@@ -39,6 +39,7 @@ def _deployment_data(deployment):
         "error": deployment.error,
         "created_at": deployment.created_at,
         "updated_at": deployment.updated_at,
+        "started_at": deployment.started_at,
         "finished_at": deployment.finished_at,
     }
 
