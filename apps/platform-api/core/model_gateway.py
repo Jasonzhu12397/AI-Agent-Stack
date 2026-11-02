@@ -2,7 +2,7 @@ import json
 import math
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -32,6 +32,7 @@ class ModelResponse:
     provider: str
     model: str
     latency_ms: int
+    tool_calls: list[dict] = field(default_factory=list)
 
     def as_dict(self):
         return asdict(self)
@@ -79,19 +80,50 @@ def _is_local_http_provider(provider):
 
 
 class ModelGateway:
-    def complete(self, model_config, messages, max_tokens=None, timeout_seconds=30):
+    def complete(
+        self,
+        model_config,
+        messages,
+        max_tokens=None,
+        timeout_seconds=30,
+        tools=None,
+        tool_choice=None,
+    ):
         if not isinstance(messages, list) or not messages:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
         for message in messages:
-            if (
-                not isinstance(message, dict)
-                or message.get("role") not in {"system", "user", "assistant"}
-                or not isinstance(message.get("content"), str)
-            ):
+            if not isinstance(message, dict) or message.get("role") not in {
+                "system", "user", "assistant", "tool"
+            }:
                 raise ModelGatewayError(
                     "INVALID_MESSAGES",
-                    "Messages must contain a supported role and string content.",
+                    "Messages must contain a supported role.",
                 )
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                if message.get("content") not in (None, "") or not isinstance(
+                    message.get("tool_calls"), list
+                ):
+                    raise ModelGatewayError(
+                        "INVALID_MESSAGES",
+                        "Assistant tool-call messages must contain a tool_calls array.",
+                    )
+            elif not isinstance(message.get("content"), str):
+                raise ModelGatewayError(
+                    "INVALID_MESSAGES",
+                    "Message content must be a string unless the assistant requests tools.",
+                )
+        if tools is not None:
+            if not isinstance(tools, list) or len(tools) > 64:
+                raise ModelGatewayError("INVALID_TOOLS", "Tools must be a list of at most 64 items.")
+            if tools and "tools" not in (model_config.capabilities or []):
+                raise ModelGatewayError(
+                    "MODEL_CAPABILITY_MISSING",
+                    "The selected model is not configured for tool calling.",
+                )
+            if tool_choice not in (None, "auto", "none", "required"):
+                raise ModelGatewayError("INVALID_TOOL_CHOICE", "Unsupported tool_choice value.")
+        elif tool_choice is not None:
+            raise ModelGatewayError("INVALID_TOOL_CHOICE", "tool_choice requires a tools list.")
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
@@ -128,14 +160,19 @@ class ModelGateway:
                     max_tokens or model_config.max_output_tokens,
                     model_config.max_output_tokens,
                 ),
+                **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
             },
             timeout_seconds,
         )
         try:
-            content = payload["choices"][0]["message"]["content"]
+            message = payload["choices"][0]["message"]
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
             usage = payload.get("usage") or {}
-            if not isinstance(content, str):
-                raise TypeError("content must be a string")
+            if not isinstance(content, str) or not isinstance(tool_calls, list):
+                raise TypeError("message content or tool_calls has an invalid type")
+            if tool_calls and not tools:
+                raise TypeError("provider returned tool calls when no tools were offered")
             input_tokens = int(usage.get("prompt_tokens", 0))
             output_tokens = int(usage.get("completion_tokens", 0))
         except (KeyError, IndexError, TypeError, ValueError) as exc:
@@ -150,6 +187,7 @@ class ModelGateway:
             provider=provider.name,
             model=model_config.model_name,
             latency_ms=int((time.monotonic() - started) * 1000),
+            tool_calls=tool_calls,
         )
 
     def embed(self, model_config, inputs, timeout_seconds=45):
