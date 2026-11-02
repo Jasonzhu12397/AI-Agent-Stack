@@ -134,13 +134,15 @@ class TaskDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_task(self, request, task_id):
-        return get_object_or_404(
-            Task.objects.filter(
-                tenant__memberships__user=request.user,
-                project__memberships__user=request.user,
-            ).distinct(),
-            pk=task_id,
-        )
+        queryset = Task.objects.filter(tenant__memberships__user=request.user)
+        tenant_admin = TenantMembership.objects.filter(
+            tenant__tasks__id=task_id,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        if not tenant_admin:
+            queryset = queryset.filter(project__memberships__user=request.user)
+        return get_object_or_404(queryset.distinct(), pk=task_id)
 
     def get(self, request, task_id):
         return Response(TaskSerializer(self.get_task(request, task_id)).data)
