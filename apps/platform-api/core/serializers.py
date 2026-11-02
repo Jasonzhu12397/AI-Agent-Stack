@@ -11,6 +11,8 @@ class TenantSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.UUIDField(read_only=True)
+
     class Meta:
         model = Project
         fields = ["id", "tenant_id", "name", "slug", "created_at"]

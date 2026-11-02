@@ -16,6 +16,12 @@ def user_factory(db):
 
 
 @pytest.mark.django_db
+def test_unauthenticated_user_cannot_list_tenants():
+    response = APIClient().get("/api/v1/tenants/")
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
 def test_tenant_list_is_scoped_to_authenticated_membership(user_factory):
     user = user_factory("tenant-user")
     other_user = user_factory("other-user")
