@@ -231,7 +231,11 @@ class AgentPublishView(APIView):
                 )
                 if available_knowledge_ids != set(knowledge_ids):
                     return Response(
-                        {"detail": "Every knowledge base must be active and belong to this project."},
+                        {
+                            "detail": (
+                                "Every knowledge base must be active and belong to this project."
+                            )
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
             if not isinstance(tool_allowlist, list) or len(tool_allowlist) > 32:
