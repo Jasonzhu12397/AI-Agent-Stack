@@ -143,14 +143,20 @@ class KnowledgeBaseListCreateView(APIView):
         chunk_size = request.data.get("chunk_size", 1200)
         chunk_overlap = request.data.get("chunk_overlap", 160)
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
-            return Response({"detail": "name is required and must be at most 120 characters."}, status=400)
+            return Response(
+                {"detail": "name is required and must be at most 120 characters."},
+                status=400,
+            )
         if not isinstance(slug, str) or not re.fullmatch(
             r"[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?",
             slug,
         ):
             return Response({"detail": "slug must be a lowercase URL-safe identifier."}, status=400)
         if not isinstance(description, str) or len(description) > 4000:
-            return Response({"detail": "description must be a string up to 4,000 characters."}, status=400)
+            return Response(
+                {"detail": "description must be a string up to 4,000 characters."},
+                status=400,
+            )
         try:
             model_uuid = uuid.UUID(str(model_id))
         except (TypeError, ValueError, AttributeError):
@@ -164,7 +170,10 @@ class KnowledgeBaseListCreateView(APIView):
             pk=model_uuid,
         )
         if "embeddings" not in (model.capabilities or []):
-            return Response({"detail": "Selected model does not declare embeddings capability."}, status=400)
+            return Response(
+                {"detail": "Selected model does not declare embeddings capability."},
+                status=400,
+            )
         if (
             not isinstance(chunk_size, int)
             or isinstance(chunk_size, bool)
@@ -175,7 +184,10 @@ class KnowledgeBaseListCreateView(APIView):
         ):
             return Response({"detail": "Invalid chunk_size or chunk_overlap."}, status=400)
         if KnowledgeBase.objects.filter(project=project, slug=slug).exists():
-            return Response({"detail": "Knowledge base slug already exists in this project."}, status=409)
+            return Response(
+                {"detail": "Knowledge base slug already exists in this project."},
+                status=409,
+            )
         item = KnowledgeBase.objects.create(
             tenant=tenant,
             project=project,
@@ -232,13 +244,22 @@ class KnowledgeBaseDocumentListCreateView(APIView):
         content = request.data.get("content")
         metadata = request.data.get("metadata", {})
         if not isinstance(title, str) or not title.strip() or len(title) > 240:
-            return Response({"detail": "title is required and must be at most 240 characters."}, status=400)
+            return Response(
+                {"detail": "title is required and must be at most 240 characters."},
+                status=400,
+            )
         if not isinstance(content, str) or not content.strip() or len(content) > 1_000_000:
-            return Response({"detail": "content must be non-empty and no larger than 1 MB."}, status=400)
+            return Response(
+                {"detail": "content must be non-empty and no larger than 1 MB."},
+                status=400,
+            )
         if not isinstance(metadata, dict) or len(json.dumps(metadata)) > 16384:
             return Response({"detail": "metadata must be a JSON object up to 16 KiB."}, status=400)
         if _contains_secret_key(metadata):
-            return Response({"detail": "Document metadata cannot contain credential fields."}, status=400)
+            return Response(
+                {"detail": "Document metadata cannot contain credential fields."},
+                status=400,
+            )
         checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
         with transaction.atomic():
             document = KnowledgeDocument.objects.create(
