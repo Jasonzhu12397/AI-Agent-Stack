@@ -30,7 +30,14 @@ def fixture(risk="low"):
         required_permissions=["sample:read"],
         input_schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "maxLength": 40}},
+            "properties": {
+                "query": {"type": "string", "maxLength": 40},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 12},
+                    "maxItems": 2,
+                },
+            },
             "required": ["query"],
             "additionalProperties": False,
         },
@@ -87,6 +94,25 @@ class ToolRouterTests(unittest.TestCase):
                 installation=installation,
                 tool=tool,
                 arguments={"query": "x"},
+                granted_permissions=["sample:read"],
+            )
+
+    def test_rejects_arrays_outside_item_schema_and_bounds(self):
+        installation, tool = fixture()
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+        with self.assertRaisesRegex(ToolExecutionError, "array shape"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"query": "x", "tags": ["a", "b", "c"]},
+                granted_permissions=["sample:read"],
+            )
+        with self.assertRaisesRegex(ToolExecutionError, "invalid item"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"query": "x", "tags": ["a", 3]},
                 granted_permissions=["sample:read"],
             )
 
