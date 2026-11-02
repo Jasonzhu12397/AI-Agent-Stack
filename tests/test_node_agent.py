@@ -829,7 +829,9 @@ def test_cluster_plan_rejects_malformed_baremetal_host_reference():
 
 
 
-def test_target_agent_control_plane_verification_requires_all_expected_control_planes_ready(monkeypatch):
+def test_target_agent_control_plane_verification_requires_all_expected_control_planes_ready(
+    monkeypatch,
+):
     responses = {
         "/version": {"gitVersion": "v1.32.2"},
         "/api/v1/nodes": {
