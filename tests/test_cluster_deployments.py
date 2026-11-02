@@ -278,7 +278,13 @@ def test_target_postflight_rejects_plan_with_missing_prerequisites(cluster_deliv
         status=AgentNode.Status.ONLINE,
         last_seen_at=timezone.now(),
     )
-    created = create_deployment(client, tenant, project, eph_node, key="target-postflight-incomplete")
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="target-postflight-incomplete",
+    )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
     deployment.status = ClusterDeployment.Status.PLAN_READY
     deployment.plan_result = {"provisioning_ready": False}
