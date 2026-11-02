@@ -59,19 +59,27 @@ def handle_deployment_command_result(
         ClusterDeployment.Status.FAILED,
     }:
         return
+    if deployment.started_at is None:
+        deployment.started_at = timezone.now()
     if outcome == "failed":
         deployment.status = ClusterDeployment.Status.FAILED
         deployment.error = error or {"code": "AGENT_COMMAND_FAILED"}
         deployment.finished_at = timezone.now()
         deployment.save(
-            update_fields=["status", "error", "finished_at", "updated_at"],
+            update_fields=[
+                "status",
+                "error",
+                "started_at",
+                "finished_at",
+                "updated_at",
+            ],
         )
         return
     if command.command_type == "host.preflight":
         deployment.preflight_result = result
         deployment.status = ClusterDeployment.Status.PLANNING
         deployment.save(
-            update_fields=["preflight_result", "status", "updated_at"],
+            update_fields=["preflight_result", "status", "started_at", "updated_at"],
         )
         queue_deployment_command(deployment, "cluster.plan")
     elif command.command_type == "cluster.plan":
@@ -79,5 +87,11 @@ def handle_deployment_command_result(
         deployment.plan_hash = str(result.get("plan_hash", command.plan_hash))[:64]
         deployment.status = ClusterDeployment.Status.PLAN_READY
         deployment.save(
-            update_fields=["plan_result", "plan_hash", "status", "updated_at"],
+            update_fields=[
+                "plan_result",
+                "plan_hash",
+                "status",
+                "started_at",
+                "updated_at",
+            ],
         )
