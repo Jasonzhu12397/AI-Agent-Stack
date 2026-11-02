@@ -13,7 +13,7 @@ The host allowlist is a security boundary, not a convenience setting. Do not put
 
 ## Model capabilities
 
-Configure chat models with the `chat` capability and embedding models with `embeddings`. The embedding gateway validates model capability, response count, vector dimensions and finite numeric values. It normalizes provider responses into a stable response contract.
+Configure chat models with the `chat` capability, function-calling models with `tools`, and embedding models with `embeddings`. The embedding gateway validates model capability, response count, vector dimensions and finite numeric values. It normalizes provider responses into a stable response contract.
 
 Example local provider:
 
@@ -46,7 +46,7 @@ The returned retrieval results are context candidates, not trusted instructions.
 
 ## Agent and Workflow integration status
 
-The existing Agent runtime already executes a real LLM chat completion through ModelGateway. The new local endpoint support makes that runtime usable with allowlisted local inference services. Embedding and Qdrant retrieval primitives are now implemented, but they are not yet exposed as Knowledge Base CRUD APIs or automatically injected into Agent/Workflow prompts.
+The Agent Worker executes real chat completions and now supports bounded OpenAI-compatible function calling. Published Agent versions may pin project-installed connector tool IDs; the Worker validates tool-call names/arguments and dispatches only through the trusted ToolRouter. Connector-specific handlers are not registered by default, and high/critical-risk tools remain blocked until a human-approval workflow exists. Embedding and Qdrant retrieval primitives are implemented, but they are not yet exposed as Knowledge Base CRUD APIs or automatically injected into Agent/Workflow prompts.
 
 The next integration milestone is:
 - Add KnowledgeBase, KnowledgeDocument and ingestion-job persistence in PostgreSQL.
