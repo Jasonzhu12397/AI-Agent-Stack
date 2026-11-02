@@ -218,3 +218,6 @@ def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
     assert "document-1:0" in gateway.messages[1]["content"]
     assert "all Kubernetes nodes are Ready" in gateway.messages[1]["content"]
     retrieval.assert_called_once()
+    assert retrieval.call_args.kwargs["metadata_filters"] == {
+        "knowledge_base_id": str(knowledge_base.id)
+    }
