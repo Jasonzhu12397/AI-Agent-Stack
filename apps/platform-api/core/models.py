@@ -401,3 +401,106 @@ class WorkflowStepRun(models.Model):
                 name="uniq_workflow_step_run_node",
             )
         ]
+
+
+class AgentNode(models.Model):
+    class NodeType(models.TextChoices):
+        EPH_NODE = "eph_node", "EPH node"
+        TARGET_CLUSTER = "target_cluster", "Target cluster"
+
+    class Status(models.TextChoices):
+        OFFLINE = "offline", "Offline"
+        ONLINE = "online", "Online"
+        REVOKED = "revoked", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="agent_nodes")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="agent_nodes")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="enrolled_agent_nodes",
+    )
+    name = models.CharField(max_length=120)
+    node_type = models.CharField(max_length=24, choices=NodeType.choices)
+    cluster_name = models.CharField(max_length=120, blank=True)
+    agent_version = models.CharField(max_length=40, blank=True)
+    capabilities = models.JSONField(default=list)
+    labels = models.JSONField(default=dict)
+    credential_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.OFFLINE)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_seen_ip = models.GenericIPAddressField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="uniq_agent_node_name_per_project",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "project", "node_type"], name="agent_node_scope_idx"),
+            models.Index(fields=["status", "last_seen_at"], name="agent_node_status_idx"),
+        ]
+
+
+class AgentCommand(models.Model):
+    class Status(models.TextChoices):
+        WAITING_APPROVAL = "waiting_approval", "Waiting approval"
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="agent_commands")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="agent_commands")
+    node = models.ForeignKey(AgentNode, on_delete=models.CASCADE, related_name="commands")
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_agent_commands",
+    )
+    command_type = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=24, choices=Status.choices)
+    idempotency_key = models.CharField(max_length=128)
+    plan_hash = models.CharField(max_length=64)
+    approved_plan_hash = models.CharField(max_length=64, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="approved_agent_commands",
+        null=True,
+        blank=True,
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=3)
+    lease_token = models.UUIDField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    result = models.JSONField(null=True, blank=True)
+    error = models.JSONField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="uniq_agent_command_idempotency",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["node", "status", "created_at"], name="agent_command_queue_idx"),
+            models.Index(fields=["tenant", "project", "created_at"], name="agent_command_scope_idx"),
+        ]
