@@ -18,7 +18,7 @@ from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolExecutionError, ToolRouter
 from core.workflow_engine import WorkflowValidationError, execute_workflow_run
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 
@@ -252,9 +252,7 @@ def _load_agent_tools(task, config):
             plugin__installations__tenant=task.tenant,
             plugin__installations__project=task.project,
             plugin__installations__status=PluginInstallation.Status.INSTALLED,
-            plugin__installations__plugin_version=__import__("django.db.models", fromlist=["F"]).F(
-                "plugin__version"
-            ),
+            plugin__installations__plugin_version=F("plugin__version"),
         )
         .select_related("plugin")
         .distinct()
