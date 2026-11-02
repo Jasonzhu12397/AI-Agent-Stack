@@ -8,30 +8,30 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41406654505](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41406654505), commit `299106b111285503e6cc002d0109dd935f90c375`, completed successfully across Python, Vue and Compose jobs. Pytest: 15 passed.
+[GitHub Actions run 41407102851](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41407102851), commit `2b16becd1fba408f4bd6550864e55085b3bb148f`, completed successfully across Python, Vue and Compose jobs. Pytest: 18 passed. Django migration drift check passed.
 
 ## Django + Vue migration
 
 | Area | Target | Status |
 |---|---|---|
 | Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
-| REST API | Django REST Framework | API root, health and membership-filtered tenant/project list endpoints passed in run 41406654505 |
+| REST API | Django REST Framework | API root, health, membership-filtered tenant/project lists and owner/admin-only project creation passed in run 41407102851 |
 | ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
-| Database | PostgreSQL via dj-database-url | PostgreSQL migrations applied successfully in run 41406654505 |
-| Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41406654505 |
+| Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
+| Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / psycopg heartbeat | Implemented; not a durable task queue |
-| Frontend | Vue 3 + TypeScript + Vite | Production build passed in run 41406654505 |
+| Frontend | Vue 3 + TypeScript + Vite | Production build passed in run 41407102851 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
-| Compose | API, Worker, PostgreSQL, Redis and Vue | Build/start and API/Web/Worker smoke tests passed in run 41406654505 |
+| Compose | API, Worker, PostgreSQL, Redis and Vue | Build/start and API/Web/Worker smoke tests passed in run 41407102851 |
 
 ## Not yet implemented or verified
 
 | Area | Target | Current status |
 |---|---|---|
-| Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Django authentication is required; tenant/project memberships and read scoping are tested. Login UI/OIDC, membership administration and role-specific write policies remain unimplemented. |
+| Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: authenticated tenant/project membership scoping and owner/admin-only project creation are tested. Login UI/OIDC, membership administration and project update/delete role policies remain unimplemented. |
 | Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Not implemented; Worker heartbeat only |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Not implemented |
 | Workflow engine | Versioned DAG, branches, recovery | Not implemented |

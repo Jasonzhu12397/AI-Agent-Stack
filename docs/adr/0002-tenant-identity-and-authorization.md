@@ -20,10 +20,11 @@ Project visibility requires both tenant membership and project membership. Tenan
 
 - `GET /api/v1/tenants/`: list only tenants associated with the authenticated user.
 - `GET /api/v1/tenants/{tenant_id}/projects/`: first resolve tenant through the user's membership, then return only projects with an explicit project membership.
+- `POST /api/v1/tenants/{tenant_id}/projects/`: only tenant owner/admin can create; tenant is derived from the authorized URL scope, never from the request body. Creator receives project-admin membership.
 - Unauthorized cross-tenant lookups return 404 to avoid disclosing resource existence.
 - Pagination is applied after authorization filtering; counts and pages must not include other tenants' records.
 
-No public tenant registration or membership mutation API is introduced in this slice. Membership provisioning remains an administrative operation until a separately authorized workflow is designed.
+No public tenant registration or membership mutation API is introduced in this slice. Membership provisioning remains an administrative operation until a separately authorized workflow is designed. Project update/delete and project-role administration remain out of scope.
 
 ## Required negative tests
 
