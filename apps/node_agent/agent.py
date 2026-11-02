@@ -335,7 +335,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             raise NodeAgentError("INVALID_CLUSTER_NAME")
         if (
             not isinstance(kubernetes_version, str)
-            or not re.fullmatch(r"v1\\.\\d+\\.\\d+", kubernetes_version)
+            or not re.fullmatch(r"v1\.\d+\.\d+", kubernetes_version)
         ):
             raise NodeAgentError("INVALID_KUBERNETES_VERSION")
         if (
