@@ -150,6 +150,76 @@ def inspect_api_group(
     }
 
 
+def discover_provider_apis() -> dict[str, Any]:
+    requirements = {
+        "cluster_api": ("cluster.x-k8s.io", ("clusters", "machines", "machinedeployments")),
+        "bootstrap_kubeadm": ("bootstrap.cluster.x-k8s.io", ("kubeadmconfigs",)),
+        "control_plane_kubeadm": ("controlplane.cluster.x-k8s.io", ("kubeadmcontrolplanes",)),
+        "infrastructure_metal3": (
+            "infrastructure.cluster.x-k8s.io",
+            ("metal3clusters", "metal3machines", "metal3machinetemplates"),
+        ),
+        "metal3": ("metal3.io", ("baremetalhosts",)),
+    }
+    discovery = kubernetes_api_get("/apis")
+    groups = {
+        item.get("name"): item
+        for item in discovery.get("groups", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    providers = {}
+    missing = []
+    for provider, (group_name, required_resources) in requirements.items():
+        group = groups.get(group_name)
+        if group is None:
+            providers[provider] = {
+                "api_group": group_name,
+                "discovered": False,
+                "version": None,
+                "resources": {},
+            }
+            missing.append(f"provider_api.{provider}")
+            continue
+        version = group.get("preferredVersion", {}).get("version")
+        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9.]+", version):
+            raise NodeAgentError("KUBERNETES_API_VERSION_INVALID")
+        version_document = kubernetes_api_get(f"/apis/{group_name}/{version}")
+        available = {
+            item.get("name"): item
+            for item in version_document.get("resources", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        resource_status = {
+            name: name in available
+            for name in required_resources
+        }
+        providers[provider] = {
+            "api_group": group_name,
+            "discovered": True,
+            "version": version,
+            "resources": resource_status,
+        }
+        for resource_name, is_available in resource_status.items():
+            if not is_available:
+                missing.append(f"provider_api.{provider}.{resource_name}")
+    return {
+        "management_kubernetes_version": kubernetes_api_get("/version").get("gitVersion"),
+        "providers": providers,
+        "missing_requirements": missing,
+        "discovery_complete": not missing,
+        "external_components": {
+            "ironic": "not_verified_by_kubernetes_api_discovery",
+            "ipa": "not_verified_by_kubernetes_api_discovery",
+            "bmc_connectivity": "not_verified",
+            "machine_image": "not_verified",
+        },
+        "crd_schema_validation": "not_performed",
+        "manifest_generation_enabled": False,
+        "mutation_adapter_enabled": False,
+        "provisioning_ready": False,
+    }
+
+
 def canonical_hash(value: dict[str, Any]) -> str:
     encoded = json.dumps(
         value,
@@ -259,6 +329,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "k8s.resource.read",
             "capi.cluster.observe",
             "metal3.host.inspect",
+            "cluster.provider.discover",
         },
         "target_cluster": {
             "node.health",
@@ -351,6 +422,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for item in data.get("items", [])[:100]
             ],
         }
+    if command_type == "cluster.provider.discover":
+        return discover_provider_apis()
     if command_type == "capi.cluster.observe":
         namespace = payload.get("namespace", os.environ.get("AGENT_NAMESPACE", "default"))
         return inspect_api_group(
