@@ -372,3 +372,42 @@ def test_provisioning_command_approval_expires_before_agent_dispatch(node_worksp
     assert poll.data["command"] is None
     assert command.status == AgentCommand.Status.FAILED
     assert command.error["code"] == "APPROVAL_EXPIRED"
+
+
+
+@pytest.mark.django_db
+def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
+    user, tenant, project, client = node_workspace
+    token = "wrong-role-poll-token"
+    node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="eph-wrong-role",
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=node,
+        requested_by=user,
+        command_type="cluster.postflight",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="wrong-role-command",
+        plan_hash="d" * 64,
+    )
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    command.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["command"] is None
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE"
