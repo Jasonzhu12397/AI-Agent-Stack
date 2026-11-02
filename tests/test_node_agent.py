@@ -1189,3 +1189,37 @@ def test_control_plane_client_rejects_invalid_checkpoint_generation_and_phase():
             "unknown_phase",
             {},
         )
+
+
+def test_target_agent_restores_assigned_deployment_checkpoint_before_polling(
+    monkeypatch,
+    capsys,
+):
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+    deployment_id = "deployment-123"
+    client.heartbeat = lambda node_type: {
+        "active_deployments": [{"deployment_id": deployment_id}]
+    }
+
+    def restore(deployment):
+        checkpoint = {
+            "deployment_id": deployment,
+            "generation": 1,
+            "sequence": 3,
+            "phase": "capi_pivot_preflight",
+            "data": {"completed_steps": ["target_agent_bootstrap"]},
+            "resume_available": True,
+        }
+        client.deployment_checkpoints[deployment] = checkpoint
+        return checkpoint
+
+    client.restore_deployment_checkpoint = restore
+    client.poll = lambda: {"command": None}
+    monkeypatch.setattr(agent, "touch_health_files", lambda readiness=False: None)
+
+    assert agent.run_once(client, "target_cluster") is False
+    output = json.loads(capsys.readouterr().out.strip())
+    assert output["event"] == "deployment_checkpoint_restored"
+    assert output["deployment_id"] == deployment_id
+    assert output["sequence"] == 3
+    assert client.deployment_checkpoints[deployment_id]["phase"] == "capi_pivot_preflight"
