@@ -19,6 +19,8 @@ from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
     AgentNode,
+    ClusterDeployment,
+    ClusterDeploymentCheckpoint,
     Project,
     ProjectMembership,
     Tenant,
@@ -702,4 +704,200 @@ class AgentRuntimeResultView(APIView):
                     str(command.deployment_id) if command.deployment_id else None
                 ),
             }
+        )
+
+
+class AgentRuntimeDeploymentCheckpointView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    ALLOWED_PHASES = {
+        "target_agent_bootstrap",
+        "capi_pivot_preflight",
+        "capi_pivot_verified",
+        "worker_provisioning",
+        "worker_pool_verified",
+        "eph_reclaim_pending",
+        "completed",
+    }
+
+    FORBIDDEN_CHECKPOINT_KEYS = FORBIDDEN_PAYLOAD_KEYS | {
+        "authorization",
+        "credential",
+        "credentials",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+    }
+
+    def _deployment(self, request, deployment_id):
+        node = _authenticate_node(request, request.data.get("node_id"))
+        if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+            return None, None
+        deployment = ClusterDeployment.objects.filter(
+            pk=deployment_id,
+            tenant=node.tenant,
+            project=node.project,
+            target_node=node,
+        ).first()
+        if deployment is None:
+            return None, None
+        if deployment.status not in {
+            ClusterDeployment.Status.CONTROL_PLANE_READY,
+            ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            ClusterDeployment.Status.POSTFLIGHT,
+        }:
+            return node, None
+        return node, deployment
+
+    def _validate_checkpoint(self, payload):
+        if not isinstance(payload, dict):
+            return "checkpoint data must be a JSON object."
+        encoded = json.dumps(payload, ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 32768:
+            return "checkpoint data must not exceed 32 KiB."
+
+        def visit(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if str(key).lower() in self.FORBIDDEN_CHECKPOINT_KEYS:
+                        return False
+                    if not visit(child):
+                        return False
+            if isinstance(value, list):
+                return all(visit(item) for item in value)
+            return True
+
+        if not visit(payload):
+            return "checkpoint contains a forbidden credential or executable field."
+        return None
+
+    def get(self, request, deployment_id):
+        node_id = request.query_params.get("node_id")
+        node = _authenticate_node(request, node_id)
+        if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+            return Response({"detail": "Invalid target agent credential."}, status=401)
+        deployment = ClusterDeployment.objects.filter(
+            pk=deployment_id,
+            tenant=node.tenant,
+            project=node.project,
+            target_node=node,
+        ).first()
+        if deployment is None:
+            return Response({"detail": "Deployment is not assigned to this target agent."}, status=404)
+        if deployment.status not in {
+            ClusterDeployment.Status.CONTROL_PLANE_READY,
+            ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            ClusterDeployment.Status.POSTFLIGHT,
+        }:
+            return Response({"detail": "Deployment is not in an agent handoff state."}, status=409)
+        checkpoint = ClusterDeploymentCheckpoint.objects.filter(
+            deployment=deployment,
+            agent_node=node,
+        ).first()
+        if checkpoint is None:
+            return Response(
+                {
+                    "deployment_id": str(deployment.id),
+                    "generation": 1,
+                    "sequence": 0,
+                    "phase": "target_agent_bootstrap",
+                    "data": {},
+                    "resume_available": False,
+                }
+            )
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "generation": checkpoint.generation,
+                "sequence": checkpoint.sequence,
+                "phase": checkpoint.phase,
+                "data": checkpoint.data,
+                "resume_available": True,
+                "updated_at": checkpoint.updated_at,
+            }
+        )
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        node, deployment = self._deployment(request, deployment_id)
+        if node is None:
+            return Response({"detail": "Invalid target agent credential."}, status=401)
+        if deployment is None:
+            return Response(
+                {"detail": "Deployment is not assigned to this target agent or is not handoff-ready."},
+                status=409,
+            )
+        phase = request.data.get("phase")
+        generation = request.data.get("generation")
+        sequence = request.data.get("sequence")
+        checkpoint_data = request.data.get("data", {})
+        if phase not in self.ALLOWED_PHASES:
+            return Response({"detail": "Unsupported checkpoint phase."}, status=400)
+        if (
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation != 1
+        ):
+            return Response({"detail": "generation must match the active generation 1."}, status=409)
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence < 1
+        ):
+            return Response({"detail": "sequence must be a positive integer."}, status=400)
+        validation_error = self._validate_checkpoint(checkpoint_data)
+        if validation_error:
+            return Response({"detail": validation_error}, status=400)
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.target_node_id != node.id or deployment.status not in {
+                ClusterDeployment.Status.CONTROL_PLANE_READY,
+                ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                ClusterDeployment.Status.POSTFLIGHT,
+            }:
+                return Response({"detail": "Deployment handoff ownership changed."}, status=409)
+            checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
+                deployment=deployment,
+            ).first()
+            if checkpoint is not None:
+                if checkpoint.agent_node_id != node.id or checkpoint.generation != generation:
+                    return Response({"detail": "Checkpoint generation or agent identity mismatch."}, status=409)
+                if sequence < checkpoint.sequence:
+                    return Response({"detail": "Checkpoint sequence must increase monotonically."}, status=409)
+                if sequence == checkpoint.sequence:
+                    if checkpoint.phase == phase and checkpoint.data == checkpoint_data:
+                        return Response(
+                            {
+                                "deployment_id": str(deployment.id),
+                                "generation": checkpoint.generation,
+                                "sequence": checkpoint.sequence,
+                                "phase": checkpoint.phase,
+                                "idempotent": True,
+                            }
+                        )
+                    return Response({"detail": "Checkpoint sequence was already used."}, status=409)
+                checkpoint.sequence = sequence
+                checkpoint.phase = phase
+                checkpoint.data = checkpoint_data
+                checkpoint.save(update_fields=["sequence", "phase", "data", "updated_at"])
+            else:
+                checkpoint = ClusterDeploymentCheckpoint.objects.create(
+                    deployment=deployment,
+                    agent_node=node,
+                    generation=generation,
+                    sequence=sequence,
+                    phase=phase,
+                    data=checkpoint_data,
+                )
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "generation": checkpoint.generation,
+                "sequence": checkpoint.sequence,
+                "phase": checkpoint.phase,
+                "idempotent": False,
+            },
+            status=201,
         )
