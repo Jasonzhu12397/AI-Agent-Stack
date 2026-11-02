@@ -1152,6 +1152,7 @@ class ControlPlaneClient:
                 "cluster.diagnose",
                 "cluster.postflight",
                 "cluster.control-plane.verify",
+                "cluster.capi.pivot.target.preflight",
                 "k8s.resource.read",
             ]
         )
