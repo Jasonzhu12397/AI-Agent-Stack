@@ -134,7 +134,11 @@ class ModelGateway:
             or max_tokens < 1
         ):
             raise ModelGatewayError("INVALID_MAX_TOKENS", "max_tokens must be a positive integer.")
-        if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        if (
+            not isinstance(timeout_seconds, (int, float))
+            or isinstance(timeout_seconds, bool)
+            or timeout_seconds <= 0
+        ):
             raise ModelGatewayError("INVALID_TIMEOUT", "timeout_seconds must be positive.")
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
