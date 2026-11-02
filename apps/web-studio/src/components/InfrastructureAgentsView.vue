@@ -25,6 +25,10 @@ const selectedNodeId = ref("");
 const nodeName = ref("eph-node-01");
 const nodeType = ref<AgentNode["node_type"]>("eph_node");
 const clusterName = ref("");
+const buildClusterName = ref("");
+const buildKubernetesVersion = ref("");
+const buildControlPlaneReplicas = ref(3);
+const buildWorkerReplicas = ref(3);
 const commandType = ref("node.health");
 const commandPayload = ref("{}");
 const enrollmentToken = ref("");
@@ -53,8 +57,6 @@ const availableCommands = computed(() => {
     "node.health",
     "host.preflight",
     "cluster.plan",
-    "cluster.provision",
-    "target-agent.bootstrap",
     "capi.cluster.observe",
     "metal3.host.inspect",
   ];
@@ -184,6 +186,38 @@ async function copyEnrollmentToken(): Promise<void> {
     info.value = "Enrollment token copied.";
   } catch {
     error.value = "Clipboard access was denied. Select and copy the token manually.";
+  }
+}
+
+async function generateClusterPlan(): Promise<void> {
+  if (!selectedNode.value || selectedNode.value.node_type !== "eph_node") return;
+  if (!buildClusterName.value.trim() || !buildKubernetesVersion.value.trim()) {
+    error.value = "Cluster name and Kubernetes version are required.";
+    return;
+  }
+  submitting.value = true;
+  error.value = "";
+  info.value = "";
+  try {
+    await createAgentCommand(
+      selectedNode.value.id,
+      "cluster.plan",
+      {
+        cluster_spec: {
+          cluster_name: buildClusterName.value.trim(),
+          kubernetes_version: buildKubernetesVersion.value.trim(),
+          control_plane_replicas: buildControlPlaneReplicas.value,
+          worker_replicas: buildWorkerReplicas.value,
+        },
+      },
+    );
+    info.value = "Cluster plan dry-run queued on the EPH agent. No CAPI or Metal3 resources will be changed.";
+    commandType.value = "cluster.plan";
+    await loadCommands();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to create cluster plan.";
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -381,6 +415,35 @@ onUnmounted(() => {
           <div class="selected-node-summary">
             <strong>{{ selectedNode.name }}</strong>
             <span>{{ selectedNode.node_type }} · {{ selectedNode.agent_version || "version not reported" }}</span>
+          </div>
+          <div v-if="selectedNode.node_type === 'eph_node'" class="infra-form cluster-build-form">
+            <div>
+              <strong>Metal3 / CAPI cluster plan</strong>
+              <p>Build a typed Kubernetes delivery plan on the EPH agent. This stage is dry-run only.</p>
+            </div>
+            <label>Target cluster name
+              <el-input v-model="buildClusterName" placeholder="edge-lab" />
+            </label>
+            <label>Kubernetes version
+              <el-input v-model="buildKubernetesVersion" placeholder="v1.x.y" />
+            </label>
+            <div class="replica-fields">
+              <label>Control plane replicas
+                <el-input-number v-model="buildControlPlaneReplicas" :min="1" :max="9" />
+              </label>
+              <label>Worker replicas
+                <el-input-number v-model="buildWorkerReplicas" :min="0" :max="1000" />
+              </label>
+            </div>
+            <el-button
+              type="primary"
+              plain
+              :loading="submitting"
+              :disabled="!buildClusterName.trim() || !buildKubernetesVersion.trim()"
+              @click="generateClusterPlan"
+            >
+              Generate cluster plan
+            </el-button>
           </div>
           <div class="infra-form">
             <label>Typed command
