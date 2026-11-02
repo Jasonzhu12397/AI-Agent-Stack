@@ -187,14 +187,16 @@ def contains_forbidden_fields(value: Any) -> bool:
 def validate_network_inputs(network: Any) -> None:
     if not isinstance(network, dict):
         return
-    for key in ("pod_cidr", "service_cidr"):
-        value = network.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise NodeAgentError("INVALID_NETWORK_CIDR")
-        try:
-            ipaddress.ip_network(value, strict=False)
-        except ValueError as exc:
-            raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
+    cidr_keys = ("pod_cidr", "service_cidr")
+    if any(network.get(key) is not None for key in cidr_keys):
+        for key in cidr_keys:
+            value = network.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise NodeAgentError("INVALID_NETWORK_CIDR")
+            try:
+                ipaddress.ip_network(value, strict=False)
+            except ValueError as exc:
+                raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
     endpoint = network.get("control_plane_endpoint")
     if endpoint:
         if not isinstance(endpoint, str) or ":" not in endpoint:
