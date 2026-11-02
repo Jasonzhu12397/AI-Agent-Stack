@@ -206,3 +206,96 @@ def test_agent_health_files_distinguish_process_liveness_from_control_plane_read
     agent.touch_health_files(readiness=True)
     assert agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
     assert agent.health_file_is_fresh("AGENT_READINESS_FILE")
+
+
+def test_metal3_inspection_discovers_version_and_returns_redacted_bmh_summary(monkeypatch):
+    def fake_get(path):
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "metal3.io",
+                        "preferredVersion": {"version": "v1alpha1"},
+                    }
+                ]
+            }
+        if path == "/apis/metal3.io/v1alpha1":
+            return {
+                "resources": [
+                    {"name": "baremetalhosts", "namespaced": True},
+                ]
+            }
+        if path == "/apis/metal3.io/v1alpha1/namespaces/metal3-system/baremetalhosts":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "bmh-01", "namespace": "metal3-system"},
+                        "spec": {
+                            "online": True,
+                            "bmc": {
+                                "address": "redfish://bmc-01",
+                                "credentialsName": "bmc-secret",
+                            },
+                        },
+                        "status": {
+                            "operationalStatus": "OK",
+                            "provisioning": {"state": "provisioned"},
+                            "poweredOn": True,
+                            "errorMessage": "",
+                        },
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {
+            "command_type": "metal3.host.inspect",
+            "payload": {"namespace": "metal3-system"},
+        },
+        "eph_node",
+    )
+
+    host = result["resources"][0]["items"][0]
+    assert result["version"] == "v1alpha1"
+    assert host["name"] == "bmh-01"
+    assert host["provisioning_state"] == "provisioned"
+    assert "bmc" not in host
+    assert "credentialsName" not in str(host)
+
+
+def test_capi_observation_uses_discovered_group_version(monkeypatch):
+    def fake_get(path):
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    }
+                ]
+            }
+        if path == "/apis/cluster.x-k8s.io/v1beta1":
+            return {
+                "resources": [
+                    {"name": "clusters", "namespaced": True},
+                    {"name": "machines", "namespaced": True},
+                    {"name": "machinedeployments", "namespaced": True},
+                ]
+            }
+        if path.endswith("/clusters"):
+            return {"items": [{"metadata": {"name": "edge-lab", "namespace": "capi-system"}, "status": {"phase": "Provisioned"}}]}
+        if path.endswith("/machines") or path.endswith("/machinedeployments"):
+            return {"items": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {"command_type": "capi.cluster.observe", "payload": {"namespace": "capi-system"}},
+        "eph_node",
+    )
+
+    assert result["discovered"] is True
+    assert result["version"] == "v1beta1"
+    assert result["resources"][0]["items"][0]["name"] == "edge-lab"
