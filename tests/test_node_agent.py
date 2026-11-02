@@ -379,25 +379,72 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
 
 def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
     groups = {
-        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machines", "machinedeployments"]),
+        "cluster.x-k8s.io": (
+            "v1beta1",
+            ["clusters", "machines", "machinedeployments"],
+        ),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigs"]),
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
-        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3clusters", "metal3machines", "metal3machinetemplates"]),
+        "infrastructure.cluster.x-k8s.io": (
+            "v1beta1",
+            ["metal3clusters", "metal3machines", "metal3machinetemplates"],
+        ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
 
     def fake_get(path):
         if path == "/apis":
-            return {"groups": [{"name": name, "preferredVersion": {"version": data[0]}} for name, data in groups.items()]}
+            return {
+                "groups": [
+                    {
+                        "name": name,
+                        "preferredVersion": {"version": data[0]},
+                    }
+                    for name, data in groups.items()
+                ]
+            }
         if path == "/version":
             return {"gitVersion": "v1.32.2"}
         if path.startswith("/apis/apiextensions.k8s.io/"):
             crd_name = path.rsplit("/", 1)[-1]
             group = crd_name.split(".", 1)[1]
-            return {"spec": {"group": group, "names": {"plural": crd_name.split(".", 1)[0], "kind": "Fixture"}, "scope": "Namespaced", "versions": [{"name": "v1beta1", "served": True, "storage": True, "schema": {"openAPIV3Schema": {"properties": {"spec": {"properties": {"clusterName": {"type": "string"}}, "required": ["clusterName"]}}}}}]}}
+            return {
+                "spec": {
+                    "group": group,
+                    "names": {
+                        "plural": crd_name.split(".", 1)[0],
+                        "kind": "Fixture",
+                    },
+                    "scope": "Namespaced",
+                    "versions": [
+                        {
+                            "name": "v1beta1",
+                            "served": True,
+                            "storage": True,
+                            "schema": {
+                                "openAPIV3Schema": {
+                                    "properties": {
+                                        "spec": {
+                                            "properties": {
+                                                "clusterName": {"type": "string"}
+                                            },
+                                            "required": ["clusterName"],
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                }
+            }
         for name, data in groups.items():
-            if path == "/apis/" + name + "/" + data[0]:
-                return {"resources": [{"name": resource} for resource in data[1]]}
+            expected_path = "/apis/" + name + "/" + data[0]
+            if path == expected_path:
+                return {
+                    "resources": [
+                        {"name": resource} for resource in data[1]
+                    ]
+                }
         raise AssertionError(path)
 
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
@@ -413,7 +460,24 @@ def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
 
 
 def test_provider_crd_schema_rejects_missing_openapi_schema():
-    result = agent.summarize_crd_schema({"spec": {"group": "metal3.io", "names": {"plural": "baremetalhosts", "kind": "BareMetalHost"}, "versions": [{"name": "v1alpha1", "served": True, "storage": True}]}})
+    result = agent.summarize_crd_schema(
+        {
+            "spec": {
+                "group": "metal3.io",
+                "names": {
+                    "plural": "baremetalhosts",
+                    "kind": "BareMetalHost",
+                },
+                "versions": [
+                    {
+                        "name": "v1alpha1",
+                        "served": True,
+                        "storage": True,
+                    }
+                ],
+            }
+        }
+    )
     assert result["schema_valid"] is False
     assert "no_served_version_with_openapi_schema" in result["schema_errors"]
 
