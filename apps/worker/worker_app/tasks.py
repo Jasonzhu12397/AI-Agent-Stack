@@ -7,6 +7,7 @@ from time import sleep
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
     AgentRun,
+    KnowledgeDocument,
     ModelConfig,
     PluginConnection,
     PluginInstallation,
@@ -16,6 +17,7 @@ from core.models import (
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolExecutionError, ToolRouter
+from core.rag_runtime import RagRuntimeError, ingest_text
 from core.workflow_engine import WorkflowValidationError, execute_workflow_run
 from django.db import transaction
 from django.db.models import F, Q
@@ -391,7 +393,69 @@ def execute_agent_run(task):
     raise PermanentTaskError("Agent reached max_iterations before producing a final answer")
 
 
+
+def execute_knowledge_ingest(task):
+    document_id = task.payload.get("knowledge_document_id")
+    try:
+        document = KnowledgeDocument.objects.select_related(
+            "knowledge_base",
+            "knowledge_base__embedding_model",
+            "knowledge_base__embedding_model__provider",
+        ).get(pk=document_id)
+    except (KnowledgeDocument.DoesNotExist, ValueError, TypeError) as exc:
+        raise PermanentTaskError("Knowledge document is unavailable") from exc
+    knowledge_base = document.knowledge_base
+    if (
+        knowledge_base.tenant_id != task.tenant_id
+        or knowledge_base.project_id != task.project_id
+    ):
+        raise PermanentTaskError("Knowledge document is outside the task tenant/project scope")
+    document.status = KnowledgeDocument.Status.INGESTING
+    document.error = None
+    document.save(update_fields=["status", "error", "updated_at"])
+    try:
+        result = ingest_text(
+            tenant_id=str(task.tenant_id),
+            project_id=str(task.project_id),
+            document_id=str(document.id),
+            text=document.content,
+            embedding_model=knowledge_base.embedding_model,
+            metadata={
+                "title": document.title,
+                **document.metadata,
+            },
+            chunk_size=knowledge_base.chunk_size,
+            overlap=knowledge_base.chunk_overlap,
+        )
+    except Exception as exc:
+        document.status = KnowledgeDocument.Status.FAILED
+        document.error = {
+            "code": "INGESTION_FAILED",
+            "message": type(exc).__name__,
+        }
+        document.save(update_fields=["status", "error", "updated_at"])
+        if isinstance(exc, RagRuntimeError):
+            raise RuntimeError("Knowledge document ingestion failed") from exc
+        raise
+    document.status = KnowledgeDocument.Status.READY
+    document.chunk_count = result["chunks"]
+    document.error = None
+    document.ingested_at = timezone.now()
+    document.save(
+        update_fields=[
+            "status",
+            "chunk_count",
+            "error",
+            "ingested_at",
+            "updated_at",
+        ]
+    )
+    return result
+
+
 def execute_task(task, worker_id):
+    if task.task_type == "knowledge.ingest":
+        return execute_knowledge_ingest(task)
     if task.task_type == "agent.run":
         return execute_agent_run(task)
     if task.task_type == "workflow.run":
