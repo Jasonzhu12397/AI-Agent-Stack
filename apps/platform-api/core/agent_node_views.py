@@ -160,6 +160,13 @@ class AgentNodeListCreateView(APIView):
 
     def get(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        stale_before = timezone.now() - timedelta(seconds=60)
+        AgentNode.objects.filter(
+            tenant=tenant,
+            project=project,
+            status=AgentNode.Status.ONLINE,
+            last_seen_at__lt=stale_before,
+        ).update(status=AgentNode.Status.OFFLINE)
         nodes = AgentNode.objects.filter(tenant=tenant, project=project)
         return Response({"count": nodes.count(), "results": [_node_data(node) for node in nodes]})
 
