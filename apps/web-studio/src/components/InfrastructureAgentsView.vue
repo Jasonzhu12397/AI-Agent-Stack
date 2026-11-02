@@ -573,7 +573,7 @@ onUnmounted(() => {
                   placeholder="Target Cluster Agent"
                 >
                   <el-option
-                    v-for="node in availableTargetNodes"
+                    v-for="node in availableTargetNodes.filter((item) => !item.cluster_name || item.cluster_name === deployment.cluster_name)"
                     :key="node.id"
                     :label="node.name + ' · ' + (node.cluster_name || 'unassigned')"
                     :value="node.id"
