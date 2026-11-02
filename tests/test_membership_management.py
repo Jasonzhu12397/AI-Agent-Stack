@@ -133,3 +133,47 @@ def test_non_admin_cannot_manage_project_members(users):
         format="json",
     )
     assert response.status_code == 403
+
+
+
+@pytest.mark.django_db
+def test_tenant_admin_can_manage_projects_without_project_membership(users):
+    admin = users("tenant-wide-admin")
+    tenant = Tenant.objects.create(name="Tenant-wide", slug="tenant-wide")
+    TenantMembership.objects.create(tenant=tenant, user=admin, role="admin")
+    project = Project.objects.create(tenant=tenant, name="Unassigned", slug="unassigned")
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    listing = client.get(f"/api/v1/tenants/{tenant.id}/projects/")
+    members = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/members/"
+    )
+
+    assert listing.status_code == 200
+    assert listing.data["count"] == 1
+    assert members.status_code == 200
+
+
+@pytest.mark.django_db
+def test_removing_tenant_member_revokes_project_membership(users):
+    admin = users("tenant-revoke-admin")
+    member = users("tenant-revoke-member")
+    tenant = Tenant.objects.create(name="Revocation", slug="revocation")
+    TenantMembership.objects.create(tenant=tenant, user=admin, role="owner")
+    tenant_membership = TenantMembership.objects.create(tenant=tenant, user=member, role="member")
+    project = Project.objects.create(tenant=tenant, name="Revoked project", slug="revoked-project")
+    project_membership = ProjectMembership.objects.create(
+        project=project,
+        user=member,
+        role="editor",
+    )
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    response = client.delete(
+        f"/api/v1/tenants/{tenant.id}/members/{tenant_membership.id}/"
+    )
+
+    assert response.status_code == 204
+    assert not ProjectMembership.objects.filter(pk=project_membership.pk).exists()
