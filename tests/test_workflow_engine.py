@@ -97,7 +97,10 @@ def test_workflow_validator_rejects_cycles_and_disconnected_nodes():
             {
                 "id": "orphan",
                 "type": "llm",
-                "config": {"model_config_id": "x", "prompt_template": "x"},
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "x",
+                },
             },
         ],
         "edges": [{"source": "start", "target": "end"}],
