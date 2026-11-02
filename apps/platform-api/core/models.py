@@ -291,3 +291,113 @@ class AgentRun(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class WorkflowDefinition(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="workflows")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="workflows")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_workflows",
+    )
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=80)
+    description = models.TextField(blank=True)
+    draft_definition = models.JSONField(default=dict)
+    current_version = models.PositiveIntegerField(default=0)
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "slug"],
+                name="uniq_workflow_slug_per_project",
+            )
+        ]
+
+
+class WorkflowVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workflow = models.ForeignKey(
+        WorkflowDefinition,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version = models.PositiveIntegerField()
+    definition_snapshot = models.JSONField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="published_workflow_versions",
+    )
+    published_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow", "version"],
+                name="uniq_workflow_version_number",
+            )
+        ]
+
+
+class WorkflowRun(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.OneToOneField(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="workflow_run",
+    )
+    workflow_version = models.ForeignKey(
+        WorkflowVersion,
+        on_delete=models.PROTECT,
+        related_name="runs",
+    )
+    input_data = models.JSONField(default=dict)
+    state = models.JSONField(default=dict)
+    output_data = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class WorkflowStepRun(models.Model):
+    class Status(models.TextChoices):
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workflow_run = models.ForeignKey(
+        WorkflowRun,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    node_id = models.CharField(max_length=120)
+    node_type = models.CharField(max_length=32)
+    status = models.CharField(max_length=16, choices=Status.choices)
+    input_data = models.JSONField(default=dict)
+    output_data = models.JSONField(null=True, blank=True)
+    error = models.JSONField(null=True, blank=True)
+    attempt = models.PositiveSmallIntegerField(default=1)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workflow_run", "node_id"],
+                name="uniq_workflow_step_run_node",
+            )
+        ]
