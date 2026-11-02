@@ -1,4 +1,6 @@
+import datetime
 import re
+import uuid
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -7,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.agent_node_views import _payload_hash, _tenant_and_project, _validate_payload
+from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.cluster_deployment_services import queue_deployment_command
 from core.models import (
     AgentCommand,
@@ -77,7 +79,10 @@ class ClusterDeploymentListCreateView(APIView):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
         if not _can_edit_project(request.user, tenant, project):
             return Response({"detail": "Project editor permission required."}, status=403)
-        eph_node_id = request.data.get("eph_node_id")
+        try:
+            eph_node_id = uuid.UUID(str(request.data.get("eph_node_id")))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "A valid eph_node_id is required."}, status=400)
         eph_node = get_object_or_404(
             AgentNode.objects.filter(
                 tenant=tenant,
@@ -88,13 +93,15 @@ class ClusterDeploymentListCreateView(APIView):
         )
         if eph_node.status != AgentNode.Status.ONLINE or (
             eph_node.last_seen_at is None
-            or eph_node.last_seen_at < timezone.now() - timezone.timedelta(seconds=60)
+            or eph_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
         ):
             return Response(
                 {"detail": "The selected EPH agent must have a fresh heartbeat."},
                 status=409,
             )
         spec = request.data.get("cluster_spec")
+        if not isinstance(spec, dict):
+            return Response({"detail": "cluster_spec must be a JSON object."}, status=400)
         payload_error = _validate_payload({"cluster_spec": spec})
         if payload_error:
             return Response({"detail": payload_error}, status=400)
