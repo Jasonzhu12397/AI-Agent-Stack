@@ -16,6 +16,16 @@ def _payload_hash(command_type: str, payload: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _spec_hash(spec: dict) -> str:
+    encoded = json.dumps(
+        spec,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def queue_deployment_command(
     deployment: ClusterDeployment,
     command_type: str,
@@ -78,6 +88,26 @@ def handle_deployment_command_result(
         )
         return
     if command.command_type == "host.preflight":
+        cpu_count = result.get("cpu_count")
+        if (
+            command.node.node_type != "eph_node"
+            or not isinstance(cpu_count, int)
+            or isinstance(cpu_count, bool)
+            or cpu_count < 1
+        ):
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "INVALID_EPH_PREFLIGHT_RESULT"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "started_at",
+                    "finished_at",
+                    "updated_at",
+                ],
+            )
+            return
         deployment.preflight_result = result
         deployment.status = ClusterDeployment.Status.PLANNING
         deployment.save(
@@ -127,10 +157,15 @@ def handle_deployment_command_result(
         plan_hash = result.get("plan_hash")
         missing_requirements = result.get("missing_requirements")
         plan_valid = (
-            result.get("plan_status") == "validated_dry_run"
+            command.node.node_type == "eph_node"
+            and result.get("plan_status") == "validated_dry_run"
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("kubernetes_version") == deployment.kubernetes_version
+            and result.get("control_plane_replicas")
+            == deployment.spec.get("control_plane_replicas")
+            and result.get("worker_replicas") == deployment.spec.get("worker_replicas")
             and isinstance(plan_hash, str)
-            and len(plan_hash) == 64
-            and all(character in "0123456789abcdef" for character in plan_hash.lower())
+            and plan_hash == _spec_hash(deployment.spec)
             and isinstance(missing_requirements, list)
             and len(missing_requirements) <= 100
             and all(isinstance(item, str) and len(item) <= 200 for item in missing_requirements)
