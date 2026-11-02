@@ -287,6 +287,7 @@ async function dispatchCommand(): Promise<void> {
 }
 
 async function runTargetPostflight(deployment: ClusterDeployment): Promise<void> {
+  if (!window.confirm("Confirm this Kubernetes cluster has already been provisioned outside this workflow and is ready for read-only checks?")) return;
   const targetNodeId = deploymentTargetNodeIds.value[deployment.id];
   if (!targetNodeId) {
     error.value = "Select an online Target Cluster Agent first.";
