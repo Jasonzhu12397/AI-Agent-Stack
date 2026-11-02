@@ -732,7 +732,13 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
 
     def _deployment(self, request, deployment_id):
         node = _authenticate_node(request, request.data.get("node_id"))
-        if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+        if (
+            node is None
+            or node.node_type != AgentNode.NodeType.TARGET_CLUSTER
+            or node.status != AgentNode.Status.ONLINE
+            or node.last_seen_at is None
+            or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
             return None, None
         deployment = ClusterDeployment.objects.filter(
             pk=deployment_id,
@@ -775,8 +781,14 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
     def get(self, request, deployment_id):
         node_id = request.query_params.get("node_id")
         node = _authenticate_node(request, node_id)
-        if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
-            return Response({"detail": "Invalid target agent credential."}, status=401)
+        if (
+            node is None
+            or node.node_type != AgentNode.NodeType.TARGET_CLUSTER
+            or node.status != AgentNode.Status.ONLINE
+            or node.last_seen_at is None
+            or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response({"detail": "Invalid or stale target agent credential."}, status=401)
         deployment = ClusterDeployment.objects.filter(
             pk=deployment_id,
             tenant=node.tenant,
