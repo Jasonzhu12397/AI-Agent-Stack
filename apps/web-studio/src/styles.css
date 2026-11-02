@@ -206,3 +206,37 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .plan-result > span { color: #a8b8d5; font: 9px "DM Mono", monospace; overflow-wrap: anywhere; }
 .plan-result ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #e4bf84; font-size: 10px; }
 .plan-result p { margin: 0; color: #8ba6a0; font-size: 10px; line-height: 1.5; }
+
+
+.integration-hub { display: grid; gap: 14px; }
+.integration-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.integration-heading h2 { margin: 5px 0; color: #eef3ff; font-size: 20px; }
+.integration-heading p:last-child { max-width: 680px; margin: 0; color: #8999b3; font-size: 11px; line-height: 1.6; }
+.integration-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.integration-panel { display: grid; gap: 12px; min-width: 0; padding: 15px; background: #0c1422; border: 1px solid #2a3850; border-radius: 10px; }
+.integration-panel-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #26354b; }
+.integration-panel-title h3 { margin: 0; color: #dce6f6; font-size: 12px; }
+.integration-panel-title span { color: #7386a4; font: 9px "DM Mono", monospace; }
+.plugin-catalog-item { display: grid; gap: 7px; padding: 12px; background: #101b2c; border: 1px solid #26364e; border-radius: 8px; cursor: pointer; }
+.plugin-catalog-item.selected { border-color: #6679d8; background: #151f37; }
+.plugin-catalog-top, .plugin-tool-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.plugin-catalog-top strong, .plugin-tool-heading strong { color: #dfe8f7; font-size: 11px; }
+.plugin-catalog-item > small, .plugin-detail-summary small, .plugin-tool-row small, .installation-card > small { color: #7f90aa; font: 9px "DM Mono", monospace; overflow-wrap: anywhere; }
+.plugin-catalog-item p, .plugin-detail-summary p, .plugin-tool-row p { margin: 0; color: #91a1ba; font-size: 10px; line-height: 1.55; }
+.plugin-tool-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.plugin-detail-summary { display: grid; gap: 6px; }
+.plugin-detail-summary strong { color: #e5edfb; font-size: 13px; }
+.plugin-tool-row { display: grid; gap: 6px; padding: 10px; border: 1px solid #24344a; border-radius: 7px; }
+.permission-grants { display: grid; gap: 8px; padding: 10px; border: 1px solid #344665; border-radius: 7px; }
+.permission-grants label { color: #b8c7df; font-size: 10px; }
+.permission-grants .el-checkbox-group { display: grid; gap: 6px; }
+.registration-panel { grid-column: 1 / -1; }
+.installation-panel { grid-column: 1 / -1; }
+.installation-card { display: grid; gap: 9px; padding: 12px; background: #101b2c; border: 1px solid #2a3b54; border-radius: 8px; }
+.connection-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #9cacc3; font-size: 10px; }
+.installation-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.connection-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.connection-form .el-button { justify-self: start; }
+.integration-safety-note { margin: 0; color: #8da49e; font-size: 10px; line-height: 1.6; }
+.integration-panel .el-textarea__inner { color: #d7e2f4; background: #080f1b; border-color: #33435b; font: 10px "DM Mono", monospace; }
+@media (max-width: 900px) { .integration-grid { grid-template-columns: 1fr; } .registration-panel, .installation-panel { grid-column: auto; } .connection-form { grid-template-columns: 1fr; } .integration-heading { flex-direction: column; } }
