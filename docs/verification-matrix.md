@@ -10,18 +10,18 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 | Area | Target | Status |
 |---|---|---|
-| Backend | Django 5.1+ / Python 3.12 | Implemented; migration CI pending |
-| REST API | Django REST Framework | API root implemented; CI pending |
-| ASGI | Django Channels / Daphne | HTTP ASGI entrypoint implemented; WebSocket consumers not implemented |
-| Production configuration | Reject default SECRET_KEY and DEBUG=true | Test added; CI pending |
-| Database | PostgreSQL via dj-database-url | Configuration implemented; CI pending |
-| Health | Liveness and database readiness | Implemented; CI pending |
+| Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
+| REST API | Django REST Framework | API root and health endpoints passed in run 41405916271 |
+| ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
+| Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41405916271 |
+| Database | PostgreSQL via dj-database-url | PostgreSQL migrations applied successfully in run 41405916271 |
+| Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41405916271 |
 | Worker | Separate Python process / psycopg heartbeat | Implemented; not a durable task queue |
-| Frontend | Vue 3 + TypeScript + Vite | Implemented; CI pending |
+| Frontend | Vue 3 + TypeScript + Vite | Production build passed in run 41405916271 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
-| Compose | API, Worker, PostgreSQL, Redis and Vue | Updated; CI pending |
+| Compose | API, Worker, PostgreSQL, Redis and Vue | Build/start and API/Web/Worker smoke tests passed in run 41405916271 |
 
 ## Not yet implemented or verified
 

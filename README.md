@@ -11,7 +11,7 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
-The FastAPI and React implementation is being replaced. Previous successful CI runs are historical evidence for the old stack and do not verify this Django/Vue migration.
+The FastAPI and React implementation has been replaced. The Django/Vue migration passed full CI in [run 41405916271](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41405916271), commit `33d740184f6ea2ba18e98aaf68680ec6238305b3`: Python 3.12 install, Ruff, Django checks, PostgreSQL migrations, 8 pytest tests, Vue production build, Compose build/start, API health checks, Web HTTP and Worker-running smoke test.
 
 ## Quick start
 
