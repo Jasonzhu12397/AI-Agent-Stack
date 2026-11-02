@@ -95,3 +95,9 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
     ],
 }
+
+LOCAL_MODEL_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("LOCAL_MODEL_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
