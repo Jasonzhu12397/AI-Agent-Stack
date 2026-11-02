@@ -301,7 +301,10 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 or target_node.last_seen_at is None
                 or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
             ):
-                return Response({"detail": "Target Agent heartbeat is no longer fresh."}, status=409)
+                return Response(
+                    {"detail": "Target Agent heartbeat is no longer fresh."},
+                    status=409,
+                )
             deployment.target_node = target_node
             deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
             deployment.save(update_fields=["target_node", "status", "updated_at"])
