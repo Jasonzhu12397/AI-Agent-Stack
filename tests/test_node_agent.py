@@ -509,6 +509,161 @@ def test_provider_crd_schema_rejects_missing_openapi_schema():
     assert "no_served_version_with_openapi_schema" in result["schema_errors"]
 
 
+
+def _cluster_crd_fixture(version="v1beta1"):
+    return {
+        "spec": {
+            "group": "cluster.x-k8s.io",
+            "names": {"plural": "clusters", "kind": "Cluster"},
+            "scope": "Namespaced",
+            "versions": [
+                {
+                    "name": version,
+                    "served": True,
+                    "storage": True,
+                    "schema": {
+                        "openAPIV3Schema": {
+                            "type": "object",
+                            "required": ["apiVersion", "kind", "metadata", "spec"],
+                            "properties": {
+                                "apiVersion": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["Cluster"]},
+                                "metadata": {
+                                    "type": "object",
+                                    "required": ["name", "namespace"],
+                                    "properties": {
+                                        "name": {"type": "string", "minLength": 1},
+                                        "namespace": {"type": "string", "minLength": 1},
+                                    },
+                                },
+                                "spec": {
+                                    "type": "object",
+                                    "required": ["clusterNetwork"],
+                                    "properties": {
+                                        "clusterNetwork": {
+                                            "type": "object",
+                                            "required": ["pods"],
+                                            "properties": {
+                                                "pods": {
+                                                    "type": "object",
+                                                    "required": ["cidrBlocks"],
+                                                    "properties": {
+                                                        "cidrBlocks": {
+                                                            "type": "array",
+                                                            "minItems": 1,
+                                                            "items": {"type": "string"},
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        },
+                                        "controlPlaneEndpoint": {"type": "string"},
+                                    },
+                                },
+                            },
+                        }
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_manifest_validation_checks_nested_required_fields_and_arrays(monkeypatch):
+    def fake_get(path):
+        if path.endswith("/clusters.cluster.x-k8s.io"):
+            return _cluster_crd_fixture()
+        raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    manifest = {
+        "apiVersion": "cluster.x-k8s.io/v1beta1",
+        "kind": "Cluster",
+        "metadata": {"name": "edge-lab", "namespace": "clusters"},
+        "spec": {
+            "clusterNetwork": {
+                "pods": {"cidrBlocks": ["10.244.0.0/16"]}
+            }
+        },
+    }
+    result = agent.validate_provider_manifests([manifest])
+    assert result["valid"] is True
+    assert result["validated_count"] == 1
+    assert result["server_side_dry_run"] is False
+    assert result["mutation_adapter_enabled"] is False
+
+
+def test_manifest_validation_rejects_missing_nested_required_and_wrong_array_type(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (
+            _cluster_crd_fixture()
+            if path.endswith("/clusters.cluster.x-k8s.io")
+            else (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404"))
+        ),
+    )
+    manifest = {
+        "apiVersion": "cluster.x-k8s.io/v1beta1",
+        "kind": "Cluster",
+        "metadata": {"name": "edge-lab", "namespace": "clusters"},
+        "spec": {"clusterNetwork": {"pods": {"cidrBlocks": "10.244.0.0/16"}}},
+    }
+    result = agent.validate_provider_manifests([manifest])
+    assert result["valid"] is False
+    errors = result["results"][0]["errors"]
+    assert "manifests[0].spec.clusterNetwork.pods.cidrBlocks:type_mismatch" in errors
+
+
+def test_manifest_validation_rejects_unsupported_api_version(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (
+            _cluster_crd_fixture()
+            if path.endswith("/clusters.cluster.x-k8s.io")
+            else (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404"))
+        ),
+    )
+    manifest = {
+        "apiVersion": "cluster.x-k8s.io/v1alpha9",
+        "kind": "Cluster",
+        "metadata": {"name": "edge-lab", "namespace": "clusters"},
+        "spec": {},
+    }
+    result = agent.validate_provider_manifests([manifest])
+    assert result["valid"] is False
+    assert result["results"][0]["errors"] == ["unsupported_api_version"]
+
+
+def test_manifest_validation_reports_missing_crd(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404")),
+    )
+    result = agent.validate_provider_manifests(
+        [{
+            "apiVersion": "cluster.x-k8s.io/v1beta1",
+            "kind": "Cluster",
+            "metadata": {"name": "edge-lab", "namespace": "clusters"},
+            "spec": {},
+        }]
+    )
+    assert result["valid"] is False
+    assert result["results"][0]["errors"] == ["crd_not_found_for_group_and_kind"]
+
+
+def test_manifest_validation_command_is_eph_only(monkeypatch):
+    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.manifest.validate",
+                "payload": {"manifests": []},
+            },
+            "target_cluster",
+        )
+
 def test_provider_discovery_rejects_non_eph_agent():
     with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
         agent.execute_command(
