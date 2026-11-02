@@ -21,13 +21,13 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Area | Target | Status |
 |---|---|---|
 | Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
-| REST API | Django REST Framework | Tenant self-service creation, project/member APIs, session auth and scoped asynchronous task create/list/detail/cancel APIs tested in runs 41408139658, 41408491282 and 41410163318 |
+| REST API | Django REST Framework | Tenant/project APIs, session auth, durable task APIs, Agent/Workflow APIs and new node enrollment/command/approval/runtime routes; new routes are awaiting PR CI |
 | ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states. Demo, single-turn LLM Agent and basic Workflow Run handlers are connected; Workflow execution evidence is in run 41420838331 |
-| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue, fake model manager, Agent Builder/run console and Workflow Studio JSON editor/publish/run history passed in run 41420838331 |
+| Frontend | Vue 3 + TypeScript + Vite | Existing workspace plus a new EPH/Target Cluster Agent console ported from the user's React reference UI; branch build is pending PR CI |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
@@ -41,12 +41,12 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe demo tasks and text-only Agent Runs; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. No external side-effect handlers or Workflow Engine integration yet |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Partial: published Agent versions and asynchronous single-turn LLM runs work. Multi-step tool calling, model routing/fallback, memory and tool policy integration remain unimplemented |
 | Workflow engine | Versioned DAG, branches, recovery | Partial: immutable versions; start/LLM/condition/end nodes; DAG validation; branch skip; persisted node steps; idempotent run creation. No drag/drop canvas, loop/parallel/join, human approval, HTTP/Code nodes, scheduler/webhook triggers or fault-injection proof of process restart recovery |
-| Policy and approval | Default deny, hash-bound one-time approval | Not implemented; high-risk external actions remain disabled |
+| Policy and approval | Default deny, hash-bound one-time approval | Partial: infrastructure provisioning/bootstrap commands require a second tenant administrator and canonical plan-hash match before dispatch. General Tool Router policy, expiry/revocation checks at every tool call and complete approval UI remain unimplemented |
 | Real MCP | SDK, transport, negotiation and protocol tests | Not implemented; FakeMCP is an in-process fixture |
 | Plugin isolation / SSRF | Sandboxed executor and network egress controls | Not implemented |
 | RAG / Memory | ACL-filtered ingestion, retrieval and deletion | Not implemented |
 | Vendor connectors | GitHub/Jira/Graph/Maps/Weather and others | Not implemented / no live API verification |
-| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Not verified |
+| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Partial: node-agent enrollment, heartbeat, command leasing and read-only Kubernetes API inspection are implemented in this branch; CAPI/Metal3 API group discovery is available. Actual Cluster/MachineDeployment/BareMetalHost writes, Ironic/IPA/BMC operations, target-agent bootstrap and end-to-end cluster postconditions are disabled and not verified |
 | Production readiness | OIDC, secret manager, backup/restore, HA, SLO and security scans | Not implemented / not verified |
 
 ## Evidence policy
@@ -55,3 +55,18 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 - Tests that are skipped or absent remain unverified.
 - Simulations are labeled as simulations, not live integrations.
 - A successful migration CI run is required before this stack is called validated.
+
+
+## Dual-agent infrastructure slice (branch: feature/dual-agent-control-plane)
+
+| Capability | Implementation | Evidence / limitation |
+|---|---|---|
+| EPH and target node enrollment | Tenant/project-scoped AgentNode records; one-time random token returned once; only SHA-256 hash stored; revoke cancels queued commands | Code and API tests added; awaiting PR CI |
+| Remote command queue | PostgreSQL AgentCommand, idempotency key, node binding, attempts, lease token and 90-second lease; stale lease results rejected | Code and API tests added; awaiting PR CI |
+| Approval gate | Cluster provision and target-agent bootstrap begin in WAITING_APPROVAL; separate tenant admin approves canonical payload hash | Self-approval and hash mismatch protection added; awaiting PR CI |
+| Node agent runner | Python stdlib HTTPS client; outbound heartbeat/poll/result; compiled command allowlist; no shell execution | Unit tests added; awaiting PR CI |
+| EPH safe operations | Host preflight and cluster spec validation/dry-run; CAPI/Metal3 API group discovery | Local logic tests added; no live management cluster tested |
+| Target cluster safe operations | In-cluster ServiceAccount GET requests for Kubernetes version, nodes, namespaces, pods/events/services; readiness and warning-event summaries | Unit tests added; no live target cluster tested |
+| CAPI/Metal3/Ironic provisioning | Version-aware declarative adapter, resource writes, Ironic/BMC lifecycle and target-agent bootstrap | Not implemented; must wait for exact target version/CRD and credential verification |
+| Production agent identity | mTLS or short-lived workload identity, certificate rotation and external secret delivery | Development one-time bearer token only; production deployment not verified |
+| Vue infrastructure console | Enroll/revoke nodes, show heartbeat state, dispatch typed commands, inspect command history, approve plan hashes | UI implementation added; awaiting Vue type-check/build in PR CI |
