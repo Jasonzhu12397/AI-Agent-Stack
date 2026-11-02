@@ -115,6 +115,11 @@ urlpatterns = [
         name="cluster-deployment-cancel",
     ),
     path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
+        ClusterDeploymentTargetPostflightView.as_view(),
+        name="cluster-deployment-target-postflight",
+    ),
+    path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
         AgentNodeListCreateView.as_view(),
         name="agent-node-list-create",
