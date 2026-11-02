@@ -104,3 +104,10 @@ The EPH `cluster.plan` command validates the basic cluster identity, Kubernetes 
 - BMC credential references, never plaintext BMC credentials.
 
 A complete input checklist is not a compatibility pass. `provisioning_ready` means required fields are present; `adapter_enabled` remains false until the exact target CRD schemas and provider versions are tested and the provisioning adapter is implemented. No manifest is applied by this plan command.
+
+
+## Persisted cluster plan workflow
+
+The Studio's Cluster Delivery Plan API creates a `ClusterDeployment` record scoped to one tenant/project and an online EPH agent. It enqueues `host.preflight`. A successful EPH preflight automatically enqueues `cluster.plan`; the returned typed plan, missing prerequisites and plan hash are persisted. The Vue console displays each stage and allows cancellation while the workflow remains in its plan-only phase.
+
+This workflow deliberately stops at `PLAN_READY`. It does not enqueue a provisioning write command. The next stage will add a version-aware CAPI/Metal3 adapter, an approval-bound provisioning transition, target-agent bootstrap and target-side postflight. Until that adapter is verified, a plan with all input fields present still reports `adapter_enabled: false`.
