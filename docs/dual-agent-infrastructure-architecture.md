@@ -110,7 +110,7 @@ A complete input checklist is not a compatibility pass. `provisioning_ready` mea
 
 The Studio's Cluster Delivery Plan API creates a `ClusterDeployment` record scoped to one tenant/project and an online EPH agent. It enqueues `host.preflight`. A successful EPH preflight automatically enqueues `cluster.plan`; the returned typed plan, missing prerequisites and plan hash are persisted. The Vue console displays each stage and allows cancellation while the workflow remains in its plan-only phase.
 
-This workflow deliberately stops at `PLAN_READY` and does not enqueue a provisioning write command. If the EPH plan reports all prerequisites present, an operator can provision the cluster through a separately verified process, explicitly confirm that action in the Studio, and dispatch a read-only postflight command to an online Target Cluster Agent. The postflight command receives only the deployment ID and cluster name, not the full provisioning spec or BMC credential references. Until a version-aware CAPI/Metal3 adapter is verified, the plan continues to report `adapter_enabled: false`.
+This workflow deliberately stops at `PLAN_READY` and does not enqueue a provisioning write command. The Target Cluster Agent postflight endpoint and result handling are implemented, but dispatch is deliberately gated on a future provisioning adapter setting `adapter_enabled: true`, `provisioning_completed: true` and deployment status `WORKERS_READY`. The current dry-run plan reports `adapter_enabled: false`, so the target postflight button remains unavailable. When enabled, the postflight command will receive only the deployment ID and cluster name, not the full provisioning spec or BMC credential references.
 
 
 ## Upstream compatibility references (reviewed 2026-11-02)
