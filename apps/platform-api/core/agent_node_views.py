@@ -144,7 +144,11 @@ def _validate_payload(payload):
 def _authenticate_node(request, node_id):
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
+    if scheme.lower() != "bearer" or not token or len(token) > 512:
+        return None
+    try:
+        node_id = uuid.UUID(str(node_id))
+    except (TypeError, ValueError, AttributeError):
         return None
     node = AgentNode.objects.filter(pk=node_id).first()
     if node is None or node.status == AgentNode.Status.REVOKED:
@@ -286,7 +290,7 @@ class AgentNodeCommandListCreateView(APIView):
             return Response({"detail": "Project editor permission required."}, status=403)
         command_type = request.data.get("command_type")
         allowed = EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
-        if command_type not in allowed:
+        if not isinstance(command_type, str) or command_type not in allowed:
             return Response({"detail": "Command is not allowed for this agent type."}, status=400)
         payload = request.data.get("payload", {})
         payload_error = _validate_payload(payload)
