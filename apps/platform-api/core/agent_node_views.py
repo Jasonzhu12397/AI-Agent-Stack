@@ -796,7 +796,10 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             target_node=node,
         ).first()
         if deployment is None:
-            return Response({"detail": "Deployment is not assigned to this target agent."}, status=404)
+            return Response(
+                {"detail": "Deployment is not assigned to this target agent."},
+                status=404,
+            )
         if deployment.status not in {
             ClusterDeployment.Status.CONTROL_PLANE_READY,
             ClusterDeployment.Status.TARGET_AGENT_PENDING,
@@ -838,7 +841,11 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             return Response({"detail": "Invalid target agent credential."}, status=401)
         if deployment is None:
             return Response(
-                {"detail": "Deployment is not assigned to this target agent or is not handoff-ready."},
+                {
+                    "detail": (
+                        "Deployment is not assigned to this target agent or is not handoff-ready."
+                    )
+                },
                 status=409,
             )
         phase = request.data.get("phase")
@@ -852,7 +859,10 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             or isinstance(generation, bool)
             or generation != 1
         ):
-            return Response({"detail": "generation must match the active generation 1."}, status=409)
+            return Response(
+                {"detail": "generation must match the active generation 1."},
+                status=409,
+            )
         if (
             not isinstance(sequence, int)
             or isinstance(sequence, bool)
@@ -875,9 +885,15 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             ).first()
             if checkpoint is not None:
                 if checkpoint.agent_node_id != node.id or checkpoint.generation != generation:
-                    return Response({"detail": "Checkpoint generation or agent identity mismatch."}, status=409)
+                    return Response(
+                        {"detail": "Checkpoint generation or agent identity mismatch."},
+                        status=409,
+                    )
                 if sequence < checkpoint.sequence:
-                    return Response({"detail": "Checkpoint sequence must increase monotonically."}, status=409)
+                    return Response(
+                        {"detail": "Checkpoint sequence must increase monotonically."},
+                        status=409,
+                    )
                 if sequence == checkpoint.sequence:
                     if checkpoint.phase == phase and checkpoint.data == checkpoint_data:
                         return Response(
