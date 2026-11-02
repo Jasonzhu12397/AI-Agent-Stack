@@ -225,13 +225,13 @@ onUnmounted(() => {
         <p class="eyebrow">WORKFLOW ORCHESTRATION</p>
         <h3>Workflow Studio</h3>
       </div>
-      <el-button type="primary" plain :disabled="!projectId" :loading="saving" @click="createDraft">
+      <el-button type="primary" plain :disabled="!props.projectId" :loading="saving" @click="createDraft">
         ＋ New workflow
       </el-button>
     </div>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="notice" :title="notice" type="success" :closable="true" @close="notice = ''" />
-    <el-empty v-if="!projectId" description="Select a project to manage workflows" :image-size="72" />
+    <el-empty v-if="!props.projectId" description="Select a project to manage workflows" :image-size="72" />
     <el-empty v-else-if="!loading && workflows.length === 0" description="Create a workflow draft to get started" :image-size="72" />
     <template v-else-if="selectedWorkflow">
       <div class="workflow-selector">
