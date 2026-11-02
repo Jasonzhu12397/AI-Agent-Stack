@@ -40,3 +40,8 @@ The port keeps the reference's dark slate background, indigo active navigation, 
 - `AgentStudioView.vue` loads project Knowledge Bases and tools from installed connectors. A new Agent draft can pin Knowledge Base IDs and installed PluginTool IDs. The published version freezes those selections.
 - RAG chunks are injected as untrusted user-context material and Qdrant retrieval is filtered by tenant, project and the selected Knowledge Base ID.
 - Provider-specific connector handlers, high-risk human approval, file parsers and document/vector deletion remain outside this milestone.
+
+
+## Workflow RAG node
+
+The Workflow Studio JSON definition editor accepts the `knowledge_search` node type. Configure `knowledge_base_ids` with 1–8 Knowledge Base UUIDs from the same project, `query_template` (supports `{{input}}`) and `limit` (1–10). Connect its output to a downstream LLM node using `input_from` or `source_node`. The server validates every Knowledge Base and embedding model at publish and run time. Retrieved content is treated as untrusted reference data.
