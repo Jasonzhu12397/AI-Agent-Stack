@@ -138,3 +138,76 @@ class Task(models.Model):
                 name="task_scope_idx",
             ),
         ]
+
+
+class ModelProvider(models.Model):
+    class ProviderType(models.TextChoices):
+        FAKE = "fake", "Fake model"
+        OPENAI_COMPATIBLE = "openai_compatible", "OpenAI compatible"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="model_providers",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_model_providers",
+    )
+    name = models.CharField(max_length=120)
+    provider_type = models.CharField(max_length=32, choices=ProviderType.choices)
+    base_url = models.URLField(max_length=500, blank=True)
+    credential_ref = models.CharField(max_length=160, blank=True)
+    config = models.JSONField(default=dict)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "name"],
+                name="uniq_model_provider_name_per_tenant",
+            )
+        ]
+
+
+class ModelConfig(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(
+        ModelProvider,
+        on_delete=models.CASCADE,
+        related_name="models",
+    )
+    model_name = models.CharField(max_length=160)
+    display_name = models.CharField(max_length=160)
+    capabilities = models.JSONField(default=list)
+    context_window = models.PositiveIntegerField(default=32768)
+    max_output_tokens = models.PositiveIntegerField(default=4096)
+    input_cost_per_million = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        default=0,
+    )
+    output_cost_per_million = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        default=0,
+    )
+    version = models.PositiveIntegerField(default=1)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["provider__name", "display_name", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "model_name", "version"],
+                name="uniq_model_config_version",
+            )
+        ]
