@@ -211,3 +211,83 @@ class ModelConfig(models.Model):
                 name="uniq_model_config_version",
             )
         ]
+
+
+class AgentDefinition(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="agents")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="agents")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_agents",
+    )
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=80)
+    description = models.TextField(blank=True)
+    draft_config = models.JSONField(default=dict)
+    current_version = models.PositiveIntegerField(default=0)
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "slug"],
+                name="uniq_agent_slug_per_project",
+            )
+        ]
+
+
+class AgentVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    agent = models.ForeignKey(
+        AgentDefinition,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version = models.PositiveIntegerField()
+    config_snapshot = models.JSONField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="published_agent_versions",
+    )
+    published_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["agent", "version"],
+                name="uniq_agent_version_number",
+            )
+        ]
+
+
+class AgentRun(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.OneToOneField(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="agent_run",
+    )
+    agent_version = models.ForeignKey(
+        AgentVersion,
+        on_delete=models.PROTECT,
+        related_name="runs",
+    )
+    input_text = models.TextField()
+    output_text = models.TextField(blank=True)
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    provider_name = models.CharField(max_length=120, blank=True)
+    model_name = models.CharField(max_length=160, blank=True)
+    latency_ms = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
