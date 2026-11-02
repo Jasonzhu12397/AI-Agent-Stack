@@ -255,21 +255,21 @@ class ClusterDeploymentTargetPostflightView(APIView):
                 {"detail": "Explicit cluster_provisioned confirmation is required."},
                 status=400,
             )
+        plan_result = deployment.plan_result or {}
         if (
-            deployment.status == ClusterDeployment.Status.PLAN_READY
-            and (deployment.plan_result or {}).get("provisioning_ready") is not True
+            plan_result.get("provisioning_ready") is not True
+            or plan_result.get("adapter_enabled") is not True
         ):
             return Response(
-                {"detail": "The EPH plan still has missing prerequisites."},
+                {"detail": "The EPH plan is dry-run only or has missing prerequisites; provisioning is not enabled."},
                 status=409,
             )
-        if deployment.status not in {
-            ClusterDeployment.Status.PLAN_READY,
-            ClusterDeployment.Status.CONTROL_PLANE_READY,
-            ClusterDeployment.Status.WORKERS_READY,
-        }:
+        if (
+            deployment.status != ClusterDeployment.Status.WORKERS_READY
+            or plan_result.get("provisioning_completed") is not True
+        ):
             return Response(
-                {"detail": "Deployment must be plan-ready or provisioned before target postflight."},
+                {"detail": "Target postflight requires a completed provisioning result with all workers ready."},
                 status=409,
             )
         target_node_id = request.data.get("target_node_id") or deployment.target_node_id
@@ -305,12 +305,11 @@ class ClusterDeploymentTargetPostflightView(APIView):
             )
         with transaction.atomic():
             deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-            if deployment.status not in {
-                ClusterDeployment.Status.PLAN_READY,
-                ClusterDeployment.Status.CONTROL_PLANE_READY,
-                ClusterDeployment.Status.WORKERS_READY,
-            }:
-                return Response({"detail": "Deployment state changed; retry the request."}, status=409)
+            if (
+                deployment.status != ClusterDeployment.Status.WORKERS_READY
+                or (deployment.plan_result or {}).get("provisioning_completed") is not True
+            ):
+                return Response({"detail": "Deployment state changed or provisioning is incomplete."}, status=409)
             if deployment.target_node_id and deployment.target_node_id != target_node.id:
                 return Response({"detail": "Deployment is already bound to another target agent."}, status=409)
             deployment.target_node = target_node
