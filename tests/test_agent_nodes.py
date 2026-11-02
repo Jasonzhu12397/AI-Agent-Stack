@@ -432,3 +432,23 @@ def test_target_agent_control_plane_verify_command_is_allowed(node_workspace):
         HTTP_IDEMPOTENCY_KEY="target-control-plane-verify",
     )
     assert response.status_code == 202
+
+
+@pytest.mark.django_db
+def test_target_agent_capi_pivot_preflight_command_is_allowed(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "target-capi-pivot-preflight", "node_type": "target_cluster"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.capi.pivot.target.preflight",
+            "payload": {"cluster_name": "edge-lab"},
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="target-capi-pivot-preflight",
+    )
+    assert response.status_code == 202
