@@ -81,7 +81,7 @@ Before enabling real provisioning, the operator must configure and verify:
 
 ## Current implementation boundary
 
-The first code slice introduces node enrollment, heartbeat, durable command dispatch, lease-protected results and hash-bound approval. The bundled node-agent runner supports safe health/preflight/plan commands. Actual CAPI/Metal3 resource writes, Ironic/BMC power operations, target-agent installation and target-cluster postflight are adapter work and remain disabled until a concrete environment compatibility matrix and credentials are supplied and tested.
+The current code supports node enrollment, heartbeat, durable command dispatch, lease-protected results and hash-bound approval. The EPH runner supports safe health/preflight/plan commands. A separately enrolled Target Cluster Agent can now receive a read-only `cluster.postflight` command after an operator explicitly confirms that the cluster was provisioned externally and the EPH plan has no missing prerequisites. The postflight result marks the deployment successful only when at least one node is present and all nodes report Ready. Actual CAPI/Metal3 resource writes, Ironic/BMC power operations and automated target-agent installation remain disabled until a concrete environment compatibility matrix and adapters are supplied and tested.
 
 ## Kubernetes agent deployment
 
@@ -110,7 +110,7 @@ A complete input checklist is not a compatibility pass. `provisioning_ready` mea
 
 The Studio's Cluster Delivery Plan API creates a `ClusterDeployment` record scoped to one tenant/project and an online EPH agent. It enqueues `host.preflight`. A successful EPH preflight automatically enqueues `cluster.plan`; the returned typed plan, missing prerequisites and plan hash are persisted. The Vue console displays each stage and allows cancellation while the workflow remains in its plan-only phase.
 
-This workflow deliberately stops at `PLAN_READY`. It does not enqueue a provisioning write command. The next stage will add a version-aware CAPI/Metal3 adapter, an approval-bound provisioning transition, target-agent bootstrap and target-side postflight. Until that adapter is verified, a plan with all input fields present still reports `adapter_enabled: false`.
+This workflow deliberately stops at `PLAN_READY` and does not enqueue a provisioning write command. If the EPH plan reports all prerequisites present, an operator can provision the cluster through a separately verified process, explicitly confirm that action in the Studio, and dispatch a read-only postflight command to an online Target Cluster Agent. The postflight command receives only the deployment ID and cluster name, not the full provisioning spec or BMC credential references. Until a version-aware CAPI/Metal3 adapter is verified, the plan continues to report `adapter_enabled: false`.
 
 
 ## Upstream compatibility references (reviewed 2026-11-02)
