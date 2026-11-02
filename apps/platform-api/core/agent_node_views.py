@@ -242,10 +242,16 @@ class AgentNodeRevokeView(APIView):
             node.save(update_fields=["status", "revoked_at", "updated_at"])
             AgentCommand.objects.filter(
                 node=node,
-                status__in=[AgentCommand.Status.QUEUED, AgentCommand.Status.WAITING_APPROVAL],
+                status__in=[
+                    AgentCommand.Status.QUEUED,
+                    AgentCommand.Status.WAITING_APPROVAL,
+                    AgentCommand.Status.RUNNING,
+                ],
             ).update(
                 status=AgentCommand.Status.CANCELLED,
                 finished_at=timezone.now(),
+                lease_token=None,
+                lease_expires_at=None,
             )
         return Response(_node_data(node))
 
