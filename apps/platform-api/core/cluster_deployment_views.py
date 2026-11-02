@@ -250,6 +250,19 @@ class ClusterDeploymentTargetPostflightView(APIView):
         )
         if not _can_edit_project(request.user, deployment.tenant, deployment.project):
             return Response({"detail": "Project editor permission required."}, status=403)
+        if request.data.get("confirmation") != "cluster_provisioned":
+            return Response(
+                {"detail": "Explicit cluster_provisioned confirmation is required."},
+                status=400,
+            )
+        if (
+            deployment.status == ClusterDeployment.Status.PLAN_READY
+            and (deployment.plan_result or {}).get("provisioning_ready") is not True
+        ):
+            return Response(
+                {"detail": "The EPH plan still has missing prerequisites."},
+                status=409,
+            )
         if deployment.status not in {
             ClusterDeployment.Status.PLAN_READY,
             ClusterDeployment.Status.CONTROL_PLANE_READY,
