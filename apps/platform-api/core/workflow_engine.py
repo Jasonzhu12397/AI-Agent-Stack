@@ -45,6 +45,29 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
         if not isinstance(config, dict):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
+        forbidden_keys = {
+            "api_key",
+            "secret",
+            "password",
+            "access_token",
+            "client_secret",
+            "authorization",
+        }
+
+        def contains_secret(value):
+            if isinstance(value, dict):
+                return any(
+                    str(key).lower() in forbidden_keys or contains_secret(child)
+                    for key, child in value.items()
+                )
+            if isinstance(value, list):
+                return any(contains_secret(child) for child in value)
+            return False
+
+        if contains_secret(config):
+            raise WorkflowValidationError(
+                f"Node {node_id} config cannot contain credential material."
+            )
         if node_type == "llm":
             if not isinstance(config.get("model_config_id"), str):
                 raise WorkflowValidationError(f"LLM node {node_id} requires model_config_id.")
@@ -75,7 +98,12 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError("Every workflow edge must be an object.")
         source = edge.get("source")
         target = edge.get("target")
-        if source not in node_map or target not in node_map:
+        if (
+            not isinstance(source, str)
+            or not isinstance(target, str)
+            or source not in node_map
+            or target not in node_map
+        ):
             raise WorkflowValidationError("Workflow edge references an unknown node.")
         if source == target or (source, target) in seen_edges:
             raise WorkflowValidationError("Self edges and duplicate edges are not allowed.")
@@ -150,31 +178,26 @@ def validate_workflow_definition(definition):
 
 
 def validate_model_references(graph, tenant):
-    model_ids = {
-        node["config"]["model_config_id"]
-        for node in graph["nodes"].values()
-        if node["type"] == "llm"
-    }
-    for model_id in model_ids:
+    for node in graph["nodes"].values():
+        if node["type"] != "llm":
+            continue
+        config = node["config"]
         model = ModelConfig.objects.select_related("provider").filter(
-            pk=model_id,
+            pk=config["model_config_id"],
             enabled=True,
             provider__enabled=True,
         ).first()
         if model is None:
             raise WorkflowValidationError("A workflow LLM node references an unavailable model.")
-        node = next(
-            item for item in graph["nodes"].values()
-            if item["type"] == "llm"
-            and item["config"]["model_config_id"] == model_id
-        )
-        config = node["config"]
         max_tokens = config.get("max_tokens", model.max_output_tokens)
         timeout_seconds = config.get("timeout_seconds", 60)
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
         if not isinstance(system_prompt, str) or len(system_prompt) > 12000:
             raise WorkflowValidationError("Workflow LLM system_prompt is invalid.")
-        if not isinstance(max_tokens, int) or not 1 <= max_tokens <= model.max_output_tokens:
+        if (
+            not isinstance(max_tokens, int)
+            or not 1 <= max_tokens <= model.max_output_tokens
+        ):
             raise WorkflowValidationError("Workflow LLM max_tokens exceeds model limits.")
         if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
             raise WorkflowValidationError("Workflow LLM timeout_seconds must be 1 to 120.")
