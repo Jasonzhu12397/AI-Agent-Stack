@@ -299,3 +299,80 @@ def test_capi_observation_uses_discovered_group_version(monkeypatch):
     assert result["discovered"] is True
     assert result["version"] == "v1beta1"
     assert result["resources"][0]["items"][0]["name"] == "edge-lab"
+
+
+def test_cluster_plan_requires_odd_control_plane_quorum():
+    spec = {
+        "cluster_name": "edge-lab",
+        "kubernetes_version": "v1.32.2",
+        "control_plane_replicas": 2,
+        "worker_replicas": 2,
+    }
+
+    with pytest.raises(agent.NodeAgentError, match="INVALID_CONTROL_PLANE_REPLICAS"):
+        agent.execute_command(
+            {"command_type": "cluster.plan", "payload": {"cluster_spec": spec}},
+            "eph_node",
+        )
+
+
+def test_cluster_plan_never_accepts_plaintext_bmc_credentials():
+    spec = {
+        "cluster_name": "edge-lab",
+        "kubernetes_version": "v1.32.2",
+        "control_plane_replicas": 3,
+        "worker_replicas": 2,
+        "metal3": {"bmc_password": "do-not-store"},
+    }
+
+    with pytest.raises(agent.NodeAgentError, match="FORBIDDEN_PAYLOAD_FIELD"):
+        agent.execute_command(
+            {"command_type": "cluster.plan", "payload": {"cluster_spec": spec}},
+            "eph_node",
+        )
+
+
+def test_complete_cluster_plan_reports_missing_adapter_separately():
+    hosts = [
+        {
+            "baremetal_host": f"bmh-{index:02d}",
+            "role": "control-plane" if index < 3 else "worker",
+            "bmc_credential_ref": f"secret-ref-{index:02d}",
+        }
+        for index in range(4)
+    ]
+    spec = {
+        "cluster_name": "edge-lab",
+        "kubernetes_version": "v1.32.2",
+        "control_plane_replicas": 3,
+        "worker_replicas": 1,
+        "provider_versions": {
+            "cluster_api": "verified-version",
+            "bootstrap_kubeadm": "verified-version",
+            "control_plane_kubeadm": "verified-version",
+            "infrastructure_metal3": "verified-version",
+            "metal3": "verified-version",
+            "ironic": "verified-version",
+            "ipa": "verified-version",
+        },
+        "network": {
+            "pod_cidr": "10.244.0.0/16",
+            "service_cidr": "10.96.0.0/12",
+            "control_plane_endpoint": "192.0.2.10:6443",
+        },
+        "machine_image": {
+            "url": "https://images.example.invalid/worker.qcow2",
+            "checksum": "sha256:example",
+        },
+        "metal3": {"namespace": "metal3-system", "hosts": hosts},
+    }
+
+    result = agent.execute_command(
+        {"command_type": "cluster.plan", "payload": {"cluster_spec": spec}},
+        "eph_node",
+    )
+
+    assert result["provisioning_ready"] is True
+    assert result["missing_requirements"] == []
+    assert result["adapter_enabled"] is False
+    assert result["side_effects"] is False
