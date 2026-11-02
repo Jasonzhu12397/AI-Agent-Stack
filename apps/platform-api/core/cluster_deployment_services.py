@@ -175,7 +175,10 @@ def handle_deployment_command_result(
         )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
-            "capi_pivot_preflight": result,
+            "capi_pivot_preflight": {
+                **result,
+                "preflight_validated": ready,
+            },
         }
         deployment.error = None
         deployment.save(
