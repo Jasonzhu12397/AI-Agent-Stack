@@ -38,7 +38,7 @@ The Target Cluster Agent is not a prerequisite for creating the target cluster. 
 - Commands are durable PostgreSQL records with idempotency key, status, attempts, lease token, lease expiry, result and error summary. A node can only claim commands addressed to itself.
 - Command acknowledgements require both node authentication and the current lease token. Stale workers cannot overwrite a newer lease's result.
 - The initial command contract is typed and allowlisted. Arbitrary shell, arbitrary Python, arbitrary URLs, arbitrary kubeconfig, and raw manifest execution are rejected.
-- Mutating operations such as cluster provisioning and target-agent bootstrap are created in `WAITING_APPROVAL`. Approval binds the canonical payload SHA-256. The command becomes dispatchable only when the approved hash still matches.
+- Mutating operations such as cluster provisioning and target-agent bootstrap are created in `WAITING_APPROVAL`. Approval binds the canonical payload SHA-256, requires a different tenant administrator and expires after 15 minutes. The command becomes dispatchable only when the approved hash still matches and the approval is fresh.
 
 ## Typed command contract
 
