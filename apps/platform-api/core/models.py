@@ -790,3 +790,6 @@ class PluginConnection(models.Model):
                 name="uniq_plugin_connection_name",
             )
         ]
+
+
+from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402
