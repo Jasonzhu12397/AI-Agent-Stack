@@ -189,13 +189,12 @@ def validate_network_inputs(network: Any) -> None:
         return
     for key in ("pod_cidr", "service_cidr"):
         value = network.get(key)
-        if value:
-            if not isinstance(value, str):
-                raise NodeAgentError("INVALID_NETWORK_CIDR")
-            try:
-                ipaddress.ip_network(value, strict=False)
-            except ValueError as exc:
-                raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
+        if not isinstance(value, str) or not value.strip():
+            raise NodeAgentError("INVALID_NETWORK_CIDR")
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError as exc:
+            raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
     endpoint = network.get("control_plane_endpoint")
     if endpoint:
         if not isinstance(endpoint, str) or ":" not in endpoint:
