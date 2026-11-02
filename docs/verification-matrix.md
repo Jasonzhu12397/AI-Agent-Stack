@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41410163318](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41410163318), commit `ed61c3bbe3cb947c454f5c00a9264f214450d2a9`, completed successfully across Python, Vue and Compose jobs. Pytest: 37 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
+[GitHub Actions run 41411548638](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41411548638), commit `90090d25bbc5e993deb9e5c01f58ec1965f18524`, completed successfully across Python, Vue and Compose jobs. Pytest: 46 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -27,7 +27,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states passed in run 41409745762. Demo handlers only; no general Agent/Workflow execution yet |
-| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace and task queue UI passed in run 41410163318 |
+| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue UI and fake model manager passed in run 41411548638 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
