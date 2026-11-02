@@ -70,6 +70,7 @@ const availableCommands = computed(() => {
     "capi.cluster.observe",
     "metal3.host.inspect",
     "cluster.provider.discover",
+    "cluster.manifest.validate",
   ];
 });
 
@@ -85,6 +86,16 @@ function defaultPayload(type: string): string {
     "capi.cluster.observe": {},
     "metal3.host.inspect": {},
     "cluster.provider.discover": {},
+    "cluster.manifest.validate": {
+      manifests: [
+        {
+          apiVersion: "cluster.x-k8s.io/v1beta1",
+          kind: "Cluster",
+          metadata: { name: "edge-lab", namespace: "default" },
+          spec: {},
+        },
+      ],
+    },
     "cluster.plan": {
       cluster_spec: {
         cluster_name: "edge-lab",
