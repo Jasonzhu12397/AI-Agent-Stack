@@ -35,6 +35,7 @@ EPH_COMMANDS = {
     "capi.cluster.observe",
     "metal3.host.inspect",
     "cluster.provider.discover",
+    "cluster.manifest.validate",
 }
 TARGET_COMMANDS = {
     "node.health",
