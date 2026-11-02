@@ -28,7 +28,10 @@ def liveness() -> dict[str, str]:
 @app.get("/health/ready", tags=["health"])
 def readiness() -> JSONResponse:
     if not database_is_ready():
-        return JSONResponse(status_code=503, content={"status": "not_ready", "database": "unavailable"})
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "database": "unavailable"},
+        )
     return JSONResponse(status_code=200, content={"status": "ready", "database": "ok"})
 
 
