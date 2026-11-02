@@ -473,9 +473,9 @@ def execute_knowledge_ingest(task):
             text=document.content,
             embedding_model=knowledge_base.embedding_model,
             metadata={
+                **document.metadata,
                 "title": document.title,
                 "knowledge_base_id": str(knowledge_base.id),
-                **document.metadata,
             },
             chunk_size=knowledge_base.chunk_size,
             overlap=knowledge_base.chunk_overlap,
