@@ -255,33 +255,6 @@ class ClusterDeploymentTargetPostflightView(APIView):
                 {"detail": "Explicit cluster_provisioned confirmation is required."},
                 status=400,
             )
-        plan_result = deployment.plan_result or {}
-        if (
-            plan_result.get("provisioning_ready") is not True
-            or plan_result.get("adapter_enabled") is not True
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "The EPH plan is dry-run only or has missing prerequisites; "
-                        "provisioning is not enabled."
-                    )
-                },
-                status=409,
-            )
-        if (
-            deployment.status != ClusterDeployment.Status.WORKERS_READY
-            or plan_result.get("provisioning_completed") is not True
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "Target postflight requires a completed provisioning result "
-                        "with all workers ready."
-                    )
-                },
-                status=409,
-            )
         target_node_id = request.data.get("target_node_id") or deployment.target_node_id
         try:
             target_node_id = uuid.UUID(str(target_node_id))
