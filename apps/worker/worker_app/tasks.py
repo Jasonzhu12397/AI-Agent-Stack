@@ -323,7 +323,11 @@ def execute_agent_run(task):
     total_tool_calls = 0
     gateway = ModelGateway()
     max_iterations = config.get("max_iterations", 1)
-    if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or not 1 <= max_iterations <= 8:
+    if (
+        not isinstance(max_iterations, int)
+        or isinstance(max_iterations, bool)
+        or not 1 <= max_iterations <= 8
+    ):
         raise PermanentTaskError("Published agent max_iterations is invalid")
     for _ in range(max_iterations):
         try:
