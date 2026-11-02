@@ -207,6 +207,13 @@ def test_agent_result_requires_current_lease_token(node_workspace):
         HTTP_AUTHORIZATION=f"Bearer {token}",
     )
     command = poll.data["command"]
+    renewed = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/lease/renew/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
 
     stale = agent_client.post(
         f"/api/v1/agent-runtime/commands/{command['id']}/result/",
@@ -224,6 +231,8 @@ def test_agent_result_requires_current_lease_token(node_workspace):
     )
 
     assert command_response.status_code == 202
+    assert renewed.status_code == 200
+    assert renewed.data["lease_expires_at"] is not None
     assert stale.status_code == 404
     assert accepted.status_code == 200
     assert accepted.data["status"] == AgentCommand.Status.SUCCEEDED
