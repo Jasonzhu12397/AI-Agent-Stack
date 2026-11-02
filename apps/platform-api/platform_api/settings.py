@@ -54,6 +54,14 @@ TEMPLATES = [
         },
     },
 ]
+CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = [
+    value.strip()
+    for value in os.getenv(
+        "CSRF_TRUSTED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if value.strip()
+]
 CORS_ALLOWED_ORIGINS = [
     value.strip()
     for value in os.getenv(

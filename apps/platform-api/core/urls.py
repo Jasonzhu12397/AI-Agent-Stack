@@ -1,5 +1,6 @@
 from django.urls import path
 
+from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
 from core.membership_views import (
     ProjectMemberDetailView,
     ProjectMemberListCreateView,
@@ -14,6 +15,10 @@ from core.views import (
 )
 
 urlpatterns = [
+    path("api/v1/auth/csrf/", csrf_cookie, name="auth-csrf"),
+    path("api/v1/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/v1/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/v1/auth/me/", CurrentUserView.as_view(), name="auth-me"),
     path("health/live", liveness, name="health-live"),
     path("health/ready", readiness, name="health-ready"),
     path("api/v1/tenants/", TenantListView.as_view(), name="tenant-list"),
