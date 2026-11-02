@@ -14,6 +14,13 @@ import {
   type Tenant,
 } from "../services/api";
 
+const props = withDefaults(
+  defineProps<{
+    activeSection?: "overview" | "models" | "agents" | "workflows";
+  }>(),
+  { activeSection: "overview" },
+);
+
 const tenants = ref<Tenant[]>([]);
 const projects = ref<Project[]>([]);
 const tasks = ref<Task[]>([]);
@@ -191,6 +198,7 @@ onUnmounted(() => {
         <el-empty v-if="!loading && tenants.length === 0" description="Create your first organization" :image-size="72" />
       </aside>
       <section class="task-panel">
+        <div v-if="props.activeSection === 'overview'">
         <div class="task-panel-heading">
           <div>
             <p class="eyebrow">PERSISTENT EXECUTION</p>
@@ -198,41 +206,44 @@ onUnmounted(() => {
           </div>
           <el-tag type="info" effect="plain">{{ tasks.length }} recent</el-tag>
         </div>
-        <div v-if="selectedProjectId" class="task-create">
-          <el-input v-model="taskMessage" placeholder="Message for demo.echo" @keyup.enter="enqueueEcho" />
-          <el-button type="primary" :loading="submitting" @click="enqueueEcho">Run demo task</el-button>
+          <div v-if="selectedProjectId" class="task-create">
+            <el-input v-model="taskMessage" placeholder="Message for demo.echo" @keyup.enter="enqueueEcho" />
+            <el-button type="primary" :loading="submitting" @click="enqueueEcho">Run demo task</el-button>
+          </div>
+          <el-empty v-else description="Select or create a project to view tasks" :image-size="90" />
+          <el-table v-if="selectedProjectId" :data="tasks" size="small" class="task-table">
+            <el-table-column prop="task_type" label="Task" min-width="110" />
+            <el-table-column label="Status" min-width="120">
+              <template #default="scope">
+                <el-tag
+                  :type="scope.row.status === 'succeeded' ? 'success' : scope.row.status === 'failed' ? 'danger' : scope.row.status === 'running' ? 'warning' : 'info'"
+                  size="small"
+                >{{ scope.row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="attempts" label="Attempts" width="86" />
+            <el-table-column label="Action" width="100">
+              <template #default="scope">
+                <el-button
+                  v-if="['queued', 'running', 'cancel_requested', 'waiting_approval'].includes(scope.row.status)"
+                  text
+                  type="danger"
+                  size="small"
+                  @click="stopTask(scope.row.id)"
+                >Cancel</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p class="task-note">PostgreSQL-backed tasks support lease-based Worker execution, single-turn LLM Agent runs and the current basic Workflow DAG runner.</p>
         </div>
-        <el-empty v-else description="Select or create a project to view tasks" :image-size="90" />
-        <el-table v-if="selectedProjectId" :data="tasks" size="small" class="task-table">
-          <el-table-column prop="task_type" label="Task" min-width="110" />
-          <el-table-column label="Status" min-width="120">
-            <template #default="scope">
-              <el-tag
-                :type="scope.row.status === 'succeeded' ? 'success' : scope.row.status === 'failed' ? 'danger' : scope.row.status === 'running' ? 'warning' : 'info'"
-                size="small"
-              >{{ scope.row.status }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="attempts" label="Attempts" width="86" />
-          <el-table-column label="Action" width="100">
-            <template #default="scope">
-              <el-button
-                v-if="['queued', 'running', 'cancel_requested', 'waiting_approval'].includes(scope.row.status)"
-                text
-                type="danger"
-                size="small"
-                @click="stopTask(scope.row.id)"
-              >Cancel</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <p class="task-note">PostgreSQL-backed tasks support lease-based Worker execution, single-turn LLM Agent runs and the current basic Workflow DAG runner.</p>
-        <ModelManagerView :tenant-id="selectedTenantId" />
+        <ModelManagerView v-if="props.activeSection === 'models'" :tenant-id="selectedTenantId" />
         <AgentStudioView
+          v-if="props.activeSection === 'agents'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />
         <WorkflowStudioView
+          v-if="props.activeSection === 'workflows'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />
