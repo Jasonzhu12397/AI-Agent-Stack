@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
@@ -30,7 +31,7 @@ def _matches_type(value: Any, expected: str) -> bool:
         "array": lambda item: isinstance(item, list),
         "string": lambda item: isinstance(item, str),
         "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
-        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item),
         "boolean": lambda item: isinstance(item, bool),
         "null": lambda item: item is None,
     }
@@ -65,17 +66,43 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$") -> None
         if not isinstance(definition, dict) or not _matches_type(item, definition.get("type", "")):
             raise ToolExecutionError(f"Invalid value for tool argument '{key}'.")
         if isinstance(item, str):
-            if len(item) > int(definition.get("maxLength", 65536)):
-                raise ToolExecutionError(f"Tool argument '{key}' is too long.")
+            if (
+                len(item) < int(definition.get("minLength", 0))
+                or len(item) > int(definition.get("maxLength", 65536))
+            ):
+                raise ToolExecutionError(f"Tool argument '{key}' has an invalid length.")
             if "enum" in definition and item not in definition["enum"]:
                 raise ToolExecutionError(f"Invalid value for tool argument '{key}'.")
         if isinstance(item, (int, float)) and not isinstance(item, bool):
+            if not math.isfinite(item):
+                raise ToolExecutionError(f"Tool argument '{key}' must be finite.")
             if "minimum" in definition and item < definition["minimum"]:
                 raise ToolExecutionError(f"Tool argument '{key}' is below its minimum.")
             if "maximum" in definition and item > definition["maximum"]:
                 raise ToolExecutionError(f"Tool argument '{key}' exceeds its maximum.")
         if isinstance(item, dict) and definition.get("type") == "object":
             validate_schema(item, definition, f"{path}.{key}")
+        if isinstance(item, list):
+            minimum = definition.get("minItems", 0)
+            maximum = definition.get("maxItems", 100)
+            item_schema = definition.get("items")
+            if (
+                not isinstance(minimum, int)
+                or isinstance(minimum, bool)
+                or not isinstance(maximum, int)
+                or isinstance(maximum, bool)
+                or minimum < 0
+                or maximum < minimum
+                or len(item) < minimum
+                or len(item) > maximum
+                or not isinstance(item_schema, dict)
+            ):
+                raise ToolExecutionError(f"Tool argument '{key}' has an invalid array shape.")
+            for element in item:
+                if not _matches_type(element, item_schema.get("type", "")):
+                    raise ToolExecutionError(f"Tool argument '{key}' contains an invalid item.")
+                if isinstance(element, dict):
+                    validate_schema(element, item_schema, f"{path}.{key}")
 
 
 class ToolRouter:
