@@ -157,7 +157,7 @@ class WorkflowPublishView(APIView):
                 )
             try:
                 graph = validate_workflow_definition(workflow.draft_definition)
-                validate_model_references(graph, workflow.tenant)
+                validate_model_references(graph, workflow.tenant, workflow.project)
             except WorkflowValidationError as exc:
                 return Response(
                     {"detail": str(exc)},
