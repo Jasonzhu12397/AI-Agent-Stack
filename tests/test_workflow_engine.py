@@ -374,3 +374,26 @@ def test_workflow_viewer_cannot_edit_or_publish(workflow_workspace):
     assert patch_response.status_code == 403
     assert publish_response.status_code == 403
     assert workflow.versions.count() == 0
+
+
+def test_workflow_validator_requires_uuid_model_reference():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "not-a-uuid",
+                    "prompt_template": "Answer {{input}}",
+                },
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "answer"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "answer"},
+            {"source": "answer", "target": "end"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="must be a UUID"):
+        validate_workflow_definition(definition)
