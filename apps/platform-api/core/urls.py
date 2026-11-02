@@ -24,6 +24,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentCancelView,
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
+    ClusterDeploymentTargetAgentHandoffView,
     ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
@@ -115,6 +116,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
         ClusterDeploymentCancelView.as_view(),
         name="cluster-deployment-cancel",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/target-agent/handoff/",
+        ClusterDeploymentTargetAgentHandoffView.as_view(),
+        name="cluster-deployment-target-agent-handoff",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
