@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
 import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
+import KnowledgeBaseView from "./KnowledgeBaseView.vue";
 import {
   cancelTask,
   createEchoTask,
@@ -18,7 +19,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations";
+    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge";
   }>(),
   { activeSection: "overview" },
 );
@@ -267,6 +268,11 @@ onUnmounted(() => {
         />
         <IntegrationHubView
           v-if="props.activeSection === 'integrations'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <KnowledgeBaseView
+          v-if="props.activeSection === 'knowledge'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />
