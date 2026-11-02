@@ -471,11 +471,32 @@ class AgentRuntimeHeartbeatView(APIView):
                     "updated_at",
                 ]
             )
+        active_deployments = []
+        if node.node_type == AgentNode.NodeType.TARGET_CLUSTER:
+            active_deployments = [
+                {
+                    "deployment_id": str(deployment.id),
+                    "cluster_name": deployment.cluster_name,
+                    "status": deployment.status,
+                    "checkpoint_endpoint": (
+                        f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+                    ),
+                }
+                for deployment in ClusterDeployment.objects.filter(
+                    target_node=node,
+                    status__in=[
+                        ClusterDeployment.Status.CONTROL_PLANE_READY,
+                        ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                        ClusterDeployment.Status.POSTFLIGHT,
+                    ],
+                ).order_by("created_at")
+            ]
         return Response(
             {
                 "node_id": str(node.id),
                 "status": node.status,
                 "server_time": node.last_seen_at,
+                "active_deployments": active_deployments,
             }
         )
 
@@ -593,6 +614,9 @@ class AgentRuntimePollView(APIView):
                     "attempt": command.attempts,
                     "lease_token": str(command.lease_token),
                     "lease_expires_at": command.lease_expires_at,
+                    "deployment_id": (
+                        str(command.deployment_id) if command.deployment_id else None
+                    ),
                 }
             }
         )
