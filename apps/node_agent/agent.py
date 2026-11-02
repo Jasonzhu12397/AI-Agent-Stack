@@ -150,6 +150,63 @@ def inspect_api_group(
     }
 
 
+CRD_REQUIREMENTS = {
+    "cluster_api": {"clusters": "clusters.cluster.x-k8s.io", "machines": "machines.cluster.x-k8s.io", "machinedeployments": "machinedeployments.cluster.x-k8s.io"},
+    "bootstrap_kubeadm": {"kubeadmconfigs": "kubeadmconfigs.bootstrap.cluster.x-k8s.io"},
+    "control_plane_kubeadm": {"kubeadmcontrolplanes": "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io"},
+    "infrastructure_metal3": {"metal3clusters": "metal3clusters.infrastructure.cluster.x-k8s.io", "metal3machines": "metal3machines.infrastructure.cluster.x-k8s.io", "metal3machinetemplates": "metal3machinetemplates.infrastructure.cluster.x-k8s.io"},
+    "metal3": {"baremetalhosts": "baremetalhosts.metal3.io"},
+}
+
+
+def summarize_crd_schema(crd: dict[str, Any]) -> dict[str, Any]:
+    spec = crd.get("spec", {})
+    served_versions = []
+    errors = []
+    for version in spec.get("versions", []):
+        if not isinstance(version, dict) or version.get("served") is not True:
+            continue
+        schema = version.get("schema", {}).get("openAPIV3Schema")
+        if not isinstance(schema, dict):
+            errors.append("served_version_missing_openapi_schema")
+            continue
+        properties = schema.get("properties", {})
+        spec_schema = properties.get("spec", {}) if isinstance(properties, dict) else {}
+        spec_properties = spec_schema.get("properties", {}) if isinstance(spec_schema, dict) else {}
+        required = spec_schema.get("required", []) if isinstance(spec_schema, dict) else []
+        served_versions.append({"name": version.get("name"), "storage": version.get("storage") is True, "spec_properties": sorted(key for key in spec_properties if isinstance(key, str))[:100], "required_spec_fields": sorted(key for key in required if isinstance(key, str))[:100]})
+    if not served_versions:
+        errors.append("no_served_version_with_openapi_schema")
+    names = spec.get("names", {})
+    return {"crd_name": names.get("plural", "") + "." + spec.get("group", ""), "group": spec.get("group"), "kind": names.get("kind"), "scope": spec.get("scope"), "served_versions": served_versions, "schema_valid": not errors, "schema_errors": errors}
+
+
+def inspect_provider_crd_schemas(providers: dict[str, Any]) -> dict[str, Any]:
+    results = {}
+    missing = []
+    invalid = []
+    for provider, resources in CRD_REQUIREMENTS.items():
+        available = providers.get(provider, {}).get("resources", {})
+        for resource, crd_name in resources.items():
+            if available.get(resource) is not True:
+                continue
+            path = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + crd_name
+            try:
+                crd = kubernetes_api_get(path)
+            except NodeAgentError as exc:
+                if str(exc) == "KUBERNETES_API_HTTP_404":
+                    missing.append(crd_name)
+                    results[crd_name] = {"found": False, "schema_valid": False}
+                    continue
+                raise
+            summary = summarize_crd_schema(crd)
+            summary["found"] = True
+            results[crd_name] = summary
+            if not summary["schema_valid"]:
+                invalid.append(crd_name)
+    return {"crds": results, "missing_crds": missing, "invalid_schemas": invalid, "schema_check_complete": not missing and not invalid}
+
+
 def discover_provider_apis() -> dict[str, Any]:
     requirements = {
         "cluster_api": ("cluster.x-k8s.io", ("clusters", "machines", "machinedeployments")),
@@ -202,18 +259,20 @@ def discover_provider_apis() -> dict[str, Any]:
         for resource_name, is_available in resource_status.items():
             if not is_available:
                 missing.append(f"provider_api.{provider}.{resource_name}")
+    schema_inspection = inspect_provider_crd_schemas(providers)
     return {
         "management_kubernetes_version": kubernetes_api_get("/version").get("gitVersion"),
         "providers": providers,
         "missing_requirements": missing,
         "discovery_complete": not missing,
+        "crd_schema_inspection": schema_inspection,
         "external_components": {
             "ironic": "not_verified_by_kubernetes_api_discovery",
             "ipa": "not_verified_by_kubernetes_api_discovery",
             "bmc_connectivity": "not_verified",
             "machine_image": "not_verified",
         },
-        "crd_schema_validation": "not_performed",
+        "crd_schema_validation": "read_only_openapi_schema_summary",
         "manifest_generation_enabled": False,
         "mutation_adapter_enabled": False,
         "provisioning_ready": False,
@@ -571,6 +630,7 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         "/api/v1/namespaces",
         "/api/v1/namespaces/",
         "/apis",
+        "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/",
     )
     if not path.startswith(allowed_prefixes) or ".." in path or "?" in path:
         raise NodeAgentError("KUBERNETES_PATH_NOT_ALLOWLISTED")
