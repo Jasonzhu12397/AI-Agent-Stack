@@ -122,3 +122,13 @@ The CAPI core support matrix defines supported management/workload Kubernetes mi
 - [Cluster API Provider Metal3 repository and compatibility notes](https://github.com/metal3-io/cluster-api-provider-metal3)
 
 The agent discovers API versions from the connected management cluster and the plan requires explicit provider version references. The platform must still validate the actual installed CRD schemas, CAPI contract, CAPM3/IPAM versions, Bare Metal Operator, Ironic and IPA versions, and the user's machine templates before enabling writes. This upstream documentation review is not a substitute for an isolated environment integration test.
+
+
+## Central AI supervisor and remote execution agents
+
+The intended control topology has three agent roles:
+1. **Control-plane AI supervisor**: interprets the user's request, gathers environment context, proposes a typed deployment plan and asks the policy/approval service to authorize it.
+2. **EPH Node Agent**: runs in the EPH/management Kubernetes environment, performs preflight, discovers the live CAPI/Metal3 API contract and executes only compiled allowlisted management-cluster operations.
+3. **Target Cluster Agent**: is installed after the target Kubernetes API becomes available, performs target-side readiness/postflight and later receives only target-cluster-scoped operations.
+
+Remote agents do not receive free-form model-generated shell or raw manifests. The control-plane supervisor must convert its plan into a versioned command schema; the server validates tenant/project scope, tool capability, risk, idempotency and approval hash before dispatch. The current implementation has the EPH/Target enrollment and command plane plus persisted EPH preflight/plan workflow. The central LLM-to-node command tool bridge, target-agent bootstrap and CAPI/Metal3 write adapter are still unimplemented.
