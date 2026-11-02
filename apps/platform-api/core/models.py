@@ -77,3 +77,64 @@ class ProjectMembership(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["project", "user"], name="uniq_project_user_membership")
         ]
+
+
+class Task(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        WAITING_APPROVAL = "waiting_approval", "Waiting approval"
+        CANCEL_REQUESTED = "cancel_requested", "Cancel requested"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="tasks")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="tasks")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_agent_tasks",
+    )
+    task_type = models.CharField(max_length=120)
+    payload = models.JSONField(default=dict)
+    result = models.JSONField(null=True, blank=True)
+    error = models.JSONField(null=True, blank=True)
+    status = models.CharField(
+        max_length=24,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    idempotency_key = models.CharField(max_length=128)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=3)
+    available_at = models.DateTimeField()
+    lease_owner = models.CharField(max_length=120, null=True, blank=True)
+    lease_token = models.UUIDField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="uniq_task_idempotency_per_tenant",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "available_at", "created_at"],
+                name="task_queue_idx",
+            ),
+            models.Index(
+                fields=["tenant", "project", "created_at"],
+                name="task_scope_idx",
+            ),
+        ]
