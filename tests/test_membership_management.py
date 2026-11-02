@@ -176,3 +176,27 @@ def test_removing_tenant_member_revokes_project_membership(users):
 
     assert response.status_code == 204
     assert not ProjectMembership.objects.filter(pk=project_membership.pk).exists()
+
+
+@pytest.mark.django_db
+def test_last_project_admin_cannot_be_demoted_or_removed(users):
+    admin = users("only-project-admin")
+    tenant = Tenant.objects.create(name="Project owner guard", slug="project-owner-guard")
+    TenantMembership.objects.create(tenant=tenant, user=admin, role="member")
+    project = Project.objects.create(tenant=tenant, name="Protected project", slug="protected-project")
+    membership = ProjectMembership.objects.create(project=project, user=admin, role="admin")
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    demoted = client.patch(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/members/{membership.id}/",
+        {"role": "viewer"},
+        format="json",
+    )
+    removed = client.delete(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/members/{membership.id}/"
+    )
+
+    assert demoted.status_code == 409
+    assert removed.status_code == 409
+    assert ProjectMembership.objects.filter(pk=membership.pk, role="admin").exists()
