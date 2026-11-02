@@ -243,11 +243,18 @@ class PluginCatalogListCreateView(APIView):
                 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", name)
                 or name in names
             ):
-                return Response({"detail": "Tool names must be unique lowercase slugs."}, status=400)
+                return Response(
+                    {"detail": "Tool names must be unique lowercase slugs."},
+                    status=400,
+                )
             names.add(name)
             if not _safe_schema(input_schema) or not _safe_schema(output_schema):
                 return Response(
-                    {"detail": f"Tool {name} input/output schema must be a closed JSON object schema."},
+                    {
+                        "detail": (
+                            f"Tool {name} input/output schema must be a closed JSON object schema."
+                        )
+                    },
                     status=400,
                 )
             if not isinstance(permissions, list) or not all(
@@ -255,21 +262,33 @@ class PluginCatalogListCreateView(APIView):
                 and re.fullmatch(r"[a-z0-9][a-z0-9:._-]{0,127}", value)
                 for value in permissions
             ):
-                return Response({"detail": f"Tool {name} has invalid required_permissions."}, status=400)
+                return Response(
+                    {"detail": f"Tool {name} has invalid required_permissions."},
+                    status=400,
+                )
             if risk_level not in PluginTool.RiskLevel.values:
                 return Response({"detail": f"Tool {name} has invalid risk_level."}, status=400)
             if idempotency_mode not in PluginTool.IdempotencyMode.values:
-                return Response({"detail": f"Tool {name} has invalid idempotency_mode."}, status=400)
+                return Response(
+                    {"detail": f"Tool {name} has invalid idempotency_mode."},
+                    status=400,
+                )
             if (
                 not isinstance(timeout_seconds, int)
                 or isinstance(timeout_seconds, bool)
                 or not 1 <= timeout_seconds <= 300
             ):
-                return Response({"detail": f"Tool {name} timeout_seconds must be 1–300."}, status=400)
+                return Response(
+                    {"detail": f"Tool {name} timeout_seconds must be 1–300."},
+                    status=400,
+                )
             if not isinstance(retry_policy, dict) or not set(retry_policy).issubset(
                 {"max_attempts", "backoff_seconds"}
             ):
-                return Response({"detail": f"Tool {name} retry_policy has unsupported fields."}, status=400)
+                return Response(
+                    {"detail": f"Tool {name} retry_policy has unsupported fields."},
+                    status=400,
+                )
             max_attempts = retry_policy.get("max_attempts", 1)
             if (
                 not isinstance(max_attempts, int)
@@ -341,7 +360,9 @@ class PluginDetailView(APIView):
 
     def get(self, request, plugin_id):
         plugin = get_object_or_404(
-            PluginDefinition.objects.filter(tenant__memberships__user=request.user).prefetch_related("tools"),
+            PluginDefinition.objects.filter(
+                tenant__memberships__user=request.user
+            ).prefetch_related("tools"),
             pk=plugin_id,
         )
         return Response(_plugin_data(plugin))
@@ -416,7 +437,10 @@ class PluginInstallationListCreateView(APIView):
             for permission in tool.required_permissions
         }
         if not set(granted_permissions).issubset(declared_permissions):
-            return Response({"detail": "Cannot grant permissions not declared by the plugin."}, status=400)
+            return Response(
+                {"detail": "Cannot grant permissions not declared by the plugin."},
+                status=400,
+            )
         if not isinstance(config, dict):
             return Response({"detail": "config must be a JSON object."}, status=400)
         payload_error = _validate_payload({"config": config})
@@ -444,7 +468,11 @@ class PluginInstallationListCreateView(APIView):
                 if not created:
                     if installation.plugin_version != plugin.version:
                         return Response(
-                            {"detail": "Installed plugin version is pinned; uninstall before upgrading."},
+                            {
+                                "detail": (
+                                    "Installed plugin version is pinned; uninstall before upgrading."
+                                )
+                            },
                             status=409,
                         )
                     installation.granted_permissions = sorted(set(granted_permissions))
@@ -459,7 +487,10 @@ class PluginInstallationListCreateView(APIView):
                         ]
                     )
         except IntegrityError:
-            return Response({"detail": "Plugin installation conflicts with an existing record."}, status=409)
+            return Response(
+                {"detail": "Plugin installation conflicts with an existing record."},
+                status=409,
+            )
         return Response(
             _installation_data(installation),
             status=201 if created else 200,
@@ -551,11 +582,19 @@ class PluginConnectionListCreateView(APIView):
             )
         ):
             return Response(
-                {"detail": "credential_ref must be a non-secret URI such as vault://path/to/credential."},
+                {
+                    "detail": (
+                        "credential_ref must be a non-secret URI such as "
+                        "vault://path/to/credential."
+                    )
+                },
                 status=400,
             )
         if auth_type == PluginConnection.AuthType.NONE and credential_ref:
-            return Response({"detail": "credential_ref is not allowed for auth_type=none."}, status=400)
+            return Response(
+                {"detail": "credential_ref is not allowed for auth_type=none."},
+                status=400,
+            )
         if not isinstance(config, dict):
             return Response({"detail": "config must be a JSON object."}, status=400)
         payload_error = _validate_payload({"config": config})
