@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from core.models import (
     AgentRun,
+    WorkflowRun,
     Project,
     ProjectMembership,
     Task,
@@ -190,6 +191,8 @@ class TaskCancelView(APIView):
             )
             if task.task_type == "agent.run" and task.status == Task.Status.CANCELLED:
                 AgentRun.objects.filter(task=task).update(finished_at=timezone.now())
+            if task.task_type == "workflow.run" and task.status == Task.Status.CANCELLED:
+                WorkflowRun.objects.filter(task=task).update(finished_at=timezone.now())
         return Response(
             TaskSerializer(task).data,
             status=status.HTTP_202_ACCEPTED,
