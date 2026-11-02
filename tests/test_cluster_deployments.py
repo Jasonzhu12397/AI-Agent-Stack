@@ -217,9 +217,10 @@ def test_cluster_deployment_cancel_stops_queued_commands(cluster_delivery_worksp
 
 
 @pytest.mark.django_db
-def test_target_agent_runs_postflight_and_completes_deployment(cluster_delivery_workspace):
+def test_target_postflight_rejects_dry_run_plan_even_if_prerequisites_are_present(
+    cluster_delivery_workspace,
+):
     user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
-    target_token = "target-agent-test-token"
     target_node = AgentNode.objects.create(
         tenant=tenant,
         project=project,
@@ -227,102 +228,40 @@ def test_target_agent_runs_postflight_and_completes_deployment(cluster_delivery_
         name="delivery-target",
         node_type=AgentNode.NodeType.TARGET_CLUSTER,
         cluster_name="edge-lab",
-        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        credential_hash=hashlib.sha256(b"target-token").hexdigest(),
         status=AgentNode.Status.ONLINE,
         last_seen_at=timezone.now(),
     )
-    created = create_deployment(client, tenant, project, eph_node, key="target-postflight")
-    deployment_id = created.data["id"]
-    eph_client = APIClient()
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="target-postflight-dry-run",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.PLAN_READY
+    deployment.plan_result = {
+        "provisioning_ready": True,
+        "adapter_enabled": False,
+        "side_effects": False,
+    }
+    deployment.save(update_fields=["status", "plan_result"])
 
-    preflight = eph_client.post(
-        "/api/v1/agent-runtime/commands/poll/",
-        {"node_id": str(eph_node.id)},
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-    )
-    preflight_command = preflight.data["command"]
-    eph_client.post(
-        f"/api/v1/agent-runtime/commands/{preflight_command['id']}/result/",
-        {
-            "node_id": str(eph_node.id),
-            "outcome": "succeeded",
-            "result": {"cpu_count": 32},
-        },
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-        HTTP_X_AGENT_LEASE=preflight_command["lease_token"],
-    )
-    plan = eph_client.post(
-        "/api/v1/agent-runtime/commands/poll/",
-        {"node_id": str(eph_node.id)},
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-    )
-    plan_command = plan.data["command"]
-    eph_client.post(
-        f"/api/v1/agent-runtime/commands/{plan_command['id']}/result/",
-        {
-            "node_id": str(eph_node.id),
-            "outcome": "succeeded",
-            "result": {
-                "plan_status": "validated_dry_run",
-                "plan_hash": "b" * 64,
-                "provisioning_ready": True,
-                "missing_requirements": [],
-                "adapter_enabled": False,
-                "side_effects": False,
-            },
-        },
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-        HTTP_X_AGENT_LEASE=plan_command["lease_token"],
-    )
-
-    postflight = client.post(
-        f"/api/v1/cluster-deployments/{deployment_id}/target-postflight/",
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-postflight/",
         {
             "target_node_id": str(target_node.id),
             "confirmation": "cluster_provisioned",
         },
         format="json",
     )
-    assert postflight.status_code == 202
-    command = AgentCommand.objects.get(pk=postflight.data["command_id"])
-    assert command.node_id == target_node.id
-    assert command.command_type == "cluster.postflight"
-    assert command.payload["cluster_name"] == "edge-lab"
-    assert "cluster_spec" not in command.payload
 
-    target_client = APIClient()
-    polled = target_client.post(
-        "/api/v1/agent-runtime/commands/poll/",
-        {"node_id": str(target_node.id)},
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {target_token}",
-    )
-    target_command = polled.data["command"]
-    result = target_client.post(
-        f"/api/v1/agent-runtime/commands/{target_command['id']}/result/",
-        {
-            "node_id": str(target_node.id),
-            "outcome": "succeeded",
-            "result": {
-                "node_count": 7,
-                "ready": True,
-                "not_ready_nodes": [],
-            },
-        },
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {target_token}",
-        HTTP_X_AGENT_LEASE=target_command["lease_token"],
-    )
-
-    deployment = ClusterDeployment.objects.get(pk=deployment_id)
-    assert result.status_code == 200
-    assert deployment.status == ClusterDeployment.Status.SUCCEEDED
-    assert deployment.plan_result["postflight"]["ready"] is True
-
+    assert response.status_code == 409
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    ).exists()
 
 
 @pytest.mark.django_db
