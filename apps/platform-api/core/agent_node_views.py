@@ -547,6 +547,41 @@ class AgentRuntimePollView(APIView):
         )
 
 
+class AgentRuntimeLeaseRenewView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, command_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        node = _authenticate_node(request, request.data.get("node_id"))
+        if node is None:
+            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+        lease_token = request.headers.get("X-Agent-Lease", "")
+        try:
+            lease_token = uuid.UUID(lease_token)
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "A valid X-Agent-Lease header is required."}, status=400)
+        now = timezone.now()
+        with transaction.atomic():
+            command = get_object_or_404(
+                AgentCommand.objects.select_for_update(),
+                pk=command_id,
+                node=node,
+                status=AgentCommand.Status.RUNNING,
+                lease_token=lease_token,
+                lease_expires_at__gte=now,
+            )
+            command.lease_expires_at = now + datetime.timedelta(seconds=90)
+            command.save(update_fields=["lease_expires_at", "updated_at"])
+        return Response(
+            {
+                "id": str(command.id),
+                "lease_expires_at": command.lease_expires_at,
+            }
+        )
+
+
 class AgentRuntimeResultView(APIView):
     authentication_classes = []
     permission_classes = []
