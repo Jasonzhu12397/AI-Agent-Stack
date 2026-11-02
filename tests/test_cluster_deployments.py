@@ -8,6 +8,7 @@ from core.models import (
     AgentCommand,
     AgentNode,
     ClusterDeployment,
+    ClusterDeploymentCheckpoint,
     Project,
     ProjectMembership,
     Tenant,
@@ -467,3 +468,136 @@ def test_target_postflight_rejects_boolean_node_count(cluster_delivery_workspace
     assert submitted.status_code == 200
     assert deployment.status == ClusterDeployment.Status.FAILED
     assert deployment.error["code"] == "TARGET_CLUSTER_POSTFLIGHT_FAILED"
+
+
+@pytest.mark.django_db
+def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_token = "target-checkpoint-agent-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="checkpoint-target-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="durable-target-checkpoint",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
+    deployment.save(update_fields=["target_node", "status"])
+
+    agent_client = APIClient()
+    url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
+    empty = agent_client.get(url, {"node_id": str(target_node.id)}, **headers)
+    assert empty.status_code == 200
+    assert empty.data["resume_available"] is False
+    assert empty.data["generation"] == 1
+
+    checkpoint_payload = {
+        "generation": 1,
+        "sequence": 1,
+        "phase": "capi_pivot_preflight",
+        "data": {
+            "cluster_name": "edge-lab",
+            "completed_steps": ["target_agent_bootstrap"],
+            "pending_step": "capi_pivot_preflight",
+        },
+    }
+    saved = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert saved.status_code == 201
+    assert saved.data["sequence"] == 1
+    assert ClusterDeploymentCheckpoint.objects.filter(
+        deployment=deployment,
+        agent_node=target_node,
+    ).count() == 1
+
+    restored = agent_client.get(url, {"node_id": str(target_node.id)}, **headers)
+    assert restored.status_code == 200
+    assert restored.data["resume_available"] is True
+    assert restored.data["data"] == checkpoint_payload["data"]
+
+    checkpoint_payload["sequence"] = 2
+    checkpoint_payload["phase"] = "capi_pivot_verified"
+    checkpoint_payload["data"]["completed_steps"].append("capi_pivot_preflight")
+    advanced = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert advanced.status_code == 201
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "capi_pivot_verified"
+
+
+@pytest.mark.django_db
+def test_target_agent_checkpoint_rejects_replay_and_credentials(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_token = "target-checkpoint-replay-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="checkpoint-replay-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="durable-target-checkpoint-replay",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
+    deployment.save(update_fields=["target_node", "status"])
+    agent_client = APIClient()
+    url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
+    payload = {
+        "generation": 1,
+        "sequence": 1,
+        "phase": "target_agent_bootstrap",
+        "data": {"completed_steps": []},
+    }
+    first = agent_client.post(url, payload, format="json", **headers)
+    repeated = agent_client.post(url, payload, format="json", **headers)
+    assert first.status_code == 201
+    assert repeated.status_code == 200
+    assert repeated.data["idempotent"] is True
+
+    replay = dict(payload)
+    replay["data"] = {"completed_steps": ["forged"]}
+    rejected_replay = agent_client.post(url, replay, format="json", **headers)
+    assert rejected_replay.status_code == 409
+
+    credential_payload = dict(payload)
+    credential_payload["sequence"] = 2
+    credential_payload["data"] = {"access_token": "must-not-persist"}
+    rejected_secret = agent_client.post(
+        url,
+        credential_payload,
+        format="json",
+        **headers,
+    )
+    assert rejected_secret.status_code == 400
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 1
+    assert "access_token" not in json.dumps(checkpoint.data)
