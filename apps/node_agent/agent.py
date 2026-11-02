@@ -1184,9 +1184,29 @@ class ControlPlaneClient:
         phase: str,
         data: dict[str, Any],
     ) -> dict[str, Any]:
-        if not deployment_id or generation != 1 or sequence < 1:
+        allowed_phases = {
+            "target_agent_bootstrap",
+            "capi_pivot_preflight",
+            "capi_pivot_verified",
+            "worker_provisioning",
+            "worker_pool_verified",
+            "eph_reclaim_pending",
+            "completed",
+        }
+        if (
+            not deployment_id
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation != 1
+            or not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence < 1
+            or phase not in allowed_phases
+        ):
             raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
         if not isinstance(data, dict) or contains_forbidden_fields(data):
+            raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
+        if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) > 32768:
             raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
         return self.request(
             f"/api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/",
