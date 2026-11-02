@@ -294,3 +294,106 @@ export function testModel(
 }
 
 export { apiBase };
+
+
+export type WorkflowDraft = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  draft_definition: Record<string, unknown>;
+  current_version: number;
+  is_archived: boolean;
+};
+
+export type WorkflowStepRun = {
+  id: string;
+  node_id: string;
+  node_type: string;
+  status: string;
+  input_data: Record<string, unknown>;
+  output_data: unknown;
+  error: Record<string, unknown> | null;
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowRun = {
+  id: string;
+  task_id: string;
+  workflow_version_id: string;
+  task_status: string;
+  input_data: Record<string, unknown>;
+  state: Record<string, unknown>;
+  output_data: unknown;
+  steps: WorkflowStepRun[];
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type WorkflowVersion = {
+  id: string;
+  workflow_id: string;
+  version: number;
+  definition_snapshot: Record<string, unknown>;
+  published_at: string;
+};
+
+export function getWorkflows(tenantId: string, projectId: string): Promise<WorkflowDraft[]> {
+  return request<WorkflowDraft[]>(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/workflows/",
+  );
+}
+
+export function createWorkflow(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    slug: string;
+    description: string;
+    draft_definition: Record<string, unknown>;
+  },
+): Promise<WorkflowDraft> {
+  return request<WorkflowDraft>(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/workflows/",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function updateWorkflow(
+  workflowId: string,
+  payload: {
+    name?: string;
+    description?: string;
+    draft_definition?: Record<string, unknown>;
+  },
+): Promise<WorkflowDraft> {
+  return request<WorkflowDraft>("/api/v1/workflows/" + workflowId + "/", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishWorkflow(workflowId: string): Promise<WorkflowVersion> {
+  return request<WorkflowVersion>("/api/v1/workflows/" + workflowId + "/publish/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getWorkflowRuns(workflowId: string): Promise<WorkflowRun[]> {
+  return request<WorkflowRun[]>("/api/v1/workflows/" + workflowId + "/runs/");
+}
+
+export function createWorkflowRun(
+  workflowId: string,
+  input: Record<string, unknown>,
+): Promise<WorkflowRun> {
+  return request<WorkflowRun>("/api/v1/workflows/" + workflowId + "/runs/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ input }),
+  });
+}

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
+import WorkflowStudioView from "./WorkflowStudioView.vue";
 import {
   cancelTask,
   createEchoTask,
@@ -228,6 +229,10 @@ onUnmounted(() => {
         <p class="task-note">This first queue milestone runs only safe demo.echo and demo.sleep handlers. Agent and Workflow execution will be connected in later milestones.</p>
         <ModelManagerView :tenant-id="selectedTenantId" />
         <AgentStudioView
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <WorkflowStudioView
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />
