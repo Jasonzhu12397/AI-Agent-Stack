@@ -1,7 +1,6 @@
-from collections import deque
-
 import json
 import re
+from collections import deque
 
 from django.utils import timezone
 
