@@ -35,7 +35,18 @@ class AgentDraftSerializer(serializers.ModelSerializer):
         if len(str(value)) > 32768:
             raise serializers.ValidationError("Draft configuration exceeds 32 KiB.")
         forbidden = {"api_key", "secret", "password", "access_token", "client_secret"}
-        if any(str(key).lower() in forbidden for key in value):
+
+        def contains_secret_key(item):
+            if isinstance(item, dict):
+                return any(
+                    str(key).lower() in forbidden or contains_secret_key(child)
+                    for key, child in item.items()
+                )
+            if isinstance(item, list):
+                return any(contains_secret_key(child) for child in item)
+            return False
+
+        if contains_secret_key(value):
             raise serializers.ValidationError(
                 "Credentials must use credential references, not draft configuration."
             )
