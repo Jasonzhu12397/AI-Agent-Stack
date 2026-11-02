@@ -88,14 +88,26 @@ def handle_deployment_command_result(
             **(deployment.plan_result or {}),
             "postflight": result,
         }
-        if result.get("ready") is True and result.get("node_count", 0) > 0:
+        node_count = result.get("node_count")
+        not_ready_nodes = result.get("not_ready_nodes")
+        valid_result = (
+            result.get("ready") is True
+            and isinstance(node_count, int)
+            and not isinstance(node_count, bool)
+            and node_count > 0
+            and isinstance(not_ready_nodes, list)
+            and not not_ready_nodes
+        )
+        if valid_result:
             deployment.status = ClusterDeployment.Status.SUCCEEDED
             deployment.error = None
         else:
             deployment.status = ClusterDeployment.Status.FAILED
             deployment.error = {
                 "code": "TARGET_CLUSTER_POSTFLIGHT_FAILED",
-                "not_ready_nodes": result.get("not_ready_nodes", []),
+                "not_ready_nodes": (
+                    not_ready_nodes if isinstance(not_ready_nodes, list) else []
+                ),
             }
         deployment.finished_at = timezone.now()
         deployment.save(
@@ -109,8 +121,39 @@ def handle_deployment_command_result(
             ],
         )
     elif command.command_type == "cluster.plan":
+        plan_hash = result.get("plan_hash")
+        missing_requirements = result.get("missing_requirements")
+        plan_valid = (
+            result.get("plan_status") == "validated_dry_run"
+            and isinstance(plan_hash, str)
+            and len(plan_hash) == 64
+            and all(character in "0123456789abcdef" for character in plan_hash.lower())
+            and isinstance(missing_requirements, list)
+            and len(missing_requirements) <= 100
+            and all(isinstance(item, str) and len(item) <= 200 for item in missing_requirements)
+            and isinstance(result.get("provisioning_ready"), bool)
+            and isinstance(result.get("adapter_enabled"), bool)
+            and isinstance(result.get("side_effects"), bool)
+        )
+        if not plan_valid or (
+            result.get("provisioning_ready") is True
+            and result.get("adapter_enabled") is not True
+        ):
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "INVALID_OR_INCONSISTENT_CLUSTER_PLAN"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "started_at",
+                    "finished_at",
+                    "updated_at",
+                ],
+            )
+            return
         deployment.plan_result = result
-        deployment.plan_hash = str(result.get("plan_hash", command.plan_hash))[:64]
+        deployment.plan_hash = plan_hash
         deployment.status = ClusterDeployment.Status.PLAN_READY
         deployment.save(
             update_fields=[
