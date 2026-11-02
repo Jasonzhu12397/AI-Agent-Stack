@@ -183,7 +183,11 @@ def test_last_project_admin_cannot_be_demoted_or_removed(users):
     admin = users("only-project-admin")
     tenant = Tenant.objects.create(name="Project owner guard", slug="project-owner-guard")
     TenantMembership.objects.create(tenant=tenant, user=admin, role="member")
-    project = Project.objects.create(tenant=tenant, name="Protected project", slug="protected-project")
+    project = Project.objects.create(
+        tenant=tenant,
+        name="Protected project",
+        slug="protected-project",
+    )
     membership = ProjectMembership.objects.create(project=project, user=admin, role="admin")
     client = APIClient()
     client.force_authenticate(user=admin)
