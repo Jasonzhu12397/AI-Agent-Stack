@@ -3,7 +3,6 @@ import hashlib
 import pytest
 from core.models import AgentCommand, AgentNode, Project, ProjectMembership, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 from rest_framework.test import APIClient
 
 
@@ -95,11 +94,28 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
     )
     assert unauthorized_poll.status_code == 401
 
-    approved = client.post(
+    self_approval = client.post(
         f"/api/v1/agent-commands/{created.data['id']}/approve/",
         {"plan_hash": created.data["plan_hash"]},
         format="json",
     )
+    approver = get_user_model().objects.create_user(
+        username="node-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{created.data['id']}/approve/",
+        {"plan_hash": created.data["plan_hash"]},
+        format="json",
+    )
+    assert self_approval.status_code == 403
     assert approved.status_code == 200
     assert approved.data["status"] == AgentCommand.Status.QUEUED
 
