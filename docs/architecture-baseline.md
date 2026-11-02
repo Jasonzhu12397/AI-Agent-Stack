@@ -1,21 +1,37 @@
-# Architecture baseline
+# Architecture baseline V3.0
 
-## Source status
+## Technology decision
 
-The user has established the product requirements in the conversation and supplied the complete Vibe Coding Execution Manual V2.0. The referenced standalone source document, “AI Agent Studio 开发文档与系统架构设计 V1.0（2026-10-29）”, is not present in the repository or current file attachments at this time.
+- Frontend: Vue 3 + TypeScript + Vite + Element Plus + Pinia + Vue Router.
+- Backend: Python 3.12 + Django + Django REST Framework.
+- Realtime: Django Channels on ASGI; WebSocket consumers will be introduced with durable run streaming.
+- Persistence: PostgreSQL is authoritative. Redis is auxiliary and never the only store for durable state.
+- Execution: independent Python Workers; task claiming, leases and recovery are a dedicated milestone.
+- Object storage: S3-compatible API. Vector retrieval: pgvector behind an abstraction.
+- Deployment: Docker Compose locally; Kubernetes with Helm/Kustomize in production.
 
-This file therefore records only the architecture requirements explicitly available in the V2.0 execution manual and the project decisions already confirmed. It does not fabricate missing diagrams, API contracts, provider details, deployment topology or CRD fields. When the original V1.0 document is added, reconcile it against this baseline and record conflicts as ADRs before changing scope.
+## Runtime boundaries
 
-## Confirmed architecture direction
+Django is the control plane: identity, tenant/project authorization, configuration, version publication, policy, audit and API orchestration.
 
-- Modular control plane with FastAPI API and independently running workers.
-- React/TypeScript/Vite Studio.
-- PostgreSQL is authoritative for durable business state; Redis is auxiliary.
-- S3-compatible object storage and replaceable vector storage are later platform capabilities.
-- Model Gateway, Agent Runtime, Workflow Engine, Policy Engine, Integration Hub, MCP Client/Server, Skills, Knowledge/RAG, Observability and isolated Plugin Executor are product modules.
-- Infrastructure integration is a professional connector: Kubernetes, CAPI, Metal3, Ironic and Redfish. Start read-only, then controlled test-environment operations only after target schemas, versions and permissions are verified.
-- Production writes, messaging, infrastructure changes and destructive operations are disabled unless separately authorized for a specific target/action.
+Python Workers are the execution plane: Agent runs, workflow steps, scheduled work and isolated integration execution. Long-running work must not be tied to an HTTP request lifecycle.
 
-## Requirement source
+Vue communicates with Django through versioned REST APIs and WebSocket channels. The browser is never authoritative for tenant identity, permissions, approval state or execution policy.
 
-The full phase plan and engineering invariants are maintained in `docs/vibe-coding.md`. Verification evidence and unknowns are maintained in `docs/verification-matrix.md`.
+## Initial implementation status
+
+The migration slice introduces the Django ASGI application, DRF API root, health endpoints, Vue 3 application shell, PostgreSQL settings and a standalone Python Worker heartbeat. This is not yet a complete authentication, task queue, Agent runtime or plugin system.
+
+## Security invariants
+
+- Production refuses the development secret key and DEBUG mode.
+- DRF defaults to authenticated access; intentionally public endpoints must explicitly opt in.
+- Server derives Principal and tenant scope; client-supplied tenant identifiers are untrusted.
+- Model output, retrieval results, Skill content, MCP responses and plugin data are untrusted.
+- Credentials are stored as secret references, never copied into prompts, logs or traces.
+- Destructive or externally visible actions require policy evaluation and configured approval.
+- Retries of non-idempotent side effects are not automatic.
+
+## Deployment boundaries
+
+API and Worker are separate processes built from the same Python package image. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager.

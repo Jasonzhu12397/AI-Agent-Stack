@@ -1,19 +1,17 @@
 # AI Agent Stack
 
-An extensible, policy-governed AI Agent platform. The project is developed milestone by milestone, with a secure execution runtime and integration architecture.
+An extensible, policy-governed AI Agent platform with separate frontend and backend technology stacks.
 
-## Current status
+## Current architecture
 
-**P0 foundation — core CI and Compose smoke checks verified.** The latest successful verification is [GitHub Actions run 41404365864](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41404365864), commit `a76ea2bbb32fca327c36b8e61b48080c8d300db9`. The run passed Python install, Ruff, pytest, PostgreSQL migration round-trip, frontend build, Compose configuration, full stack startup, API liveness/readiness, Web HTTP and Worker-running checks. The current slice includes:
-- React + TypeScript + Vite Web Studio with live API/database status checks.
-- FastAPI service with liveness and PostgreSQL readiness endpoints.
-- Independent Worker process with graceful shutdown and database heartbeat.
-- PostgreSQL 16 as the persistent data store; Redis 7 is auxiliary.
-- Alembic migration baseline for the tenant root entity, with PostgreSQL 16 upgrade/downgrade/upgrade verification.
-- Deterministic FakeModel, FakeTool and in-process FakeMCP fixture with contract tests. FakeMCP is not real MCP protocol compatibility.
-- Docker Compose development environment and GitHub Actions CI workflow.
+- **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
+- **Backend:** Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
+- **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
+- **Execution:** independent Python Worker; durable task claiming and recovery are a later milestone.
+- **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
+- **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
-The Worker does not yet claim or execute durable tasks. Agent authoring, workflows, approvals, real MCP protocol support, Skills, and Kubernetes adapters are planned milestones, not implemented features. Authentication, tenant authorization, durable task recovery, production security controls and real external connectors are also not implemented.
+The FastAPI and React implementation is being replaced. Previous successful CI runs are historical evidence for the old stack and do not verify this Django/Vue migration.
 
 ## Quick start
 
@@ -24,9 +22,9 @@ cp .env.example .env
 docker compose --env-file .env -f deploy/docker-compose.yml up --build
 ```
 
-- Web Studio: http://localhost:5173
-- API: http://localhost:8000
-- OpenAPI: http://localhost:8000/docs
+- Vue Studio: http://localhost:5173
+- Django API: http://localhost:8000/api/v1/
+- Django Admin: http://localhost:8000/admin/
 - Liveness: http://localhost:8000/health/live
 - Readiness: http://localhost:8000/health/ready
 
@@ -38,28 +36,36 @@ docker compose --env-file .env -f deploy/docker-compose.yml down
 
 ## Local checks
 
-With Python 3.12:
+Python 3.12:
 
 ```bash
 python -m pip install -e ".[dev]"
 ruff check .
 pytest
+python apps/platform-api/manage.py check
 ```
 
-## Architecture direction
+Frontend:
 
-- `apps/platform-api`: HTTP API and application boundary.
-- `apps/worker`: independently deployable background process.
-- `apps/web-studio`: React/TypeScript operator workspace.
-- `packages/`: planned contracts, domain, runtime, integrations, and observability modules.
+```bash
+cd apps/web-studio
+npm install
+npm run build
+```
+
+## Repository layout
+
+- `apps/platform-api/platform_api`: Django project configuration and ASGI entrypoint.
+- `apps/platform-api/core`: shared HTTP endpoints and core Django app.
+- `apps/worker`: independently deployable Python Worker.
+- `apps/web-studio`: Vue 3 operator workspace.
+- `packages/`: planned contracts, domain, runtime, integrations and observability modules.
 - `deploy/`: local and future deployment assets.
-- `migrations/`: Alembic database migrations.
-- `docs/vibe-coding.md`: milestone plan and acceptance principles.
-
-PostgreSQL is the only authoritative persistence layer. Redis must not be used as the sole store for runs, approvals, audit events, or other durable business state.
+- `docs/`: architecture decisions, threat model, verification matrix and delivery plan.
+- `tests/`: backend contract and integration tests.
 
 ## Security baseline
 
-Model output is untrusted structured intent, never authorization. Future tool execution must enforce schema validation, actor/tenant scope, allowlists, resource constraints, and policy decisions before any side effect. Credentials must be referenced through secret handles and must never be copied into prompts, traces, or logs.
+Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted. Authorization is enforced by server-side policy, never by model intent or client-supplied tenant identifiers.
 
 No production infrastructure writes or external write integrations are enabled in this milestone.

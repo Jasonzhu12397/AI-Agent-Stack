@@ -24,7 +24,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://agent:agent_dev_password@localhost:5432/agent_stack
+      DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/agent_stack
+      APP_ENV: test
+      SECRET_KEY: ci-test-secret-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,13 +39,12 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Lint
         run: ruff check .
+      - name: Django system checks
+        run: python apps/platform-api/manage.py check
+      - name: Apply Django migrations
+        run: python apps/platform-api/manage.py migrate --noinput
       - name: Test
         run: pytest
-      - name: Migration upgrade and downgrade round-trip
-        run: |
-          alembic upgrade head
-          alembic downgrade base
-          alembic upgrade head
 
   web:
     runs-on: ubuntu-latest
@@ -55,9 +56,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web-studio/package.json
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Build
+      - name: Build Vue Studio
         run: npm run build
 
   compose:
@@ -70,7 +73,7 @@ jobs:
           docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
       - name: Build and start the complete local stack
         run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
-      - name: Smoke test API and Web Studio
+      - name: Smoke test Django API and Vue Studio
         run: |
           curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/live
           curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/ready
