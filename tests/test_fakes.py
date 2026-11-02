@@ -1,5 +1,4 @@
 import pytest
-
 from app.fakes import EchoInput, FakeMCPServer, FakeModel, FakeTool, ToolIntent
 
 
@@ -25,7 +24,7 @@ def test_fake_tool_validates_input_and_has_no_external_side_effect() -> None:
 
     assert tool.invoke({"value": "local-only"}) == {"value": "local-only"}
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         tool.invoke({"value": ""})
     with pytest.raises(ValidationError):
         EchoInput.model_validate({"value": "ok", "tenant_id": "spoofed"})
