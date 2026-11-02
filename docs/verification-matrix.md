@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41424616552](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41424616552), commit `fe9f0fe99701dbf34cea6ad3320663da717b7419`, completed successfully across Python, Vue and Compose jobs. Pytest: 90 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, the Vue dashboard and dual-agent console. The newest heartbeat concurrency and documentation refinements are being revalidated.
+[GitHub Actions run 41425741918](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41425741918), commit `f496d8d141d5fbdd0b702b070803d379e794d488`, completed successfully across Python, Vue and Compose jobs. Pytest: 95 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, persisted EPH preflight → cluster-plan orchestration, the Vue dashboard and dual-agent console.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -71,4 +71,5 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Production agent identity | mTLS or short-lived workload identity, certificate rotation and external secret delivery | Development one-time bearer token only; production deployment not verified |
 | Vue infrastructure console | Reference-style dark navigation, project-scoped dashboard, EPH/Target enrollment, heartbeat, typed command dispatch, command history, approval hash and EPH cluster-plan wizard | Dashboard and navigation passed run 41423783202; cluster-plan wizard and pod rollout additions are awaiting newer CI |
 
-| Kubernetes agent deployment | Separate EPH/Target Deployments, ServiceAccounts, read-only RBAC, non-root security context, readiness/liveness checks | Templates added under `deploy/agents/`; YAML/application not yet tested against a real management or target cluster |
+| Cluster delivery orchestration | Persistent ClusterDeployment; EPH preflight → automatic cluster.plan; plan result/hash persistence; cancellation and idempotency | 5 API orchestration tests passed in run 41425741918. Workflow intentionally stops at PLAN_READY; no provisioning write is issued |
+| Kubernetes agent deployment | Separate EPH/Target Deployments, ServiceAccounts, read-only RBAC, non-root security context, readiness/liveness checks | Templates and probes passed repository CI; YAML/application not yet tested against a real management or target cluster |
