@@ -19,6 +19,7 @@ def _payload_hash(command_type: str, payload: dict) -> str:
 def queue_deployment_command(
     deployment: ClusterDeployment,
     command_type: str,
+    node=None,
 ) -> AgentCommand:
     payload = {
         "deployment_id": str(deployment.id),
@@ -30,7 +31,7 @@ def queue_deployment_command(
         idempotency_key=idempotency_key,
         defaults={
             "project": deployment.project,
-            "node": deployment.eph_node,
+            "node": node or deployment.eph_node,
             "requested_by": deployment.requested_by,
             "deployment": deployment,
             "command_type": command_type,
@@ -82,6 +83,31 @@ def handle_deployment_command_result(
             update_fields=["preflight_result", "status", "started_at", "updated_at"],
         )
         queue_deployment_command(deployment, "cluster.plan")
+    elif command.command_type == "cluster.postflight":
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "postflight": result,
+        }
+        if result.get("ready") is True and result.get("node_count", 0) > 0:
+            deployment.status = ClusterDeployment.Status.SUCCEEDED
+            deployment.error = None
+        else:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {
+                "code": "TARGET_CLUSTER_POSTFLIGHT_FAILED",
+                "not_ready_nodes": result.get("not_ready_nodes", []),
+            }
+        deployment.finished_at = timezone.now()
+        deployment.save(
+            update_fields=[
+                "plan_result",
+                "status",
+                "error",
+                "finished_at",
+                "started_at",
+                "updated_at",
+            ],
+        )
     elif command.command_type == "cluster.plan":
         deployment.plan_result = result
         deployment.plan_hash = str(result.get("plan_hash", command.plan_hash))[:64]
