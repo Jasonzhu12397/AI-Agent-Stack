@@ -220,6 +220,7 @@ export function createModelConfig(
   providerId: string,
   modelName: string,
   displayName: string,
+  capabilities: string[] = ["chat", "tools"],
 ): Promise<ModelConfig> {
   return request<ModelConfig>(
     `/api/v1/tenants/${tenantId}/model-providers/${providerId}/models/`,
@@ -228,7 +229,7 @@ export function createModelConfig(
       body: JSON.stringify({
         model_name: modelName,
         display_name: displayName,
-        capabilities: ["chat", "tools"],
+        capabilities,
         context_window: 32768,
         max_output_tokens: 4096,
       }),
@@ -754,5 +755,24 @@ export function createKnowledgeDocument(
   return request("/api/v1/knowledge-bases/" + knowledgeBaseId + "/documents/", {
     method: "POST",
     body: JSON.stringify({ title, content, metadata }),
+  });
+}
+
+
+export function createOpenAICompatibleProvider(
+  tenantId: string,
+  name: string,
+  baseUrl: string,
+  credentialRef: string,
+): Promise<ModelProvider> {
+  return request<ModelProvider>(`/api/v1/tenants/${tenantId}/model-providers/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      provider_type: "openai_compatible",
+      base_url: baseUrl,
+      credential_ref: credentialRef,
+      config: {},
+    }),
   });
 }
