@@ -4,7 +4,6 @@ from core.models import (
     PluginConnection,
     PluginDefinition,
     PluginInstallation,
-    PluginTool,
     Project,
     ProjectMembership,
     Tenant,
