@@ -44,3 +44,21 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .muted { color: #53627a; }
 @media (max-width: 760px) { .hero { padding: 72px 0; } .status-card { grid-template-columns: 1fr; } .milestone-grid { grid-template-columns: repeat(2, 1fr); } footer { gap: 12px; flex-direction: column; } }
 @media (max-width: 440px) { .shell { width: calc(100% - 32px); } .milestone-grid { grid-template-columns: 1fr; } h1 { letter-spacing: -2px; } .login-card { padding: 26px; } .topbar { gap: 8px; } .account-actions { gap: 6px; } }
+
+.workspace { padding: 42px 0; border-bottom: 1px solid #263146; }
+.workspace-heading, .task-panel-heading, .workspace-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.workspace-heading { margin-bottom: 22px; }
+.workspace-heading .eyebrow, .task-panel-heading .eyebrow { margin-bottom: 7px; }
+.workspace-heading h2 { margin: 0; }
+.workspace-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
+.workspace-sidebar, .task-panel { min-width: 0; padding: 20px; background: #111a2a; border: 1px solid #28364d; border-radius: 12px; }
+.workspace-section-heading h3, .task-panel-heading h3 { margin: 0; font-size: 15px; }
+.full-width { width: 100%; }
+.inline-form { display: grid; gap: 9px; margin-top: 12px; }
+.workspace-sidebar .el-input__wrapper, .workspace-sidebar .el-select__wrapper, .task-create .el-input__wrapper { background: #0b1321; box-shadow: 0 0 0 1px #34435c inset; }
+.workspace-sidebar .el-input__inner, .task-create .el-input__inner { color: #e8edf7; }
+.task-create { display: flex; gap: 10px; margin: 20px 0; }
+.task-create .el-input { flex: 1; }
+.task-table { width: 100%; margin-top: 10px; --el-table-bg-color: #111a2a; --el-table-tr-bg-color: #111a2a; --el-table-header-bg-color: #172338; --el-table-row-hover-bg-color: #1a2940; --el-table-border-color: #28364d; --el-table-text-color: #c7d2e3; --el-table-header-text-color: #91a3c0; }
+.task-note { margin: 16px 0 0; color: #8190a8; font-size: 11px; line-height: 1.6; }
+@media (max-width: 760px) { .workspace-grid { grid-template-columns: 1fr; } .task-create { flex-direction: column; } .workspace-heading { align-items: flex-start; flex-direction: column; } }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import LoginView from "./components/LoginView.vue";
+import WorkspaceView from "./components/WorkspaceView.vue";
 import {
   apiBase,
   getCurrentUser,
@@ -102,6 +103,7 @@ onUnmounted(() => {
         </a>
       </div>
     </section>
+    <WorkspaceView />
     <section class="overview">
       <div class="section-heading">
         <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>
