@@ -153,3 +153,10 @@ This is a read-only capability check, not a provider compatibility pass: CRD Ope
 ## Provider CRD OpenAPI inspection
 
 The EPH Agent provider discovery operation now fetches the installed CRD objects for the required CAPI core, Kubeadm bootstrap/control-plane, CAPM3 and Metal3 resources. It reports served versions, storage version flags, CRD scope, top-level `spec` property names and required `spec` fields without returning the full CRD schema. Missing CRDs and served versions without an OpenAPI v3 schema are reported separately. This is a schema-presence and shape summary only; it does not prove provider release compatibility or validate a proposed manifest against every nested schema constraint. The EPH read-only ClusterRole grants `get` on `apiextensions.k8s.io/customresourcedefinitions`; no create, patch, update or delete permission is added. Provisioning remains disabled.
+
+
+## Live CRD-backed manifest validation (read-only)
+
+The EPH Agent exposes `cluster.manifest.validate`. It accepts a bounded list of candidate custom-resource manifests, resolves each Group/Kind against the installed CAPI, Kubeadm, CAPM3 and Metal3 CRDs, requires the requested API version to be served, checks CRD scope and recursively validates supported OpenAPI schema constraints (types, required fields, enum, string length/pattern, numeric bounds, array item/count constraints, nested properties and additionalProperties). Results contain bounded per-manifest validation errors and never return the CRD schema itself.
+
+The operation is read-only: it uses only CRD GET requests and does not submit manifests to the Kubernetes API. It is not Kubernetes API server admission validation and does not execute CEL rules, conversion webhooks, admission webhooks, cross-resource reference checks or provider compatibility tests. The EPH Role remains read-only. Candidate manifests are limited to 100 objects and a 1 MiB serialized payload. This validation is an additional preflight gate, not authorization to provision; `server_side_dry_run`, `mutation_adapter_enabled` and `provisioning_ready` remain false.
