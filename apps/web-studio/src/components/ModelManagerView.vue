@@ -212,7 +212,12 @@ watch(selectedProviderId, () => void loadModels());
           <strong>{{ model.display_name }}</strong>
           <p>{{ model.model_name }} · v{{ model.version }} · {{ model.context_window }} context</p>
         </div>
-        <el-button size="small" :loading="busy" @click="runModelTest(model)">Test model</el-button>
+        <el-button
+          v-if="model.capabilities.includes("chat")"
+          size="small"
+          :loading="busy"
+          @click="runModelTest(model)"
+        >Test model</el-button>
       </div>
     </div>
     <el-empty v-else description="Select a provider or add a local fake provider" :image-size="72" />
