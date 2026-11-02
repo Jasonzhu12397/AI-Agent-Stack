@@ -264,10 +264,14 @@ class AgentNodeCommandListCreateView(APIView):
         return Response({"count": len(commands), "results": [_command_data(item) for item in commands]})
 
     def post(self, request, node_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         node = get_object_or_404(
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
         )
+        if node.status == AgentNode.Status.REVOKED:
+            return Response({"detail": "Agent node has been revoked."}, status=409)
         is_admin = TenantMembership.objects.filter(
             tenant=node.tenant,
             user=request.user,
@@ -334,6 +338,8 @@ class AgentCommandApproveView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, command_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         command = get_object_or_404(
             AgentCommand.objects.filter(tenant__memberships__user=request.user),
             pk=command_id,
