@@ -306,13 +306,47 @@ class ClusterDeploymentTargetPostflightView(APIView):
         with transaction.atomic():
             deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
             if (
-                deployment.status != ClusterDeployment.Status.WORKERS_READY
-                or (deployment.plan_result or {}).get("provisioning_completed") is not True
+                deployment.status == ClusterDeployment.Status.POSTFLIGHT
+                and deployment.target_node_id == target_node.id
             ):
-                return Response({"detail": "Deployment state changed or provisioning is incomplete."}, status=409)
+                command = AgentCommand.objects.filter(
+                    deployment=deployment,
+                    command_type="cluster.postflight",
+                ).first()
+                if command is not None:
+                    return Response(
+                        {
+                            "deployment": _deployment_data(deployment),
+                            "command_id": str(command.id),
+                            "command_status": command.status,
+                        },
+                        status=200,
+                    )
+            locked_plan = deployment.plan_result or {}
+            if (
+                deployment.status != ClusterDeployment.Status.WORKERS_READY
+                or locked_plan.get("provisioning_ready") is not True
+                or locked_plan.get("adapter_enabled") is not True
+                or locked_plan.get("provisioning_completed") is not True
+            ):
+                return Response(
+                    {"detail": "Deployment state changed or provisioning is incomplete."},
+                    status=409,
+                )
             if deployment.target_node_id and deployment.target_node_id != target_node.id:
                 return Response(
                     {"detail": "Deployment is already bound to another target agent."},
+                    status=409,
+                )
+            target_node = AgentNode.objects.select_for_update().get(pk=target_node.pk)
+            if (
+                target_node.status != AgentNode.Status.ONLINE
+                or target_node.last_seen_at is None
+                or target_node.last_seen_at
+                < timezone.now() - datetime.timedelta(seconds=60)
+            ):
+                return Response(
+                    {"detail": "The selected target agent must have a fresh heartbeat."},
                     status=409,
                 )
             deployment.target_node = target_node
