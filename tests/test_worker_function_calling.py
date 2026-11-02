@@ -89,7 +89,6 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer():
             "model_config_id": str(model.id),
             "system_prompt": "Use tools when required.",
             "tool_allowlist": [str(tool.id)],
-            "max_iterations": 3,
             "timeout_seconds": 30,
             "max_tokens": 256,
         },
