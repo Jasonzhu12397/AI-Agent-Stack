@@ -11,17 +11,18 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "infrastructure";
+type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "integrations" | "infrastructure";
 const activeView = ref<ActiveView>("dashboard");
 const navItems: { id: ActiveView; label: string }[] = [
   { id: "dashboard", label: "Overview" },
   { id: "models", label: "Model Manager" },
   { id: "agents", label: "Agent Studio" },
   { id: "workflows", label: "Workflow DAG" },
+  { id: "integrations", label: "Integration Hub" },
   { id: "infrastructure", label: "Infrastructure Agents" },
 ];
 const workspaceSection = computed<
-  "overview" | "models" | "agents" | "workflows"
+  "overview" | "models" | "agents" | "workflows" | "integrations"
 >(() => {
   if (activeView.value === "dashboard" || activeView.value === "infrastructure") {
     return "overview";
