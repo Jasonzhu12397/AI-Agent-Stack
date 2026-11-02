@@ -168,6 +168,8 @@ class PluginCatalogListCreateView(APIView):
             return Response({"detail": "Unsupported connector_type."}, status=400)
         plugin_name = str(request.data.get("name", plugin_key)).strip()
         source_url = request.data.get("source_url", "")
+        if source_url is None:
+            source_url = ""
         if not plugin_name or len(plugin_name) > 120:
             return Response({"detail": "Plugin name is required."}, status=400)
         if source_url and (
@@ -444,7 +446,7 @@ class PluginInstallationStatusView(APIView):
         ):
             return Response({"detail": "Project editor permission required."}, status=403)
         status_value = request.data.get("status")
-        if status_value not in {
+        if not isinstance(status_value, str) or status_value not in {
             PluginInstallation.Status.DISABLED,
             PluginInstallation.Status.UNINSTALLED,
             PluginInstallation.Status.INSTALLED,
