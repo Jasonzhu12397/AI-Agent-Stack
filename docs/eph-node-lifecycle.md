@@ -64,7 +64,6 @@ The exact OS transition mechanism (new RAM image, disk-backed target OS, or anot
 9. **CAPI bootstrap pivot before workers:** if CAPI controllers and Cluster API objects are hosted inside EPH, they must be moved into the target cluster and verified healthy before EPH shutdown and before worker provisioning. Moving only the AI Agent Pod is insufficient; it does not transfer CAPI ownership or reconciliation state. The target cluster becomes the durable self-hosted CAPI management plane, unless a separate external management cluster is explicitly configured.
 10. **No premature worker provisioning:** worker provisioning must not start until the target Agent is healthy on the target Control Plane and the CAPI pivot has completed and reconciled successfully.
 11. **Idempotent reclaim:** handoff, EPH credential revocation, target worker enrollment, and completion reporting must be idempotent and bound to the same deployment ID and physical inventory identity.
-10. **Idempotent reclaim:** handoff, EPH credential revocation, target worker enrollment, and completion reporting must be idempotent and bound to the same deployment ID and physical inventory identity.
 
 ## Suggested deployment states
 
