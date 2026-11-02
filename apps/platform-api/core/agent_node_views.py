@@ -440,23 +440,27 @@ class AgentRuntimeHeartbeatView(APIView):
             isinstance(item, str) for item in capabilities
         ):
             return Response({"detail": "capabilities must be a list of strings."}, status=400)
-        node.agent_version = str(request.data.get("agent_version", node.agent_version))[:40]
-        node.capabilities = capabilities
-        node.cluster_name = str(request.data.get("cluster_name", node.cluster_name))[:120]
-        node.status = AgentNode.Status.ONLINE
-        node.last_seen_at = timezone.now()
-        node.last_seen_ip = request.META.get("REMOTE_ADDR")
-        node.save(
-            update_fields=[
-                "agent_version",
-                "capabilities",
-                "cluster_name",
-                "status",
-                "last_seen_at",
-                "last_seen_ip",
-                "updated_at",
-            ]
-        )
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if node.status == AgentNode.Status.REVOKED:
+                return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            node.agent_version = str(request.data.get("agent_version", node.agent_version))[:40]
+            node.capabilities = capabilities
+            node.cluster_name = str(request.data.get("cluster_name", node.cluster_name))[:120]
+            node.status = AgentNode.Status.ONLINE
+            node.last_seen_at = timezone.now()
+            node.last_seen_ip = request.META.get("REMOTE_ADDR")
+            node.save(
+                update_fields=[
+                    "agent_version",
+                    "capabilities",
+                    "cluster_name",
+                    "status",
+                    "last_seen_at",
+                    "last_seen_ip",
+                    "updated_at",
+                ]
+            )
         return Response(
             {
                 "node_id": str(node.id),
