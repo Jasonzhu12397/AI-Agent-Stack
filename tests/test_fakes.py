@@ -1,7 +1,7 @@
 import pytest
+from pydantic import ValidationError
 
 from app.fakes import EchoInput, FakeMCPServer, FakeModel, FakeTool, ToolIntent
-from pydantic import ValidationError
 
 
 def test_fake_model_returns_validated_structured_intent() -> None:
