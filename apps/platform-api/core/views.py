@@ -1,9 +1,9 @@
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import DatabaseError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET
-from rest_framework.generics import ListAPIView, ListCreateAPIView
+from rest_framework.generics import ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from core.models import Project, ProjectMembership, Tenant, TenantMembership
@@ -28,7 +28,7 @@ def readiness(request):
     return JsonResponse({"status": "ready", "database": "ok"})
 
 
-class TenantListView(ListAPIView):
+class TenantListView(ListCreateAPIView):
     serializer_class = TenantSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = TenantPagination
@@ -38,6 +38,15 @@ class TenantListView(ListAPIView):
             Tenant.objects.filter(memberships__user=self.request.user)
             .order_by("name")
             .distinct()
+        )
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        tenant = serializer.save()
+        TenantMembership.objects.create(
+            tenant=tenant,
+            user=self.request.user,
+            role=TenantMembership.Role.OWNER,
         )
 
 
