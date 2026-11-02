@@ -8,7 +8,7 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Backend:** Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
 - **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
 - **Execution:** independent Python Worker with PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, bounded retries and cooperative cancellation. Safe demo handlers, single-turn LLM Agent runs and a basic persistent Workflow DAG runner are connected.
-- **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. Commands are typed, tenant/project scoped, persisted, lease-protected and approval-hash bound for provisioning/bootstrap operations.
+- **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
 - **Node agents:** the Python runner supports EPH preflight, typed Metal3/CAPI cluster-plan validation, dynamic CAPI/Metal3 API discovery and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
@@ -108,6 +108,8 @@ npm run build
 See [Dual-Agent Infrastructure Architecture](docs/dual-agent-infrastructure-architecture.md) and [ADR 0003](docs/adr/0003-remote-dual-agent-control-plane.md).
 
 The control plane enrolls an `eph_node` and a `target_cluster` agent independently. Node enrollment returns a one-time token; only its SHA-256 hash is stored. The agent initiates outbound HTTPS heartbeats and command polls. PostgreSQL stores command state, idempotency key, attempts, lease token/expiry, result and error. Provisioning and target-agent bootstrap commands wait for a different tenant administrator to approve the exact plan hash.
+
+The cluster plan workflow is created through `POST /api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/`. It persists the deployment, queues `host.preflight`, automatically queues `cluster.plan` after a successful preflight, and exposes the resulting plan via `GET /api/v1/cluster-deployments/{id}/`. The workflow stops at `PLAN_READY`; it does not install Kubernetes.
 
 The EPH runner currently supports:
 - `node.health`, `host.preflight`, `cluster.plan` (validates cluster identity, odd control-plane quorum, provider-version references, network/image inputs, BMH references and credential references; dry-run only);
