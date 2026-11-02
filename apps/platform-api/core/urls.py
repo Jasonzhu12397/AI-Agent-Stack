@@ -1,5 +1,10 @@
 from django.urls import path
 
+from core.cluster_deployment_views import (
+    ClusterDeploymentCancelView,
+    ClusterDeploymentDetailView,
+    ClusterDeploymentListCreateView,
+)
 from core.agent_node_views import (
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
@@ -40,6 +45,21 @@ from core.workflow_views import (
 )
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
+        ClusterDeploymentListCreateView.as_view(),
+        name="cluster-deployment-list-create",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/",
+        ClusterDeploymentDetailView.as_view(),
+        name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
+        ClusterDeploymentCancelView.as_view(),
+        name="cluster-deployment-cancel",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
         AgentNodeListCreateView.as_view(),
