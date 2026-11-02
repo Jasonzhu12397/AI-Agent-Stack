@@ -285,7 +285,14 @@ def test_capi_observation_uses_discovered_group_version(monkeypatch):
                 ]
             }
         if path.endswith("/clusters"):
-            return {"items": [{"metadata": {"name": "edge-lab", "namespace": "capi-system"}, "status": {"phase": "Provisioned"}}]}
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "edge-lab", "namespace": "capi-system"},
+                        "status": {"phase": "Provisioned"},
+                    }
+                ]
+            }
         if path.endswith("/machines") or path.endswith("/machinedeployments"):
             return {"items": []}
         raise AssertionError(path)
