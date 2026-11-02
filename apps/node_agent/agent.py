@@ -159,11 +159,36 @@ def canonical_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def contains_forbidden_fields(value: Any) -> bool:
+    forbidden = {
+        "password",
+        "secret",
+        "token",
+        "private_key",
+        "bmc_password",
+        "bmc_username",
+        "kubeconfig",
+        "raw_manifest",
+        "shell",
+        "script",
+    }
+    if isinstance(value, dict):
+        return any(
+            str(key).lower() in forbidden or contains_forbidden_fields(child)
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(contains_forbidden_fields(child) for child in value)
+    return False
+
+
 def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     command_type = command.get("command_type")
     payload = command.get("payload", {})
     if not isinstance(payload, dict):
         raise NodeAgentError("INVALID_PAYLOAD")
+    if contains_forbidden_fields(payload):
+        raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
     allowed = {
         "eph_node": {
             "node.health",
@@ -302,15 +327,23 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         kubernetes_version = spec.get("kubernetes_version")
         control_plane_replicas = spec.get("control_plane_replicas")
         worker_replicas = spec.get("worker_replicas")
-        if not isinstance(cluster_name, str) or not cluster_name or len(cluster_name) > 63:
+        if (
+            not isinstance(cluster_name, str)
+            or len(cluster_name) > 63
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+        ):
             raise NodeAgentError("INVALID_CLUSTER_NAME")
-        if not isinstance(kubernetes_version, str) or not kubernetes_version.startswith("v1."):
+        if (
+            not isinstance(kubernetes_version, str)
+            or not re.fullmatch(r"v1\\.\\d+\\.\\d+", kubernetes_version)
+        ):
             raise NodeAgentError("INVALID_KUBERNETES_VERSION")
         if (
             not isinstance(control_plane_replicas, int)
             or isinstance(control_plane_replicas, bool)
             or control_plane_replicas < 1
             or control_plane_replicas > 9
+            or control_plane_replicas % 2 == 0
         ):
             raise NodeAgentError("INVALID_CONTROL_PLANE_REPLICAS")
         if (
@@ -320,6 +353,41 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             or worker_replicas > 1000
         ):
             raise NodeAgentError("INVALID_WORKER_REPLICAS")
+        provider_versions = spec.get("provider_versions", {})
+        network = spec.get("network", {})
+        machine_image = spec.get("machine_image", {})
+        metal3 = spec.get("metal3", {})
+        missing_requirements = []
+        for key in [
+            "cluster_api",
+            "bootstrap_kubeadm",
+            "control_plane_kubeadm",
+            "infrastructure_metal3",
+            "metal3",
+            "ironic",
+            "ipa",
+        ]:
+            if not isinstance(provider_versions, dict) or not provider_versions.get(key):
+                missing_requirements.append(f"provider_versions.{key}")
+        for key in ["pod_cidr", "service_cidr", "control_plane_endpoint"]:
+            if not isinstance(network, dict) or not network.get(key):
+                missing_requirements.append(f"network.{key}")
+        for key in ["url", "checksum"]:
+            if not isinstance(machine_image, dict) or not machine_image.get(key):
+                missing_requirements.append(f"machine_image.{key}")
+        if not isinstance(metal3, dict) or not metal3.get("namespace"):
+            missing_requirements.append("metal3.namespace")
+        hosts = metal3.get("hosts", []) if isinstance(metal3, dict) else []
+        if not isinstance(hosts, list) or len(hosts) < control_plane_replicas + worker_replicas:
+            missing_requirements.append("metal3.hosts")
+        else:
+            for index, host in enumerate(hosts):
+                if not isinstance(host, dict):
+                    missing_requirements.append(f"metal3.hosts[{index}]")
+                    continue
+                for key in ["baremetal_host", "role", "bmc_credential_ref"]:
+                    if not host.get(key):
+                        missing_requirements.append(f"metal3.hosts[{index}].{key}")
         return {
             "plan_status": "validated_dry_run",
             "cluster_name": cluster_name,
@@ -328,6 +396,9 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "worker_replicas": worker_replicas,
             "plan_hash": canonical_hash(spec),
             "side_effects": False,
+            "provisioning_ready": not missing_requirements,
+            "missing_requirements": missing_requirements,
+            "adapter_enabled": False,
             "next_required_checks": [
                 "management_kubernetes_version",
                 "cluster_api_provider_versions",
@@ -335,6 +406,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 "ironic_and_ipa_versions",
                 "machine_template_compatibility",
                 "network_and_image_configuration",
+                "baremetal_host_and_bmc_reference_validation",
             ],
         }
     raise NodeAgentError("UNSUPPORTED_COMMAND")
