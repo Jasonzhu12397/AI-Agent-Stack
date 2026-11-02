@@ -713,6 +713,7 @@ class ControlPlaneClient:
                 "k8s.resource.read",
                 "capi.cluster.observe",
                 "metal3.host.inspect",
+                "cluster.provider.discover",
             ]
             if node_type == "eph_node"
             else [
