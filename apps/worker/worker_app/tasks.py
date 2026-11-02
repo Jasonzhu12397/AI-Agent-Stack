@@ -4,7 +4,8 @@ from datetime import timedelta
 from time import sleep
 
 from core.model_gateway import ModelGateway, ModelGatewayError
-from core.models import AgentRun, ModelConfig, Task
+from core.models import AgentRun, ModelConfig, Task, WorkflowRun
+from core.workflow_engine import WorkflowValidationError, execute_workflow_run
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -142,6 +143,14 @@ def finish_task(task_id, lease_token, result):
                 "updated_at",
             ]
         )
+        if task.task_type == "workflow.run" and task.status == Task.Status.SUCCEEDED:
+            WorkflowRun.objects.filter(task=task).update(
+                output_data=result["output"],
+                state=result["state"],
+                finished_at=now,
+            )
+        elif task.task_type == "workflow.run":
+            WorkflowRun.objects.filter(task=task).update(finished_at=now)
         if task.task_type == "agent.run":
             run_update = {"finished_at": now}
             if task.status == Task.Status.SUCCEEDED:
@@ -199,6 +208,11 @@ def fail_task(task_id, lease_token, error, retryable=True):
             Task.Status.CANCELLED,
         }:
             AgentRun.objects.filter(task=task).update(finished_at=now)
+        if task.task_type == "workflow.run" and task.status in {
+            Task.Status.FAILED,
+            Task.Status.CANCELLED,
+        }:
+            WorkflowRun.objects.filter(task=task).update(finished_at=now)
         return True
 
 
@@ -252,6 +266,15 @@ def execute_agent_run(task):
 def execute_task(task, worker_id):
     if task.task_type == "agent.run":
         return execute_agent_run(task)
+    if task.task_type == "workflow.run":
+        try:
+            return execute_workflow_run(
+                task,
+                worker_id,
+                renew_lease,
+            )
+        except WorkflowValidationError as exc:
+            raise PermanentTaskError(str(exc)) from exc
     if task.task_type == "demo.echo":
         return {"echo": task.payload}
     if task.task_type == "demo.sleep":
