@@ -111,3 +111,14 @@ A complete input checklist is not a compatibility pass. `provisioning_ready` mea
 The Studio's Cluster Delivery Plan API creates a `ClusterDeployment` record scoped to one tenant/project and an online EPH agent. It enqueues `host.preflight`. A successful EPH preflight automatically enqueues `cluster.plan`; the returned typed plan, missing prerequisites and plan hash are persisted. The Vue console displays each stage and allows cancellation while the workflow remains in its plan-only phase.
 
 This workflow deliberately stops at `PLAN_READY`. It does not enqueue a provisioning write command. The next stage will add a version-aware CAPI/Metal3 adapter, an approval-bound provisioning transition, target-agent bootstrap and target-side postflight. Until that adapter is verified, a plan with all input fields present still reports `adapter_enabled: false`.
+
+
+## Upstream compatibility references (reviewed 2026-11-02)
+
+The CAPI core support matrix defines supported management/workload Kubernetes minors per CAPI release, while infrastructure providers maintain their own compatibility contracts. CAPM3's own release table currently lists different API contracts across provider minors (for example, older tested releases and newer supported releases do not necessarily use the same API version). Therefore the target cluster's Kubernetes version alone is not enough to choose a CAPI/CAPM3 API version.
+
+- [Cluster API version support and Kubernetes skew](https://cluster-api.sigs.k8s.io/reference/versions)
+- [Metal3 provider version support](https://book.metal3.io/version_support)
+- [Cluster API Provider Metal3 repository and compatibility notes](https://github.com/metal3-io/cluster-api-provider-metal3)
+
+The agent discovers API versions from the connected management cluster and the plan requires explicit provider version references. The platform must still validate the actual installed CRD schemas, CAPI contract, CAPM3/IPAM versions, Bare Metal Operator, Ironic and IPA versions, and the user's machine templates before enabling writes. This upstream documentation review is not a substitute for an isolated environment integration test.
