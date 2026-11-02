@@ -680,3 +680,79 @@ export function createPluginConnection(
     body: JSON.stringify({ ...payload, config: {} }),
   });
 }
+
+
+export type KnowledgeBase = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  embedding_model_id: string;
+  chunk_size: number;
+  chunk_overlap: number;
+  is_archived: boolean;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  checksum: string;
+  status: "pending" | "ingesting" | "ready" | "failed";
+  chunk_count: number;
+  error: Record<string, unknown> | null;
+  ingested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function getKnowledgeBases(
+  tenantId: string,
+  projectId: string,
+): Promise<Page<KnowledgeBase>> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/knowledge-bases/",
+  );
+}
+
+export function createKnowledgeBase(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    slug: string;
+    description: string;
+    embedding_model_id: string;
+    chunk_size: number;
+    chunk_overlap: number;
+  },
+): Promise<KnowledgeBase> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/knowledge-bases/",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function getKnowledgeDocuments(
+  knowledgeBaseId: string,
+): Promise<Page<KnowledgeDocument>> {
+  return request("/api/v1/knowledge-bases/" + knowledgeBaseId + "/documents/");
+}
+
+export function createKnowledgeDocument(
+  knowledgeBaseId: string,
+  title: string,
+  content: string,
+  metadata: Record<string, unknown> = {},
+): Promise<KnowledgeDocument> {
+  return request("/api/v1/knowledge-bases/" + knowledgeBaseId + "/documents/", {
+    method: "POST",
+    body: JSON.stringify({ title, content, metadata }),
+  });
+}
