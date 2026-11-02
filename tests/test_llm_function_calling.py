@@ -141,7 +141,16 @@ def test_model_gateway_preserves_assistant_content_with_tool_calls():
     ]
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            response = ModelGateway().complete(model_config(), messages)
+            response = ModelGateway().complete(
+                model_config(),
+                messages,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "demo__lookup", "parameters": {"type": "object"}},
+                    }
+                ],
+            )
     assert response.content == "I will check that now."
 
 
