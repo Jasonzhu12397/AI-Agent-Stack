@@ -137,6 +137,8 @@ The Target Agent now exposes `cluster.capi.pivot.target.preflight`. This command
 
 This is only the target-side preflight. It does not inspect the EPH source ownership graph, copy credentials, run `clusterctl move`, transfer provider objects, or prove post-pivot reconciliation. A source-side inventory and version/provider compatibility check are still required before an executor can be enabled.
 
+The Control Plane-first handoff endpoint now queues `cluster.capi.pivot.target.preflight` directly to the assigned Target Agent. The API validates the returned cluster/namespace, exact four-controller inventory, controller readiness, API blockers and the no-side-effects flag before persisting the result in the deployment plan. A successful preflight is recorded as `preflight_validated`; it deliberately does not advance the deployment to worker provisioning or authorize a pivot mutation.
+
 ## Operational failure handling
 
 - If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
