@@ -1,0 +1,272 @@
+# ruff: noqa: I001
+import pytest
+from core.models import (
+    PluginConnection,
+    PluginDefinition,
+    PluginInstallation,
+    PluginTool,
+    Project,
+    ProjectMembership,
+    Tenant,
+    TenantMembership,
+)
+from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
+
+
+@pytest.fixture
+def plugin_workspace(db):
+    user = get_user_model().objects.create_user(
+        username="plugin-owner",
+        password="test-password",
+    )
+    tenant = Tenant.objects.create(name="Plugin tenant", slug="plugin-tenant")
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=user,
+        role=TenantMembership.Role.OWNER,
+    )
+    project = Project.objects.create(
+        tenant=tenant,
+        name="Plugin project",
+        slug="plugin-project",
+    )
+    ProjectMembership.objects.create(
+        project=project,
+        user=user,
+        role=ProjectMembership.Role.ADMIN,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return user, tenant, project, client
+
+
+def plugin_payload(tenant):
+    return {
+        "tenant_id": str(tenant.id),
+        "plugin_key": "github-reader",
+        "name": "GitHub Reader",
+        "description": "Read-only repository metadata connector.",
+        "version": "1.0.0",
+        "connector_type": "http",
+        "maintainer": "Platform Team",
+        "license": "Apache-2.0",
+        "source_url": "https://example.invalid/github-reader.json",
+        "manifest": {"category": "developer-tools"},
+        "tools": [
+            {
+                "name": "list-repositories",
+                "description": "List repositories visible to the connection.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"owner": {"type": "string"}},
+                    "required": ["owner"],
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"repositories": {"type": "array"}},
+                    "additionalProperties": False,
+                },
+                "required_permissions": ["github:repo:read"],
+                "risk_level": "low",
+                "timeout_seconds": 20,
+                "retry_policy": {"max_attempts": 3, "backoff_seconds": 2},
+                "idempotency_mode": "read_only",
+            }
+        ],
+    }
+
+
+def register_plugin(client, tenant):
+    return client.post(
+        "/api/v1/connectors/",
+        plugin_payload(tenant),
+        format="json",
+    )
+
+
+@pytest.mark.django_db
+def test_plugin_registry_requires_review_before_project_installation(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+
+    assert registered.status_code == 201
+    assert registered.data["review_status"] == PluginDefinition.ReviewStatus.DRAFT
+    assert registered.data["enabled"] is False
+    assert registered.data["tools"][0]["name"] == "list-repositories"
+
+    blocked = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert blocked.status_code == 404
+    assert PluginInstallation.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_approved_plugin_can_be_installed_with_explicit_permission_and_credential_ref(
+    plugin_workspace,
+):
+    user, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+    approved = client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {"api_base": "https://api.github.com"},
+        },
+        format="json",
+    )
+
+    assert approved.status_code == 200
+    assert approved.data["review_status"] == PluginDefinition.ReviewStatus.APPROVED
+    assert installed.status_code == 201
+    assert installed.data["plugin_version"] == "1.0.0"
+    assert installed.data["granted_permissions"] == ["github:repo:read"]
+
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "github-production",
+            "auth_type": "credential_ref",
+            "credential_ref": "vault://platform/github-reader",
+            "config": {"base_url": "https://api.github.com"},
+        },
+        format="json",
+    )
+
+    assert connection.status_code == 201
+    assert connection.data["status"] == PluginConnection.Status.PENDING
+    assert connection.data["credential_ref"] == "vault://platform/github-reader"
+    assert PluginConnection.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_plugin_registration_rejects_plaintext_secret_in_manifest(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"]["api_token"] = "must-not-be-stored"
+
+    response = client.post("/api/v1/connectors/", payload, format="json")
+
+    assert response.status_code == 400
+    assert PluginDefinition.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_plugin_connection_rejects_plaintext_credential(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+
+    response = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "bad-connection",
+            "auth_type": "credential_ref",
+            "credential_ref": "ghp_plaintext_token",
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert PluginConnection.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_plugin_installation_rejects_undeclared_permissions(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:write"],
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert PluginInstallation.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_non_idempotent_plugin_tool_cannot_configure_retries(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["tools"][0]["idempotency_mode"] = "none"
+    payload["tools"][0]["retry_policy"] = {"max_attempts": 2}
+
+    response = client.post("/api/v1/connectors/", payload, format="json")
+
+    assert response.status_code == 400
+    assert PluginDefinition.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_plugin_installation_version_is_pinned(plugin_workspace):
+    user, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    installation = PluginInstallation.objects.get(pk=installed.data["id"])
+    installation.plugin_version = "0.9.0"
+    installation.save(update_fields=["plugin_version"])
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 409
