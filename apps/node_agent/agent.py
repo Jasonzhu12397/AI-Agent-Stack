@@ -151,11 +151,25 @@ def inspect_api_group(
 
 
 CRD_REQUIREMENTS = {
-    "cluster_api": {"clusters": "clusters.cluster.x-k8s.io", "machines": "machines.cluster.x-k8s.io", "machinedeployments": "machinedeployments.cluster.x-k8s.io"},
-    "bootstrap_kubeadm": {"kubeadmconfigs": "kubeadmconfigs.bootstrap.cluster.x-k8s.io"},
-    "control_plane_kubeadm": {"kubeadmcontrolplanes": "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io"},
-    "infrastructure_metal3": {"metal3clusters": "metal3clusters.infrastructure.cluster.x-k8s.io", "metal3machines": "metal3machines.infrastructure.cluster.x-k8s.io", "metal3machinetemplates": "metal3machinetemplates.infrastructure.cluster.x-k8s.io"},
-    "metal3": {"baremetalhosts": "baremetalhosts.metal3.io"},
+    "cluster_api": {
+        "clusters": "clusters.cluster.x-k8s.io",
+        "machines": "machines.cluster.x-k8s.io",
+        "machinedeployments": "machinedeployments.cluster.x-k8s.io",
+    },
+    "bootstrap_kubeadm": {
+        "kubeadmconfigs": "kubeadmconfigs.bootstrap.cluster.x-k8s.io",
+    },
+    "control_plane_kubeadm": {
+        "kubeadmcontrolplanes": "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io",
+    },
+    "infrastructure_metal3": {
+        "metal3clusters": "metal3clusters.infrastructure.cluster.x-k8s.io",
+        "metal3machines": "metal3machines.infrastructure.cluster.x-k8s.io",
+        "metal3machinetemplates": "metal3machinetemplates.infrastructure.cluster.x-k8s.io",
+    },
+    "metal3": {
+        "baremetalhosts": "baremetalhosts.metal3.io",
+    },
 }
 
 
@@ -166,19 +180,55 @@ def summarize_crd_schema(crd: dict[str, Any]) -> dict[str, Any]:
     for version in spec.get("versions", []):
         if not isinstance(version, dict) or version.get("served") is not True:
             continue
-        schema = version.get("schema", {}).get("openAPIV3Schema")
+        version_schema = version.get("schema", {})
+        schema = (
+            version_schema.get("openAPIV3Schema")
+            if isinstance(version_schema, dict)
+            else None
+        )
         if not isinstance(schema, dict):
             errors.append("served_version_missing_openapi_schema")
             continue
         properties = schema.get("properties", {})
-        spec_schema = properties.get("spec", {}) if isinstance(properties, dict) else {}
-        spec_properties = spec_schema.get("properties", {}) if isinstance(spec_schema, dict) else {}
-        required = spec_schema.get("required", []) if isinstance(spec_schema, dict) else []
-        served_versions.append({"name": version.get("name"), "storage": version.get("storage") is True, "spec_properties": sorted(key for key in spec_properties if isinstance(key, str))[:100], "required_spec_fields": sorted(key for key in required if isinstance(key, str))[:100]})
+        spec_schema = (
+            properties.get("spec", {})
+            if isinstance(properties, dict)
+            else {}
+        )
+        spec_properties = (
+            spec_schema.get("properties", {})
+            if isinstance(spec_schema, dict)
+            else {}
+        )
+        required = (
+            spec_schema.get("required", [])
+            if isinstance(spec_schema, dict)
+            else []
+        )
+        served_versions.append(
+            {
+                "name": version.get("name"),
+                "storage": version.get("storage") is True,
+                "spec_properties": sorted(
+                    key for key in spec_properties if isinstance(key, str)
+                )[:100],
+                "required_spec_fields": sorted(
+                    key for key in required if isinstance(key, str)
+                )[:100],
+            }
+        )
     if not served_versions:
         errors.append("no_served_version_with_openapi_schema")
     names = spec.get("names", {})
-    return {"crd_name": names.get("plural", "") + "." + spec.get("group", ""), "group": spec.get("group"), "kind": names.get("kind"), "scope": spec.get("scope"), "served_versions": served_versions, "schema_valid": not errors, "schema_errors": errors}
+    return {
+        "crd_name": names.get("plural", "") + "." + spec.get("group", ""),
+        "group": spec.get("group"),
+        "kind": names.get("kind"),
+        "scope": spec.get("scope"),
+        "served_versions": served_versions,
+        "schema_valid": not errors,
+        "schema_errors": errors,
+    }
 
 
 def inspect_provider_crd_schemas(providers: dict[str, Any]) -> dict[str, Any]:
@@ -190,13 +240,19 @@ def inspect_provider_crd_schemas(providers: dict[str, Any]) -> dict[str, Any]:
         for resource, crd_name in resources.items():
             if available.get(resource) is not True:
                 continue
-            path = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + crd_name
+            path = (
+                "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/"
+                + crd_name
+            )
             try:
                 crd = kubernetes_api_get(path)
             except NodeAgentError as exc:
                 if str(exc) == "KUBERNETES_API_HTTP_404":
                     missing.append(crd_name)
-                    results[crd_name] = {"found": False, "schema_valid": False}
+                    results[crd_name] = {
+                        "found": False,
+                        "schema_valid": False,
+                    }
                     continue
                 raise
             summary = summarize_crd_schema(crd)
@@ -204,7 +260,12 @@ def inspect_provider_crd_schemas(providers: dict[str, Any]) -> dict[str, Any]:
             results[crd_name] = summary
             if not summary["schema_valid"]:
                 invalid.append(crd_name)
-    return {"crds": results, "missing_crds": missing, "invalid_schemas": invalid, "schema_check_complete": not missing and not invalid}
+    return {
+        "crds": results,
+        "missing_crds": missing,
+        "invalid_schemas": invalid,
+        "schema_check_complete": not missing and not invalid,
+    }
 
 
 def discover_provider_apis() -> dict[str, Any]:
