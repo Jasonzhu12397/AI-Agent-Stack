@@ -8,10 +8,12 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Backend:** Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
 - **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
 - **Execution:** independent Python Worker with PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, bounded retries and cooperative cancellation. Safe demo handlers, single-turn LLM Agent runs and a basic persistent Workflow DAG runner are connected.
+- **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. Commands are typed, tenant/project scoped, persisted, lease-protected and approval-hash bound for provisioning/bootstrap operations.
+- **Node agents:** the Python runner supports EPH host preflight, cluster-plan dry runs and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
-The FastAPI and React implementation has been replaced. The latest verified workflow milestone passed full CI in [run 41421249429](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421249429), commit `8e2d51233e163b0d0e4661dea1cdd90e0ca47789`: Ruff, 61 pytest tests, Vue production build, PostgreSQL migrations, Compose build/start, API health checks, Web HTTP and Worker-running smoke test.
+The FastAPI and React implementation has been replaced. The Vue UI follows the layout and interaction patterns in [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), ported from its React implementation rather than embedding React into this Vue application. The previous verified workflow milestone passed full CI in [run 41421574449](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421574449), commit `56d29c006031fa9363e79c88f2c365aa1649ebf2`; this branch's dual-agent work is awaiting its own PR CI.
 
 The P1-1 identity slice adds Tenant, TenantMembership, Project and ProjectMembership models. Tenant and project lists are membership-filtered; only tenant owners/admins can create projects, and the creator receives project-admin membership. Cross-tenant, tenant_id spoofing, role denial, revocation and pagination isolation are tested. Login UI/OIDC, membership invitations/administration and project role-specific update/delete permissions remain unimplemented.
 
@@ -25,6 +27,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up --build
 ```
 
 - Vue Studio: http://localhost:5173
+- Infrastructure Agents: open the Infrastructure Agents tab after signing in.
 - Django API: http://localhost:8000/api/v1/
 - Django Admin: http://localhost:8000/admin/
 
@@ -74,6 +77,21 @@ npm run build
 - `deploy/`: local and future deployment assets.
 - `docs/`: architecture decisions, threat model, verification matrix and delivery plan.
 - `tests/`: backend contract and integration tests.
+
+## Dual-agent infrastructure control
+
+See [Dual-Agent Infrastructure Architecture](docs/dual-agent-infrastructure-architecture.md) and [ADR 0003](docs/adr/0003-remote-dual-agent-control-plane.md).
+
+The control plane enrolls an `eph_node` and a `target_cluster` agent independently. Node enrollment returns a one-time token; only its SHA-256 hash is stored. The agent initiates outbound HTTPS heartbeats and command polls. PostgreSQL stores command state, idempotency key, attempts, lease token/expiry, result and error. Provisioning and target-agent bootstrap commands wait for a different tenant administrator to approve the exact plan hash.
+
+The EPH runner currently supports:
+- `node.health`, `host.preflight`, `cluster.plan` (dry-run only);
+- `cluster.health`, `cluster.observe`, `cluster.diagnose`, `cluster.postflight`, `k8s.resource.read` (read-only in-cluster Kubernetes API);
+- `capi.cluster.observe` and `metal3.host.inspect` (API group discovery only).
+
+The Target Cluster runner supports node health and read-only Kubernetes inspection after it is installed inside the target cluster. It is not needed to bootstrap the cluster. Production node identity should move to mTLS/short-lived workload identity; the current one-time bearer token is the initial development enrollment mechanism.
+
+**Not yet enabled:** actual CAPI Cluster/MachineDeployment creation, Metal3 BareMetalHost writes, Ironic/BMC operations, target-agent installation, arbitrary manifest apply and day-2 mutation. These require a verified management/target Kubernetes + CAPI + Metal3 + Ironic + IPA compatibility matrix, scoped credentials and an execution adapter. A command marked approved is not proof that provisioning occurred.
 
 ## Workflow milestone
 
