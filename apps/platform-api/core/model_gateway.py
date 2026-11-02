@@ -9,7 +9,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.conf import settings
 
-from core.models import ModelConfig, ModelProvider
+from core.models import ModelProvider
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
