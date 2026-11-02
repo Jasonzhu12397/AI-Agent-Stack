@@ -381,13 +381,32 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         if not isinstance(hosts, list) or len(hosts) < control_plane_replicas + worker_replicas:
             missing_requirements.append("metal3.hosts")
         else:
+            control_plane_hosts = 0
+            worker_hosts = 0
             for index, host in enumerate(hosts):
                 if not isinstance(host, dict):
                     missing_requirements.append(f"metal3.hosts[{index}]")
                     continue
-                for key in ["baremetal_host", "role", "bmc_credential_ref"]:
+                for key in [
+                    "baremetal_host",
+                    "role",
+                    "bmc_credential_ref",
+                    "boot_mac",
+                    "root_device_hints",
+                    "network_data_ref",
+                ]:
                     if not host.get(key):
                         missing_requirements.append(f"metal3.hosts[{index}].{key}")
+                if host.get("role") == "control-plane":
+                    control_plane_hosts += 1
+                elif host.get("role") == "worker":
+                    worker_hosts += 1
+                else:
+                    missing_requirements.append(f"metal3.hosts[{index}].role")
+            if control_plane_hosts < control_plane_replicas:
+                missing_requirements.append("metal3.hosts.control_plane_capacity")
+            if worker_hosts < worker_replicas:
+                missing_requirements.append("metal3.hosts.worker_capacity")
         return {
             "plan_status": "validated_dry_run",
             "cluster_name": cluster_name,
