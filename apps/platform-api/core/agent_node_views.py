@@ -34,6 +34,7 @@ EPH_COMMANDS = {
     "target-agent.bootstrap",
     "capi.cluster.observe",
     "metal3.host.inspect",
+    "cluster.provider.discover",
 }
 TARGET_COMMANDS = {
     "node.health",
