@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -34,7 +34,7 @@ class ModelProviderListCreateView(APIView):
 
     def get(self, request, tenant_id):
         tenant = get_tenant(request, tenant_id)
-        providers = ModelProvider.objects.filter(tenant__in=[tenant, None], enabled=True)
+        providers = ModelProvider.objects.filter(Q(tenant=tenant) | Q(tenant__isnull=True), enabled=True)
         return Response(ModelProviderReadSerializer(providers, many=True).data)
 
     def post(self, request, tenant_id):
@@ -58,7 +58,10 @@ class ModelConfigListCreateView(APIView):
 
     def get_provider(self, request, tenant, provider_id):
         return get_object_or_404(
-            ModelProvider.objects.filter(tenant=tenant, enabled=True),
+            ModelProvider.objects.filter(
+                Q(tenant=tenant) | Q(tenant__isnull=True),
+                enabled=True,
+            ),
             pk=provider_id,
         )
 
@@ -76,6 +79,11 @@ class ModelConfigListCreateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         provider = self.get_provider(request, tenant, provider_id)
+        if provider.tenant_id != tenant.id:
+            return Response(
+                {"detail": "Only tenant-owned providers can be modified by tenant admins."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ModelConfigSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         model_config = serializer.save(provider=provider)
@@ -97,7 +105,7 @@ class ModelTestView(APIView):
             )
         model_config = get_object_or_404(
             ModelConfig.objects.select_related("provider").filter(
-                provider__tenant=tenant,
+                Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
                 provider__enabled=True,
                 enabled=True,
             ),
