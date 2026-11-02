@@ -232,7 +232,16 @@ def summarize_crd_schema(crd: dict[str, Any]) -> dict[str, Any]:
 
 
 
-def validate_openapi_value(value: Any, schema: dict[str, Any], path: str, errors: list[str]) -> None:
+def validate_openapi_value(
+    value: Any,
+    schema: dict[str, Any],
+    path: str,
+    errors: list[str],
+    depth: int = 0,
+) -> None:
+    if depth > 64:
+        errors.append(path + ":maximum_validation_depth_exceeded")
+        return
     if not isinstance(schema, dict):
         errors.append(path + ":schema_malformed")
         return
@@ -274,7 +283,7 @@ def validate_openapi_value(value: Any, schema: dict[str, Any], path: str, errors
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(value[:1000]):
-                validate_openapi_value(item, item_schema, f"{path}[{index}]", errors)
+                validate_openapi_value(item, item_schema, f"{path}[{index}]", errors, depth + 1)
     if isinstance(value, dict):
         properties = schema.get("properties", {})
         required = schema.get("required", [])
@@ -287,12 +296,12 @@ def validate_openapi_value(value: Any, schema: dict[str, Any], path: str, errors
         for field, child in value.items():
             child_schema = properties.get(field)
             if isinstance(child_schema, dict):
-                validate_openapi_value(child, child_schema, path + "." + field, errors)
+                validate_openapi_value(child, child_schema, path + "." + field, errors, depth + 1)
             elif schema.get("additionalProperties") is False:
                 errors.append(path + "." + str(field) + ":unknown_field")
             elif isinstance(schema.get("additionalProperties"), dict):
                 validate_openapi_value(
-                    child, schema["additionalProperties"], path + "." + str(field), errors
+                    child, schema["additionalProperties"], path + "." + str(field), errors, depth + 1
                 )
 
 
@@ -300,7 +309,9 @@ def validate_provider_manifests(manifests: Any) -> dict[str, Any]:
     if not isinstance(manifests, list) or not manifests or len(manifests) > 100:
         raise NodeAgentError("INVALID_MANIFEST_LIST")
     try:
-        encoded_size = len(json.dumps(manifests, separators=(",", ":"), ensure_ascii=False))
+        encoded_size = len(
+            json.dumps(manifests, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
     except (TypeError, ValueError) as exc:
         raise NodeAgentError("INVALID_MANIFEST_LIST") from exc
     if encoded_size > 1024 * 1024:
