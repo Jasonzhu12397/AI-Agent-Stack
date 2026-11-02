@@ -134,6 +134,7 @@ async function loadNodes(): Promise<void> {
   if (!selectedTenantId.value || !selectedProjectId.value) {
     nodes.value = [];
     commands.value = [];
+    deployments.value = [];
     return;
   }
   try {
@@ -325,6 +326,9 @@ function formatTime(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "Never";
 }
 
+watch(nodeType, (value) => {
+  nodeName.value = value === "eph_node" ? "eph-node-01" : "target-cluster-01";
+});
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
 watch(selectedProjectId, () => void loadNodes());
 watch(selectedNodeId, () => {
@@ -356,7 +360,7 @@ onUnmounted(() => {
         <h2>EPH &amp; Target Cluster Agents</h2>
         <p class="infra-description">
           One remote control plane, two independently enrolled execution agents. EPH provisions the
-          target through CAPI / Metal3 / Ironic; the target agent joins after the Kubernetes API is ready.
+          target delivery plan through CAPI / Metal3 / Ironic; target-side checks join after API readiness.
         </p>
       </div>
       <el-tag type="success" effect="plain">OUTBOUND CONTROL CHANNEL</el-tag>
