@@ -66,7 +66,7 @@ async function loadWorkspace(): Promise<void> {
     const modelPages = await Promise.all(
       providers.map((provider) => getModelConfigs(props.tenantId, provider.id)),
     );
-    models.value = modelPages.flat();
+    models.value = modelPages.flat().filter((model) => model.capabilities.includes("chat"));
     if (models.value.length > 0) selectedModelId.value = models.value[0].id;
     const [basePage, catalogPage, installationPage] = await Promise.all([
       getKnowledgeBases(props.tenantId, props.projectId),
