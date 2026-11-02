@@ -220,26 +220,57 @@ class ProjectMemberDetailView(APIView):
         valid_roles = {choice for choice, _ in ProjectMembership.Role.choices}
         if role not in valid_roles:
             return Response({"detail": "A valid role is required."}, status=400)
-        membership = get_object_or_404(ProjectMembership, project=project, pk=membership_id)
-        membership.role = role
-        membership.save(update_fields=["role"])
-        return Response({"id": str(membership.id), "username": membership.user.get_username(), "role": membership.role})
+        with transaction.atomic():
+            Project.objects.select_for_update().get(pk=project.pk)
+            membership = get_object_or_404(
+                ProjectMembership.objects.select_for_update(),
+                project=project,
+                pk=membership_id,
+            )
+            if (
+                membership.role == ProjectMembership.Role.ADMIN
+                and role != ProjectMembership.Role.ADMIN
+            ):
+                admin_count = ProjectMembership.objects.filter(
+                    project=project,
+                    role=ProjectMembership.Role.ADMIN,
+                ).count()
+                if admin_count <= 1:
+                    return Response(
+                        {"detail": "A project must retain at least one administrator."},
+                        status=409,
+                    )
+            membership.role = role
+            membership.save(update_fields=["role"])
+        return Response(
+            {
+                "id": str(membership.id),
+                "username": membership.user.get_username(),
+                "role": membership.role,
+            }
+        )
 
     def delete(self, request, tenant_id, project_id, membership_id):
         tenant = tenant_for_user(request, tenant_id)
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
             return Response({"detail": "Project administrator permission required."}, status=403)
-        membership = get_object_or_404(ProjectMembership, project=project, pk=membership_id)
-        if membership.role == ProjectMembership.Role.ADMIN:
-            admin_count = ProjectMembership.objects.filter(
+        with transaction.atomic():
+            Project.objects.select_for_update().get(pk=project.pk)
+            membership = get_object_or_404(
+                ProjectMembership.objects.select_for_update(),
                 project=project,
-                role=ProjectMembership.Role.ADMIN,
-            ).count()
-            if admin_count <= 1:
-                return Response(
-                    {"detail": "A project must retain at least one administrator."},
-                    status=409,
-                )
-        membership.delete()
+                pk=membership_id,
+            )
+            if membership.role == ProjectMembership.Role.ADMIN:
+                admin_count = ProjectMembership.objects.filter(
+                    project=project,
+                    role=ProjectMembership.Role.ADMIN,
+                ).count()
+                if admin_count <= 1:
+                    return Response(
+                        {"detail": "A project must retain at least one administrator."},
+                        status=409,
+                    )
+            membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
