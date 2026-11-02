@@ -339,6 +339,7 @@ def execute_agent_run(task):
                 query=agent_run.input_text,
                 embedding_model=knowledge_base.embedding_model,
                 limit=3,
+                metadata_filters={"knowledge_base_id": str(knowledge_base.id)},
             )
         except RagRuntimeError as exc:
             raise RuntimeError("Knowledge retrieval failed") from exc
@@ -473,6 +474,7 @@ def execute_knowledge_ingest(task):
             embedding_model=knowledge_base.embedding_model,
             metadata={
                 "title": document.title,
+                "knowledge_base_id": str(knowledge_base.id),
                 **document.metadata,
             },
             chunk_size=knowledge_base.chunk_size,
