@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from django.urls import path
 
 from core.agent_node_views import (
