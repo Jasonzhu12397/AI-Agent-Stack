@@ -47,14 +47,6 @@ def can_create_task(request, tenant, project):
     return tenant_admin or project_editor
 
 
-def visible_task_queryset(request):
-    return Task.objects.filter(
-        tenant__memberships__user=request.user,
-    ).filter(
-        project__memberships__user=request.user,
-    ).distinct()
-
-
 class TaskListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -62,8 +54,14 @@ class TaskListCreateView(APIView):
         tenant = accessible_tenant(request, tenant_id)
         project = accessible_project(request, tenant, project_id)
         queryset = Task.objects.filter(tenant=tenant, project=project).order_by("-created_at")
-        limit = min(max(int(request.query_params.get("limit", 50)), 1), 100)
-        offset = max(int(request.query_params.get("offset", 0)), 0)
+        try:
+            limit = min(max(int(request.query_params.get("limit", 50)), 1), 100)
+            offset = max(int(request.query_params.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "limit and offset must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         items = queryset[offset : offset + limit]
         return Response(
             {
@@ -160,6 +158,9 @@ class TaskCancelView(APIView):
             elif task.status == Task.Status.RUNNING:
                 task.status = Task.Status.CANCEL_REQUESTED
                 task.cancel_requested_at = timezone.now()
+            elif task.status == Task.Status.WAITING_APPROVAL:
+                task.status = Task.Status.CANCELLED
+                task.finished_at = timezone.now()
             elif task.status == Task.Status.CANCEL_REQUESTED:
                 return Response(TaskSerializer(task).data, status=status.HTTP_202_ACCEPTED)
             else:
