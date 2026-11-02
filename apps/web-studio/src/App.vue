@@ -11,9 +11,15 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-const activeView = ref<
-  "dashboard" | "models" | "agents" | "workflows" | "infrastructure"
->("dashboard");
+type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "infrastructure";
+const activeView = ref<ActiveView>("dashboard");
+const navItems: { id: ActiveView; label: string }[] = [
+  { id: "dashboard", label: "Overview" },
+  { id: "models", label: "Model Manager" },
+  { id: "agents", label: "Agent Studio" },
+  { id: "workflows", label: "Workflow DAG" },
+  { id: "infrastructure", label: "Infrastructure Agents" },
+];
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
 const currentUser = ref<CurrentUser | null>(null);
@@ -90,16 +96,10 @@ onUnmounted(() => {
     />
     <nav class="main-nav" aria-label="Main navigation">
       <button
-        v-for="item in [
-          { id: 'dashboard', label: 'Overview' },
-          { id: 'models', label: 'Model Manager' },
-          { id: 'agents', label: 'Agent Studio' },
-          { id: 'workflows', label: 'Workflow DAG' },
-          { id: 'infrastructure', label: 'Infrastructure Agents' },
-        ]"
+        v-for="item in navItems"
         :key="item.id"
         :class="{ active: activeView === item.id }"
-        @click="activeView = item.id as typeof activeView"
+        @click="activeView = item.id"
       >
         {{ item.label }}
       </button>
