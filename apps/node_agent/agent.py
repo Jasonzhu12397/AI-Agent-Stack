@@ -1119,6 +1119,7 @@ class ControlPlaneClient:
         self.node_id = node_id
         self.token = token
         self.timeout = timeout
+        self.deployment_checkpoints: dict[str, dict[str, Any]] = {}
 
     def request(
         self,
@@ -1170,10 +1171,15 @@ class ControlPlaneClient:
         if checkpoint.get("resume_available") is True:
             if not isinstance(checkpoint.get("data"), dict):
                 raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
-            if not isinstance(checkpoint.get("sequence"), int):
+            if (
+                not isinstance(checkpoint.get("sequence"), int)
+                or isinstance(checkpoint.get("sequence"), bool)
+                or checkpoint.get("sequence") < 1
+            ):
                 raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
             if checkpoint.get("generation") != 1:
                 raise NodeAgentError("CHECKPOINT_GENERATION_UNSUPPORTED")
+        self.deployment_checkpoints[deployment_id] = checkpoint
         return checkpoint
 
     def save_deployment_checkpoint(
@@ -1208,7 +1214,7 @@ class ControlPlaneClient:
             raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
         if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) > 32768:
             raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
-        return self.request(
+        result = self.request(
             f"/api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/",
             {
                 "node_id": self.node_id,
@@ -1218,6 +1224,15 @@ class ControlPlaneClient:
                 "data": data,
             },
         )
+        self.deployment_checkpoints[deployment_id] = {
+            "deployment_id": deployment_id,
+            "generation": generation,
+            "sequence": sequence,
+            "phase": phase,
+            "data": data,
+            "resume_available": True,
+        }
+        return result
 
     def heartbeat(self, node_type: str) -> dict[str, Any]:
         capabilities = (
@@ -1309,7 +1324,28 @@ def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
 
 
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
-    client.heartbeat(node_type)
+    heartbeat = client.heartbeat(node_type)
+    if node_type == "target_cluster":
+        for deployment in heartbeat.get("active_deployments", []):
+            deployment_id = deployment.get("deployment_id")
+            if (
+                isinstance(deployment_id, str)
+                and deployment_id
+                and deployment_id not in client.deployment_checkpoints
+            ):
+                checkpoint = client.restore_deployment_checkpoint(deployment_id)
+                print(
+                    json.dumps(
+                        {
+                            "event": "deployment_checkpoint_restored",
+                            "deployment_id": deployment_id,
+                            "resume_available": checkpoint.get("resume_available", False),
+                            "phase": checkpoint.get("phase"),
+                            "sequence": checkpoint.get("sequence", 0),
+                        }
+                    ),
+                    flush=True,
+                )
     envelope = client.poll()
     command = envelope.get("command")
     if not command:
