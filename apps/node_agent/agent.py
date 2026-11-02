@@ -797,10 +797,22 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             )
             metadata = deployment.get("metadata", {})
             status_data = deployment.get("status", {})
+            available_replicas = status_data.get("availableReplicas")
+            desired_replicas = deployment.get("spec", {}).get("replicas", 1)
+            observed_generation = status_data.get("observedGeneration", 0)
+            generation = metadata.get("generation", 1)
             ready = (
-                isinstance(status_data.get("availableReplicas"), int)
-                and status_data.get("availableReplicas") > 0
-                and status_data.get("observedGeneration", 0) >= metadata.get("generation", 1)
+                isinstance(available_replicas, int)
+                and not isinstance(available_replicas, bool)
+                and isinstance(desired_replicas, int)
+                and not isinstance(desired_replicas, bool)
+                and desired_replicas > 0
+                and available_replicas >= desired_replicas
+                and isinstance(observed_generation, int)
+                and not isinstance(observed_generation, bool)
+                and isinstance(generation, int)
+                and not isinstance(generation, bool)
+                and observed_generation >= generation
             )
             controller_states.append(
                 {
