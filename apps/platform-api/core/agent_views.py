@@ -180,8 +180,24 @@ class AgentPublishView(APIView):
                     {"detail": "Selected model does not declare chat capability."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            system_prompt = config.get("system_prompt")
+            if not isinstance(system_prompt, str) or not system_prompt.strip():
+                return Response(
+                    {"detail": "system_prompt must be a non-empty string."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(system_prompt) > 12000:
+                return Response(
+                    {"detail": "system_prompt cannot exceed 12,000 characters."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             tool_allowlist = config.get("tool_allowlist", [])
             knowledge_base_ids = config.get("knowledge_base_ids", [])
+            if not isinstance(tool_allowlist, list) or not isinstance(knowledge_base_ids, list):
+                return Response(
+                    {"detail": "tool_allowlist and knowledge_base_ids must be arrays."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if tool_allowlist or knowledge_base_ids:
                 return Response(
                     {
@@ -205,7 +221,10 @@ class AgentPublishView(APIView):
                     {"detail": "timeout_seconds must be between 1 and 120."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if not isinstance(max_tokens, int) or not 1 <= max_tokens <= model_config.max_output_tokens:
+            if (
+                not isinstance(max_tokens, int)
+                or not 1 <= max_tokens <= model_config.max_output_tokens
+            ):
                 return Response(
                     {"detail": "max_tokens exceeds the selected model output limit."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -219,7 +238,7 @@ class AgentPublishView(APIView):
             ) + 1
             snapshot = {
                 "model_config_id": str(model_config.id),
-                "system_prompt": config["system_prompt"],
+                "system_prompt": system_prompt,
                 "tool_allowlist": [],
                 "knowledge_base_ids": [],
                 "max_iterations": 1,
