@@ -45,19 +45,10 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
         if not isinstance(config, dict):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
-        forbidden_keys = {
-            "api_key",
-            "secret",
-            "password",
-            "access_token",
-            "client_secret",
-            "authorization",
-        }
-
         def contains_secret(value):
             if isinstance(value, dict):
                 return any(
-                    str(key).lower() in forbidden_keys or contains_secret(child)
+                    str(key).lower() in FORBIDDEN_CREDENTIAL_KEYS or contains_secret(child)
                     for key, child in value.items()
                 )
             if isinstance(value, list):
