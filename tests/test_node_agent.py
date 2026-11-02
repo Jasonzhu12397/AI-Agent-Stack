@@ -342,7 +342,12 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
         if path == "/version":
             return {"gitVersion": "v1.32.2"}
         if path.endswith("/cluster.x-k8s.io/v1beta1"):
-            return {"resources": [{"name": name} for name in ["clusters", "machines", "machinedeployments"]]}
+            return {
+                "resources": [
+                    {"name": name}
+                    for name in ["clusters", "machines", "machinedeployments"]
+                ]
+            }
         if path.endswith("/bootstrap.cluster.x-k8s.io/v1beta1"):
             return {"resources": [{"name": "kubeadmconfigs"}]}
         if path.endswith("/controlplane.cluster.x-k8s.io/v1beta1"):
