@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -32,8 +33,26 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise NodeAgentError("INVALID_PAYLOAD")
     allowed = {
-        "eph_node": {"node.health", "host.preflight", "cluster.plan"},
-        "target_cluster": {"node.health"},
+        "eph_node": {
+            "node.health",
+            "host.preflight",
+            "cluster.plan",
+            "cluster.health",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "k8s.resource.read",
+            "capi.cluster.observe",
+            "metal3.host.inspect",
+        },
+        "target_cluster": {
+            "node.health",
+            "cluster.health",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "k8s.resource.read",
+        },
     }
     if command_type not in allowed.get(node_type, set()):
         raise NodeAgentError("CAPABILITY_NOT_CONFIGURED")
@@ -44,6 +63,77 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "platform": platform.platform(),
             "agent_status": "ready",
         }
+    if command_type == "cluster.health":
+        version = kubernetes_api_get("/version")
+        return {"api_reachable": True, "kubernetes_version": version.get("gitVersion")}
+    if command_type == "cluster.observe":
+        version = kubernetes_api_get("/version")
+        nodes = kubernetes_api_get("/api/v1/nodes")
+        api_groups = kubernetes_api_get("/apis")
+        return {
+            "kubernetes_version": version.get("gitVersion"),
+            "node_count": len(nodes.get("items", [])),
+            "node_names": [
+                item.get("metadata", {}).get("name")
+                for item in nodes.get("items", [])
+            ],
+            "api_group_count": len(api_groups.get("groups", [])),
+        }
+    if command_type == "cluster.postflight":
+        nodes = kubernetes_api_get("/api/v1/nodes")
+        items = nodes.get("items", [])
+        not_ready = []
+        for item in items:
+            conditions = item.get("status", {}).get("conditions", [])
+            ready = next((condition for condition in conditions if condition.get("type") == "Ready"), {})
+            if ready.get("status") != "True":
+                not_ready.append(item.get("metadata", {}).get("name"))
+        return {
+            "node_count": len(items),
+            "ready": len(items) > 0 and not not_ready,
+            "not_ready_nodes": not_ready,
+        }
+    if command_type == "cluster.diagnose":
+        namespace = payload.get("namespace", "default")
+        if not isinstance(namespace, str) or not namespace or "/" in namespace:
+            raise NodeAgentError("INVALID_NAMESPACE")
+        events = kubernetes_api_get(f"/api/v1/namespaces/{namespace}/events")
+        return {
+            "namespace": namespace,
+            "event_count": len(events.get("items", [])),
+            "warning_events": [
+                {
+                    "reason": item.get("reason"),
+                    "message": str(item.get("message", ""))[:500],
+                    "involved_object": item.get("involvedObject", {}).get("name"),
+                }
+                for item in events.get("items", [])
+                if item.get("type") == "Warning"
+            ][:100],
+        }
+    if command_type == "k8s.resource.read":
+        resource = payload.get("resource")
+        namespace = payload.get("namespace", "default")
+        if resource in {"nodes", "namespaces"}:
+            data = kubernetes_api_get(f"/api/v1/{resource}")
+        elif resource in {"pods", "events", "services"} and isinstance(namespace, str) and namespace and "/" not in namespace:
+            data = kubernetes_api_get(f"/api/v1/namespaces/{namespace}/{resource}")
+        else:
+            raise NodeAgentError("RESOURCE_NOT_ALLOWLISTED")
+        return {"resource": resource, "namespace": namespace, "items": data.get("items", [])[:100]}
+    if command_type in {"capi.cluster.observe", "metal3.host.inspect"}:
+        api_groups = kubernetes_api_get("/apis")
+        target_group = "cluster.x-k8s.io" if command_type == "capi.cluster.observe" else "metal3.io"
+        groups = [
+            {
+                "name": group.get("name"),
+                "versions": [version.get("version") for version in group.get("versions", [])],
+                "preferred_version": group.get("preferredVersion", {}).get("version"),
+            }
+            for group in api_groups.get("groups", [])
+            if group.get("name") == target_group
+        ]
+        return {"api_group": target_group, "discovered": bool(groups), "groups": groups}
     if command_type == "host.preflight":
         disk = shutil.disk_usage("/")
         return {
@@ -106,6 +196,54 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     raise NodeAgentError("UNSUPPORTED_COMMAND")
 
 
+def kubernetes_api_get(path: str) -> dict[str, Any]:
+    allowed_prefixes = (
+        "/version",
+        "/api/v1/nodes",
+        "/api/v1/namespaces",
+        "/api/v1/namespaces/",
+        "/apis",
+    )
+    if not path.startswith(allowed_prefixes) or ".." in path or "?" in path:
+        raise NodeAgentError("KUBERNETES_PATH_NOT_ALLOWLISTED")
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    token_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    )
+    ca_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_CA_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    )
+    if not host or not os.path.isfile(token_path) or not os.path.isfile(ca_path):
+        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
+    with open(token_path, encoding="utf-8") as token_file:
+        token = token_file.read().strip()
+    context = ssl.create_default_context(cafile=ca_path)
+    request = urllib.request.Request(
+        f"https://{host}:{port}{path}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=15) as response:
+            payload = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+    if len(payload) > 1024 * 1024:
+        raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_JSON") from exc
+    if not isinstance(result, dict):
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_SHAPE")
+    return result
+
+
 class ControlPlaneClient:
     def __init__(self, base_url: str, node_id: str, token: str, timeout: int = 20):
         self.base_url = base_url.rstrip("/")
@@ -136,9 +274,27 @@ class ControlPlaneClient:
 
     def heartbeat(self, node_type: str) -> dict[str, Any]:
         capabilities = (
-            ["node.health", "host.preflight", "cluster.plan"]
+            [
+                "node.health",
+                "host.preflight",
+                "cluster.plan",
+                "cluster.health",
+                "cluster.observe",
+                "cluster.diagnose",
+                "cluster.postflight",
+                "k8s.resource.read",
+                "capi.cluster.observe",
+                "metal3.host.inspect",
+            ]
             if node_type == "eph_node"
-            else ["node.health"]
+            else [
+                "node.health",
+                "cluster.health",
+                "cluster.observe",
+                "cluster.diagnose",
+                "cluster.postflight",
+                "k8s.resource.read",
+            ]
         )
         return self.request(
             "/api/v1/agent-runtime/heartbeat/",
