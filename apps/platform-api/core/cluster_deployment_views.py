@@ -238,6 +238,86 @@ class ClusterDeploymentCancelView(APIView):
 
 
 
+class ClusterDeploymentTargetAgentHandoffView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        if deployment.status not in {
+            ClusterDeployment.Status.CONTROL_PLANE_READY,
+            ClusterDeployment.Status.TARGET_AGENT_PENDING,
+        }:
+            return Response(
+                {"detail": "Target Agent handoff requires a verified ready Control Plane."},
+                status=409,
+            )
+        try:
+            target_node_id = uuid.UUID(str(request.data.get("target_node_id")))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "A valid target_node_id is required."}, status=400)
+        target_node = get_object_or_404(
+            AgentNode.objects.filter(
+                tenant=deployment.tenant,
+                project=deployment.project,
+                node_type=AgentNode.NodeType.TARGET_CLUSTER,
+            ),
+            pk=target_node_id,
+        )
+        if target_node.status != AgentNode.Status.ONLINE or (
+            target_node.last_seen_at is None
+            or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response(
+                {"detail": "The selected Target Agent must have a fresh heartbeat."},
+                status=409,
+            )
+        if target_node.cluster_name != deployment.cluster_name:
+            return Response(
+                {"detail": "Target Agent must be enrolled for the deployment cluster name."},
+                status=409,
+            )
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status not in {
+                ClusterDeployment.Status.CONTROL_PLANE_READY,
+                ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            }:
+                return Response({"detail": "Deployment handoff state changed."}, status=409)
+            if deployment.target_node_id and deployment.target_node_id != target_node.id:
+                return Response(
+                    {"detail": "Deployment is already assigned to another Target Agent."},
+                    status=409,
+                )
+            target_node = AgentNode.objects.select_for_update().get(pk=target_node.pk)
+            if (
+                target_node.status != AgentNode.Status.ONLINE
+                or target_node.last_seen_at is None
+                or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+            ):
+                return Response({"detail": "Target Agent heartbeat is no longer fresh."}, status=409)
+            deployment.target_node = target_node
+            deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
+            deployment.save(update_fields=["target_node", "status", "updated_at"])
+        return Response(
+            {
+                "deployment": _deployment_data(deployment),
+                "target_agent_id": str(target_node.id),
+                "checkpoint_endpoint": (
+                    f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+                ),
+                "worker_provisioning_allowed": False,
+            },
+            status=202,
+        )
+
+
 class ClusterDeploymentTargetPostflightView(APIView):
     permission_classes = [IsAuthenticated]
 
