@@ -60,6 +60,7 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
                 or parsed.password
                 or parsed.query
                 or parsed.fragment
+                or parsed.port not in (None, 443)
                 or parsed.hostname.lower() not in allowed_hosts
             ):
                 raise serializers.ValidationError(
@@ -104,6 +105,14 @@ class ModelConfigSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs.get("context_window", 1) <= 0:
             raise serializers.ValidationError({"context_window": "Must be greater than zero."})
-        if attrs.get("max_output_tokens", 1) <= 0:
+        max_output_tokens = attrs.get("max_output_tokens", 1)
+        if max_output_tokens <= 0:
             raise serializers.ValidationError({"max_output_tokens": "Must be greater than zero."})
+        if max_output_tokens > attrs.get("context_window", 32768):
+            raise serializers.ValidationError(
+                {"max_output_tokens": "Cannot exceed the model context window."}
+            )
+        for field in ("input_cost_per_million", "output_cost_per_million"):
+            if attrs.get(field, 0) < 0:
+                raise serializers.ValidationError({field: "Cost cannot be negative."})
         return attrs
