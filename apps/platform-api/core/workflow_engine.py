@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import json
 import re
+import uuid
 from collections import deque
 
 from django.utils import timezone
@@ -74,6 +75,12 @@ def validate_workflow_definition(definition):
         if node_type == "llm":
             if not isinstance(config.get("model_config_id"), str):
                 raise WorkflowValidationError(f"LLM node {node_id} requires model_config_id.")
+            try:
+                uuid.UUID(config["model_config_id"])
+            except ValueError as exc:
+                raise WorkflowValidationError(
+                    f"LLM node {node_id} model_config_id must be a UUID."
+                ) from exc
             if not isinstance(config.get("prompt_template"), str):
                 raise WorkflowValidationError(f"LLM node {node_id} requires prompt_template.")
             if len(config["prompt_template"]) > 12000:
@@ -230,7 +237,7 @@ def _execute_node(node, state, input_data):
     if node_type == "start":
         return input_data
     if node_type == "condition":
-        source_node = config.get("source_node")
+        source_node = config.get("input_from") or config.get("source_node")
         if source_node:
             actual = state.get(source_node)
         else:
@@ -238,7 +245,7 @@ def _execute_node(node, state, input_data):
             actual = input_data.get(input_key) if isinstance(input_data, dict) else None
         return {"matched": actual == config["equals"]}
     if node_type == "end":
-        source_node = config.get("source_node")
+        source_node = config.get("input_from") or config.get("source_node")
         return state.get(source_node) if source_node else dict(state)
     if node_type == "llm":
         source_value = _step_input(node, state)
