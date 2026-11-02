@@ -114,7 +114,10 @@ class ModelGateway:
                 )
         if tools is not None:
             if not isinstance(tools, list) or len(tools) > 64:
-                raise ModelGatewayError("INVALID_TOOLS", "Tools must be a list of at most 64 items.")
+                raise ModelGatewayError(
+                    "INVALID_TOOLS",
+                    "Tools must be a list of at most 64 items.",
+                )
             if tools and "tools" not in (model_config.capabilities or []):
                 raise ModelGatewayError(
                     "MODEL_CAPABILITY_MISSING",
