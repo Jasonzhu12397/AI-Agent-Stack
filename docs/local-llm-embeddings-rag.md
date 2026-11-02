@@ -50,6 +50,8 @@ The API now supports project-scoped KnowledgeBase creation with a pinned embeddi
 
 Published Agent versions can pin up to 8 Knowledge Base IDs from the same tenant/project. At execution time the Worker embeds the user query with each selected base's embedding model, retrieves up to three tenant/project-filtered chunks per base, and injects them as explicitly untrusted reference material with document/chunk source IDs. Knowledge Base selection is immutable per published Agent version.
 
+Workflow DAGs also support a `knowledge_search` node. The node pins 1–8 project knowledge bases, accepts a query template and bounded result limit, and emits document/chunk source IDs plus retrieved text. Downstream LLM nodes receive the results with an explicit untrusted-reference instruction. Publish and run both revalidate tenant/project scope and embedding-model capability.
+
 The current document API accepts text content; PDF/DOCX parsing, file upload, document deletion/vector cleanup, reranking, retention controls and ingestion progress streaming are not implemented yet.
 
 ## Agent and Workflow integration status
