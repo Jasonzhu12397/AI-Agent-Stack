@@ -32,19 +32,46 @@ def _can_manage_project(user, tenant, project):
     ).exists()
 
 
+def _contains_sensitive_key(value):
+    sensitive_parts = (
+        "password",
+        "secret",
+        "token",
+        "private_key",
+        "kubeconfig",
+        "api_key",
+        "access_key",
+        "authorization",
+    )
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if any(part in normalized for part in sensitive_parts):
+                return True
+            if _contains_sensitive_key(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_key(child) for child in value)
+    return False
+
+
 def _safe_schema(value):
     if not isinstance(value, dict) or value.get("type") != "object":
         return False
-    if not isinstance(value.get("properties", {}), dict):
+    properties = value.get("properties", {})
+    if not isinstance(properties, dict):
         return False
     required = value.get("required", [])
     if not isinstance(required, list) or not all(
-        isinstance(item, str) for item in required
+        isinstance(item, str) and item in properties for item in required
     ):
         return False
     if value.get("additionalProperties", False) is not False:
         return False
-    return len(str(value).encode("utf-8")) <= 32768
+    return (
+        not _contains_sensitive_key(value)
+        and len(str(value).encode("utf-8")) <= 32768
+    )
 
 
 def _plugin_tools(plugin):
@@ -188,7 +215,7 @@ class PluginCatalogListCreateView(APIView):
                 status=400,
             )
         payload_error = _validate_payload({"plugin_manifest": manifest, "tool_definitions": tools})
-        if payload_error:
+        if payload_error or _contains_sensitive_key(manifest) or _contains_sensitive_key(tools):
             return Response({"detail": payload_error}, status=400)
         names = set()
         normalized_tools = []
@@ -388,7 +415,7 @@ class PluginInstallationListCreateView(APIView):
         if not isinstance(config, dict):
             return Response({"detail": "config must be a JSON object."}, status=400)
         payload_error = _validate_payload({"config": config})
-        if payload_error:
+        if payload_error or _contains_sensitive_key(config):
             return Response({"detail": payload_error}, status=400)
         try:
             with transaction.atomic():
