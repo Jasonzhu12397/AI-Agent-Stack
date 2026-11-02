@@ -18,7 +18,6 @@ def chunk_text(text, chunk_size=1200, overlap=160):
         raise RagRuntimeError("Chunk overlap must be smaller than chunk size.")
     normalized = "\n".join(line.rstrip() for line in text.splitlines()).strip()
     chunks = []
-    start = 0
     for index in range(0, len(normalized), chunk_size - overlap):
         content = normalized[index : index + chunk_size].strip()
         if content:
@@ -64,7 +63,7 @@ def ingest_text(
         for batch_start in range(0, len(chunks), 128):
             batch = chunks[batch_start : batch_start + 128]
             embedded = gateway.embed(embedding_model, batch)
-            for offset, (content, vector) in enumerate(zip(batch, embedded.vectors)):
+            for offset, (content, vector) in enumerate(zip(batch, embedded.vectors, strict=True)):
                 chunk_index = batch_start + offset
                 digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
                 records.append(
