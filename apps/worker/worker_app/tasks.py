@@ -143,7 +143,19 @@ def finish_task(task_id, lease_token, result):
             ]
         )
         if task.task_type == "agent.run":
-            AgentRun.objects.filter(task=task).update(finished_at=now)
+            run_update = {"finished_at": now}
+            if task.status == Task.Status.SUCCEEDED:
+                run_update.update(
+                    {
+                        "output_text": result["content"],
+                        "input_tokens": result["input_tokens"],
+                        "output_tokens": result["output_tokens"],
+                        "provider_name": result["provider"],
+                        "model_name": result["model"],
+                        "latency_ms": result["latency_ms"],
+                    }
+                )
+            AgentRun.objects.filter(task=task).update(**run_update)
         return True
 
 
@@ -257,19 +269,7 @@ def execute_task(task, worker_id):
 def process_task(task, worker_id):
     try:
         result = execute_task(task, worker_id)
-        completed = finish_task(task.id, task.lease_token, result)
-        if completed and task.task_type == "agent.run":
-            task.refresh_from_db(fields=["status"])
-            if task.status == Task.Status.SUCCEEDED:
-                AgentRun.objects.filter(task=task).update(
-                    output_text=result["content"],
-                    input_tokens=result["input_tokens"],
-                    output_tokens=result["output_tokens"],
-                    provider_name=result["provider"],
-                    model_name=result["model"],
-                    latency_ms=result["latency_ms"],
-                    finished_at=timezone.now(),
-                )
+        finish_task(task.id, task.lease_token, result)
     except PermanentTaskError as exc:
         fail_task(
             task.id,
