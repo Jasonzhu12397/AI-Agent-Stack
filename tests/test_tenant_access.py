@@ -125,3 +125,73 @@ def test_tenant_pagination_count_does_not_include_other_users_tenants(user_facto
     assert response.status_code == 200
     assert response.data["count"] == 12
     assert len(response.data["results"]) == 5
+
+
+@pytest.mark.django_db
+def test_only_tenant_owner_or_admin_can_create_project(user_factory):
+    owner = user_factory("project-owner")
+    member = user_factory("project-member")
+    tenant = Tenant.objects.create(name="Create tenant", slug="create-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=owner, role="owner")
+    TenantMembership.objects.create(tenant=tenant, user=member, role="member")
+
+    client = APIClient()
+    client.force_authenticate(user=member)
+    denied = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/",
+        {"name": "Denied", "slug": "denied"},
+        format="json",
+    )
+    assert denied.status_code == 403
+
+    client.force_authenticate(user=owner)
+    allowed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/",
+        {"name": "Allowed", "slug": "allowed"},
+        format="json",
+    )
+    assert allowed.status_code == 201
+    created = Project.objects.get(tenant=tenant, slug="allowed")
+    assert ProjectMembership.objects.filter(
+        project=created,
+        user=owner,
+        role=ProjectMembership.Role.ADMIN,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_project_creation_ignores_spoofed_tenant_id(user_factory):
+    user = user_factory("project-spoof-owner")
+    tenant = Tenant.objects.create(name="Authorized", slug="authorized-tenant")
+    foreign = Tenant.objects.create(name="Foreign", slug="foreign-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=user, role="admin")
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/",
+        {"name": "Scoped project", "slug": "scoped", "tenant_id": str(foreign.id)},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["tenant_id"] == str(tenant.id)
+    assert not Project.objects.filter(tenant=foreign, slug="scoped").exists()
+
+
+@pytest.mark.django_db
+def test_project_slug_must_be_unique_within_tenant(user_factory):
+    user = user_factory("project-slug-owner")
+    tenant = Tenant.objects.create(name="Slug tenant", slug="slug-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=user, role="owner")
+    Project.objects.create(tenant=tenant, name="Existing", slug="duplicate")
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/",
+        {"name": "Duplicate", "slug": "duplicate"},
+        format="json",
+    )
+
+    assert response.status_code == 400
