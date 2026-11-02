@@ -491,6 +491,13 @@ class AgentCommand(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    deployment = models.ForeignKey(
+        "ClusterDeployment",
+        on_delete=models.SET_NULL,
+        related_name="commands",
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["-created_at"]
