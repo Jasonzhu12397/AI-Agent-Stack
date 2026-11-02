@@ -231,6 +231,171 @@ def summarize_crd_schema(crd: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def validate_openapi_value(value: Any, schema: dict[str, Any], path: str, errors: list[str]) -> None:
+    if not isinstance(schema, dict):
+        errors.append(path + ":schema_malformed")
+        return
+    expected = schema.get("type")
+    type_checks = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+    }
+    if expected in type_checks and not type_checks[expected](value):
+        errors.append(path + ":type_mismatch")
+        return
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(path + ":enum_mismatch")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            errors.append(path + ":below_minimum")
+        if "maximum" in schema and value > schema["maximum"]:
+            errors.append(path + ":above_maximum")
+    if isinstance(value, str):
+        if "minLength" in schema and len(value) < schema["minLength"]:
+            errors.append(path + ":string_too_short")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            errors.append(path + ":string_too_long")
+        if "pattern" in schema:
+            try:
+                if re.search(schema["pattern"], value) is None:
+                    errors.append(path + ":pattern_mismatch")
+            except re.error:
+                errors.append(path + ":schema_pattern_invalid")
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            errors.append(path + ":too_few_items")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errors.append(path + ":too_many_items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value[:1000]):
+                validate_openapi_value(item, item_schema, f"{path}[{index}]", errors)
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            errors.append(path + ":schema_object_invalid")
+            return
+        for field in required:
+            if isinstance(field, str) and field not in value:
+                errors.append(path + "." + field + ":required")
+        for field, child in value.items():
+            child_schema = properties.get(field)
+            if isinstance(child_schema, dict):
+                validate_openapi_value(child, child_schema, path + "." + field, errors)
+            elif schema.get("additionalProperties") is False:
+                errors.append(path + "." + str(field) + ":unknown_field")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                validate_openapi_value(
+                    child, schema["additionalProperties"], path + "." + str(field), errors
+                )
+
+
+def validate_provider_manifests(manifests: Any) -> dict[str, Any]:
+    if not isinstance(manifests, list) or not manifests or len(manifests) > 100:
+        raise NodeAgentError("INVALID_MANIFEST_LIST")
+    try:
+        encoded_size = len(json.dumps(manifests, separators=(",", ":"), ensure_ascii=False))
+    except (TypeError, ValueError) as exc:
+        raise NodeAgentError("INVALID_MANIFEST_LIST") from exc
+    if encoded_size > 1024 * 1024:
+        raise NodeAgentError("MANIFEST_PAYLOAD_TOO_LARGE")
+    crd_cache = {}
+    results = []
+    for index, manifest in enumerate(manifests):
+        if not isinstance(manifest, dict):
+            raise NodeAgentError("INVALID_MANIFEST_OBJECT")
+        api_version = manifest.get("apiVersion")
+        kind = manifest.get("kind")
+        metadata = manifest.get("metadata")
+        if (
+            not isinstance(api_version, str)
+            or "/" not in api_version
+            or not isinstance(kind, str)
+            or not isinstance(metadata, dict)
+            or not isinstance(metadata.get("name"), str)
+            or not metadata.get("name")
+        ):
+            raise NodeAgentError("INVALID_MANIFEST_IDENTITY")
+        group, version_name = api_version.split("/", 1)
+        matched = None
+        for provider_resources in CRD_REQUIREMENTS.values():
+            for crd_name in provider_resources.values():
+                if crd_name not in crd_cache:
+                    try:
+                        crd_cache[crd_name] = kubernetes_api_get(
+                            "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + crd_name
+                        )
+                    except NodeAgentError as exc:
+                        if str(exc) == "KUBERNETES_API_HTTP_404":
+                            crd_cache[crd_name] = None
+                        else:
+                            raise
+                crd = crd_cache[crd_name]
+                if not isinstance(crd, dict):
+                    continue
+                crd_spec = crd.get("spec", {})
+                names = crd_spec.get("names", {})
+                if crd_spec.get("group") != group or names.get("kind") != kind:
+                    continue
+                version_entry = next(
+                    (
+                        item for item in crd_spec.get("versions", [])
+                        if isinstance(item, dict)
+                        and item.get("name") == version_name
+                        and item.get("served") is True
+                    ),
+                    None,
+                )
+                if version_entry is None:
+                    matched = {"error": "unsupported_api_version"}
+                    break
+                openapi = version_entry.get("schema", {}).get("openAPIV3Schema")
+                matched = {
+                    "schema": openapi,
+                    "scope": crd_spec.get("scope"),
+                    "error": None if isinstance(openapi, dict) else "openapi_schema_missing",
+                }
+                break
+            if matched is not None:
+                break
+        if matched is None:
+            results.append({
+                "index": index,
+                "valid": False,
+                "errors": ["crd_not_found_for_group_and_kind"],
+            })
+            continue
+        if matched.get("error"):
+            results.append({
+                "index": index,
+                "valid": False,
+                "errors": [matched["error"]],
+            })
+            continue
+        errors = []
+        if matched["scope"] == "Namespaced" and not metadata.get("namespace"):
+            errors.append("metadata.namespace:required_for_namespaced_resource")
+        if matched["scope"] == "Cluster" and metadata.get("namespace"):
+            errors.append("metadata.namespace:not_allowed_for_cluster_scoped_resource")
+        validate_openapi_value(manifest, matched["schema"], f"manifests[{index}]", errors)
+        results.append({"index": index, "valid": not errors, "errors": errors[:100]})
+    return {
+        "validated_count": len(results),
+        "valid": all(item["valid"] for item in results),
+        "results": results,
+        "validation_mode": "read_only_live_crd_openapi_schema",
+        "server_side_dry_run": False,
+        "mutation_adapter_enabled": False,
+        "provisioning_ready": False,
+    }
+
+
 def inspect_provider_crd_schemas(providers: dict[str, Any]) -> dict[str, Any]:
     results = {}
     missing = []
@@ -450,6 +615,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "capi.cluster.observe",
             "metal3.host.inspect",
             "cluster.provider.discover",
+            "cluster.manifest.validate",
         },
         "target_cluster": {
             "node.health",
@@ -544,6 +710,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         }
     if command_type == "cluster.provider.discover":
         return discover_provider_apis()
+    if command_type == "cluster.manifest.validate":
+        return validate_provider_manifests(payload.get("manifests"))
     if command_type == "capi.cluster.observe":
         namespace = payload.get("namespace", os.environ.get("AGENT_NAMESPACE", "default"))
         return inspect_api_group(
@@ -775,6 +943,7 @@ class ControlPlaneClient:
                 "capi.cluster.observe",
                 "metal3.host.inspect",
                 "cluster.provider.discover",
+                "cluster.manifest.validate",
             ]
             if node_type == "eph_node"
             else [
