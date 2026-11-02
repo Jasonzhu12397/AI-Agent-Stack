@@ -50,7 +50,13 @@ def resolve_credential(credential_ref):
 
 
 class ModelGateway:
-    def complete(self, model_config: ModelConfig, messages):
+    def complete(
+        self,
+        model_config: ModelConfig,
+        messages,
+        max_tokens=None,
+        timeout_seconds=30,
+    ):
         if not isinstance(messages, list) or not messages:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
         for message in messages:
@@ -85,9 +91,22 @@ class ModelGateway:
             )
         if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
             raise ModelGatewayError("PROVIDER_UNSUPPORTED", "The provider type is not supported.")
-        return self._openai_compatible(model_config, messages, started)
+        return self._openai_compatible(
+            model_config,
+            messages,
+            started,
+            max_tokens,
+            timeout_seconds,
+        )
 
-    def _openai_compatible(self, model_config, messages, started):
+    def _openai_compatible(
+        self,
+        model_config,
+        messages,
+        started,
+        max_tokens,
+        timeout_seconds,
+    ):
         provider = model_config.provider
         credential = resolve_credential(provider.credential_ref)
         url = provider.base_url.rstrip("/") + "/chat/completions"
@@ -95,7 +114,10 @@ class ModelGateway:
             {
                 "model": model_config.model_name,
                 "messages": messages,
-                "max_tokens": model_config.max_output_tokens,
+                "max_tokens": min(
+                    max_tokens or model_config.max_output_tokens,
+                    model_config.max_output_tokens,
+                ),
             }
         ).encode("utf-8")
         request = Request(
@@ -110,7 +132,7 @@ class ModelGateway:
         )
         try:
             opener = build_opener(NoRedirectHandler())
-            with opener.open(request, timeout=30) as response:
+            with opener.open(request, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             raise ModelGatewayError(
