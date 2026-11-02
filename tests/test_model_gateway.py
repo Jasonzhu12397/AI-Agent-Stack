@@ -229,3 +229,25 @@ def test_model_config_versions_are_immutable_and_increment(model_tenant):
     assert response.status_code == 201
     assert response.data["version"] == 2
     assert ModelConfig.objects.filter(provider=provider, model_name=model.model_name).count() == 2
+
+
+@pytest.mark.django_db
+def test_model_provider_rejects_secret_values_inside_config(model_tenant):
+    user, tenant, _, _ = model_tenant
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/model-providers/",
+        {
+            "name": "Unsafe provider",
+            "provider_type": "fake",
+            "base_url": "",
+            "credential_ref": "",
+            "config": {"api_key": "must-not-be-persisted"},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert not ModelProvider.objects.filter(tenant=tenant, name="Unsafe provider").exists()
