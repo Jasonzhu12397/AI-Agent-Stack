@@ -826,3 +826,98 @@ def test_cluster_plan_rejects_url_as_control_plane_endpoint():
 def test_cluster_plan_rejects_malformed_baremetal_host_reference():
     with pytest.raises(agent.NodeAgentError, match="INVALID_BAREMETAL_HOST_REFERENCE"):
         agent.validate_metal3_hosts([{"baremetal_host": ["metal3-system", "bmh-01"]}])
+
+
+
+def test_target_agent_control_plane_verification_requires_all_expected_control_planes_ready(monkeypatch):
+    responses = {
+        "/version": {"gitVersion": "v1.32.2"},
+        "/api/v1/nodes": {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "cp-01",
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                },
+                {
+                    "metadata": {
+                        "name": "cp-02",
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "False"}]
+                    },
+                },
+                {
+                    "metadata": {
+                        "name": "worker-01",
+                        "labels": {"node-role.kubernetes.io/worker": ""},
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.control-plane.verify",
+            "payload": {"expected_control_plane_replicas": 3},
+        },
+        "target_cluster",
+    )
+    assert result["control_plane_ready"] is False
+    assert result["ready_control_plane_replicas"] == 1
+    assert result["not_ready_control_plane_nodes"] == ["cp-02"]
+    assert result["worker_provisioning_allowed"] is False
+    assert result["capi_pivot_allowed"] is False
+    assert result["side_effects"] is False
+
+
+def test_target_agent_control_plane_verification_succeeds_without_workers(monkeypatch):
+    responses = {
+        "/version": {"gitVersion": "v1.32.2"},
+        "/api/v1/nodes": {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "cp-01",
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.control-plane.verify",
+            "payload": {"expected_control_plane_replicas": 1},
+        },
+        "target_cluster",
+    )
+    assert result["control_plane_ready"] is True
+    assert result["ready_control_plane_replicas"] == 1
+    assert result["control_plane_nodes"] == ["cp-01"]
+    assert result["worker_provisioning_allowed"] is True
+    assert result["capi_pivot_allowed"] is True
+
+
+def test_target_agent_control_plane_verification_rejects_even_replica_count():
+    with pytest.raises(agent.NodeAgentError, match="INVALID_CONTROL_PLANE_REPLICAS"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.control-plane.verify",
+                "payload": {"expected_control_plane_replicas": 2},
+            },
+            "target_cluster",
+        )
