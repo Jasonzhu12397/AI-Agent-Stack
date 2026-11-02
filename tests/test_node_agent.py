@@ -341,6 +341,33 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
             }
         if path == "/version":
             return {"gitVersion": "v1.32.2"}
+        if path.startswith("/apis/apiextensions.k8s.io/"):
+            crd_name = path.rsplit("/", 1)[-1]
+            group = crd_name.split(".", 1)[1]
+            return {
+                "spec": {
+                    "group": group,
+                    "names": {
+                        "plural": crd_name.split(".", 1)[0],
+                        "kind": "Fixture",
+                    },
+                    "scope": "Namespaced",
+                    "versions": [
+                        {
+                            "name": "v1beta1",
+                            "served": True,
+                            "storage": True,
+                            "schema": {
+                                "openAPIV3Schema": {
+                                    "properties": {
+                                        "spec": {"type": "object"}
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                }
+            }
         if path.endswith("/cluster.x-k8s.io/v1beta1"):
             return {
                 "resources": [
