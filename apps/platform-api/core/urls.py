@@ -1,10 +1,5 @@
 from django.urls import path
 
-from core.cluster_deployment_views import (
-    ClusterDeploymentCancelView,
-    ClusterDeploymentDetailView,
-    ClusterDeploymentListCreateView,
-)
 from core.agent_node_views import (
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
@@ -14,6 +9,11 @@ from core.agent_node_views import (
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
     AgentRuntimeResultView,
+)
+from core.cluster_deployment_views import (
+    ClusterDeploymentCancelView,
+    ClusterDeploymentDetailView,
+    ClusterDeploymentListCreateView,
 )
 from core.agent_views import (
     AgentDetailView,
