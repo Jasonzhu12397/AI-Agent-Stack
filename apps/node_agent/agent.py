@@ -1015,6 +1015,7 @@ class ControlPlaneClient:
                 "cluster.observe",
                 "cluster.diagnose",
                 "cluster.postflight",
+                "cluster.control-plane.verify",
                 "k8s.resource.read",
             ]
         )
