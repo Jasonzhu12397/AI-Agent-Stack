@@ -41,6 +41,8 @@ jobs:
         run: ruff check .
       - name: Django system checks
         run: python apps/platform-api/manage.py check
+      - name: Check migration model drift
+        run: python apps/platform-api/manage.py makemigrations --check --dry-run
       - name: Apply Django migrations
         run: python apps/platform-api/manage.py migrate --noinput
       - name: Test
