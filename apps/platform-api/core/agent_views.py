@@ -21,7 +21,6 @@ from core.models import (
     ModelConfig,
     Project,
     ProjectMembership,
-    PluginInstallation,
     PluginTool,
     Task,
     Tenant,
@@ -250,7 +249,7 @@ class AgentPublishView(APIView):
             max_iterations = config.get("max_iterations", 1)
             timeout_seconds = config.get("timeout_seconds", 60)
             max_tokens = config.get("max_tokens", 2048)
-            if not isinstance(max_iterations, int) or not 1 <= max_iterations <= 8:
+            if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or not 1 <= max_iterations <= 8:
                 return Response(
                     {"detail": "max_iterations must be between 1 and 8."},
                     status=status.HTTP_400_BAD_REQUEST,
