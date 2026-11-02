@@ -205,3 +205,83 @@ def test_workflow_run_requires_published_version(workflow_workspace):
 
     assert response.status_code == 409
     assert Task.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_workflow_condition_executes_only_matching_branch(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "check",
+                "type": "condition",
+                "config": {"input_key": "mode", "equals": "fast"},
+            },
+            {
+                "id": "fast_answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model.id),
+                    "prompt_template": "Fast: {{input}}",
+                    "max_tokens": 128,
+                    "timeout_seconds": 20,
+                },
+            },
+            {
+                "id": "slow_answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model.id),
+                    "prompt_template": "Slow: {{input}}",
+                    "max_tokens": 128,
+                    "timeout_seconds": 20,
+                },
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "config": {"source_node": "fast_answer"},
+            },
+        ],
+        "edges": [
+            {"source": "start", "target": "check"},
+            {"source": "check", "target": "fast_answer", "when": True},
+            {"source": "check", "target": "slow_answer", "when": False},
+            {"source": "fast_answer", "target": "end"},
+            {"source": "slow_answer", "target": "end"},
+        ],
+    }
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Conditional workflow",
+        slug="conditional-workflow",
+        draft_definition=definition,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    published = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    run_response = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"mode": "fast", "question": "choose a branch"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-branch-001",
+    )
+    assert run_response.status_code == 202
+
+    assert process_once("workflow-branch-worker") is True
+
+    run = WorkflowRun.objects.get(pk=run_response.data["id"])
+    assert run.task.status == Task.Status.SUCCEEDED
+    assert run.output_data["content"] == "workflow response"
+    assert WorkflowStepRun.objects.get(
+        workflow_run=run,
+        node_id="slow_answer",
+    ).status == WorkflowStepRun.Status.SKIPPED
