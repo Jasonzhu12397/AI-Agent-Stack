@@ -512,6 +512,7 @@ export type ClusterDeployment = {
   error: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  started_at: string | null;
   finished_at: string | null;
 };
 
