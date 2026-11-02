@@ -451,6 +451,22 @@ class PluginInstallationListCreateView(APIView):
                 {"detail": "Plugin configuration cannot contain credential fields."},
                 status=400,
             )
+        previous_version = PluginInstallation.objects.filter(
+            project=project,
+            plugin__plugin_key=plugin.plugin_key,
+        ).exclude(plugin=plugin).exclude(
+            status=PluginInstallation.Status.UNINSTALLED
+        ).first()
+        if previous_version:
+            return Response(
+                {
+                    "detail": (
+                        "Another version of this connector is installed; "
+                        "uninstall it before installing the new version."
+                    )
+                },
+                status=409,
+            )
         try:
             with transaction.atomic():
                 installation, created = PluginInstallation.objects.get_or_create(
