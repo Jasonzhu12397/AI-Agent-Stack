@@ -63,7 +63,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agent
 docker compose --env-file .env -f deploy/docker-compose.yml logs -f eph-node-agent target-cluster-agent
 ```
 
-6. In the Studio, dispatch `node.health` to both agents and `host.preflight` / `cluster.plan` to the EPH agent.
+6. In the Studio, dispatch `node.health` to both agents. Use the **Metal3 / CAPI cluster plan** form on the EPH node to create a persisted workflow: the control plane queues `host.preflight`, then automatically queues `cluster.plan` and stores the plan result.
 
 The local Compose target agent runs outside a Kubernetes cluster, so it can report node health but Kubernetes API commands require the agent to be deployed inside the target cluster with a dedicated ServiceAccount and CA/token mounts. The EPH Compose process reports its container environment, not the physical host. Do not use this local profile as a production deployment.
 
