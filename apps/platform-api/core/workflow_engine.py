@@ -1,7 +1,6 @@
 import re
 from collections import deque
 
-from django.db import transaction
 from django.utils import timezone
 
 from core.model_gateway import ModelGateway, ModelGatewayError
@@ -49,6 +48,14 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(f"LLM node {node_id} prompt is too long.")
         if node_type == "condition" and "equals" not in config:
             raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
+        if node_type in {"llm", "condition", "end"}:
+            source_node = config.get("input_from") or config.get("source_node")
+            if source_node and (
+                not isinstance(source_node, str) or source_node == node_id
+            ):
+                raise WorkflowValidationError(
+                    f"Node {node_id} has an invalid source node reference."
+                )
         node_map[node_id] = node
     starts = [node_id for node_id, node in node_map.items() if node["type"] == "start"]
     ends = [node_id for node_id, node in node_map.items() if node["type"] == "end"]
@@ -270,7 +277,7 @@ def execute_workflow_run(task, worker_id, renew_lease):
         if not renew_lease(task.id, task.lease_token, worker_id):
             raise RuntimeError("Workflow task cancellation requested or lease lost")
         now = timezone.now()
-        step, _ = WorkflowStepRun.objects.get_or_create(
+        step, created = WorkflowStepRun.objects.get_or_create(
             workflow_run=workflow_run,
             node_id=node_id,
             defaults={
@@ -281,7 +288,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
         )
         step.status = WorkflowStepRun.Status.RUNNING
         step.node_type = node["type"]
-        step.attempt += 1 if step.started_at else 0
+        if not created:
+            step.attempt += 1
         step.started_at = now
         step.finished_at = None
         step.error = None
