@@ -42,10 +42,35 @@ Use that account to sign in to the Vue Studio; tenant membership provisioning is
 - Liveness: http://localhost:8000/health/live
 - Readiness: http://localhost:8000/health/ready
 
+### Run the two local node-agent processes
+
+1. Sign in to the Studio and create/select a tenant and project.
+2. Open **Infrastructure Agents** and enroll one `EPH Node Agent` and one `Target Cluster Agent`.
+3. Copy each one-time token and node UUID immediately. The token is never returned again.
+4. Add them to the ignored local `.env` file:
+
+```dotenv
+EPH_AGENT_NODE_ID=<eph-node-uuid>
+EPH_AGENT_TOKEN=<eph-one-time-token>
+TARGET_AGENT_NODE_ID=<target-node-uuid>
+TARGET_AGENT_TOKEN=<target-one-time-token>
+```
+
+5. Start the two optional agent processes:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agents up --build -d eph-node-agent target-cluster-agent
+docker compose --env-file .env -f deploy/docker-compose.yml logs -f eph-node-agent target-cluster-agent
+```
+
+6. In the Studio, dispatch `node.health` to both agents and `host.preflight` / `cluster.plan` to the EPH agent.
+
+The local Compose target agent runs outside a Kubernetes cluster, so it can report node health but Kubernetes API commands require the agent to be deployed inside the target cluster with a dedicated ServiceAccount and CA/token mounts. The EPH Compose process reports its container environment, not the physical host. Do not use this local profile as a production deployment.
+
 Stop services:
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml down
+docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agents down
 ```
 
 ## Local checks
