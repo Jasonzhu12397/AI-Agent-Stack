@@ -115,21 +115,46 @@ class QdrantVectorStore:
         )
         return {"upserted": len(points)}
 
-    def search(self, tenant_id, project_id, vector, limit=5, score_threshold=None):
+    def search(
+        self,
+        tenant_id,
+        project_id,
+        vector,
+        limit=5,
+        score_threshold=None,
+        metadata_filters=None,
+    ):
         if not tenant_id or not project_id:
             raise VectorStoreError("Tenant and project scope are mandatory for vector search.")
         if not isinstance(limit, int) or not 1 <= limit <= 50:
             raise VectorStoreError("Search limit must be between 1 and 50.")
+        must_filters = [
+            {"key": "tenant_id", "match": {"value": str(tenant_id)}},
+            {"key": "project_id", "match": {"value": str(project_id)}},
+        ]
+        if metadata_filters is not None:
+            if not isinstance(metadata_filters, dict) or len(metadata_filters) > 8:
+                raise VectorStoreError("Metadata filters must be an object with at most 8 entries.")
+            for key, value in metadata_filters.items():
+                if (
+                    not isinstance(key, str)
+                    or not key.replace("_", "").isalnum()
+                    or not key
+                    or value is None
+                    or isinstance(value, (dict, list))
+                ):
+                    raise VectorStoreError("Metadata filter key or value is invalid.")
+                must_filters.append(
+                    {
+                        "key": f"metadata.{key}",
+                        "match": {"value": value},
+                    }
+                )
         body = {
             "vector": self._validate_vector(vector),
             "limit": limit,
             "with_payload": True,
-            "filter": {
-                "must": [
-                    {"key": "tenant_id", "match": {"value": str(tenant_id)}},
-                    {"key": "project_id", "match": {"value": str(project_id)}},
-                ]
-            },
+            "filter": {"must": must_filters},
         }
         if score_threshold is not None:
             threshold = float(score_threshold)
