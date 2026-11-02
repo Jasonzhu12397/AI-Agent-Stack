@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import json
 
 from django.db import IntegrityError, transaction
