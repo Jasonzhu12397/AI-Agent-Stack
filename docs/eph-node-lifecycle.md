@@ -111,6 +111,18 @@ The central platform should persist at least:
 
 Do not persist raw BMC passwords, kubeconfigs, bearer tokens, or join tokens in deployment JSON. Store secret-manager references and short-lived credential handles.
 
+## Implemented Target Agent handoff API boundary
+
+The platform now exposes a Control-Plane-first handoff binding endpoint:
+
+- An authenticated project editor calls `POST /api/v1/cluster-deployments/{deployment_id}/target-agent/handoff/` with the enrolled Target Agent node ID.
+- The endpoint accepts only `CONTROL_PLANE_READY` or an idempotent `TARGET_AGENT_PENDING` deployment, requires a fresh Target Agent heartbeat, and binds exactly one target identity to the deployment.
+- The response includes the durable checkpoint endpoint and explicitly returns `worker_provisioning_allowed: false`.
+- The Target Agent reads or advances its central checkpoint through `GET/POST /api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/`, authenticated with its own enrollment credential.
+- Checkpoints are scoped to the bound Target Agent identity and deployment, use generation 1 and monotonically increasing sequence numbers, support exact-request idempotency, and reject replay, stale agent heartbeats, credential fields, and executable payload fields. The checkpoint payload is capped at 32 KiB.
+
+This is a durable checkpoint storage and restore API, not yet automatic Pod deployment or automatic CAPI pivot. The caller must currently ensure that the first Control Plane readiness transition to `CONTROL_PLANE_READY` has been independently verified. The CAPI pivot executor, checkpoint-driven workflow scheduler, and worker provisioning gate remain to be implemented.
+
 ## Operational failure handling
 
 - If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
@@ -121,4 +133,4 @@ Do not persist raw BMC passwords, kubeconfigs, bearer tokens, or join tokens in 
 
 ## Implementation boundary
 
-The current repository has EPH/Target agent enrollment, heartbeat, typed command dispatch, plan persistence, read-only provider discovery and live CRD-backed schema validation. The target-Agent-on-Control-Plane deployment, durable task resume, CAPI bootstrap-cluster pivot, worker provisioning state machine, physical identity correlation, EPH handoff, credential revocation, OS re-image/reboot and same-machine worker re-enrollment are not implemented yet. CAPI/Metal3/Ironic mutation and the production provisioning adapter also remain disabled. This document defines the required behavior; it is not a claim that the complete lifecycle is already automated.
+The current repository has EPH/Target agent enrollment, heartbeat, typed command dispatch, plan persistence, a Control-Plane-first Target Agent binding endpoint, and a central durable checkpoint read/write API with generation, monotonic sequence, idempotency and credential-field rejection; it also has read-only provider discovery and live CRD-backed schema validation. The target-Agent-on-Control-Plane deployment, durable task resume, CAPI bootstrap-cluster pivot, worker provisioning state machine, physical identity correlation, EPH handoff, credential revocation, OS re-image/reboot and same-machine worker re-enrollment are not implemented yet. CAPI/Metal3/Ironic mutation and the production provisioning adapter also remain disabled. This document defines the required behavior; it is not a claim that the complete lifecycle is already automated.
