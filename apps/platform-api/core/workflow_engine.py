@@ -12,6 +12,16 @@ from core.models import (
 )
 
 
+FORBIDDEN_CREDENTIAL_KEYS = {
+    "api_key",
+    "secret",
+    "password",
+    "access_token",
+    "client_secret",
+    "authorization",
+}
+
+
 class WorkflowValidationError(ValueError):
     pass
 
@@ -45,6 +55,7 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
         if not isinstance(config, dict):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
+
         def contains_secret(value):
             if isinstance(value, dict):
                 return any(
@@ -69,7 +80,7 @@ def validate_workflow_definition(definition):
         if node_type == "condition" and "equals" not in config:
             raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
         if node_type in {"llm", "condition", "end"}:
-            source_node = config.get("input_from") or config.get("source_node")
+            source_node = config.get("input_from") or config.get("source_node") or config.get("source_node")
             if source_node and (
                 not isinstance(source_node, str) or source_node == node_id
             ):
