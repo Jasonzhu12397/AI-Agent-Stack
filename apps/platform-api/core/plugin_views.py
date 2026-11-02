@@ -185,7 +185,7 @@ class PluginCatalogListCreateView(APIView):
                 {"detail": "manifest must be an object and tools must contain 1–50 items."},
                 status=400,
             )
-        payload_error = _validate_payload({"manifest": manifest, "tools": tools})
+        payload_error = _validate_payload({"plugin_manifest": manifest, "tool_definitions": tools})
         if payload_error:
             return Response({"detail": payload_error}, status=400)
         names = set()
