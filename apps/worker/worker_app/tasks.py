@@ -330,6 +330,8 @@ def execute_agent_run(task):
         raise PermanentTaskError("An allowed knowledge base is no longer active in this project")
     retrieved_chunks = []
     for knowledge_base in knowledge_bases:
+        if sum(len(item["text"]) for item in retrieved_chunks) >= 12000:
+            break
         try:
             matches = retrieve_context(
                 tenant_id=str(task.tenant_id),
