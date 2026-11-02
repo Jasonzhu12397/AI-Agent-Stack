@@ -1,6 +1,7 @@
 import pytest
 from core.models import Project, ProjectMembership, Task, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 
@@ -88,3 +89,61 @@ def test_viewer_cannot_create_task_and_foreign_tenant_cannot_read(task_users):
 
     assert denied.status_code == 403
     assert Task.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_queued_task_can_be_cancelled_by_project_member(task_users):
+    editor = task_users("task-cancel-editor")
+    tenant = Tenant.objects.create(name="Cancel tenant", slug="cancel-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=editor, role="member")
+    project = Project.objects.create(tenant=tenant, name="Cancel project", slug="cancel-project")
+    ProjectMembership.objects.create(project=project, user=editor, role="editor")
+    task = Task.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=editor,
+        task_type="demo.echo",
+        payload={},
+        idempotency_key="cancel-task-001",
+        available_at=timezone.now(),
+    )
+    client = APIClient()
+    client.force_authenticate(user=editor)
+
+    response = client.post(f"/api/v1/tasks/{task.id}/cancel/", {}, format="json")
+
+    assert response.status_code == 202
+    task.refresh_from_db()
+    assert task.status == Task.Status.CANCELLED
+    assert task.finished_at is not None
+
+
+@pytest.mark.django_db
+def test_running_task_cancel_is_cooperative(task_users):
+    editor = task_users("running-cancel-editor")
+    tenant = Tenant.objects.create(name="Running cancel", slug="running-cancel")
+    TenantMembership.objects.create(tenant=tenant, user=editor, role="member")
+    project = Project.objects.create(tenant=tenant, name="Running project", slug="running-project")
+    ProjectMembership.objects.create(project=project, user=editor, role="editor")
+    task = Task.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=editor,
+        task_type="demo.sleep",
+        payload={"seconds": 5},
+        idempotency_key="running-cancel-001",
+        status=Task.Status.RUNNING,
+        available_at=timezone.now(),
+        lease_owner="worker",
+        lease_token="00000000-0000-0000-0000-000000000001",
+        lease_expires_at=timezone.now() + timezone.timedelta(seconds=30),
+    )
+    client = APIClient()
+    client.force_authenticate(user=editor)
+
+    response = client.post(f"/api/v1/tasks/{task.id}/cancel/", {}, format="json")
+
+    assert response.status_code == 202
+    task.refresh_from_db()
+    assert task.status == Task.Status.CANCEL_REQUESTED
+    assert task.cancel_requested_at is not None
