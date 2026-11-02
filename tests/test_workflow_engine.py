@@ -625,3 +625,68 @@ def test_workflow_knowledge_search_node_retrieves_pinned_base(workflow_workspace
     assert retrieval.call_args.kwargs["metadata_filters"] == {
         "knowledge_base_id": str(knowledge_base.id)
     }
+
+
+
+@pytest.mark.django_db
+def test_workflow_publish_rejects_knowledge_base_from_another_project(workflow_workspace):
+    user, tenant, project, chat_model = workflow_workspace
+    embedding_provider = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="Other project embedding provider",
+        provider_type=ModelProvider.ProviderType.FAKE,
+    )
+    embedding_model = ModelConfig.objects.create(
+        provider=embedding_provider,
+        model_name="other-project-embedding",
+        display_name="Other project embedding",
+        capabilities=["embeddings"],
+    )
+    other_project = Project.objects.create(
+        tenant=tenant,
+        name="Other knowledge project",
+        slug="other-knowledge-project",
+    )
+    other_base = KnowledgeBase.objects.create(
+        tenant=tenant,
+        project=other_project,
+        created_by=user,
+        embedding_model=embedding_model,
+        name="Private knowledge",
+        slug="private-knowledge",
+    )
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "search",
+                "type": "knowledge_search",
+                "config": {"knowledge_base_ids": [str(other_base.id)]},
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "search"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "search"},
+            {"source": "search", "target": "end"},
+        ],
+    }
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Cross project workflow",
+        slug="cross-project-workflow",
+        draft_definition=definition,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert workflow.versions.count() == 0
