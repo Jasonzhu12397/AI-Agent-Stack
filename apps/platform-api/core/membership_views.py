@@ -47,34 +47,53 @@ def require_project_admin(request, tenant, project):
     ).exists()
 
 
+def membership_payload(membership):
+    return {
+        "id": str(membership.id),
+        "user_id": membership.user_id,
+        "username": membership.user.get_username(),
+        "email": membership.user.email,
+        "role": membership.role,
+    }
+
+
 class TenantMemberListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
         tenant = tenant_for_user(request, tenant_id)
         if not require_tenant_admin(request, tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Tenant administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         memberships = (
             TenantMembership.objects.filter(tenant=tenant)
             .select_related("user")
             .order_by("user__username")
         )
-        return Response([
-            {"id": str(item.id), "user_id": item.user_id, "username": item.user.get_username(), "email": item.user.email, "role": item.role}
-            for item in memberships
-        ])
+        return Response([membership_payload(item) for item in memberships])
 
     def post(self, request, tenant_id):
         tenant = tenant_for_user(request, tenant_id)
         if not require_tenant_admin(request, tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Tenant administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         username = request.data.get("username")
         role = request.data.get("role", TenantMembership.Role.MEMBER)
         valid_roles = {choice for choice, _ in TenantMembership.Role.choices}
         if not username or role not in valid_roles:
-            return Response({"detail": "A valid username and role are required."}, status=400)
+            return Response(
+                {"detail": "A valid username and role are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if role == TenantMembership.Role.OWNER and not require_tenant_owner(request, tenant):
-            return Response({"detail": "Only an owner can grant the owner role."}, status=403)
+            return Response(
+                {"detail": "Only an owner can grant the owner role."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         user = get_object_or_404(get_user_model(), username=username)
         membership, created = TenantMembership.objects.get_or_create(
             tenant=tenant,
@@ -82,9 +101,12 @@ class TenantMemberListCreateView(APIView):
             defaults={"role": role},
         )
         if not created:
-            return Response({"detail": "User is already a tenant member."}, status=409)
+            return Response(
+                {"detail": "User is already a tenant member."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(
-            {"id": str(membership.id), "username": user.get_username(), "role": membership.role},
+            membership_payload(membership),
             status=status.HTTP_201_CREATED,
         )
 
@@ -95,11 +117,17 @@ class TenantMemberDetailView(APIView):
     def patch(self, request, tenant_id, membership_id):
         tenant = tenant_for_user(request, tenant_id)
         if not require_tenant_admin(request, tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Tenant administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         role = request.data.get("role")
         valid_roles = {choice for choice, _ in TenantMembership.Role.choices}
         if role not in valid_roles:
-            return Response({"detail": "A valid role is required."}, status=400)
+            return Response(
+                {"detail": "A valid role is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         with transaction.atomic():
             Tenant.objects.select_for_update().get(pk=tenant.pk)
             membership = get_object_or_404(
@@ -109,9 +137,15 @@ class TenantMemberDetailView(APIView):
             )
             actor_is_owner = require_tenant_owner(request, tenant)
             if membership.role == TenantMembership.Role.OWNER and not actor_is_owner:
-                return Response({"detail": "Only an owner can change an owner role."}, status=403)
+                return Response(
+                    {"detail": "Only an owner can change an owner role."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if role == TenantMembership.Role.OWNER and not actor_is_owner:
-                return Response({"detail": "Only an owner can grant the owner role."}, status=403)
+                return Response(
+                    {"detail": "Only an owner can grant the owner role."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if (
                 membership.role == TenantMembership.Role.OWNER
                 and role != TenantMembership.Role.OWNER
@@ -123,22 +157,19 @@ class TenantMemberDetailView(APIView):
                 if owner_count <= 1:
                     return Response(
                         {"detail": "A tenant must retain at least one owner."},
-                        status=409,
+                        status=status.HTTP_409_CONFLICT,
                     )
             membership.role = role
             membership.save(update_fields=["role"])
-        return Response(
-            {
-                "id": str(membership.id),
-                "username": membership.user.get_username(),
-                "role": membership.role,
-            }
-        )
+        return Response(membership_payload(membership))
 
     def delete(self, request, tenant_id, membership_id):
         tenant = tenant_for_user(request, tenant_id)
         if not require_tenant_admin(request, tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Tenant administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         with transaction.atomic():
             Tenant.objects.select_for_update().get(pk=tenant.pk)
             membership = get_object_or_404(
@@ -148,14 +179,20 @@ class TenantMemberDetailView(APIView):
             )
             actor_is_owner = require_tenant_owner(request, tenant)
             if membership.role == TenantMembership.Role.OWNER and not actor_is_owner:
-                return Response({"detail": "Only an owner can remove an owner."}, status=403)
+                return Response(
+                    {"detail": "Only an owner can remove an owner."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if membership.role == TenantMembership.Role.OWNER:
                 owner_count = TenantMembership.objects.filter(
                     tenant=tenant,
                     role=TenantMembership.Role.OWNER,
                 ).count()
                 if owner_count <= 1:
-                    return Response({"detail": "A tenant must retain at least one owner."}, status=409)
+                    return Response(
+                        {"detail": "A tenant must retain at least one owner."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
             ProjectMembership.objects.filter(
                 project__tenant=tenant,
                 user=membership.user,
@@ -171,39 +208,51 @@ class ProjectMemberListCreateView(APIView):
         tenant = tenant_for_user(request, tenant_id)
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
-            return Response({"detail": "Project administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Project administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         memberships = (
             ProjectMembership.objects.filter(project=project)
             .select_related("user")
             .order_by("user__username")
         )
-        return Response([
-            {"id": str(item.id), "user_id": item.user_id, "username": item.user.get_username(), "email": item.user.email, "role": item.role}
-            for item in memberships
-        ])
+        return Response([membership_payload(item) for item in memberships])
 
     def post(self, request, tenant_id, project_id):
         tenant = tenant_for_user(request, tenant_id)
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
-            return Response({"detail": "Project administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Project administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         username = request.data.get("username")
         role = request.data.get("role", ProjectMembership.Role.VIEWER)
         valid_roles = {choice for choice, _ in ProjectMembership.Role.choices}
         if not username or role not in valid_roles:
-            return Response({"detail": "A valid username and role are required."}, status=400)
+            return Response(
+                {"detail": "A valid username and role are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         user = get_object_or_404(get_user_model(), username=username)
         if not TenantMembership.objects.filter(tenant=tenant, user=user).exists():
-            return Response({"detail": "User must belong to the tenant before joining a project."}, status=409)
+            return Response(
+                {"detail": "User must belong to the tenant before joining a project."},
+                status=status.HTTP_409_CONFLICT,
+            )
         membership, created = ProjectMembership.objects.get_or_create(
             project=project,
             user=user,
             defaults={"role": role},
         )
         if not created:
-            return Response({"detail": "User is already a project member."}, status=409)
+            return Response(
+                {"detail": "User is already a project member."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(
-            {"id": str(membership.id), "username": user.get_username(), "role": membership.role},
+            membership_payload(membership),
             status=status.HTTP_201_CREATED,
         )
 
@@ -215,15 +264,21 @@ class ProjectMemberDetailView(APIView):
         tenant = tenant_for_user(request, tenant_id)
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
-            return Response({"detail": "Project administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Project administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         role = request.data.get("role")
         valid_roles = {choice for choice, _ in ProjectMembership.Role.choices}
         if role not in valid_roles:
-            return Response({"detail": "A valid role is required."}, status=400)
+            return Response(
+                {"detail": "A valid role is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         with transaction.atomic():
             Project.objects.select_for_update().get(pk=project.pk)
             membership = get_object_or_404(
-                ProjectMembership.objects.select_for_update(),
+                ProjectMembership.objects.select_for_update().select_related("user"),
                 project=project,
                 pk=membership_id,
             )
@@ -238,23 +293,20 @@ class ProjectMemberDetailView(APIView):
                 if admin_count <= 1:
                     return Response(
                         {"detail": "A project must retain at least one administrator."},
-                        status=409,
+                        status=status.HTTP_409_CONFLICT,
                     )
             membership.role = role
             membership.save(update_fields=["role"])
-        return Response(
-            {
-                "id": str(membership.id),
-                "username": membership.user.get_username(),
-                "role": membership.role,
-            }
-        )
+        return Response(membership_payload(membership))
 
     def delete(self, request, tenant_id, project_id, membership_id):
         tenant = tenant_for_user(request, tenant_id)
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
-            return Response({"detail": "Project administrator permission required."}, status=403)
+            return Response(
+                {"detail": "Project administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         with transaction.atomic():
             Project.objects.select_for_update().get(pk=project.pk)
             membership = get_object_or_404(
@@ -270,7 +322,7 @@ class ProjectMemberDetailView(APIView):
                 if admin_count <= 1:
                     return Response(
                         {"detail": "A project must retain at least one administrator."},
-                        status=409,
+                        status=status.HTTP_409_CONFLICT,
                     )
             membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
