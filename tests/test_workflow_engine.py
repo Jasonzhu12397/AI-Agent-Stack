@@ -290,3 +290,87 @@ def test_workflow_condition_executes_only_matching_branch(workflow_workspace):
         workflow_run=run,
         node_id="slow_answer",
     ).status == WorkflowStepRun.Status.SKIPPED
+
+
+def test_workflow_validator_rejects_embedded_credentials():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "end",
+                "type": "end",
+                "config": {"headers": {"Authorization": "Bearer do-not-store"}},
+            },
+        ],
+        "edges": [{"source": "start", "target": "end"}],
+    }
+    with pytest.raises(WorkflowValidationError, match="credential material"):
+        validate_workflow_definition(definition)
+
+
+@pytest.mark.django_db
+def test_workflow_detail_is_not_visible_across_tenants(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    other_user = get_user_model().objects.create_user(
+        username="other-tenant-user",
+        password="test-password",
+    )
+    other_tenant = Tenant.objects.create(
+        name="Other tenant",
+        slug="other-tenant",
+    )
+    TenantMembership.objects.create(
+        tenant=other_tenant,
+        user=other_user,
+        role="member",
+    )
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Private workflow",
+        slug="private-workflow",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=other_user)
+
+    response = client.get(f"/api/v1/workflows/{workflow.id}/")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_workflow_viewer_cannot_edit_or_publish(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    viewer = get_user_model().objects.create_user(
+        username="workflow-viewer",
+        password="test-password",
+    )
+    TenantMembership.objects.create(tenant=tenant, user=viewer, role="member")
+    ProjectMembership.objects.create(project=project, user=viewer, role="viewer")
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Viewer protected workflow",
+        slug="viewer-protected",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=viewer)
+
+    patch_response = client.patch(
+        f"/api/v1/workflows/{workflow.id}/",
+        {"description": "unauthorized edit"},
+        format="json",
+    )
+    publish_response = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+
+    assert patch_response.status_code == 403
+    assert publish_response.status_code == 403
+    assert workflow.versions.count() == 0
