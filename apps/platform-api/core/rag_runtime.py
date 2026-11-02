@@ -107,13 +107,17 @@ def retrieve_context(
     store = vector_store or QdrantVectorStore()
     try:
         embedded = ModelGateway().embed(embedding_model, [query])
+        search_options = {
+            "limit": limit,
+            "score_threshold": score_threshold,
+        }
+        if metadata_filters is not None:
+            search_options["metadata_filters"] = metadata_filters
         matches = store.search(
             tenant_id,
             project_id,
             embedded.vectors[0],
-            limit=limit,
-            score_threshold=score_threshold,
-            metadata_filters=metadata_filters,
+            **search_options,
         )
     except (ModelGatewayError, VectorStoreError) as exc:
         raise RagRuntimeError(str(exc)) from exc
