@@ -24,6 +24,10 @@ from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
 )
+from core.knowledge_views import (
+    KnowledgeBaseDocumentListCreateView,
+    KnowledgeBaseListCreateView,
+)
 from core.membership_views import (
     ProjectMemberDetailView,
     ProjectMemberListCreateView,
@@ -55,6 +59,16 @@ from core.workflow_views import (
 
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/knowledge-bases/",
+        KnowledgeBaseListCreateView.as_view(),
+        name="knowledge-base-list-create",
+    ),
+    path(
+        "api/v1/knowledge-bases/<uuid:knowledge_base_id>/documents/",
+        KnowledgeBaseDocumentListCreateView.as_view(),
+        name="knowledge-base-document-list-create",
+    ),
     path(
         "api/v1/connectors/",
         PluginCatalogListCreateView.as_view(),
