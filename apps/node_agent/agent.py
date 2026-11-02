@@ -301,7 +301,11 @@ def validate_openapi_value(
                 errors.append(path + "." + str(field) + ":unknown_field")
             elif isinstance(schema.get("additionalProperties"), dict):
                 validate_openapi_value(
-                    child, schema["additionalProperties"], path + "." + str(field), errors, depth + 1
+                    child,
+                    schema["additionalProperties"],
+                    path + "." + str(field),
+                    errors,
+                    depth + 1,
                 )
 
 
