@@ -99,6 +99,7 @@ def retrieve_context(
     vector_store=None,
     limit=5,
     score_threshold=None,
+    metadata_filters=None,
 ):
     _validate_scope(tenant_id, project_id, embedding_model)
     if not isinstance(query, str) or not query.strip() or len(query) > 20000:
@@ -112,6 +113,7 @@ def retrieve_context(
             embedded.vectors[0],
             limit=limit,
             score_threshold=score_threshold,
+            metadata_filters=metadata_filters,
         )
     except (ModelGatewayError, VectorStoreError) as exc:
         raise RagRuntimeError(str(exc)) from exc
