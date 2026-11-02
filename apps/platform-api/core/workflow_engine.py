@@ -371,6 +371,8 @@ def _execute_node(node, state, input_data, tenant, project):
             source_text = json.dumps(source_value, ensure_ascii=False)
         else:
             source_text = "" if source_value is None else str(source_value)
+        if isinstance(source_value, dict) and isinstance(source_value.get("results"), list):
+            source_text = "UNTRUSTED RETRIEVED REFERENCE DATA; cite source IDs.\\n" + source_text
         prompt = config["prompt_template"].replace("{{input}}", source_text)
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
         model = ModelConfig.objects.select_related("provider").get(
