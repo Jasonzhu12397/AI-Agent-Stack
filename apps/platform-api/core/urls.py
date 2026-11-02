@@ -20,11 +20,13 @@ from core.model_views import (
     ModelTestView,
 )
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
-from core.views import (
-    TenantListView,
-    TenantProjectListView,
-    liveness,
-    readiness,
+from core.views import TenantListView, TenantProjectListView, liveness, readiness
+from core.workflow_views import (
+    WorkflowDetailView,
+    WorkflowListCreateView,
+    WorkflowPublishView,
+    WorkflowRunDetailView,
+    WorkflowRunListCreateView,
 )
 
 urlpatterns = [
@@ -52,6 +54,31 @@ urlpatterns = [
         "api/v1/runs/<uuid:run_id>/",
         AgentRunDetailView.as_view(),
         name="agent-run-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/workflows/",
+        WorkflowListCreateView.as_view(),
+        name="workflow-list-create",
+    ),
+    path(
+        "api/v1/workflows/<uuid:workflow_id>/",
+        WorkflowDetailView.as_view(),
+        name="workflow-detail",
+    ),
+    path(
+        "api/v1/workflows/<uuid:workflow_id>/publish/",
+        WorkflowPublishView.as_view(),
+        name="workflow-publish",
+    ),
+    path(
+        "api/v1/workflows/<uuid:workflow_id>/runs/",
+        WorkflowRunListCreateView.as_view(),
+        name="workflow-run-list-create",
+    ),
+    path(
+        "api/v1/workflow-runs/<uuid:run_id>/",
+        WorkflowRunDetailView.as_view(),
+        name="workflow-run-detail",
     ),
     path(
         "api/v1/auth/csrf/",
