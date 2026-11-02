@@ -397,3 +397,46 @@ def test_workflow_validator_requires_uuid_model_reference():
     }
     with pytest.raises(WorkflowValidationError, match="must be a UUID"):
         validate_workflow_definition(definition)
+
+
+def test_workflow_validator_rejects_invalid_condition_key_and_future_source():
+    invalid_condition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "check",
+                "type": "condition",
+                "config": {"input_key": ["not", "a", "key"], "equals": True},
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "check"},
+            {"source": "check", "target": "end", "when": True},
+            {"source": "check", "target": "end", "when": False},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="input_key"):
+        validate_workflow_definition(invalid_condition)
+
+    future_source = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "{{input}}",
+                    "input_from": "end",
+                },
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "answer"},
+            {"source": "answer", "target": "end"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="earlier node"):
+        validate_workflow_definition(future_source)
