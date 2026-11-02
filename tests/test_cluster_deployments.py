@@ -298,3 +298,137 @@ def test_target_postflight_rejects_plan_with_missing_prerequisites(cluster_deliv
         deployment=deployment,
         command_type="cluster.postflight",
     ).exists()
+
+
+
+@pytest.mark.django_db
+def test_cluster_plan_rejects_inconsistent_ready_flag_without_adapter(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, node, token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        node,
+        key="invalid-ready-plan",
+    )
+    agent_client = APIClient()
+    preflight = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    preflight_command = preflight.data["command"]
+    agent_client.post(
+        f"/api/v1/agent-runtime/commands/{preflight_command['id']}/result/",
+        {
+            "node_id": str(node.id),
+            "outcome": "succeeded",
+            "result": {"cpu_count": 16},
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=preflight_command["lease_token"],
+    )
+    plan = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    plan_command = plan.data["command"]
+    result = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{plan_command['id']}/result/",
+        {
+            "node_id": str(node.id),
+            "outcome": "succeeded",
+            "result": {
+                "plan_status": "validated_dry_run",
+                "plan_hash": "c" * 64,
+                "provisioning_ready": True,
+                "missing_requirements": [],
+                "adapter_enabled": False,
+                "side_effects": False,
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=plan_command["lease_token"],
+    )
+
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    assert result.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "INVALID_OR_INCONSISTENT_CLUSTER_PLAN"
+
+
+@pytest.mark.django_db
+def test_target_postflight_rejects_boolean_node_count(cluster_delivery_workspace):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_token = "target-postflight-bool-count"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="delivery-target-bool-count",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="target-postflight-bool-count",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.WORKERS_READY
+    deployment.plan_result = {
+        "provisioning_ready": True,
+        "adapter_enabled": True,
+        "provisioning_completed": True,
+    }
+    deployment.save(update_fields=["status", "plan_result"])
+    queued = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-postflight/",
+        {
+            "target_node_id": str(target_node.id),
+            "confirmation": "cluster_provisioned",
+        },
+        format="json",
+    )
+    assert queued.status_code == 202
+
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(target_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+    command = polled.data["command"]
+    submitted = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        {
+            "node_id": str(target_node.id),
+            "outcome": "succeeded",
+            "result": {
+                "node_count": True,
+                "ready": True,
+                "not_ready_nodes": [],
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
+
+    deployment.refresh_from_db()
+    assert submitted.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_CLUSTER_POSTFLIGHT_FAILED"
