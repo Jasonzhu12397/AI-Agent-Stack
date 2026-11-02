@@ -1,6 +1,7 @@
 from django.urls import path
 
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.model_views import ModelConfigListCreateView, ModelProviderListCreateView, ModelTestView
 from core.membership_views import (
     ProjectMemberDetailView,
     ProjectMemberListCreateView,
@@ -16,6 +17,9 @@ from core.views import (
 )
 
 urlpatterns = [
+    path(\"api/v1/tenants/<uuid:tenant_id>/model-providers/\", ModelProviderListCreateView.as_view(), name=\"model-provider-list-create\"),
+    path(\"api/v1/tenants/<uuid:tenant_id>/model-providers/<uuid:provider_id>/models/\", ModelConfigListCreateView.as_view(), name=\"model-config-list-create\"),
+    path(\"api/v1/tenants/<uuid:tenant_id>/model-configs/<uuid:model_config_id>/test/\", ModelTestView.as_view(), name=\"model-test\"),
     path("api/v1/auth/csrf/", csrf_cookie, name="auth-csrf"),
     path("api/v1/auth/login/", LoginView.as_view(), name="auth-login"),
     path("api/v1/auth/logout/", LogoutView.as_view(), name="auth-logout"),
