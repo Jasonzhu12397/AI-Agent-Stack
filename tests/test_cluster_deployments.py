@@ -514,6 +514,7 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     assert empty.data["generation"] == 1
 
     checkpoint_payload = {
+        "node_id": str(target_node.id),
         "generation": 1,
         "sequence": 1,
         "phase": "capi_pivot_preflight",
@@ -584,6 +585,7 @@ def test_target_agent_checkpoint_rejects_replay_and_credentials(
     url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
     headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
     payload = {
+        "node_id": str(target_node.id),
         "generation": 1,
         "sequence": 1,
         "phase": "target_agent_bootstrap",
