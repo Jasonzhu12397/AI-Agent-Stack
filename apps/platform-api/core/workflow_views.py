@@ -204,6 +204,11 @@ class WorkflowRunListCreateView(APIView):
                 {"detail": "Workflow must have a published version before it can run."},
                 status=status.HTTP_409_CONFLICT,
             )
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "Request body must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         input_data = request.data.get("input", {})
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not isinstance(input_data, dict) or len(json.dumps(input_data)) > 65536:
