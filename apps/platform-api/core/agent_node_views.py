@@ -239,8 +239,6 @@ class AgentNodeRevokeView(APIView):
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
         )
-        if node.status == AgentNode.Status.REVOKED:
-            return Response({"detail": "Agent node has been revoked."}, status=409)
         is_admin = TenantMembership.objects.filter(
             tenant=node.tenant,
             user=request.user,
@@ -248,7 +246,10 @@ class AgentNodeRevokeView(APIView):
         ).exists()
         if not is_admin:
             return Response({"detail": "Tenant owner or admin role is required."}, status=403)
-        if node.status != AgentNode.Status.REVOKED:
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if node.status == AgentNode.Status.REVOKED:
+                return Response({"detail": "Agent node has been revoked."}, status=409)
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
@@ -478,6 +479,9 @@ class AgentRuntimePollView(APIView):
             return Response({"detail": "Invalid or revoked node credential."}, status=401)
         now = timezone.now()
         with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if node.status == AgentNode.Status.REVOKED:
+                return Response({"detail": "Invalid or revoked node credential."}, status=401)
             command = (
                 AgentCommand.objects.select_for_update(skip_locked=True)
                 .filter(node=node)
