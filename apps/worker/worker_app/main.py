@@ -3,10 +3,9 @@ import signal
 import time
 from itertools import count
 
-from sqlalchemy import text
-
 from app.config import settings
 from app.db import engine
+from sqlalchemy import text
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger("ai-agent-worker")
