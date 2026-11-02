@@ -75,6 +75,8 @@ def claim_next_task(worker_id, lease_seconds=150):
             )
             if task.task_type == "agent.run":
                 AgentRun.objects.filter(task=task).update(finished_at=now)
+            if task.task_type == "workflow.run":
+                WorkflowRun.objects.filter(task=task).update(finished_at=now)
             return None
         task.status = Task.Status.RUNNING
         task.attempts += 1
