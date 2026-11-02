@@ -123,9 +123,21 @@ def handle_deployment_command_result(
         conflicts = result.get("cluster_name_conflicts")
         blockers = result.get("blockers")
         expected_namespace = command.payload.get("namespace", "default")
+        expected_controllers = {
+            ("capi-system", "capi-controller-manager"),
+            (
+                "capi-kubeadm-bootstrap-system",
+                "capi-kubeadm-bootstrap-controller-manager",
+            ),
+            (
+                "capi-kubeadm-control-plane-system",
+                "capi-kubeadm-control-plane-controller-manager",
+            ),
+            ("capm3-system", "capm3-controller-manager"),
+        }
         valid_controllers = (
             isinstance(controllers, list)
-            and len(controllers) == 4
+            and len(controllers) == len(expected_controllers)
             and all(
                 isinstance(item, dict)
                 and isinstance(item.get("namespace"), str)
@@ -133,6 +145,14 @@ def handle_deployment_command_result(
                 and isinstance(item.get("ready"), bool)
                 for item in controllers
             )
+            and {
+                (item["namespace"], item["deployment"])
+                for item in controllers
+                if isinstance(item, dict)
+                and isinstance(item.get("namespace"), str)
+                and isinstance(item.get("deployment"), str)
+            }
+            == expected_controllers
         )
         valid_lists = all(
             isinstance(items, list)
