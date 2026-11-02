@@ -30,6 +30,14 @@ from core.membership_views import (
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
+from core.plugin_views import (
+    PluginApproveView,
+    PluginCatalogListCreateView,
+    PluginConnectionListCreateView,
+    PluginDetailView,
+    PluginInstallationListCreateView,
+    PluginInstallationStatusView,
+)
 from core.model_views import (
     ModelConfigListCreateView,
     ModelProviderListCreateView,
@@ -47,6 +55,36 @@ from core.workflow_views import (
 
 
 urlpatterns = [
+    path(
+        "api/v1/connectors/",
+        PluginCatalogListCreateView.as_view(),
+        name="plugin-catalog",
+    ),
+    path(
+        "api/v1/connectors/<uuid:plugin_id>/",
+        PluginDetailView.as_view(),
+        name="plugin-detail",
+    ),
+    path(
+        "api/v1/connectors/<uuid:plugin_id>/approve/",
+        PluginApproveView.as_view(),
+        name="plugin-approve",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/plugin-installations/",
+        PluginInstallationListCreateView.as_view(),
+        name="plugin-installations",
+    ),
+    path(
+        "api/v1/plugin-installations/<uuid:installation_id>/status/",
+        PluginInstallationStatusView.as_view(),
+        name="plugin-installation-status",
+    ),
+    path(
+        "api/v1/plugin-installations/<uuid:installation_id>/connections/",
+        PluginConnectionListCreateView.as_view(),
+        name="plugin-connections",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
         ClusterDeploymentListCreateView.as_view(),
