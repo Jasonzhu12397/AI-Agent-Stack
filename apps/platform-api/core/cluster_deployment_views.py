@@ -311,7 +311,10 @@ class ClusterDeploymentTargetPostflightView(APIView):
             ):
                 return Response({"detail": "Deployment state changed or provisioning is incomplete."}, status=409)
             if deployment.target_node_id and deployment.target_node_id != target_node.id:
-                return Response({"detail": "Deployment is already bound to another target agent."}, status=409)
+                return Response(
+                    {"detail": "Deployment is already bound to another target agent."},
+                    status=409,
+                )
             deployment.target_node = target_node
             deployment.status = ClusterDeployment.Status.POSTFLIGHT
             deployment.save(update_fields=["target_node", "status", "updated_at"])
