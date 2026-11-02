@@ -69,6 +69,7 @@ const availableCommands = computed(() => {
     "cluster.plan",
     "capi.cluster.observe",
     "metal3.host.inspect",
+    "cluster.provider.discover",
   ];
 });
 
@@ -83,6 +84,7 @@ function defaultPayload(type: string): string {
     "k8s.resource.read": { resource: "nodes" },
     "capi.cluster.observe": {},
     "metal3.host.inspect": {},
+    "cluster.provider.discover": {},
     "cluster.plan": {
       cluster_spec: {
         cluster_name: "edge-lab",
