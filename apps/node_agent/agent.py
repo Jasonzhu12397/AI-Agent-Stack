@@ -396,7 +396,12 @@ def touch_health_files(readiness: bool = False) -> None:
 
 
 def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
-    path = Path(os.environ.get(name, f"/tmp/{name.lower().replace('agent_', 'agent-')}"))
+    default_path = (
+        "/tmp/agent-liveness"
+        if name == "AGENT_LIVENESS_FILE"
+        else "/tmp/agent-readiness"
+    )
+    path = Path(os.environ.get(name, default_path))
     if not path.is_file():
         return False
     return time.time() - path.stat().st_mtime <= max_age_seconds
