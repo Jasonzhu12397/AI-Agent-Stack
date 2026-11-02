@@ -368,7 +368,7 @@ def execute_agent_run(task):
                 f"[document={chunk['document_id']} chunk={chunk['chunk_id']} "
                 f"score={chunk['score']}]\\n{chunk['text']}\\n\\n"
             )
-        messages.append({"role": "system", "content": reference_text[:16000]})
+        messages.append({"role": "user", "content": reference_text[:16000]})
     messages.append({"role": "user", "content": agent_run.input_text})
     input_tokens = 0
     output_tokens = 0
