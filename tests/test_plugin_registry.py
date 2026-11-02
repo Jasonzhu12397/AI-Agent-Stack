@@ -158,7 +158,7 @@ def test_approved_plugin_can_be_installed_with_explicit_permission_and_credentia
 def test_plugin_registration_rejects_plaintext_secret_in_manifest(plugin_workspace):
     user, tenant, project, client = plugin_workspace
     payload = plugin_payload(tenant)
-    payload["manifest"]["api_token"] = "must-not-be-stored"
+    payload["manifest"]["token"] = "must-not-be-stored"
 
     response = client.post("/api/v1/connectors/", payload, format="json")
 
