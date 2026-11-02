@@ -85,7 +85,14 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         not_ready = []
         for item in items:
             conditions = item.get("status", {}).get("conditions", [])
-            ready = next((condition for condition in conditions if condition.get("type") == "Ready"), {})
+            ready = next(
+                (
+                    condition
+                    for condition in conditions
+                    if condition.get("type") == "Ready"
+                ),
+                {},
+            )
             if ready.get("status") != "True":
                 not_ready.append(item.get("metadata", {}).get("name"))
         return {
@@ -116,7 +123,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         namespace = payload.get("namespace", "default")
         if resource in {"nodes", "namespaces"}:
             data = kubernetes_api_get(f"/api/v1/{resource}")
-        elif resource in {"pods", "events", "services"} and isinstance(namespace, str) and namespace and "/" not in namespace:
+        elif (
+            resource in {"pods", "events", "services"}
+            and isinstance(namespace, str)
+            and namespace
+            and "/" not in namespace
+        ):
             data = kubernetes_api_get(f"/api/v1/namespaces/{namespace}/{resource}")
         else:
             raise NodeAgentError("RESOURCE_NOT_ALLOWLISTED")
@@ -371,7 +383,7 @@ def main() -> None:
     if not base_url.startswith("https://") and os.environ.get("APP_ENV") == "production":
         raise SystemExit("Production node agents require HTTPS.")
     client = ControlPlaneClient(base_url, node_id, token)
-    for iteration in count():
+    for _iteration in count():
         try:
             processed = run_once(client, node_type)
             if args.once:
