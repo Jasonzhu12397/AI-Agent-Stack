@@ -215,8 +215,13 @@ class PluginCatalogListCreateView(APIView):
                 status=400,
             )
         payload_error = _validate_payload({"plugin_manifest": manifest, "tool_definitions": tools})
-        if payload_error or _contains_sensitive_key(manifest) or _contains_sensitive_key(tools):
+        if payload_error:
             return Response({"detail": payload_error}, status=400)
+        if _contains_sensitive_key(manifest) or _contains_sensitive_key(tools):
+            return Response(
+                {"detail": "Plugin metadata and schemas cannot contain credential fields."},
+                status=400,
+            )
         names = set()
         normalized_tools = []
         for item in tools:
@@ -415,8 +420,13 @@ class PluginInstallationListCreateView(APIView):
         if not isinstance(config, dict):
             return Response({"detail": "config must be a JSON object."}, status=400)
         payload_error = _validate_payload({"config": config})
-        if payload_error or _contains_sensitive_key(config):
+        if payload_error:
             return Response({"detail": payload_error}, status=400)
+        if _contains_sensitive_key(config):
+            return Response(
+                {"detail": "Plugin configuration cannot contain credential fields."},
+                status=400,
+            )
         try:
             with transaction.atomic():
                 installation, created = PluginInstallation.objects.get_or_create(
@@ -551,6 +561,11 @@ class PluginConnectionListCreateView(APIView):
         payload_error = _validate_payload({"config": config})
         if payload_error:
             return Response({"detail": payload_error}, status=400)
+        if _contains_sensitive_key(config):
+            return Response(
+                {"detail": "Connection configuration cannot contain credential fields."},
+                status=400,
+            )
         try:
             connection = PluginConnection.objects.create(
                 installation=installation,
