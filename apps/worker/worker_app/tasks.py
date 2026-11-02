@@ -45,6 +45,8 @@ def claim_next_task(worker_id, lease_seconds=150):
                     "updated_at",
                 ]
             )
+            if task.task_type == "agent.run":
+                AgentRun.objects.filter(task=task).update(finished_at=now)
             return None
         if task.status == Task.Status.RUNNING and task.attempts >= task.max_attempts:
             task.status = Task.Status.FAILED
@@ -68,6 +70,8 @@ def claim_next_task(worker_id, lease_seconds=150):
                     "updated_at",
                 ]
             )
+            if task.task_type == "agent.run":
+                AgentRun.objects.filter(task=task).update(finished_at=now)
             return None
         task.status = Task.Status.RUNNING
         task.attempts += 1
@@ -138,6 +142,8 @@ def finish_task(task_id, lease_token, result):
                 "updated_at",
             ]
         )
+        if task.task_type == "agent.run":
+            AgentRun.objects.filter(task=task).update(finished_at=now)
         return True
 
 
@@ -176,6 +182,11 @@ def fail_task(task_id, lease_token, error, retryable=True):
                 "updated_at",
             ]
         )
+        if task.task_type == "agent.run" and task.status in {
+            Task.Status.FAILED,
+            Task.Status.CANCELLED,
+        }:
+            AgentRun.objects.filter(task=task).update(finished_at=now)
         return True
 
 
