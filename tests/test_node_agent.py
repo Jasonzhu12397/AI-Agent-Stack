@@ -1223,3 +1223,81 @@ def test_target_agent_restores_assigned_deployment_checkpoint_before_polling(
     assert output["deployment_id"] == deployment_id
     assert output["sequence"] == 3
     assert client.deployment_checkpoints[deployment_id]["phase"] == "capi_pivot_preflight"
+
+
+def test_target_capi_pivot_preflight_checks_apis_controllers_and_cluster_conflicts(
+    monkeypatch,
+):
+    group_versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "bootstrap.cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1beta1",
+        "metal3.io": "v1alpha1",
+    }
+    required_resources = {
+        "cluster.x-k8s.io": ["clusters", "machines", "machinedeployments"],
+        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs"],
+        "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
+        "infrastructure.cluster.x-k8s.io": [
+            "metal3clusters",
+            "metal3machines",
+            "metal3machinetemplates",
+        ],
+        "metal3.io": ["baremetalhosts"],
+    }
+    controllers = {
+        "capi-system": "capi-controller-manager",
+        "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+        "capi-kubeadm-control-plane-system": (
+            "capi-kubeadm-control-plane-controller-manager"
+        ),
+        "capm3-system": "capm3-controller-manager",
+    }
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": group,
+                    "preferredVersion": {"version": version},
+                }
+                for group, version in group_versions.items()
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/default/clusters": {
+            "items": []
+        },
+    }
+    for group, resources in required_resources.items():
+        version = group_versions[group]
+        responses[f"/apis/{group}/{version}"] = {
+            "resources": [{"name": resource} for resource in resources]
+        }
+    for namespace, deployment_name in controllers.items():
+        responses[
+            f"/apis/apps/v1/namespaces/{namespace}/deployments"
+        ] = {
+            "items": [
+                {
+                    "metadata": {"name": deployment_name, "generation": 2},
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "observedGeneration": 2},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.target.preflight",
+            "payload": {"cluster_name": "edge-lab", "namespace": "default"},
+        },
+        "target_cluster",
+    )
+
+    assert result["target_management_plane_ready"] is True
+    assert result["pivot_execution_allowed"] is True
+    assert result["missing_resources"] == []
+    assert result["cluster_name_conflicts"] == []
+    assert result["blockers"] == []
+    assert result["side_effects"] is False
