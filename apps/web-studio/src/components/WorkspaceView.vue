@@ -165,7 +165,19 @@ onUnmounted(() => {
     <div class="workspace-heading">
       <div>
         <p class="eyebrow">CONTROL PLANE</p>
-        <h2>Workspace</h2>
+        <h2>
+          {{
+            props.activeSection === "overview"
+              ? "Overview"
+              : props.activeSection === "models"
+                ? "Model Manager"
+                : props.activeSection === "agents"
+                  ? "Agent Studio"
+                  : props.activeSection === "workflows"
+                    ? "Workflow Studio"
+                    : "Integration Hub"
+          }}
+        </h2>
       </div>
       <el-tag type="success" effect="plain">SESSION AUTHENTICATED</el-tag>
     </div>
