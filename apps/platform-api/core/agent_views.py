@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import transaction
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -20,6 +21,8 @@ from core.models import (
     ModelConfig,
     Project,
     ProjectMembership,
+    PluginInstallation,
+    PluginTool,
     Task,
     Tenant,
     TenantMembership,
@@ -198,22 +201,58 @@ class AgentPublishView(APIView):
                     {"detail": "tool_allowlist and knowledge_base_ids must be arrays."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if tool_allowlist or knowledge_base_ids:
+            if knowledge_base_ids:
                 return Response(
-                    {
-                        "detail": (
-                            "This runtime slice supports text-only agents. "
-                            "Tools and knowledge bases are not yet enabled."
-                        )
-                    },
+                    {"detail": "Knowledge bases are not yet enabled for published agents."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if not isinstance(tool_allowlist, list) or len(tool_allowlist) > 32:
+                return Response(
+                    {"detail": "tool_allowlist must contain at most 32 plugin tool IDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                tool_ids = [uuid.UUID(str(value)) for value in tool_allowlist]
+            except (TypeError, ValueError, AttributeError):
+                return Response(
+                    {"detail": "tool_allowlist entries must be plugin tool UUIDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(set(tool_ids)) != len(tool_ids):
+                return Response(
+                    {"detail": "tool_allowlist cannot contain duplicate IDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if tool_ids:
+                if "tools" not in model_config.capabilities:
+                    return Response(
+                        {"detail": "Selected model does not declare tools capability."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                available_tool_ids = set(
+                    PluginTool.objects.filter(
+                        id__in=tool_ids,
+                        enabled=True,
+                        plugin__tenant=agent.tenant,
+                        plugin__enabled=True,
+                        plugin__review_status="approved",
+                        plugin__installations__tenant=agent.tenant,
+                        plugin__installations__project=agent.project,
+                        plugin__installations__status="installed",
+                        plugin__installations__plugin_version=F("plugin__version"),
+                    ).values_list("id", flat=True)
+                )
+                if available_tool_ids != set(tool_ids):
+                    return Response(
+                        {"detail": "Every allowed tool must belong to an approved connector installed in this project."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
             max_iterations = config.get("max_iterations", 1)
             timeout_seconds = config.get("timeout_seconds", 60)
             max_tokens = config.get("max_tokens", 2048)
-            if max_iterations != 1:
+            if not isinstance(max_iterations, int) or not 1 <= max_iterations <= 8:
                 return Response(
-                    {"detail": "The initial runtime supports exactly one model iteration."},
+                    {"detail": "max_iterations must be between 1 and 8."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
@@ -239,9 +278,9 @@ class AgentPublishView(APIView):
             snapshot = {
                 "model_config_id": str(model_config.id),
                 "system_prompt": system_prompt,
-                "tool_allowlist": [],
+                "tool_allowlist": [str(value) for value in tool_ids],
                 "knowledge_base_ids": [],
-                "max_iterations": 1,
+                "max_iterations": max_iterations,
                 "timeout_seconds": timeout_seconds,
                 "max_tokens": max_tokens,
             }
