@@ -176,7 +176,9 @@ onUnmounted(() => {
                   ? "Agent Studio"
                   : props.activeSection === "workflows"
                     ? "Workflow Studio"
-                    : "Integration Hub"
+                    : props.activeSection === "knowledge"
+                      ? "Knowledge Bases"
+                      : "Integration Hub"
           }}
         </h2>
       </div>
