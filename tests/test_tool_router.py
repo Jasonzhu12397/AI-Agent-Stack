@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
 from core.tool_router import ToolExecutionError, ToolRouter
 
