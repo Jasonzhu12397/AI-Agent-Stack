@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.agent_node_views import _validate_payload
+from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.models import (
     PluginConnection,
     PluginDefinition,
