@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import ssl
@@ -15,6 +16,47 @@ from typing import Any
 
 class NodeAgentError(Exception):
     pass
+
+
+def sanitize_kubernetes_item(resource: str, item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata", {})
+    result = {
+        "name": metadata.get("name"),
+        "namespace": metadata.get("namespace"),
+    }
+    if resource == "nodes":
+        result["conditions"] = [
+            {"type": condition.get("type"), "status": condition.get("status")}
+            for condition in item.get("status", {}).get("conditions", [])
+        ]
+        result["capacity"] = item.get("status", {}).get("capacity", {})
+        result["allocatable"] = item.get("status", {}).get("allocatable", {})
+    elif resource == "namespaces":
+        result["phase"] = item.get("status", {}).get("phase")
+    elif resource == "pods":
+        result["phase"] = item.get("status", {}).get("phase")
+        result["node_name"] = item.get("spec", {}).get("nodeName")
+    elif resource == "events":
+        message = str(item.get("message", ""))[:500]
+        result["type"] = item.get("type")
+        result["reason"] = item.get("reason")
+        result["message"] = re.sub(
+            r"(?i)(password|token|secret|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+",
+            r"\\1=[REDACTED]",
+            message,
+        )
+        result["involved_object"] = {
+            "kind": item.get("involvedObject", {}).get("kind"),
+            "name": item.get("involvedObject", {}).get("name"),
+        }
+    elif resource == "services":
+        result["type"] = item.get("spec", {}).get("type")
+        result["cluster_ip"] = item.get("spec", {}).get("clusterIP")
+        result["ports"] = [
+            {"port": port.get("port"), "protocol": port.get("protocol")}
+            for port in item.get("spec", {}).get("ports", [])
+        ]
+    return result
 
 
 def canonical_hash(value: dict[str, Any]) -> str:
@@ -109,11 +151,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "namespace": namespace,
             "event_count": len(events.get("items", [])),
             "warning_events": [
-                {
-                    "reason": item.get("reason"),
-                    "message": str(item.get("message", ""))[:500],
-                    "involved_object": item.get("involvedObject", {}).get("name"),
-                }
+                sanitize_kubernetes_item("events", item)
                 for item in events.get("items", [])
                 if item.get("type") == "Warning"
             ][:100],
@@ -132,7 +170,14 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             data = kubernetes_api_get(f"/api/v1/namespaces/{namespace}/{resource}")
         else:
             raise NodeAgentError("RESOURCE_NOT_ALLOWLISTED")
-        return {"resource": resource, "namespace": namespace, "items": data.get("items", [])[:100]}
+        return {
+            "resource": resource,
+            "namespace": namespace,
+            "items": [
+                sanitize_kubernetes_item(resource, item)
+                for item in data.get("items", [])[:100]
+            ],
+        }
     if command_type in {"capi.cluster.observe", "metal3.host.inspect"}:
         api_groups = kubernetes_api_get("/apis")
         target_group = "cluster.x-k8s.io" if command_type == "capi.cluster.observe" else "metal3.io"
