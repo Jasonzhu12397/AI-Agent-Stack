@@ -178,6 +178,10 @@ class TaskCancelView(APIView):
                     "updated_at",
                 ]
             )
+            if task.task_type == "agent.run" and task.status == Task.Status.CANCELLED:
+                from core.models import AgentRun
+
+                AgentRun.objects.filter(task=task).update(finished_at=timezone.now())
         return Response(
             TaskSerializer(task).data,
             status=status.HTTP_202_ACCEPTED,
