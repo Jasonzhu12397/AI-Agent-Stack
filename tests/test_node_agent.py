@@ -1,6 +1,6 @@
 import pytest
 
-from apps.node_agent import agent
+from node_agent import agent
 
 
 def test_node_health_is_available_for_both_agent_roles():
