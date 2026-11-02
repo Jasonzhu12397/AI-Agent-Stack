@@ -77,6 +77,11 @@ DATABASES = {
     )
 }
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+MODEL_PROVIDER_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("MODEL_PROVIDER_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
 LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "UTC"
 USE_I18N = True
