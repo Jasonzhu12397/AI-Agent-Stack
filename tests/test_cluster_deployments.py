@@ -633,3 +633,111 @@ def test_target_agent_checkpoint_rejects_replay_and_credentials(
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
     assert checkpoint.sequence == 1
     assert "access_token" not in json.dumps(checkpoint.data)
+
+
+@pytest.mark.django_db
+def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_token = "target-capi-preflight-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="capi-preflight-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="target-capi-preflight-dispatch",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+
+    assert handoff.status_code == 202
+    command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+    )
+    assert command.node_id == target_node.id
+    assert command.payload == {
+        "deployment_id": str(deployment.id),
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+    }
+    assert handoff.data["preflight_command_id"] == str(command.id)
+    assert handoff.data["worker_provisioning_allowed"] is False
+
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(target_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+    assert polled.status_code == 200
+    command_data = polled.data["command"]
+    assert command_data["command_type"] == "cluster.capi.pivot.target.preflight"
+
+    result = {
+        "target_management_plane_ready": True,
+        "pivot_execution_allowed": True,
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+        "missing_resources": [],
+        "controllers": [
+            {
+                "namespace": namespace,
+                "deployment": deployment_name,
+                "ready": True,
+            }
+            for namespace, deployment_name in [
+                ("capi-system", "capi-controller-manager"),
+                (
+                    "capi-kubeadm-bootstrap-system",
+                    "capi-kubeadm-bootstrap-controller-manager",
+                ),
+                (
+                    "capi-kubeadm-control-plane-system",
+                    "capi-kubeadm-control-plane-controller-manager",
+                ),
+                ("capm3-system", "capm3-controller-manager"),
+            ]
+        ],
+        "cluster_name_conflicts": [],
+        "blockers": [],
+        "side_effects": False,
+    }
+    submitted = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command_data['id']}/result/",
+        {
+            "node_id": str(target_node.id),
+            "outcome": "succeeded",
+            "result": result,
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+        HTTP_X_AGENT_LEASE=command_data["lease_token"],
+    )
+
+    deployment.refresh_from_db()
+    assert submitted.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.TARGET_AGENT_PENDING
+    assert deployment.plan_result["capi_pivot_preflight"]["preflight_validated"] is True
+    assert deployment.plan_result["capi_pivot_preflight"]["side_effects"] is False
+    assert deployment.error is None
