@@ -170,7 +170,6 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
     assert result.output_tokens == 7
     assert fake_opener.request.full_url == "https://api.example.test/v1/chat/completions"
     assert fake_opener.request.get_header("Authorization") == "Bearer test-secret"
-    assert request.get_header("Authorization") == "Bearer test-secret"
 
 
 def test_missing_model_credential_fails_without_revealing_secret():
