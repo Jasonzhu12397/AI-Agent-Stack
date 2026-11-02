@@ -164,6 +164,8 @@ class AgentNodeListCreateView(APIView):
         return Response({"count": nodes.count(), "results": [_node_data(node) for node in nodes]})
 
     def post(self, request, tenant_id, project_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         tenant, project, is_admin = _tenant_and_project(request, tenant_id, project_id)
         if not is_admin:
             return Response(
@@ -208,10 +210,14 @@ class AgentNodeRevokeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, node_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         node = get_object_or_404(
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
         )
+        if node.status == AgentNode.Status.REVOKED:
+            return Response({"detail": "Agent node has been revoked."}, status=409)
         is_admin = TenantMembership.objects.filter(
             tenant=node.tenant,
             user=request.user,
@@ -332,6 +338,8 @@ class AgentCommandApproveView(APIView):
         ).exists()
         if not is_admin:
             return Response({"detail": "Tenant owner or admin role is required to approve provisioning."}, status=403)
+        if command.requested_by_id == request.user.id:
+            return Response({"detail": "A different administrator must approve this command."}, status=403)
         if command.status != AgentCommand.Status.WAITING_APPROVAL:
             return Response({"detail": "Command is not waiting for approval."}, status=409)
         supplied_hash = str(request.data.get("plan_hash", ""))
@@ -396,6 +404,8 @@ class AgentRuntimePollView(APIView):
     permission_classes = []
 
     def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
@@ -472,6 +482,8 @@ class AgentRuntimeResultView(APIView):
     permission_classes = []
 
     def post(self, request, command_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
@@ -497,6 +509,7 @@ class AgentRuntimeResultView(APIView):
                 node=node,
                 status=AgentCommand.Status.RUNNING,
                 lease_token=lease_token,
+                lease_expires_at__gte=timezone.now(),
             )
             command.status = (
                 AgentCommand.Status.SUCCEEDED
