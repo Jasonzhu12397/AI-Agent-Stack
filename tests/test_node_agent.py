@@ -377,6 +377,47 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
     assert "/apis/infrastructure.cluster.x-k8s.io/v1beta1" in calls
 
 
+def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
+    groups = {
+        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machines", "machinedeployments"]),
+        "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigs"]),
+        "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
+        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3clusters", "metal3machines", "metal3machinetemplates"]),
+        "metal3.io": ("v1alpha1", ["baremetalhosts"]),
+    }
+
+    def fake_get(path):
+        if path == "/apis":
+            return {"groups": [{"name": name, "preferredVersion": {"version": data[0]}} for name, data in groups.items()]}
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path.startswith("/apis/apiextensions.k8s.io/"):
+            crd_name = path.rsplit("/", 1)[-1]
+            group = crd_name.split(".", 1)[1]
+            return {"spec": {"group": group, "names": {"plural": crd_name.split(".", 1)[0], "kind": "Fixture"}, "scope": "Namespaced", "versions": [{"name": "v1beta1", "served": True, "storage": True, "schema": {"openAPIV3Schema": {"properties": {"spec": {"properties": {"clusterName": {"type": "string"}}, "required": ["clusterName"]}}}}}]}}
+        for name, data in groups.items():
+            if path == "/apis/" + name + "/" + data[0]:
+                return {"resources": [{"name": resource} for resource in data[1]]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.discover_provider_apis()
+    inspection = result["crd_schema_inspection"]
+    assert inspection["schema_check_complete"] is True
+    assert inspection["invalid_schemas"] == []
+    crd = inspection["crds"]["clusters.cluster.x-k8s.io"]
+    assert crd["schema_valid"] is True
+    assert crd["served_versions"][0]["required_spec_fields"] == ["clusterName"]
+    assert result["provisioning_ready"] is False
+    assert result["mutation_adapter_enabled"] is False
+
+
+def test_provider_crd_schema_rejects_missing_openapi_schema():
+    result = agent.summarize_crd_schema({"spec": {"group": "metal3.io", "names": {"plural": "baremetalhosts", "kind": "BareMetalHost"}, "versions": [{"name": "v1alpha1", "served": True, "storage": True}]}})
+    assert result["schema_valid"] is False
+    assert "no_served_version_with_openapi_schema" in result["schema_errors"]
+
+
 def test_provider_discovery_rejects_non_eph_agent():
     with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
         agent.execute_command(
