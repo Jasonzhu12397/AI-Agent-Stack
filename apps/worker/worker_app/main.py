@@ -10,7 +10,7 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "platform_api.settings")
 django.setup()
 
-from worker_app.tasks import process_once
+from worker_app.tasks import process_once  # noqa: E402
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger("ai-agent-worker")
