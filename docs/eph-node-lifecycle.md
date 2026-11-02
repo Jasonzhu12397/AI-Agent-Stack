@@ -26,18 +26,28 @@ Capacity pool / physical inventory
   -> start EPH Agent Pod and enroll with central Supervisor
   -> preflight hardware, network, image and target plan
   -> validate candidate CAPI/Metal3 manifests against live CRD schemas
-  -> approved provisioning of the target cluster
-  -> target control plane and required worker capacity become Ready
-  -> bootstrap Target Agent in the target cluster
-  -> Target Agent confirms target-side health and worker readiness
-  -> persist handoff intent and final-node bootstrap configuration centrally
-  -> cordon/drain or otherwise quiesce the temporary EPH Kubernetes workload
-  -> stop temporary EPH services and invalidate EPH runtime credentials
-  -> reboot/re-network-boot the same physical node into the target worker OS
-  -> join the target cluster as a worker using a short-lived join credential
-  -> Target Agent verifies the expected physical node is Ready
-  -> mark the physical node reclaimed and return it to target compute capacity
+  -> approved provisioning of the target control plane only
+  -> target control plane API, etcd and core networking become Ready
+  -> deploy the Target Agent Pod onto a target control-plane node
+  -> restore the durable deployment/task checkpoint and establish Supervisor heartbeat
+  -> verify Target Agent identity, API access, lease ownership and command execution
+  -> pivot CAPI management components and Cluster API objects from the EPH bootstrap
+     cluster into the target cluster (clusterctl move or a version-tested equivalent)
+  -> verify CAPI controllers are healthy and the moved Cluster/ControlPlane objects reconcile
+  -> only now stop the EPH Agent and temporary EPH Kubernetes bootstrap cluster
+  -> invalidate EPH runtime credentials and persist the handoff checkpoint centrally
+  -> provision remaining control-plane replicas (if any) and Data Plane worker nodes
+     from the now self-hosted target management plane
+  -> Target Agent verifies all requested nodes and networking are Ready
+  -> reboot/re-network-boot the same physical EPH host into the target worker OS
+  -> enroll that physical host with a new Target Agent identity and join as a worker
+  -> Target Agent verifies the expected physical identity and Ready condition
+  -> mark the EPH hardware reclaimed and return it to target compute capacity
 ```
+
+The target Control Plane must be operational before the EPH Agent is moved. The Agent is recreated as a Pod in the target cluster; its process memory and Pod filesystem are not migrated. The central Supervisor is the durable task source of truth, so the new Pod resumes using the same logical deployment/task identity and a fresh target-cluster credential. Schedule it onto a control-plane node with the standard control-plane NoSchedule toleration and an explicit control-plane node selector, because no workers exist yet.
+
+The CAPI bootstrap-cluster pivot is a separate and mandatory operation. If CAPI controllers and Cluster API objects live in the temporary EPH Kubernetes cluster, merely moving the AI Agent Pod does not move CAPI ownership or reconciliation. Before shutting down EPH, move the CAPI management components and owned Cluster API objects into the target cluster using `clusterctl move` (or a provider/version-tested equivalent), then verify controllers and objects reconcile there. Only after that pivot is healthy may the workflow create the remaining control-plane replicas and Data Plane workers. The exact pivot procedure must be tested against the selected CAPI/CAPM3 versions and provider topology.
 
 The exact OS transition mechanism (new RAM image, disk-backed target OS, or another approved worker image) is an environment-specific implementation detail. It must be explicitly configured and tested; the platform must not assume that a running EPH OS can simply be converted in-place into a target worker.
 
@@ -51,7 +61,9 @@ The exact OS transition mechanism (new RAM image, disk-backed target OS, or anot
 6. **Expected EPH disconnect:** the EPH Agent going offline during an approved handoff is an expected lifecycle event, not automatically a failed deployment. The Supervisor tracks a handoff deadline and waits for Target Agent confirmation. A timeout becomes a recoverable handoff failure requiring reconciliation.
 7. **No overlapping control planes:** the temporary single-node EPH Kubernetes cluster must be stopped before the same host joins the target cluster. Do not run both kubelets/control planes concurrently on the same host.
 8. **No secret carry-over:** temporary Kubernetes credentials, bootstrap tokens, kubeconfigs and ephemeral secrets must not be copied into the final worker environment. Only the minimum short-lived target join material is delivered through the approved bootstrap channel.
-9. **CAPI/Metal3 state ownership:** if CAPI/Metal3 controllers or their management objects are hosted inside the temporary EPH Kubernetes cluster, that state disappears at reclamation. Therefore all required provisioning must finish before handoff, and any state needed for later day-2 management must be transferred to a durable management plane or represented by the central platform. The implementation must not claim that an ephemeral CAPI management cluster provides persistent day-2 reconciliation.
+9. **CAPI bootstrap pivot before workers:** if CAPI controllers and Cluster API objects are hosted inside EPH, they must be moved into the target cluster and verified healthy before EPH shutdown and before worker provisioning. Moving only the AI Agent Pod is insufficient; it does not transfer CAPI ownership or reconciliation state. The target cluster becomes the durable self-hosted CAPI management plane, unless a separate external management cluster is explicitly configured.
+10. **No premature worker provisioning:** worker provisioning must not start until the target Agent is healthy on the target Control Plane and the CAPI pivot has completed and reconciled successfully.
+11. **Idempotent reclaim:** handoff, EPH credential revocation, target worker enrollment, and completion reporting must be idempotent and bound to the same deployment ID and physical inventory identity.
 10. **Idempotent reclaim:** handoff, EPH credential revocation, target worker enrollment, and completion reporting must be idempotent and bound to the same deployment ID and physical inventory identity.
 
 ## Suggested deployment states
@@ -66,7 +78,12 @@ EPH_RESERVED
   -> WAITING_APPROVAL
   -> TARGET_PROVISIONING
   -> TARGET_CONTROL_PLANE_READY
+  -> TARGET_AGENT_DEPLOYING
   -> TARGET_AGENT_READY
+  -> CAPI_BOOTSTRAP_PIVOT_PENDING
+  -> CAPI_BOOTSTRAP_PIVOT_VERIFIED
+  -> WORKER_PROVISIONING
+  -> WORKERS_READY
   -> EPH_HANDOFF_PENDING
   -> EPH_REBOOTING
   -> EPH_TARGET_WORKER_JOINING
@@ -103,4 +120,4 @@ Do not persist raw BMC passwords, kubeconfigs, bearer tokens, or join tokens in 
 
 ## Implementation boundary
 
-The current repository has EPH/Target agent enrollment, heartbeat, typed command dispatch, plan persistence, read-only provider discovery and live CRD-backed schema validation. The full EPH RAM boot lifecycle, physical inventory correlation, handoff state machine, OS re-image/reboot orchestration, credential revocation at handoff, and automatic re-enrollment of the same machine as a target worker are not implemented yet. CAPI/Metal3/Ironic mutation and the production provisioning adapter also remain disabled. This document defines the required behavior; it is not a claim that the complete lifecycle is already automated.
+The current repository has EPH/Target agent enrollment, heartbeat, typed command dispatch, plan persistence, read-only provider discovery and live CRD-backed schema validation. The target-Agent-on-Control-Plane deployment, durable task resume, CAPI bootstrap-cluster pivot, worker provisioning state machine, physical identity correlation, EPH handoff, credential revocation, OS re-image/reboot and same-machine worker re-enrollment are not implemented yet. CAPI/Metal3/Ironic mutation and the production provisioning adapter also remain disabled. This document defines the required behavior; it is not a claim that the complete lifecycle is already automated.
