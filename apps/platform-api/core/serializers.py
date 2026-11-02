@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from core.models import Project, Tenant
+from core.models import Project, Task, Tenant
 
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -23,3 +23,32 @@ class ProjectSerializer(serializers.ModelSerializer):
         if Project.objects.filter(tenant_id=tenant_id, slug=value).exists():
             raise serializers.ValidationError("Project slug already exists in this tenant.")
         return value
+
+
+class TaskSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.UUIDField(read_only=True)
+    project_id = serializers.UUIDField(read_only=True)
+    created_by_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Task
+        fields = [
+            "id",
+            "tenant_id",
+            "project_id",
+            "created_by_id",
+            "task_type",
+            "payload",
+            "result",
+            "error",
+            "status",
+            "attempts",
+            "max_attempts",
+            "available_at",
+            "heartbeat_at",
+            "started_at",
+            "finished_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

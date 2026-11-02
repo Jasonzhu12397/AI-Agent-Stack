@@ -7,6 +7,7 @@ from core.membership_views import (
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
+from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.views import (
     TenantListView,
     TenantProjectListView,
@@ -46,5 +47,16 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/members/<uuid:membership_id>/",
         ProjectMemberDetailView.as_view(),
         name="project-member-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tasks/",
+        TaskListCreateView.as_view(),
+        name="task-list-create",
+    ),
+    path("api/v1/tasks/<uuid:task_id>/", TaskDetailView.as_view(), name="task-detail"),
+    path(
+        "api/v1/tasks/<uuid:task_id>/cancel/",
+        TaskCancelView.as_view(),
+        name="task-cancel",
     ),
 ]
