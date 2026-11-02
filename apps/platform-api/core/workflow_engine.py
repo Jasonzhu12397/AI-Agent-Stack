@@ -21,6 +21,11 @@ FORBIDDEN_CREDENTIAL_KEYS = {
     "access_token",
     "client_secret",
     "authorization",
+    "api-key",
+    "x-api-key",
+    "clientsecret",
+    "refresh_token",
+    "private_key",
 }
 
 
@@ -85,12 +90,20 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(f"LLM node {node_id} requires prompt_template.")
             if len(config["prompt_template"]) > 12000:
                 raise WorkflowValidationError(f"LLM node {node_id} prompt is too long.")
-        if node_type == "condition" and "equals" not in config:
-            raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
+        if node_type == "condition":
+            if "equals" not in config:
+                raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
+            input_key = config.get("input_key", "input")
+            if not isinstance(input_key, str) or not 1 <= len(input_key) <= 120:
+                raise WorkflowValidationError(
+                    f"Condition node {node_id} input_key must be a non-empty string."
+                )
         if node_type in {"llm", "condition", "end"}:
             source_node = config.get("input_from") or config.get("source_node")
             if source_node and (
-                not isinstance(source_node, str) or source_node == node_id
+                not isinstance(source_node, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", source_node)
+                or source_node == node_id
             ):
                 raise WorkflowValidationError(
                     f"Node {node_id} has an invalid source node reference."
@@ -166,6 +179,19 @@ def validate_workflow_definition(definition):
                 queue.append(target)
     if len(ordered_ids) != len(node_map):
         raise WorkflowValidationError("Workflow graph contains a cycle.")
+    order_index = {
+        node_id: index
+        for index, node_id in enumerate(ordered_ids)
+    }
+    for node_id, node in node_map.items():
+        source_node = (
+            node["config"].get("input_from")
+            or node["config"].get("source_node")
+        )
+        if source_node and order_index[source_node] >= order_index[node_id]:
+            raise WorkflowValidationError(
+                f"Node {node_id} source reference must point to an earlier node."
+            )
     reachable = set()
     pending = [start_id]
     while pending:
@@ -205,11 +231,16 @@ def validate_model_references(graph, tenant):
         if not isinstance(system_prompt, str) or len(system_prompt) > 12000:
             raise WorkflowValidationError("Workflow LLM system_prompt is invalid.")
         if (
-            not isinstance(max_tokens, int)
+            isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
             or not 1 <= max_tokens <= model.max_output_tokens
         ):
             raise WorkflowValidationError("Workflow LLM max_tokens exceeds model limits.")
-        if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, int)
+            or not 1 <= timeout_seconds <= 120
+        ):
             raise WorkflowValidationError("Workflow LLM timeout_seconds must be 1 to 120.")
         if model.provider.tenant_id not in (None, tenant.id):
             raise WorkflowValidationError("Workflow model provider is outside the tenant.")
