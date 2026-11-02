@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41412708962](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41412708962), commit `9a79dd80cf5a3ca7d354640e7b5f622a4b6f178c`, completed successfully across Python, Vue and Compose jobs. Pytest: 50 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
+[GitHub Actions run 41413169641](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41413169641), commit `95dc3d1596c21c923fe01bf0a1270a60ab69c134`, completed successfully across Python, Vue and Compose jobs. Pytest: 50 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -27,7 +27,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states passed in run 41409745762. Demo handlers only; no general Agent/Workflow execution yet |
-| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue UI and fake model manager passed in run 41411548638 |
+| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue, fake model manager and first Agent Builder/run console passed in run 41413169641 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
