@@ -505,6 +505,31 @@ class AgentRuntimePollView(APIView):
             )
             if command is None:
                 return Response({"command": None})
+            allowed_commands = (
+                EPH_COMMANDS
+                if node.node_type == AgentNode.NodeType.EPH_NODE
+                else TARGET_COMMANDS
+            )
+            if command.command_type not in allowed_commands:
+                command.status = AgentCommand.Status.FAILED
+                command.error = {
+                    "code": "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE",
+                    "retryable": False,
+                }
+                command.finished_at = now
+                command.lease_token = None
+                command.lease_expires_at = None
+                command.save(
+                    update_fields=[
+                        "status",
+                        "error",
+                        "finished_at",
+                        "lease_token",
+                        "lease_expires_at",
+                        "updated_at",
+                    ],
+                )
+                return Response({"command": None})
             if command.attempts >= command.max_attempts:
                 command.status = AgentCommand.Status.FAILED
                 command.error = {"code": "LEASE_EXPIRED", "retryable": False}
