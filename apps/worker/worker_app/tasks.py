@@ -2,11 +2,10 @@ import uuid
 from datetime import timedelta
 from time import sleep
 
+from core.models import Task
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
-
-from core.models import Task
 
 
 class PermanentTaskError(Exception):
