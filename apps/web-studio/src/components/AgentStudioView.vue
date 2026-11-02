@@ -5,18 +5,28 @@ import {
   createAgentRun,
   getAgentRuns,
   getAgents,
+  getKnowledgeBases,
+  getPluginCatalog,
+  getPluginInstallations,
   getModelConfigs,
   getModelProviders,
   publishAgent,
   type AgentDraft,
   type AgentRun,
+  type KnowledgeBase,
   type ModelConfig,
+  type PluginTool,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 const agents = ref<AgentDraft[]>([]);
 const models = ref<ModelConfig[]>([]);
 const runs = ref<AgentRun[]>([]);
+type SelectableTool = PluginTool & { plugin_name: string; plugin_key: string };
+const knowledgeBases = ref<KnowledgeBase[]>([]);
+const availableTools = ref<SelectableTool[]>([]);
+const selectedKnowledgeBaseIds = ref<string[]>([]);
+const selectedToolIds = ref<string[]>([]);
 const selectedAgentId = ref("");
 const selectedModelId = ref("");
 const agentName = ref("New assistant");
