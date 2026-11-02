@@ -638,6 +638,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.observe",
             "cluster.diagnose",
             "cluster.postflight",
+            "cluster.control-plane.verify",
             "k8s.resource.read",
         },
     }
@@ -665,6 +666,53 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for item in nodes.get("items", [])
             ],
             "api_group_count": len(api_groups.get("groups", [])),
+        }
+    if command_type == "cluster.control-plane.verify":
+        expected_replicas = payload.get("expected_control_plane_replicas", 1)
+        if (
+            not isinstance(expected_replicas, int)
+            or isinstance(expected_replicas, bool)
+            or expected_replicas < 1
+            or expected_replicas > 9
+            or expected_replicas % 2 == 0
+        ):
+            raise NodeAgentError("INVALID_CONTROL_PLANE_REPLICAS")
+        version = kubernetes_api_get("/version")
+        nodes = kubernetes_api_get("/api/v1/nodes").get("items", [])
+        control_plane_nodes = []
+        not_ready_nodes = []
+        for item in nodes:
+            metadata = item.get("metadata", {})
+            labels = metadata.get("labels", {})
+            is_control_plane = (
+                "node-role.kubernetes.io/control-plane" in labels
+                or "node-role.kubernetes.io/master" in labels
+            )
+            if not is_control_plane:
+                continue
+            conditions = item.get("status", {}).get("conditions", [])
+            ready = next(
+                (condition for condition in conditions if condition.get("type") == "Ready"),
+                {},
+            )
+            name = metadata.get("name")
+            control_plane_nodes.append(name)
+            if ready.get("status") != "True":
+                not_ready_nodes.append(name)
+        ready = (
+            len(control_plane_nodes) >= expected_replicas
+            and not not_ready_nodes
+        )
+        return {
+            "control_plane_ready": ready,
+            "kubernetes_version": version.get("gitVersion"),
+            "expected_control_plane_replicas": expected_replicas,
+            "ready_control_plane_replicas": len(control_plane_nodes) - len(not_ready_nodes),
+            "control_plane_nodes": control_plane_nodes[:9],
+            "not_ready_control_plane_nodes": not_ready_nodes[:9],
+            "worker_provisioning_allowed": ready,
+            "capi_pivot_allowed": ready,
+            "side_effects": False,
         }
     if command_type == "cluster.postflight":
         nodes = kubernetes_api_get("/api/v1/nodes")
