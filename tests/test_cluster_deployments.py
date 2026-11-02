@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import datetime
 import hashlib
+import json
 
 import pytest
 from core.models import (
@@ -62,6 +63,16 @@ def cluster_spec():
         "control_plane_replicas": 3,
         "worker_replicas": 4,
     }
+
+
+def cluster_plan_hash():
+    encoded = json.dumps(
+        cluster_spec(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def create_deployment(client, tenant, project, node, key="cluster-plan-001"):
@@ -175,7 +186,11 @@ def test_cluster_delivery_runs_preflight_then_plan_and_persists_plan_result(
             "outcome": "succeeded",
             "result": {
                 "plan_status": "validated_dry_run",
-                "plan_hash": "a" * 64,
+                "cluster_name": "edge-lab",
+                "kubernetes_version": "v1.32.2",
+                "control_plane_replicas": 3,
+                "worker_replicas": 4,
+                "plan_hash": cluster_plan_hash(),
                 "provisioning_ready": False,
                 "missing_requirements": ["provider_versions.cluster_api"],
                 "adapter_enabled": False,
@@ -352,7 +367,11 @@ def test_cluster_plan_rejects_inconsistent_ready_flag_without_adapter(
             "outcome": "succeeded",
             "result": {
                 "plan_status": "validated_dry_run",
-                "plan_hash": "c" * 64,
+                "cluster_name": "edge-lab",
+                "kubernetes_version": "v1.32.2",
+                "control_plane_replicas": 3,
+                "worker_replicas": 4,
+                "plan_hash": cluster_plan_hash(),
                 "provisioning_ready": True,
                 "missing_requirements": [],
                 "adapter_enabled": False,
