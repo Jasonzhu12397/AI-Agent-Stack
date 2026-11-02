@@ -1,5 +1,14 @@
 from django.urls import path
 
+from core.agent_node_views import (
+    AgentCommandApproveView,
+    AgentNodeCommandListCreateView,
+    AgentNodeListCreateView,
+    AgentNodeRevokeView,
+    AgentRuntimeHeartbeatView,
+    AgentRuntimePollView,
+    AgentRuntimeResultView,
+)
 from core.agent_views import (
     AgentDetailView,
     AgentListCreateView,
@@ -30,6 +39,41 @@ from core.workflow_views import (
 )
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
+        AgentNodeListCreateView.as_view(),
+        name="agent-node-list-create",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/revoke/",
+        AgentNodeRevokeView.as_view(),
+        name="agent-node-revoke",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/commands/",
+        AgentNodeCommandListCreateView.as_view(),
+        name="agent-node-commands",
+    ),
+    path(
+        "api/v1/agent-commands/<uuid:command_id>/approve/",
+        AgentCommandApproveView.as_view(),
+        name="agent-command-approve",
+    ),
+    path(
+        "api/v1/agent-runtime/heartbeat/",
+        AgentRuntimeHeartbeatView.as_view(),
+        name="agent-runtime-heartbeat",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/poll/",
+        AgentRuntimePollView.as_view(),
+        name="agent-runtime-poll",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/<uuid:command_id>/result/",
+        AgentRuntimeResultView.as_view(),
+        name="agent-runtime-result",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agents/",
         AgentListCreateView.as_view(),
