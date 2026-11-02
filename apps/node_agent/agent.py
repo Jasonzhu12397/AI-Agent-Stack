@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -182,6 +183,51 @@ def contains_forbidden_fields(value: Any) -> bool:
     return False
 
 
+
+def validate_network_inputs(network: Any) -> None:
+    if not isinstance(network, dict):
+        return
+    for key in ("pod_cidr", "service_cidr"):
+        value = network.get(key)
+        if value:
+            try:
+                ipaddress.ip_network(value, strict=False)
+            except (TypeError, ValueError) as exc:
+                raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
+    endpoint = network.get("control_plane_endpoint")
+    if endpoint:
+        if not isinstance(endpoint, str) or ":" not in endpoint:
+            raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
+        host, separator, port_text = endpoint.rpartition(":")
+        if not separator or not host or not port_text.isdigit():
+            raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
+        if not 1 <= int(port_text) <= 65535:
+            raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
+
+
+def validate_metal3_hosts(hosts: Any) -> None:
+    if not isinstance(hosts, list):
+        return
+    host_names = set()
+    boot_macs = set()
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        host_name = host.get("baremetal_host")
+        if host_name:
+            if host_name in host_names:
+                raise NodeAgentError("DUPLICATE_BAREMETAL_HOST")
+            host_names.add(host_name)
+        boot_mac = host.get("boot_mac")
+        if boot_mac:
+            normalized_mac = str(boot_mac).lower().replace("-", ":")
+            if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", normalized_mac):
+                raise NodeAgentError("INVALID_BOOT_MAC")
+            if normalized_mac in boot_macs:
+                raise NodeAgentError("DUPLICATE_BOOT_MAC")
+            boot_macs.add(normalized_mac)
+
+
 def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     command_type = command.get("command_type")
     payload = command.get("payload", {})
@@ -357,6 +403,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         network = spec.get("network", {})
         machine_image = spec.get("machine_image", {})
         metal3 = spec.get("metal3", {})
+        validate_network_inputs(network)
+        validate_metal3_hosts(metal3.get("hosts", []) if isinstance(metal3, dict) else [])
         missing_requirements = []
         for key in [
             "cluster_api",
