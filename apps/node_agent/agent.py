@@ -546,6 +546,14 @@ class ControlPlaneClient:
             {"node_id": self.node_id},
         )
 
+
+    def renew_lease(self, command_id: str, lease_token: str) -> dict[str, Any]:
+        return self.request(
+            f"/api/v1/agent-runtime/commands/{command_id}/lease/renew/",
+            {"node_id": self.node_id},
+            lease_token=lease_token,
+        )
+
     def submit_result(
         self,
         command_id: str,
