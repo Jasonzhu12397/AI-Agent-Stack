@@ -443,3 +443,56 @@ def test_workflow_validator_rejects_invalid_condition_key_and_future_source():
     }
     with pytest.raises(WorkflowValidationError, match="earlier node"):
         validate_workflow_definition(future_source)
+
+
+@pytest.mark.django_db
+def test_workflow_run_idempotency_and_request_shape(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Idempotent workflow",
+        slug="idempotent-workflow",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    published = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+
+    first = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"message": "same request"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-idempotent-001",
+    )
+    repeated = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"message": "same request"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-idempotent-001",
+    )
+    conflict = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"message": "different request"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-idempotent-001",
+    )
+    invalid_shape = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        [{"message": "not an object"}],
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-idempotent-002",
+    )
+
+    assert first.status_code == 202
+    assert repeated.status_code == 200
+    assert repeated.data["id"] == first.data["id"]
+    assert conflict.status_code == 409
+    assert invalid_shape.status_code == 400
+    assert Task.objects.filter(task_type="workflow.run").count() == 1
