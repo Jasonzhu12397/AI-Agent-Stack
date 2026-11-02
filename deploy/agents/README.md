@@ -25,9 +25,10 @@ The target agent must not be required to create the first target Control Plane. 
 2. Create `target-cluster-agent-credentials` in `ai-agent-system` with keys `control-url`, `node-id` and `token`.
 3. Apply `namespace.yaml`, `rbac.yaml` and `target-cluster-agent.yaml` to the target cluster.
 4. Verify the Pod is Ready and its Supervisor heartbeat/command lease works.
-5. If CAPI controllers and Cluster API objects were hosted in EPH, pivot them into the target cluster with `clusterctl move` (or a provider/version-tested equivalent) and verify reconciliation before stopping EPH or provisioning workers.
-6. Continue remaining Control Plane replicas and Data Plane workers from the target cluster management plane.
-7. Re-image/reboot the original EPH hardware only after it is no longer needed as the bootstrap host; enroll it as a worker with a new identity and verify its physical identity and Ready condition.
+5. When the Supervisor assigns a deployment through the handoff API, the Target Agent discovers it in its heartbeat response and automatically retrieves its durable checkpoint before polling commands. Confirm the structured `deployment_checkpoint_restored` log event and the expected phase/sequence.
+6. If CAPI controllers and Cluster API objects were hosted in EPH, pivot them into the target cluster with `clusterctl move` (or a provider/version-tested equivalent) and verify reconciliation before stopping EPH or provisioning workers.
+7. Continue remaining Control Plane replicas and Data Plane workers from the target cluster management plane.
+8. Re-image/reboot the original EPH hardware only after it is no longer needed as the bootstrap host; enroll it as a worker with a new identity and verify its physical identity and Ready condition.
 
 The supplied target Role/RoleBinding grants read access to pods, events and services in the `default` namespace only. Add equivalent Role/RoleBinding pairs for each explicitly approved workload namespace. The ClusterRole grants read-only node/namespace discovery.
 
