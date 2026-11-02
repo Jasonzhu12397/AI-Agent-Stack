@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
-import math
 from typing import Any
 
 
@@ -31,7 +31,7 @@ def _matches_type(value: Any, expected: str) -> bool:
         "array": lambda item: isinstance(item, list),
         "string": lambda item: isinstance(item, str),
         "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
-        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and (isinstance(item, int) or math.isfinite(item)),
         "boolean": lambda item: isinstance(item, bool),
         "null": lambda item: item is None,
     }
@@ -74,7 +74,7 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$") -> None
             if "enum" in definition and item not in definition["enum"]:
                 raise ToolExecutionError(f"Invalid value for tool argument '{key}'.")
         if isinstance(item, (int, float)) and not isinstance(item, bool):
-            if not math.isfinite(item):
+            if isinstance(item, float) and not math.isfinite(item):
                 raise ToolExecutionError(f"Tool argument '{key}' must be finite.")
             if "minimum" in definition and item < definition["minimum"]:
                 raise ToolExecutionError(f"Tool argument '{key}' is below its minimum.")
