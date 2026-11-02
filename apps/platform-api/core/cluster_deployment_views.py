@@ -308,6 +308,11 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
             deployment.target_node = target_node
             deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
             deployment.save(update_fields=["target_node", "status", "updated_at"])
+            preflight_command = queue_deployment_command(
+                deployment,
+                "cluster.capi.pivot.target.preflight",
+                node=target_node,
+            )
         return Response(
             {
                 "deployment": _deployment_data(deployment),
@@ -315,6 +320,8 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 "checkpoint_endpoint": (
                     f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
                 ),
+                "preflight_command_id": str(preflight_command.id),
+                "preflight_command_status": preflight_command.status,
                 "worker_provisioning_allowed": False,
             },
             status=202,
