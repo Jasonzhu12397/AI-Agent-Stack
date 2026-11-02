@@ -1,9 +1,9 @@
+import datetime
 import hashlib
 import hmac
 import json
 import secrets
 import uuid
-from datetime import timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -164,7 +164,7 @@ class AgentNodeListCreateView(APIView):
 
     def get(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        stale_before = timezone.now() - timedelta(seconds=60)
+        stale_before = timezone.now() - datetime.timedelta(seconds=60)
         AgentNode.objects.filter(
             tenant=tenant,
             project=project,
@@ -187,12 +187,17 @@ class AgentNodeListCreateView(APIView):
         node_type = request.data.get("node_type")
         cluster_name = str(request.data.get("cluster_name", "")).strip()
         if not name or len(name) > 120:
-            return Response({"detail": "name is required and must be at most 120 characters."}, status=400)
+            return Response(
+                {"detail": "name is required and must be at most 120 characters."},
+                status=400,
+            )
         if node_type not in AgentNode.NodeType.values:
             return Response({"detail": "node_type must be eph_node or target_cluster."}, status=400)
         capabilities = request.data.get("capabilities", [])
         labels = request.data.get("labels", {})
-        if not isinstance(capabilities, list) or not all(isinstance(item, str) for item in capabilities):
+        if not isinstance(capabilities, list) or not all(
+            isinstance(item, str) for item in capabilities
+        ):
             return Response({"detail": "capabilities must be a list of strings."}, status=400)
         if not isinstance(labels, dict):
             return Response({"detail": "labels must be a JSON object."}, status=400)
@@ -210,10 +215,16 @@ class AgentNodeListCreateView(APIView):
                 credential_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
             )
         except IntegrityError:
-            return Response({"detail": "A node with this name already exists in the project."}, status=409)
+            return Response(
+                {"detail": "A node with this name already exists in the project."},
+                status=409,
+            )
         data = _node_data(node)
         data["enrollment_token"] = raw_token
-        data["token_warning"] = "Store this token securely; it is shown only once. Use TLS for agent communication."
+        data["token_warning"] = (
+            "Store this token securely; it is shown only once. "
+            "Use TLS for agent communication."
+        )
         return Response(data, status=status.HTTP_201_CREATED)
 
 
@@ -264,14 +275,24 @@ class AgentNodeCommandListCreateView(APIView):
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
         )
-        if not ProjectMembership.objects.filter(project=node.project, user=request.user).exists() and not TenantMembership.objects.filter(
+        project_member = ProjectMembership.objects.filter(
+            project=node.project,
+            user=request.user,
+        ).exists()
+        tenant_admin = TenantMembership.objects.filter(
             tenant=node.tenant,
             user=request.user,
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists():
+        ).exists()
+        if not project_member and not tenant_admin:
             return Response({"detail": "Project membership required."}, status=403)
         commands = AgentCommand.objects.filter(node=node)[:100]
-        return Response({"count": len(commands), "results": [_command_data(item) for item in commands]})
+        return Response(
+            {
+                "count": len(commands),
+                "results": [_command_data(item) for item in commands],
+            }
+        )
 
     def post(self, request, node_id):
         if not isinstance(request.data, dict):
@@ -337,7 +358,10 @@ class AgentNodeCommandListCreateView(APIView):
             or command.command_type != command_type
             or command.payload != payload
         ):
-            return Response({"detail": "Idempotency-Key was used for a different command."}, status=409)
+            return Response(
+                {"detail": "Idempotency-Key was used for a different command."},
+                status=409,
+            )
         return Response(
             _command_data(command),
             status=status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK,
@@ -360,18 +384,28 @@ class AgentCommandApproveView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return Response({"detail": "Tenant owner or admin role is required to approve provisioning."}, status=403)
+            return Response(
+                {"detail": "Tenant owner or admin role is required to approve provisioning."},
+                status=403,
+            )
         if command.requested_by_id == request.user.id:
-            return Response({"detail": "A different administrator must approve this command."}, status=403)
+            return Response(
+                {"detail": "A different administrator must approve this command."},
+                status=403,
+            )
         if command.status != AgentCommand.Status.WAITING_APPROVAL:
             return Response({"detail": "Command is not waiting for approval."}, status=409)
         supplied_hash = str(request.data.get("plan_hash", ""))
         current_hash = _payload_hash(command.command_type, command.payload)
-        if not supplied_hash or not hmac.compare_digest(supplied_hash, command.plan_hash) or not hmac.compare_digest(
-            current_hash,
-            command.plan_hash,
+        if (
+            not supplied_hash
+            or not hmac.compare_digest(supplied_hash, command.plan_hash)
+            or not hmac.compare_digest(current_hash, command.plan_hash)
         ):
-            return Response({"detail": "Approval plan hash does not match the immutable command payload."}, status=409)
+            return Response(
+                {"detail": "Approval plan hash does not match the immutable command payload."},
+                status=409,
+            )
         command.status = AgentCommand.Status.QUEUED
         command.approved_plan_hash = current_hash
         command.approved_by = request.user
@@ -400,7 +434,9 @@ class AgentRuntimeHeartbeatView(APIView):
         if node is None:
             return Response({"detail": "Invalid or revoked node credential."}, status=401)
         capabilities = request.data.get("capabilities", node.capabilities)
-        if not isinstance(capabilities, list) or not all(isinstance(item, str) for item in capabilities):
+        if not isinstance(capabilities, list) or not all(
+            isinstance(item, str) for item in capabilities
+        ):
             return Response({"detail": "capabilities must be a list of strings."}, status=400)
         node.agent_version = str(request.data.get("agent_version", node.agent_version))[:40]
         node.capabilities = capabilities
@@ -419,7 +455,13 @@ class AgentRuntimeHeartbeatView(APIView):
                 "updated_at",
             ]
         )
-        return Response({"node_id": str(node.id), "status": node.status, "server_time": node.last_seen_at})
+        return Response(
+            {
+                "node_id": str(node.id),
+                "status": node.status,
+                "server_time": node.last_seen_at,
+            }
+        )
 
 
 class AgentRuntimePollView(APIView):
@@ -473,7 +515,7 @@ class AgentRuntimePollView(APIView):
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
-            command.lease_expires_at = now + timedelta(seconds=90)
+            command.lease_expires_at = now + datetime.timedelta(seconds=90)
             if command.started_at is None:
                 command.started_at = now
             command.save(
