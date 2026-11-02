@@ -68,3 +68,17 @@ jobs:
         run: |
           cp .env.example .env
           docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+      - name: Build and start the complete local stack
+        run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
+      - name: Smoke test API and Web Studio
+        run: |
+          curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/live
+          curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/ready
+          curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:5173/
+          test "$(docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services worker)" = "worker"
+      - name: Show stack diagnostics
+        if: always()
+        run: docker compose --env-file .env -f deploy/docker-compose.yml ps
+      - name: Stop local stack
+        if: always()
+        run: docker compose --env-file .env -f deploy/docker-compose.yml down -v
