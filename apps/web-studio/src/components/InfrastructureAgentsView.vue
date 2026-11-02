@@ -287,7 +287,7 @@ async function dispatchCommand(): Promise<void> {
 }
 
 async function runTargetPostflight(deployment: ClusterDeployment): Promise<void> {
-  if (!window.confirm("Confirm this Kubernetes cluster has already been provisioned outside this workflow and is ready for read-only checks?")) return;
+  if (!window.confirm("Confirm that CAPI / Metal3 / Ironic provisioning has completed and every worker is ready before running target-side checks?")) return;
   const targetNodeId = deploymentTargetNodeIds.value[deployment.id];
   if (!targetNodeId) {
     error.value = "Select an online Target Cluster Agent first.";
@@ -395,8 +395,8 @@ onUnmounted(() => {
         <p class="eyebrow">REMOTE INFRASTRUCTURE CONTROL</p>
         <h2>EPH &amp; Target Cluster Agents</h2>
         <p class="infra-description">
-          One remote control plane, two independently enrolled execution agents. EPH provisions the
-          target delivery plan through CAPI / Metal3 / Ironic; target-side checks join after API readiness.
+          One remote control plane, two independently enrolled execution agents. EPH validates the
+          CAPI / Metal3 / Ironic delivery plan; target-side checks join only after provisioning completes.
         </p>
       </div>
       <el-tag type="success" effect="plain">OUTBOUND CONTROL CHANNEL</el-tag>
