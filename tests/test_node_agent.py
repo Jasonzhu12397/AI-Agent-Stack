@@ -150,3 +150,40 @@ def test_kubernetes_api_client_requires_in_cluster_identity(monkeypatch, tmp_pat
 
     with pytest.raises(agent.NodeAgentError, match="KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE"):
         agent.kubernetes_api_get("/version")
+
+
+def test_kubernetes_resource_summaries_omit_pod_environment_and_redact_event_secrets():
+    pod = {
+        "metadata": {"name": "api-0", "namespace": "platform"},
+        "spec": {
+            "nodeName": "worker-01",
+            "containers": [
+                {
+                    "env": [
+                        {"name": "API_TOKEN", "value": "do-not-return-this"},
+                    ]
+                }
+            ],
+        },
+        "status": {"phase": "Running"},
+    }
+    event = {
+        "metadata": {"name": "warning-01", "namespace": "platform"},
+        "type": "Warning",
+        "reason": "FailedMount",
+        "message": "token=do-not-return-this volume mount failed",
+        "involvedObject": {"kind": "Pod", "name": "api-0"},
+    }
+
+    pod_summary = agent.sanitize_kubernetes_item("pods", pod)
+    event_summary = agent.sanitize_kubernetes_item("events", event)
+
+    assert pod_summary == {
+        "name": "api-0",
+        "namespace": "platform",
+        "phase": "Running",
+        "node_name": "worker-01",
+    }
+    assert "do-not-return-this" not in str(pod_summary)
+    assert "do-not-return-this" not in event_summary["message"]
+    assert "[REDACTED]" in event_summary["message"]
