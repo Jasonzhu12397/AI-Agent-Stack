@@ -7,7 +7,9 @@ from collections import deque
 from django.utils import timezone
 
 from core.model_gateway import ModelGateway, ModelGatewayError
+from core.rag_runtime import RagRuntimeError, retrieve_context
 from core.models import (
+    KnowledgeBase,
     ModelConfig,
     WorkflowRun,
     WorkflowStepRun,
@@ -57,6 +59,7 @@ def validate_workflow_definition(definition):
             "start",
             "llm",
             "condition",
+            "knowledge_search",
             "end",
         }:
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
@@ -90,6 +93,33 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(f"LLM node {node_id} requires prompt_template.")
             if len(config["prompt_template"]) > 12000:
                 raise WorkflowValidationError(f"LLM node {node_id} prompt is too long.")
+        if node_type == "knowledge_search":
+            knowledge_ids = config.get("knowledge_base_ids")
+            if not isinstance(knowledge_ids, list) or not 1 <= len(knowledge_ids) <= 8:
+                raise WorkflowValidationError(
+                    f"Knowledge search node {node_id} requires 1 to 8 knowledge bases."
+                )
+            try:
+                for knowledge_id in knowledge_ids:
+                    uuid.UUID(str(knowledge_id))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise WorkflowValidationError(
+                    f"Knowledge search node {node_id} contains an invalid knowledge base ID."
+                ) from exc
+            if len(set(knowledge_ids)) != len(knowledge_ids):
+                raise WorkflowValidationError(
+                    f"Knowledge search node {node_id} cannot repeat knowledge bases."
+                )
+            query_template = config.get("query_template", "{{input}}")
+            if not isinstance(query_template, str) or not 1 <= len(query_template) <= 4000:
+                raise WorkflowValidationError(
+                    f"Knowledge search node {node_id} query_template is invalid."
+                )
+            limit = config.get("limit", 5)
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
+                raise WorkflowValidationError(
+                    f"Knowledge search node {node_id} limit must be 1 to 10."
+                )
         if node_type == "condition":
             if "equals" not in config:
                 raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
@@ -98,7 +128,7 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Condition node {node_id} input_key must be a non-empty string."
                 )
-        if node_type in {"llm", "condition", "end"}:
+        if node_type in {"llm", "condition", "knowledge_search", "end"}:
             source_node = config.get("input_from") or config.get("source_node")
             if source_node and (
                 not isinstance(source_node, str)
@@ -213,11 +243,29 @@ def validate_workflow_definition(definition):
     }
 
 
-def validate_model_references(graph, tenant):
+def validate_model_references(graph, tenant, project):
     for node in graph["nodes"].values():
+        config = node["config"]
+        if node["type"] == "knowledge_search":
+            knowledge_bases = KnowledgeBase.objects.filter(
+                id__in=config["knowledge_base_ids"],
+                tenant=tenant,
+                project=project,
+                is_archived=False,
+                embedding_model__enabled=True,
+                embedding_model__provider__enabled=True,
+            ).select_related("embedding_model")
+            if knowledge_bases.count() != len(config["knowledge_base_ids"]):
+                raise WorkflowValidationError(
+                    "A workflow knowledge search node references an unavailable project knowledge base."
+                )
+            if any("embeddings" not in item.embedding_model.capabilities for item in knowledge_bases):
+                raise WorkflowValidationError(
+                    "Workflow knowledge search models must support embeddings."
+                )
+            continue
         if node["type"] != "llm":
             continue
-        config = node["config"]
         model = ModelConfig.objects.select_related("provider").filter(
             pk=config["model_config_id"],
             enabled=True,
@@ -262,7 +310,7 @@ def _step_input(node, state):
     return None
 
 
-def _execute_node(node, state, input_data):
+def _execute_node(node, state, input_data, tenant, project):
     node_type = node["type"]
     config = node["config"]
     if node_type == "start":
@@ -278,6 +326,45 @@ def _execute_node(node, state, input_data):
     if node_type == "end":
         source_node = config.get("input_from") or config.get("source_node")
         return state.get(source_node) if source_node else dict(state)
+    if node_type == "knowledge_search":
+        source_value = _step_input(node, state)
+        if isinstance(source_value, (dict, list)):
+            source_text = json.dumps(source_value, ensure_ascii=False)
+        else:
+            source_text = "" if source_value is None else str(source_value)
+        query = config.get("query_template", "{{input}}").replace("{{input}}", source_text)
+        results = []
+        knowledge_bases = KnowledgeBase.objects.filter(
+            id__in=config["knowledge_base_ids"],
+            tenant=tenant,
+            project=project,
+            is_archived=False,
+        ).select_related("embedding_model", "embedding_model__provider")
+        for knowledge_base in knowledge_bases:
+            try:
+                matches = retrieve_context(
+                    tenant_id=str(tenant.id),
+                    project_id=str(project.id),
+                    query=query,
+                    embedding_model=knowledge_base.embedding_model,
+                    limit=min(config.get("limit", 5), 10),
+                    metadata_filters={"knowledge_base_id": str(knowledge_base.id)},
+                )
+            except RagRuntimeError as exc:
+                raise RuntimeError("Workflow knowledge retrieval failed") from exc
+            for match in matches:
+                if len(results) >= config.get("limit", 5):
+                    break
+                results.append(
+                    {
+                        "knowledge_base_id": str(knowledge_base.id),
+                        "document_id": match.get("document_id"),
+                        "chunk_id": match.get("chunk_id"),
+                        "score": match.get("score"),
+                        "text": str(match.get("text", ""))[:2500],
+                    }
+                )
+        return {"query": query, "results": results}
     if node_type == "llm":
         source_value = _step_input(node, state)
         if isinstance(source_value, (dict, list)):
@@ -389,7 +476,13 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.input_data = {"active_predecessors": [edge["source"] for edge in active_incoming]}
         step.save()
         try:
-            output = _execute_node(node, state, workflow_run.input_data)
+            output = _execute_node(
+                node,
+                state,
+                workflow_run.input_data,
+                workflow.tenant,
+                workflow.project,
+            )
         except Exception as exc:
             step.status = WorkflowStepRun.Status.FAILED
             step.error = {
