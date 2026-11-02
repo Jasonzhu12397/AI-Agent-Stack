@@ -1,4 +1,6 @@
 # ruff: noqa: I001
+import json
+
 import pytest
 
 from node_agent import agent
