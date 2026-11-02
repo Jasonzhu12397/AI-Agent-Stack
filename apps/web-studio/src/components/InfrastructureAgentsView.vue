@@ -408,8 +408,8 @@ onUnmounted(() => {
         <p class="eyebrow">REMOTE INFRASTRUCTURE CONTROL</p>
         <h2>EPH &amp; Target Cluster Agents</h2>
         <p class="infra-description">
-          One remote control plane, two independently enrolled execution agents. EPH validates the
-          CAPI / Metal3 / Ironic delivery plan; target-side checks join only after provisioning completes.
+          One remote control plane, two independently enrolled execution agents. EPH is a temporary RAM-booted
+          bare-metal node running single-node Kubernetes; after bootstrap, that same host is rebooted and reclaimed as a target worker.
         </p>
       </div>
       <el-tag type="success" effect="plain">OUTBOUND CONTROL CHANNEL</el-tag>
@@ -435,8 +435,8 @@ onUnmounted(() => {
       <article class="infra-role-card eph">
         <span class="role-index">01 · BOOTSTRAP PLANE</span>
         <h3>EPH Node Agent</h3>
-        <p>Host preflight, management Kubernetes checks, CAPI / Metal3 discovery and cluster plan coordination.</p>
-        <el-tag type="warning" effect="plain">Runs before target cluster exists</el-tag>
+        <p>Runs in the EPH node's temporary single-node Kubernetes Pod: host preflight, CAPI / Metal3 discovery and bootstrap coordination.</p>
+        <el-tag type="warning" effect="plain">RAM boot · temporary · reclaimed as target worker</el-tag>
       </article>
       <div class="infra-link"><span>Remote command channel</span><b>⇄</b></div>
       <article class="infra-role-card target">
@@ -456,7 +456,7 @@ onUnmounted(() => {
         <div class="infra-form">
           <label>Agent type
             <el-select v-model="nodeType">
-              <el-option label="EPH Node Agent" value="eph_node" />
+              <el-option label="EPH Agent (temporary RAM-boot node)" value="eph_node" />
               <el-option label="Target Cluster Agent" value="target_cluster" />
             </el-select>
           </label>
@@ -490,7 +490,7 @@ onUnmounted(() => {
             <span class="node-symbol">{{ node.node_type === "eph_node" ? "E" : "T" }}</span>
             <span class="node-main">
               <strong>{{ node.name }}</strong>
-              <small>{{ node.node_type }} · {{ node.cluster_name || "cluster not assigned" }}</small>
+              <small>{{ node.node_type === "eph_node" ? "temporary RAM-boot EPH · later target worker" : "target cluster agent" }} · {{ node.cluster_name || "cluster not assigned" }}</small>
               <small>Last heartbeat: {{ formatTime(node.last_seen_at) }}</small>
             </span>
             <el-tag :type="statusType(node.status)" size="small">{{ node.status }}</el-tag>
@@ -513,7 +513,7 @@ onUnmounted(() => {
           <div v-if="selectedNode.node_type === 'eph_node'" class="infra-form cluster-build-form">
             <div>
               <strong>Metal3 / CAPI cluster plan</strong>
-              <p>Build a typed Kubernetes delivery plan on the EPH agent. This stage is dry-run only.</p>
+              <p>Plan target cluster delivery from the temporary RAM-booted EPH node. The EPH host is expected to reboot and join the final cluster as a worker. This stage is dry-run only.</p>
             </div>
             <label>Target cluster name
               <el-input v-model="buildClusterName" placeholder="edge-lab" />
