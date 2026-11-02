@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41411548638](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41411548638), commit `90090d25bbc5e993deb9e5c01f58ec1965f18524`, completed successfully across Python, Vue and Compose jobs. Pytest: 46 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
+[GitHub Actions run 41412708962](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41412708962), commit `9a79dd80cf5a3ca7d354640e7b5f622a4b6f178c`, completed successfully across Python, Vue and Compose jobs. Pytest: 50 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -38,7 +38,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Area | Target | Current status |
 |---|---|---|
 | Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Django session login/logout/current-user, CSRF protection, tenant/project RBAC, membership administration, last-owner/last-project-admin protections and membership revocation tested. OIDC/OAuth2, invitations/email workflow, password reset, service identities and fine-grained resource/tool policies remain unimplemented. |
-| Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe `demo.echo` and `demo.sleep` tasks; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. Vue workspace can enqueue and monitor demo tasks. Not yet wired to Agent/Workflow runs; no external side-effect handlers |
+| Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe demo tasks and text-only Agent Runs; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. No external side-effect handlers or Workflow Engine integration yet |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Not implemented |
 | Workflow engine | Versioned DAG, branches, recovery | Not implemented |
 | Policy and approval | Default deny, hash-bound one-time approval | Not implemented |
