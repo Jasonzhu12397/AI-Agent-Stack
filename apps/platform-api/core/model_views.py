@@ -49,6 +49,14 @@ class ModelProviderListCreateView(APIView):
             )
         serializer = ModelProviderWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if ModelProvider.objects.filter(
+            tenant=tenant,
+            name=serializer.validated_data["name"],
+        ).exists():
+            return Response(
+                {"detail": "A model provider with this name already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
         provider = serializer.save(tenant=tenant, created_by=request.user)
         return Response(
             ModelProviderReadSerializer(provider).data,
@@ -81,27 +89,29 @@ class ModelConfigListCreateView(APIView):
                 {"detail": "Tenant administrator permission required."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        provider = self.get_provider(request, tenant, provider_id)
-        if provider.tenant_id != tenant.id:
-            return Response(
-                {"detail": "Only tenant-owned providers can be modified by tenant admins."},
-                status=status.HTTP_403_FORBIDDEN,
+        with transaction.atomic():
+            provider = self.get_provider(request, tenant, provider_id)
+            if provider.tenant_id != tenant.id:
+                return Response(
+                    {"detail": "Only tenant-owned providers can be modified by tenant admins."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            provider = ModelProvider.objects.select_for_update().get(pk=provider.pk)
+            serializer = ModelConfigSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            latest_version = (
+                ModelConfig.objects.filter(
+                    provider=provider,
+                    model_name=serializer.validated_data["model_name"],
+                )
+                .order_by("-version")
+                .values_list("version", flat=True)
+                .first()
             )
-        serializer = ModelConfigSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        latest_version = (
-            ModelConfig.objects.filter(
+            model_config = serializer.save(
                 provider=provider,
-                model_name=serializer.validated_data["model_name"],
+                version=(latest_version or 0) + 1,
             )
-            .order_by("-version")
-            .values_list("version", flat=True)
-            .first()
-        )
-        model_config = serializer.save(
-            provider=provider,
-            version=(latest_version or 0) + 1,
-        )
         return Response(
             ModelConfigSerializer(model_config).data,
             status=status.HTTP_201_CREATED,
