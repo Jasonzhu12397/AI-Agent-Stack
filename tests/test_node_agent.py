@@ -308,6 +308,90 @@ def test_capi_observation_uses_discovered_group_version(monkeypatch):
     assert result["resources"][0]["items"][0]["name"] == "edge-lab"
 
 
+
+def test_provider_discovery_reports_live_api_versions_and_missing_resources(monkeypatch):
+    calls = []
+
+    def fake_get(path):
+        calls.append(path)
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    },
+                    {
+                        "name": "bootstrap.cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    },
+                    {
+                        "name": "controlplane.cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    },
+                    {
+                        "name": "infrastructure.cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    },
+                    {
+                        "name": "metal3.io",
+                        "preferredVersion": {"version": "v1alpha1"},
+                    },
+                ]
+            }
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path.endswith("/cluster.x-k8s.io/v1beta1"):
+            return {"resources": [{"name": name} for name in ["clusters", "machines", "machinedeployments"]]}
+        if path.endswith("/bootstrap.cluster.x-k8s.io/v1beta1"):
+            return {"resources": [{"name": "kubeadmconfigs"}]}
+        if path.endswith("/controlplane.cluster.x-k8s.io/v1beta1"):
+            return {"resources": [{"name": "kubeadmcontrolplanes"}]}
+        if path.endswith("/infrastructure.cluster.x-k8s.io/v1beta1"):
+            return {"resources": [{"name": name} for name in ["metal3clusters", "metal3machines"]]}
+        if path.endswith("/metal3.io/v1alpha1"):
+            return {"resources": [{"name": "baremetalhosts"}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {"command_type": "cluster.provider.discover", "payload": {}},
+        "eph_node",
+    )
+
+    assert result["management_kubernetes_version"] == "v1.32.2"
+    assert result["providers"]["cluster_api"]["version"] == "v1beta1"
+    assert result["providers"]["metal3"]["version"] == "v1alpha1"
+    assert result["discovery_complete"] is False
+    assert result["missing_requirements"] == [
+        "provider_api.infrastructure_metal3.metal3machinetemplates"
+    ]
+    assert result["external_components"]["ironic"] == "not_verified_by_kubernetes_api_discovery"
+    assert result["mutation_adapter_enabled"] is False
+    assert result["provisioning_ready"] is False
+    assert "/apis/infrastructure.cluster.x-k8s.io/v1beta1" in calls
+
+
+def test_provider_discovery_rejects_non_eph_agent():
+    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        agent.execute_command(
+            {"command_type": "cluster.provider.discover", "payload": {}},
+            "target_cluster",
+        )
+
+
+def test_provider_discovery_reports_absent_provider_groups(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: {"groups": []} if path == "/apis" else {"gitVersion": "v1.32.2"},
+    )
+    result = agent.discover_provider_apis()
+    assert result["discovery_complete"] is False
+    assert len(result["missing_requirements"]) == 5
+    assert result["mutation_adapter_enabled"] is False
+
+
 def test_cluster_plan_requires_odd_control_plane_quorum():
     spec = {
         "cluster_name": "edge-lab",
