@@ -6,6 +6,7 @@ from core.agent_node_views import (
     AgentNodeCommandListCreateView,
     AgentNodeListCreateView,
     AgentNodeRevokeView,
+    AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
@@ -144,6 +145,11 @@ urlpatterns = [
         "api/v1/agent-runtime/heartbeat/",
         AgentRuntimeHeartbeatView.as_view(),
         name="agent-runtime-heartbeat",
+    ),
+    path(
+        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
+        AgentRuntimeDeploymentCheckpointView.as_view(),
+        name="agent-runtime-deployment-checkpoint",
     ),
     path(
         "api/v1/agent-runtime/commands/poll/",
