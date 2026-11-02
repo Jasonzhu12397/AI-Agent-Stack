@@ -100,9 +100,10 @@ class ModelGateway:
                     "Messages must contain a supported role.",
                 )
             if message.get("role") == "assistant" and message.get("tool_calls"):
-                if message.get("content") not in (None, "") or not isinstance(
-                    message.get("tool_calls"), list
-                ):
+                if (
+                    message.get("content") is not None
+                    and not isinstance(message.get("content"), str)
+                ) or not isinstance(message.get("tool_calls"), list):
                     raise ModelGatewayError(
                         "INVALID_MESSAGES",
                         "Assistant tool-call messages must contain a tool_calls array.",
@@ -127,6 +128,14 @@ class ModelGateway:
                 raise ModelGatewayError("INVALID_TOOL_CHOICE", "Unsupported tool_choice value.")
         elif tool_choice is not None:
             raise ModelGatewayError("INVALID_TOOL_CHOICE", "tool_choice requires a tools list.")
+        if max_tokens is not None and (
+            not isinstance(max_tokens, int)
+            or isinstance(max_tokens, bool)
+            or max_tokens < 1
+        ):
+            raise ModelGatewayError("INVALID_MAX_TOKENS", "max_tokens must be a positive integer.")
+        if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ModelGatewayError("INVALID_TIMEOUT", "timeout_seconds must be positive.")
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
@@ -172,7 +181,11 @@ class ModelGateway:
             content = message.get("content") or ""
             tool_calls = message.get("tool_calls") or []
             usage = payload.get("usage") or {}
-            if not isinstance(content, str) or not isinstance(tool_calls, list):
+            if (
+                not isinstance(content, str)
+                or not isinstance(tool_calls, list)
+                or len(tool_calls) > 16
+            ):
                 raise TypeError("message content or tool_calls has an invalid type")
             if tool_calls and not tools:
                 raise TypeError("provider returned tool calls when no tools were offered")
@@ -287,7 +300,13 @@ class ModelGateway:
         try:
             opener = build_opener(NoRedirectHandler())
             with opener.open(request, timeout=timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                raw_payload = response.read(16 * 1024 * 1024 + 1)
+            if len(raw_payload) > 16 * 1024 * 1024:
+                raise ModelGatewayError(
+                    "MODEL_PROVIDER_RESPONSE_TOO_LARGE",
+                    "The model provider response exceeded the 16 MiB limit.",
+                )
+            payload = json.loads(raw_payload.decode("utf-8"))
         except HTTPError as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_HTTP_ERROR",
