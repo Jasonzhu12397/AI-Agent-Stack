@@ -397,3 +397,100 @@ export function createWorkflowRun(
     body: JSON.stringify({ input }),
   });
 }
+
+
+export type AgentNode = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  node_type: "eph_node" | "target_cluster";
+  cluster_name: string;
+  agent_version: string;
+  capabilities: string[];
+  labels: Record<string, string>;
+  status: "offline" | "online" | "revoked";
+  last_seen_at: string | null;
+  last_seen_ip: string | null;
+  created_at: string;
+};
+
+export type EnrolledAgentNode = AgentNode & {
+  enrollment_token: string;
+  token_warning: string;
+};
+
+export type AgentCommand = {
+  id: string;
+  node_id: string;
+  command_type: string;
+  payload: Record<string, unknown>;
+  status: "waiting_approval" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  plan_hash: string;
+  approved_at: string | null;
+  attempts: number;
+  result: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export function getAgentNodes(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: AgentNode[] }> {
+  return request("/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-nodes/");
+}
+
+export function enrollAgentNode(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    node_type: AgentNode["node_type"];
+    cluster_name?: string;
+    capabilities?: string[];
+    labels?: Record<string, string>;
+  },
+): Promise<EnrolledAgentNode> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-nodes/",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function revokeAgentNode(nodeId: string): Promise<AgentNode> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/revoke/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getAgentCommands(
+  nodeId: string,
+): Promise<{ count: number; results: AgentCommand[] }> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/commands/");
+}
+
+export function createAgentCommand(
+  nodeId: string,
+  commandType: string,
+  payload: Record<string, unknown>,
+): Promise<AgentCommand> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/commands/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ command_type: commandType, payload }),
+  });
+}
+
+export function approveAgentCommand(
+  commandId: string,
+  planHash: string,
+): Promise<AgentCommand> {
+  return request("/api/v1/agent-commands/" + commandId + "/approve/", {
+    method: "POST",
+    body: JSON.stringify({ plan_hash: planHash }),
+  });
+}
