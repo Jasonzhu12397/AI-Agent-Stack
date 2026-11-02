@@ -21,10 +21,11 @@ def queue_deployment_command(
     command_type: str,
     node=None,
 ) -> AgentCommand:
-    payload = {
-        "deployment_id": str(deployment.id),
-        "cluster_spec": deployment.spec,
-    }
+    payload = {"deployment_id": str(deployment.id)}
+    if command_type == "cluster.postflight":
+        payload["cluster_name"] = deployment.cluster_name
+    else:
+        payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
     command, _ = AgentCommand.objects.get_or_create(
         tenant=deployment.tenant,
