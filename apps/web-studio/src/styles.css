@@ -198,3 +198,11 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .replica-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .replica-fields .el-input-number { width: 100%; }
 .replica-fields .el-input-number .el-input__wrapper { background: #0b1321; box-shadow: 0 0 0 1px #34435c inset; }
+
+.deployment-list { display: grid; gap: 9px; margin-top: 16px; }
+.deployment-card { display: grid; gap: 8px; padding: 12px; background: #0c1422; border: 1px solid #3c4c70; border-radius: 9px; }
+.deployment-card > small { color: #8190a8; font-size: 10px; }
+.plan-result { display: grid; gap: 8px; padding: 10px; background: #111b2c; border-radius: 7px; }
+.plan-result > span { color: #a8b8d5; font: 9px "DM Mono", monospace; overflow-wrap: anywhere; }
+.plan-result ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #e4bf84; font-size: 10px; }
+.plan-result p { margin: 0; color: #8ba6a0; font-size: 10px; line-height: 1.5; }
