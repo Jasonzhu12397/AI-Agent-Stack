@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.agent_node_views import _tenant_and_project, _validate_payload
+from core.agent_node_views import _validate_payload
 from core.models import (
     PluginConnection,
     PluginDefinition,
@@ -166,6 +166,16 @@ class PluginCatalogListCreateView(APIView):
             return Response({"detail": "A valid plugin version is required."}, status=400)
         if connector_type not in PluginDefinition.ConnectorType.values:
             return Response({"detail": "Unsupported connector_type."}, status=400)
+        plugin_name = str(request.data.get("name", plugin_key)).strip()
+        source_url = request.data.get("source_url", "")
+        if not plugin_name or len(plugin_name) > 120:
+            return Response({"detail": "Plugin name is required."}, status=400)
+        if source_url and (
+            not isinstance(source_url, str)
+            or not source_url.startswith("https://")
+            or len(source_url) > 500
+        ):
+            return Response({"detail": "source_url must be an HTTPS URL."}, status=400)
         if (
             not isinstance(manifest, dict)
             or not isinstance(tools, list)
@@ -222,8 +232,10 @@ class PluginCatalogListCreateView(APIView):
                 or not 1 <= timeout_seconds <= 300
             ):
                 return Response({"detail": f"Tool {name} timeout_seconds must be 1–300."}, status=400)
-            if not isinstance(retry_policy, dict):
-                return Response({"detail": f"Tool {name} retry_policy must be an object."}, status=400)
+            if not isinstance(retry_policy, dict) or not set(retry_policy).issubset(
+                {"max_attempts", "backoff_seconds"}
+            ):
+                return Response({"detail": f"Tool {name} retry_policy has unsupported fields."}, status=400)
             max_attempts = retry_policy.get("max_attempts", 1)
             if (
                 not isinstance(max_attempts, int)
@@ -265,13 +277,13 @@ class PluginCatalogListCreateView(APIView):
                     tenant=tenant,
                     created_by=request.user,
                     plugin_key=plugin_key,
-                    name=str(request.data.get("name", plugin_key))[:120],
+                    name=plugin_name,
                     description=str(request.data.get("description", ""))[:4000],
                     version=version,
                     connector_type=connector_type,
                     maintainer=str(request.data.get("maintainer", ""))[:120],
                     license=str(request.data.get("license", ""))[:80],
-                    source_url=str(request.data.get("source_url", ""))[:500],
+                    source_url=source_url,
                     manifest=manifest,
                     review_status=PluginDefinition.ReviewStatus.DRAFT,
                     enabled=False,
