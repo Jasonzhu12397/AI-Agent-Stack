@@ -204,7 +204,43 @@ onUnmounted(() => {
             />
           </el-select>
           <el-input v-model="systemPrompt" type="textarea" :rows="4" placeholder="System prompt" />
-          <el-button type="primary" :disabled="!selectedModel" :loading="busy" @click="createDraft">Create draft</el-button>
+          <el-select
+            v-model="selectedKnowledgeBaseIds"
+            multiple
+            collapse-tags
+            placeholder="Attach project knowledge bases (optional)"
+            class="full-width"
+          >
+            <el-option
+              v-for="item in knowledgeBases"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <el-select
+            v-model="selectedToolIds"
+            multiple
+            collapse-tags
+            placeholder="Allow installed connector tools (optional)"
+            class="full-width"
+          >
+            <el-option
+              v-for="tool in availableTools"
+              :key="tool.id"
+              :label="tool.plugin_name + ' / ' + tool.name + ' · ' + tool.risk_level"
+              :value="tool.id"
+            />
+          </el-select>
+          <p class="task-note">
+            Function calling is bounded to 4 turns. Tools without a registered trusted handler fail closed.
+          </p>
+          <el-button
+            type="primary"
+            :disabled="!selectedModel || (selectedToolIds.length > 0 && !selectedModel.capabilities.includes('tools'))"
+            :loading="busy"
+            @click="createDraft"
+          >Create draft</el-button>
         </div>
         <div class="agent-builder-form">
           <h4>Publish and run</h4>
@@ -236,7 +272,7 @@ onUnmounted(() => {
             :loading="busy"
             @click="runCurrent"
           >Run published agent</el-button>
-          <p class="task-note">This first runtime executes one text-only model call. Tools, RAG, memory and multi-step planning are intentionally not enabled yet.</p>
+          <p class="task-note">Published Agents can use pinned Knowledge Bases and project-installed tools. Retrieved text is untrusted context; high-risk tool approvals and connector transports remain pending.</p>
         </div>
       </div>
       <div v-if="runs.length" class="agent-run-list">
