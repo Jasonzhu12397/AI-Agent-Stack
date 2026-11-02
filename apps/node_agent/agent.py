@@ -60,6 +60,95 @@ def sanitize_kubernetes_item(resource: str, item: dict[str, Any]) -> dict[str, A
     return result
 
 
+def inspect_api_group(
+    group_name: str,
+    resource_names: list[str],
+    namespace: str,
+) -> dict[str, Any]:
+    if not isinstance(namespace, str) or not namespace or "/" in namespace or ".." in namespace:
+        raise NodeAgentError("INVALID_NAMESPACE")
+    discovery = kubernetes_api_get("/apis")
+    group = next(
+        (item for item in discovery.get("groups", []) if item.get("name") == group_name),
+        None,
+    )
+    if group is None:
+        return {"api_group": group_name, "discovered": False, "resources": []}
+    version = group.get("preferredVersion", {}).get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9.]+", version):
+        raise NodeAgentError("KUBERNETES_API_VERSION_INVALID")
+    version_document = kubernetes_api_get(f"/apis/{group_name}/{version}")
+    resources = []
+    for resource_name in resource_names:
+        resource = next(
+            (
+                item
+                for item in version_document.get("resources", [])
+                if item.get("name") == resource_name
+            ),
+            None,
+        )
+        if resource is None:
+            resources.append({"resource": resource_name, "available": False, "items": []})
+            continue
+        if resource.get("namespaced"):
+            path = f"/apis/{group_name}/{version}/namespaces/{namespace}/{resource_name}"
+        else:
+            path = f"/apis/{group_name}/{version}/{resource_name}"
+        document = kubernetes_api_get(path)
+        summaries = []
+        for item in document.get("items", [])[:100]:
+            metadata = item.get("metadata", {})
+            summary = {
+                "name": metadata.get("name"),
+                "namespace": metadata.get("namespace"),
+            }
+            if group_name == "metal3.io":
+                status_data = item.get("status", {})
+                summary.update(
+                    {
+                        "online": item.get("spec", {}).get("online"),
+                        "operational_status": status_data.get("operationalStatus"),
+                        "provisioning_state": status_data.get("provisioning", {}).get("state"),
+                        "powered_on": status_data.get("poweredOn"),
+                        "error": str(status_data.get("errorMessage", ""))[:300],
+                    }
+                )
+            else:
+                status_data = item.get("status", {})
+                summary.update(
+                    {
+                        "phase": status_data.get("phase"),
+                        "version": item.get("spec", {}).get("version"),
+                        "node_name": status_data.get("nodeRef", {}).get("name"),
+                        "conditions": [
+                            {
+                                "type": condition.get("type"),
+                                "status": condition.get("status"),
+                                "reason": condition.get("reason"),
+                            }
+                            for condition in status_data.get("conditions", [])
+                        ],
+                    }
+                )
+            summaries.append(summary)
+        resources.append(
+            {
+                "resource": resource_name,
+                "available": True,
+                "count": len(document.get("items", [])),
+                "items": summaries,
+            }
+        )
+    return {
+        "api_group": group_name,
+        "discovered": True,
+        "version": version,
+        "namespace": namespace,
+        "resources": resources,
+    }
+
+
 def canonical_hash(value: dict[str, Any]) -> str:
     encoded = json.dumps(
         value,
@@ -179,19 +268,16 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for item in data.get("items", [])[:100]
             ],
         }
-    if command_type in {"capi.cluster.observe", "metal3.host.inspect"}:
-        api_groups = kubernetes_api_get("/apis")
-        target_group = "cluster.x-k8s.io" if command_type == "capi.cluster.observe" else "metal3.io"
-        groups = [
-            {
-                "name": group.get("name"),
-                "versions": [version.get("version") for version in group.get("versions", [])],
-                "preferred_version": group.get("preferredVersion", {}).get("version"),
-            }
-            for group in api_groups.get("groups", [])
-            if group.get("name") == target_group
-        ]
-        return {"api_group": target_group, "discovered": bool(groups), "groups": groups}
+    if command_type == "capi.cluster.observe":
+        namespace = payload.get("namespace", os.environ.get("AGENT_NAMESPACE", "default"))
+        return inspect_api_group(
+            "cluster.x-k8s.io",
+            ["clusters", "machines", "machinedeployments"],
+            namespace,
+        )
+    if command_type == "metal3.host.inspect":
+        namespace = payload.get("namespace", os.environ.get("AGENT_NAMESPACE", "default"))
+        return inspect_api_group("metal3.io", ["baremetalhosts"], namespace)
     if command_type == "host.preflight":
         disk = shutil.disk_usage("/")
         return {
