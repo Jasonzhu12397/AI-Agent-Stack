@@ -49,6 +49,7 @@ def contains_secret_key(value):
 
 
 class ModelProviderWriteSerializer(serializers.ModelSerializer):
+    base_url = serializers.CharField(max_length=500, required=False, allow_blank=True)
     credential_ref = serializers.CharField(required=False, allow_blank=True, max_length=200)
 
     class Meta:
