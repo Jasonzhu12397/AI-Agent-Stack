@@ -249,3 +249,50 @@ def test_heartbeat_marks_node_online_and_revocation_blocks_future_calls(node_wor
     assert revoked.status_code == 200
     assert revoked.data["status"] == AgentNode.Status.REVOKED
     assert after_revoke.status_code == 401
+
+
+@pytest.mark.django_db
+def test_revoking_node_cancels_running_command_and_clears_lease(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-running-revoke", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "node.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="revoke-running-command",
+    )
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    command_id = polled.data["command"]["id"]
+
+    revoked = client.post(f"/api/v1/agent-nodes/{node_id}/revoke/", {}, format="json")
+
+    command = AgentCommand.objects.get(pk=command_id)
+    assert revoked.status_code == 200
+    assert command.status == AgentCommand.Status.CANCELLED
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+
+
+@pytest.mark.django_db
+def test_agent_runtime_rejects_malformed_node_id(node_workspace):
+    user, tenant, project, client = node_workspace
+    response = APIClient().post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": "not-a-uuid"},
+        format="json",
+        HTTP_AUTHORIZATION="Bearer arbitrary-token",
+    )
+
+    assert response.status_code == 401
