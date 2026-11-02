@@ -1,7 +1,5 @@
 import json
 
-from core.models import Project, ProjectMembership, Task, Tenant, TenantMembership
-from core.serializers import TaskSerializer
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -9,6 +7,9 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from core.models import Project, ProjectMembership, Task, Tenant, TenantMembership
+from core.serializers import TaskSerializer
 
 
 SUPPORTED_TASK_TYPES = {"demo.echo", "demo.sleep"}
