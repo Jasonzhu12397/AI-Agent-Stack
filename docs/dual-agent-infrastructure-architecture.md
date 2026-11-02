@@ -82,3 +82,25 @@ Before enabling real provisioning, the operator must configure and verify:
 ## Current implementation boundary
 
 The first code slice introduces node enrollment, heartbeat, durable command dispatch, lease-protected results and hash-bound approval. The bundled node-agent runner supports safe health/preflight/plan commands. Actual CAPI/Metal3 resource writes, Ironic/BMC power operations, target-agent installation and target-cluster postflight are adapter work and remain disabled until a concrete environment compatibility matrix and credentials are supplied and tested.
+
+## Kubernetes agent deployment
+
+Kubernetes templates are under `deploy/agents/`:
+- `namespace.yaml`: shared `ai-agent-system` namespace;
+- `rbac.yaml`: separate EPH and target ServiceAccounts with read-only CAPI/Metal3 or target workload inspection scopes;
+- `eph-node-agent.yaml`: EPH agent Deployment in the management/EPH cluster;
+- `target-cluster-agent.yaml`: target agent Deployment, applied only after target API readiness;
+- `README.md`: image, one-time token Secret and rollout instructions.
+
+Both Deployments run non-root, drop Linux capabilities, disable privilege escalation, use a read-only root filesystem and mount only a small writable `/tmp` volume for liveness/readiness timestamps. The target workload Role is scoped to the `default` namespace as an example; create additional namespace-local RoleBindings only for approved namespaces. No Service or inbound listener is exposed.
+
+## Cluster plan input contract
+
+The EPH `cluster.plan` command validates the basic cluster identity, Kubernetes version, odd control-plane quorum and worker count. It also reports missing production prerequisites:
+- exact CAPI core, Kubeadm bootstrap/control-plane, Metal3 infrastructure, Metal3, Ironic and IPA versions;
+- Pod/Service CIDRs and control-plane endpoint;
+- machine image URL and checksum;
+- Metal3 namespace and enough named BareMetalHost references for all requested replicas;
+- BMC credential references, never plaintext BMC credentials.
+
+A complete input checklist is not a compatibility pass. `provisioning_ready` means required fields are present; `adapter_enabled` remains false until the exact target CRD schemas and provider versions are tested and the provisioning adapter is implemented. No manifest is applied by this plan command.
