@@ -1,3 +1,4 @@
+import json
 import re
 from collections import deque
 
@@ -35,7 +36,12 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError("Every node requires a valid stable id.")
         if node_id in node_map:
             raise WorkflowValidationError(f"Duplicate workflow node id: {node_id}")
-        if node_type not in {"start", "llm", "condition", "end"}:
+        if not isinstance(node_type, str) or node_type not in {
+            "start",
+            "llm",
+            "condition",
+            "end",
+        }:
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
         if not isinstance(config, dict):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
@@ -90,6 +96,14 @@ def validate_workflow_definition(definition):
         if outgoing[end_id]:
             raise WorkflowValidationError("End nodes cannot have outgoing edges.")
     for node_id, node in node_map.items():
+        source_node = (
+            node["config"].get("input_from")
+            or node["config"].get("source_node")
+        )
+        if source_node and source_node not in node_map:
+            raise WorkflowValidationError(
+                f"Node {node_id} references an unknown source node."
+            )
         if node["type"] == "condition":
             branch_values = {
                 edge.get("when")
@@ -149,6 +163,21 @@ def validate_model_references(graph, tenant):
         ).first()
         if model is None:
             raise WorkflowValidationError("A workflow LLM node references an unavailable model.")
+        node = next(
+            item for item in graph["nodes"].values()
+            if item["type"] == "llm"
+            and item["config"]["model_config_id"] == model_id
+        )
+        config = node["config"]
+        max_tokens = config.get("max_tokens", model.max_output_tokens)
+        timeout_seconds = config.get("timeout_seconds", 60)
+        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        if not isinstance(system_prompt, str) or len(system_prompt) > 12000:
+            raise WorkflowValidationError("Workflow LLM system_prompt is invalid.")
+        if not isinstance(max_tokens, int) or not 1 <= max_tokens <= model.max_output_tokens:
+            raise WorkflowValidationError("Workflow LLM max_tokens exceeds model limits.")
+        if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
+            raise WorkflowValidationError("Workflow LLM timeout_seconds must be 1 to 120.")
         if model.provider.tenant_id not in (None, tenant.id):
             raise WorkflowValidationError("Workflow model provider is outside the tenant.")
         if "chat" not in model.capabilities:
@@ -188,7 +217,7 @@ def _execute_node(node, state, input_data):
     if node_type == "llm":
         source_value = _step_input(node, state)
         if isinstance(source_value, (dict, list)):
-            source_text = str(source_value)
+            source_text = json.dumps(source_value, ensure_ascii=False)
         else:
             source_text = "" if source_value is None else str(source_value)
         prompt = config["prompt_template"].replace("{{input}}", source_text)
