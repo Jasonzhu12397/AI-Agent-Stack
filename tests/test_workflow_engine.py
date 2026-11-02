@@ -83,6 +83,7 @@ def test_workflow_validator_rejects_cycles_and_disconnected_nodes():
             {"source": "start", "target": "end"},
             {"source": "cycle_a", "target": "cycle_b", "when": True},
             {"source": "cycle_b", "target": "cycle_a", "when": False},
+            {"source": "cycle_b", "target": "end", "when": True},
             {"source": "cycle_a", "target": "end", "when": False},
         ],
     }
