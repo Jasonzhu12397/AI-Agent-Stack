@@ -411,3 +411,24 @@ def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
     assert response.data["command"] is None
     assert command.status == AgentCommand.Status.FAILED
     assert command.error["code"] == "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE"
+
+
+
+@pytest.mark.django_db
+def test_target_agent_control_plane_verify_command_is_allowed(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "target-control-plane-verifier", "node_type": "target_cluster"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.control-plane.verify",
+            "payload": {"expected_control_plane_replicas": 1},
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="target-control-plane-verify",
+    )
+    assert response.status_code == 202
