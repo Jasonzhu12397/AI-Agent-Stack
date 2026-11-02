@@ -183,7 +183,7 @@ async function addConnection(): Promise<void> {
     await createPluginConnection(installation.id, {
       name: connectionName.value.trim(),
       auth_type: authType.value,
-      credential_ref: credentialRef.value.trim(),
+      credential_ref: authType.value === "none" ? "" : credentialRef.value.trim(),
     });
     connectionName.value = "";
     credentialRef.value = "";
@@ -361,7 +361,10 @@ onMounted(() => void refresh());
       <el-empty v-if="!installations.length" description="No connector installed in this project" :image-size="56" />
     </section>
 
-    <section v-if="selectedInstallation" class="integration-panel connection-panel">
+    <section
+      v-if="selectedInstallation && selectedInstallation.status === 'installed'"
+      class="integration-panel connection-panel"
+    >
       <div class="integration-panel-title">
         <h3>Connection reference</h3>
         <span>{{ selectedInstallation.plugin_name }}</span>
