@@ -226,7 +226,7 @@ onUnmounted(() => {
             </template>
           </el-table-column>
         </el-table>
-        <p class="task-note">This first queue milestone runs only safe demo.echo and demo.sleep handlers. Agent and Workflow execution will be connected in later milestones.</p>
+        <p class="task-note">PostgreSQL-backed tasks support lease-based Worker execution, single-turn LLM Agent runs and the current basic Workflow DAG runner.</p>
         <ModelManagerView :tenant-id="selectedTenantId" />
         <AgentStudioView
           :tenant-id="selectedTenantId"
