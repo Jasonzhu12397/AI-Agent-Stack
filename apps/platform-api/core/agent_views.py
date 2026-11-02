@@ -18,6 +18,7 @@ from core.models import (
     AgentDefinition,
     AgentRun,
     AgentVersion,
+    KnowledgeBase,
     ModelConfig,
     PluginTool,
     Project,
@@ -200,11 +201,39 @@ class AgentPublishView(APIView):
                     {"detail": "tool_allowlist and knowledge_base_ids must be arrays."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if knowledge_base_ids:
+            if len(knowledge_base_ids) > 8:
                 return Response(
-                    {"detail": "Knowledge bases are not yet enabled for published agents."},
+                    {"detail": "knowledge_base_ids may contain at most 8 knowledge bases."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            try:
+                knowledge_ids = [uuid.UUID(str(value)) for value in knowledge_base_ids]
+            except (TypeError, ValueError, AttributeError):
+                return Response(
+                    {"detail": "knowledge_base_ids entries must be UUIDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(set(knowledge_ids)) != len(knowledge_ids):
+                return Response(
+                    {"detail": "knowledge_base_ids cannot contain duplicate IDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if knowledge_ids:
+                available_knowledge_ids = set(
+                    KnowledgeBase.objects.filter(
+                        id__in=knowledge_ids,
+                        tenant=agent.tenant,
+                        project=agent.project,
+                        is_archived=False,
+                        embedding_model__enabled=True,
+                        embedding_model__provider__enabled=True,
+                    ).values_list("id", flat=True)
+                )
+                if available_knowledge_ids != set(knowledge_ids):
+                    return Response(
+                        {"detail": "Every knowledge base must be active and belong to this project."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
             if not isinstance(tool_allowlist, list) or len(tool_allowlist) > 32:
                 return Response(
                     {"detail": "tool_allowlist must contain at most 32 plugin tool IDs."},
@@ -287,7 +316,7 @@ class AgentPublishView(APIView):
                 "model_config_id": str(model_config.id),
                 "system_prompt": system_prompt,
                 "tool_allowlist": [str(value) for value in tool_ids],
-                "knowledge_base_ids": [],
+                "knowledge_base_ids": [str(value) for value in knowledge_ids],
                 "max_iterations": max_iterations,
                 "timeout_seconds": timeout_seconds,
                 "max_tokens": max_tokens,
