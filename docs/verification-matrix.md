@@ -8,7 +8,9 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, completed successfully across Python, Vue and Compose jobs. Pytest: 36 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue build and Compose API/Web/Worker smoke tests passed.
+[GitHub Actions run 41410163318](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41410163318), commit `ed61c3bbe3cb947c454f5c00a9264f214450d2a9`, completed successfully across Python, Vue and Compose jobs. Pytest: 37 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
+
+[Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
 [Session authentication run 41408491282](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41408491282), commit `7bc5cb4f33b0911f2648b5302e557c694cd0863e`, passed with 28 tests. [Membership administration run 41408139658](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41408139658) passed with 26 tests.
 
@@ -19,13 +21,13 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Area | Target | Status |
 |---|---|---|
 | Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
-| REST API | Django REST Framework | Tenant/project/member APIs, session auth and scoped asynchronous task create/list/detail/cancel APIs tested in runs 41408139658, 41408491282 and 41409745762 |
+| REST API | Django REST Framework | Tenant self-service creation, project/member APIs, session auth and scoped asynchronous task create/list/detail/cancel APIs tested in runs 41408139658, 41408491282 and 41410163318 |
 | ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states passed in run 41409745762. Demo handlers only; no general Agent/Workflow execution yet |
-| Frontend | Vue 3 + TypeScript + Vite | Production build and session-based login UI passed in run 41408491282 |
+| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace and task queue UI passed in run 41410163318 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
@@ -36,7 +38,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Area | Target | Current status |
 |---|---|---|
 | Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Django session login/logout/current-user, CSRF protection, tenant/project RBAC, membership administration, last-owner/last-project-admin protections and membership revocation tested. OIDC/OAuth2, invitations/email workflow, password reset, service identities and fine-grained resource/tool policies remain unimplemented. |
-| Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe `demo.echo` and `demo.sleep` tasks; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. Not yet wired to Agent/Workflow runs; no external side-effect handlers |
+| Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe `demo.echo` and `demo.sleep` tasks; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. Vue workspace can enqueue and monitor demo tasks. Not yet wired to Agent/Workflow runs; no external side-effect handlers |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Not implemented |
 | Workflow engine | Versioned DAG, branches, recovery | Not implemented |
 | Policy and approval | Default deny, hash-bound one-time approval | Not implemented |
