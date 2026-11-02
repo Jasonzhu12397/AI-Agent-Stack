@@ -44,6 +44,14 @@ Qdrant is not the source of truth for tenants, projects, document permissions or
 
 The returned retrieval results are context candidates, not trusted instructions. The LLM prompt builder must label retrieved content as untrusted reference material, preserve document/chunk citations and never let retrieved text override system or policy instructions.
 
+## Knowledge Base APIs and Agent retrieval
+
+The API now supports project-scoped KnowledgeBase creation with a pinned embedding model and chunk settings. Text documents (up to 1 MB per request) are stored in PostgreSQL and queued as `knowledge.ingest` tasks. The Worker chunks and embeds each document, upserts vectors into Qdrant, and records ingestion status, chunk count and errors on the document.
+
+Published Agent versions can pin up to 8 Knowledge Base IDs from the same tenant/project. At execution time the Worker embeds the user query with each selected base's embedding model, retrieves up to three tenant/project-filtered chunks per base, and injects them as explicitly untrusted reference material with document/chunk source IDs. Knowledge Base selection is immutable per published Agent version.
+
+The current document API accepts text content; PDF/DOCX parsing, file upload, document deletion/vector cleanup, reranking, retention controls and ingestion progress streaming are not implemented yet.
+
 ## Agent and Workflow integration status
 
 The Agent Worker executes real chat completions and now supports bounded OpenAI-compatible function calling. Published Agent versions may pin project-installed connector tool IDs; the Worker validates tool-call names/arguments and dispatches only through the trusted ToolRouter. Connector-specific handlers are not registered by default, and high/critical-risk tools remain blocked until a human-approval workflow exists. Embedding and Qdrant retrieval primitives are implemented, but they are not yet exposed as Knowledge Base CRUD APIs or automatically injected into Agent/Workflow prompts.
