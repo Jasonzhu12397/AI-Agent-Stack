@@ -27,6 +27,14 @@ docker compose --env-file .env -f deploy/docker-compose.yml up --build
 - Vue Studio: http://localhost:5173
 - Django API: http://localhost:8000/api/v1/
 - Django Admin: http://localhost:8000/admin/
+
+Create the first local administrator in another terminal after the stack is running:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml exec api python apps/platform-api/manage.py createsuperuser
+```
+
+Use that account to sign in to the Vue Studio; tenant membership provisioning is still an administrative workflow.
 - Liveness: http://localhost:8000/health/live
 - Readiness: http://localhost:8000/health/ready
 
