@@ -25,7 +25,6 @@ def chunk_text(text, chunk_size=1200, overlap=160):
             chunks.append(content)
         if index + chunk_size >= len(normalized):
             break
-        start = index + chunk_size - overlap
     return chunks
 
 
