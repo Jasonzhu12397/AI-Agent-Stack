@@ -152,10 +152,14 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
     )
     monkeypatch.setenv("MODEL_API_KEY", "test-secret")
     class FakeOpener:
+        request = None
+
         def open(self, request, timeout):
+            self.request = request
             return FakeHTTPResponse()
 
-    with patch("core.model_gateway.build_opener", return_value=FakeOpener()) as mocked:
+    fake_opener = FakeOpener()
+    with patch("core.model_gateway.build_opener", return_value=fake_opener):
         result = ModelGateway().complete(
             model,
             [{"role": "user", "content": "hello"}],
@@ -164,7 +168,8 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
     assert result.content == "provider answer"
     assert result.input_tokens == 12
     assert result.output_tokens == 7
-    assert mocked.called
+    assert fake_opener.request.full_url == "https://api.example.test/v1/chat/completions"
+    assert fake_opener.request.get_header("Authorization") == "Bearer test-secret"
     assert request.get_header("Authorization") == "Bearer test-secret"
 
 
@@ -185,3 +190,43 @@ def test_missing_model_credential_fails_without_revealing_secret():
         ModelGateway().complete(model, [{"role": "user", "content": "hello"}])
 
     assert exc.value.code == "MODEL_CREDENTIAL_MISSING"
+
+
+@pytest.mark.django_db
+def test_model_test_endpoint_executes_fake_model(model_tenant):
+    user, tenant, _, model = model_tenant
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/model-configs/{model.id}/test/",
+        {"messages": [{"role": "user", "content": "hello"}]},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["content"] == "fake model ready"
+    assert response.data["input_tokens"] == 0
+
+
+@pytest.mark.django_db
+def test_model_config_versions_are_immutable_and_increment(model_tenant):
+    user, tenant, provider, model = model_tenant
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/model-providers/{provider.id}/models/",
+        {
+            "model_name": model.model_name,
+            "display_name": "Fake Chat Updated",
+            "capabilities": ["chat"],
+            "context_window": 32768,
+            "max_output_tokens": 4096,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["version"] == 2
+    assert ModelConfig.objects.filter(provider=provider, model_name=model.model_name).count() == 2
