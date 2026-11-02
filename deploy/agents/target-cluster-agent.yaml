@@ -61,13 +61,22 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: agent-health
+              mountPath: /tmp
           readinessProbe:
             exec:
-              command: ["python", "-c", "import os; raise SystemExit(0 if os.environ.get('AGENT_NODE_ID') else 1)"]
+              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
             initialDelaySeconds: 5
-            periodSeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["python", "-c", "import os; raise SystemExit(0 if os.environ.get('AGENT_TOKEN') else 1)"]
-            initialDelaySeconds: 10
-            periodSeconds: 30
+              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: agent-health
+          emptyDir:
+            sizeLimit: 1Mi
