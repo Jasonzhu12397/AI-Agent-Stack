@@ -2,15 +2,19 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   approveAgentCommand,
+  cancelClusterDeployment,
   createAgentCommand,
+  createClusterDeployment,
   enrollAgentNode,
   getAgentCommands,
   getAgentNodes,
+  getClusterDeployments,
   getProjects,
   getTenants,
   revokeAgentNode,
   type AgentCommand,
   type AgentNode,
+  type ClusterDeployment,
   type Project,
   type Tenant,
 } from "../services/api";
@@ -19,6 +23,7 @@ const tenants = ref<Tenant[]>([]);
 const projects = ref<Project[]>([]);
 const nodes = ref<AgentNode[]>([]);
 const commands = ref<AgentCommand[]>([]);
+const deployments = ref<ClusterDeployment[]>([]);
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const selectedNodeId = ref("");
@@ -137,8 +142,25 @@ async function loadNodes(): Promise<void> {
     if (!nodes.value.some((node) => node.id === selectedNodeId.value)) {
       selectedNodeId.value = nodes.value[0]?.id ?? "";
     }
+    await loadDeployments();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load node agents.";
+  }
+}
+
+async function loadDeployments(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) {
+    deployments.value = [];
+    return;
+  }
+  try {
+    const response = await getClusterDeployments(
+      selectedTenantId.value,
+      selectedProjectId.value,
+    );
+    deployments.value = response.results;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to load cluster plans.";
   }
 }
 
@@ -199,20 +221,22 @@ async function generateClusterPlan(): Promise<void> {
   error.value = "";
   info.value = "";
   try {
-    await createAgentCommand(
+    const deployment = await createClusterDeployment(
+      selectedTenantId.value,
+      selectedProjectId.value,
       selectedNode.value.id,
-      "cluster.plan",
       {
-        cluster_spec: {
-          cluster_name: buildClusterName.value.trim(),
-          kubernetes_version: buildKubernetesVersion.value.trim(),
-          control_plane_replicas: buildControlPlaneReplicas.value,
-          worker_replicas: buildWorkerReplicas.value,
-        },
+        cluster_name: buildClusterName.value.trim(),
+        kubernetes_version: buildKubernetesVersion.value.trim(),
+        control_plane_replicas: buildControlPlaneReplicas.value,
+        worker_replicas: buildWorkerReplicas.value,
       },
     );
-    info.value = "Cluster plan dry-run queued on the EPH agent. No CAPI or Metal3 resources will be changed.";
-    commandType.value = "cluster.plan";
+    info.value =
+      deployment.status === "plan_ready"
+        ? "Cluster plan completed. Review the missing prerequisites before provisioning."
+        : "Cluster delivery workflow created. EPH preflight and plan commands are queued.";
+    await loadDeployments();
     await loadCommands();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create cluster plan.";
@@ -246,6 +270,23 @@ async function dispatchCommand(): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+async function cancelDeployment(deployment: ClusterDeployment): Promise<void> {
+  if (!window.confirm("Cancel this cluster plan workflow?")) return;
+  try {
+    await cancelClusterDeployment(deployment.id);
+    info.value = "Cluster plan workflow cancelled.";
+    await loadDeployments();
+    await loadCommands();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to cancel cluster plan.";
+  }
+}
+
+function missingRequirements(deployment: ClusterDeployment): string[] {
+  const value = deployment.plan_result?.missing_requirements;
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 async function approveCommand(command: AgentCommand): Promise<void> {
@@ -457,6 +498,42 @@ onUnmounted(() => {
             <el-button type="primary" :loading="submitting" :disabled="selectedNode.status === 'revoked'" @click="dispatchCommand">
               Dispatch command
             </el-button>
+          </div>
+          <div class="deployment-list">
+            <div class="infra-panel-heading">
+              <h4>Cluster delivery plans</h4>
+              <span>{{ deployments.length }} recent</span>
+            </div>
+            <article v-for="deployment in deployments" :key="deployment.id" class="deployment-card">
+              <div class="command-topline">
+                <strong>{{ deployment.cluster_name }} · {{ deployment.kubernetes_version }}</strong>
+                <el-tag :type="statusType(deployment.status)" size="small">{{ deployment.status }}</el-tag>
+              </div>
+              <small>{{ formatTime(deployment.created_at) }} · EPH {{ deployment.eph_node_id.slice(0, 8) }}</small>
+              <div v-if="deployment.plan_result" class="plan-result">
+                <span>Plan hash: {{ deployment.plan_hash || "not generated" }}</span>
+                <el-tag
+                  :type="deployment.plan_result.adapter_enabled === true ? 'success' : 'warning'"
+                  size="small"
+                >
+                  {{ deployment.plan_result.adapter_enabled === true ? "Adapter enabled" : "Apply adapter disabled" }}
+                </el-tag>
+                <ul v-if="missingRequirements(deployment).length">
+                  <li v-for="item in missingRequirements(deployment)" :key="item">{{ item }}</li>
+                </ul>
+                <p v-else>Input prerequisites are complete. Compatibility and real provisioning are still separate gates.</p>
+              </div>
+              <el-button
+                v-if="['preflight_queued', 'planning', 'plan_ready'].includes(deployment.status)"
+                size="small"
+                text
+                type="danger"
+                @click="cancelDeployment(deployment)"
+              >
+                Cancel plan
+              </el-button>
+            </article>
+            <el-empty v-if="!deployments.length" description="No cluster plan workflows created" :image-size="56" />
           </div>
           <div class="command-list">
             <div class="infra-panel-heading"><h4>Command history</h4><span>{{ commands.length }} recent</span></div>
