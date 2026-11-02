@@ -776,3 +776,11 @@ export function createOpenAICompatibleProvider(
     }),
   });
 }
+
+
+export function runClusterDeploymentPostflight(deploymentId: string, targetNodeId: string) {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/target-postflight/",
+    { method: "POST", body: JSON.stringify({ target_node_id: targetNodeId }) },
+  );
+}
