@@ -1167,3 +1167,25 @@ def test_control_plane_client_rejects_checkpoint_credentials():
             "capi_pivot_preflight",
             {"completed_steps": [], "kubeconfig": "sensitive"},
         )
+
+
+def test_control_plane_client_rejects_invalid_checkpoint_generation_and_phase():
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+
+    with pytest.raises(agent.NodeAgentError, match="INVALID_DEPLOYMENT_CHECKPOINT"):
+        client.save_deployment_checkpoint(
+            "deployment-123",
+            True,
+            1,
+            "target_agent_bootstrap",
+            {},
+        )
+
+    with pytest.raises(agent.NodeAgentError, match="INVALID_DEPLOYMENT_CHECKPOINT"):
+        client.save_deployment_checkpoint(
+            "deployment-123",
+            1,
+            1,
+            "unknown_phase",
+            {},
+        )
