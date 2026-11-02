@@ -5,13 +5,13 @@ import os
 import platform
 import re
 import shutil
-from pathlib import Path
 import socket
 import ssl
 import time
 import urllib.error
 import urllib.request
 from itertools import count
+from pathlib import Path
 from typing import Any
 
 
