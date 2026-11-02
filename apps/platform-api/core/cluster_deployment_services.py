@@ -34,6 +34,9 @@ def queue_deployment_command(
     payload = {"deployment_id": str(deployment.id)}
     if command_type == "cluster.postflight":
         payload["cluster_name"] = deployment.cluster_name
+    elif command_type == "cluster.capi.pivot.target.preflight":
+        payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
@@ -114,6 +117,70 @@ def handle_deployment_command_result(
             update_fields=["preflight_result", "status", "started_at", "updated_at"],
         )
         queue_deployment_command(deployment, "cluster.plan")
+    elif command.command_type == "cluster.capi.pivot.target.preflight":
+        controllers = result.get("controllers")
+        missing_resources = result.get("missing_resources")
+        conflicts = result.get("cluster_name_conflicts")
+        blockers = result.get("blockers")
+        expected_namespace = command.payload.get("namespace", "default")
+        valid_controllers = (
+            isinstance(controllers, list)
+            and len(controllers) == 4
+            and all(
+                isinstance(item, dict)
+                and isinstance(item.get("namespace"), str)
+                and isinstance(item.get("deployment"), str)
+                and isinstance(item.get("ready"), bool)
+                for item in controllers
+            )
+        )
+        valid_lists = all(
+            isinstance(items, list)
+            and len(items) <= 100
+            and all(isinstance(item, str) and len(item) <= 200 for item in items)
+            for items in [missing_resources, conflicts, blockers]
+        )
+        preflight_valid = (
+            command.node.node_type == "target_cluster"
+            and command.node_id == deployment.target_node_id
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == expected_namespace
+            and isinstance(result.get("target_management_plane_ready"), bool)
+            and isinstance(result.get("pivot_execution_allowed"), bool)
+            and result.get("side_effects") is False
+            and valid_controllers
+            and valid_lists
+        )
+        if not preflight_valid:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "INVALID_CAPI_PIVOT_PREFLIGHT_RESULT"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "started_at",
+                    "finished_at",
+                    "updated_at",
+                ],
+            )
+            return
+        ready = (
+            result["target_management_plane_ready"] is True
+            and result["pivot_execution_allowed"] is True
+            and not missing_resources
+            and not conflicts
+            and not blockers
+            and all(item["ready"] for item in controllers)
+        )
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "capi_pivot_preflight": result,
+        }
+        deployment.error = None
+        deployment.save(
+            update_fields=["plan_result", "error", "started_at", "updated_at"],
+        )
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
