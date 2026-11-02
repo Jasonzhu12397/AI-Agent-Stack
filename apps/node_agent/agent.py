@@ -41,8 +41,8 @@ def sanitize_kubernetes_item(resource: str, item: dict[str, Any]) -> dict[str, A
         result["type"] = item.get("type")
         result["reason"] = item.get("reason")
         result["message"] = re.sub(
-            r"(?i)(password|token|secret|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+",
-            r"\\1=[REDACTED]",
+            r"(?i)(password|token|secret|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+",
+            r"\1=[REDACTED]",
             message,
         )
         result["involved_object"] = {
