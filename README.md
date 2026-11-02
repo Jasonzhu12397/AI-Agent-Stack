@@ -11,7 +11,7 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
-The FastAPI and React implementation has been replaced. The Django/Vue platform passed full CI in [run 41407102851](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41407102851), commit `2b16becd1fba408f4bd6550864e55085b3bb148f`: Python 3.12 install, Ruff, Django checks, migration drift check, PostgreSQL migrations, 18 pytest tests, Vue production build, Compose build/start, API health checks, Web HTTP and Worker-running smoke test.
+The FastAPI and React implementation has been replaced. The Django/Vue platform passed full CI in [run 41410163318](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41410163318), commit `ed61c3bbe3cb947c454f5c00a9264f214450d2a9`: Python 3.12 install, Ruff, Django checks, migration drift check, PostgreSQL migrations, 37 pytest tests, Vue production build, Compose build/start, API health checks, Web HTTP and Worker-running smoke test.
 
 The P1-1 identity slice adds Tenant, TenantMembership, Project and ProjectMembership models. Tenant and project lists are membership-filtered; only tenant owners/admins can create projects, and the creator receives project-admin membership. Cross-tenant, tenant_id spoofing, role denial, revocation and pagination isolation are tested. Login UI/OIDC, membership invitations/administration and project role-specific update/delete permissions remain unimplemented.
 
