@@ -235,3 +235,82 @@ class ClusterDeploymentCancelView(APIView):
                 lease_expires_at=None,
             )
         return Response(_deployment_data(deployment))
+
+
+
+class ClusterDeploymentTargetPostflightView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        if deployment.status not in {
+            ClusterDeployment.Status.PLAN_READY,
+            ClusterDeployment.Status.CONTROL_PLANE_READY,
+            ClusterDeployment.Status.WORKERS_READY,
+        }:
+            return Response(
+                {"detail": "Deployment must be plan-ready or provisioned before target postflight."},
+                status=409,
+            )
+        target_node_id = request.data.get("target_node_id") or deployment.target_node_id
+        try:
+            target_node_id = uuid.UUID(str(target_node_id))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "A valid target_node_id is required."}, status=400)
+        target_node = get_object_or_404(
+            AgentNode.objects.filter(
+                tenant=deployment.tenant,
+                project=deployment.project,
+                node_type=AgentNode.NodeType.TARGET_CLUSTER,
+            ),
+            pk=target_node_id,
+        )
+        if target_node.status != AgentNode.Status.ONLINE or (
+            target_node.last_seen_at is None
+            or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response(
+                {"detail": "The selected target agent must have a fresh heartbeat."},
+                status=409,
+            )
+        if target_node.cluster_name and target_node.cluster_name != deployment.cluster_name:
+            return Response(
+                {"detail": "Target agent is enrolled for a different cluster name."},
+                status=409,
+            )
+        if deployment.target_node_id and deployment.target_node_id != target_node.id:
+            return Response(
+                {"detail": "Deployment is already bound to another target agent."},
+                status=409,
+            )
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status not in {
+                ClusterDeployment.Status.PLAN_READY,
+                ClusterDeployment.Status.CONTROL_PLANE_READY,
+                ClusterDeployment.Status.WORKERS_READY,
+            }:
+                return Response({"detail": "Deployment state changed; retry the request."}, status=409)
+            deployment.target_node = target_node
+            deployment.status = ClusterDeployment.Status.POSTFLIGHT
+            deployment.save(update_fields=["target_node", "status", "updated_at"])
+            command = queue_deployment_command(
+                deployment,
+                "cluster.postflight",
+                node=target_node,
+            )
+        return Response(
+            {
+                "deployment": _deployment_data(deployment),
+                "command_id": str(command.id),
+                "command_status": command.status,
+            },
+            status=202,
+        )
