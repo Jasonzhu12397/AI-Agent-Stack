@@ -23,8 +23,9 @@ class FakeResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size=-1):
+        data = json.dumps(self.payload).encode("utf-8")
+        return data if size < 0 else data[:size]
 
 
 class FakeOpener:
@@ -96,6 +97,52 @@ def test_model_gateway_sends_function_tools_and_returns_tool_calls():
     assert response.content == ""
     assert response.tool_calls == tool_calls
     assert response.input_tokens == 10
+
+
+def test_model_gateway_preserves_assistant_content_with_tool_calls():
+    opener = FakeOpener(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "I will check that now.",
+                        "tool_calls": [
+                            {
+                                "id": "call-2",
+                                "type": "function",
+                                "function": {
+                                    "name": "demo__lookup",
+                                    "arguments": '{"key":"status"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {},
+        }
+    )
+    messages = [
+        {"role": "user", "content": "check status"},
+        {
+            "role": "assistant",
+            "content": "I will check that now.",
+            "tool_calls": [
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {
+                        "name": "demo__lookup",
+                        "arguments": '{"key":"status"}',
+                    },
+                }
+            ],
+        },
+    ]
+    with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
+        with patch("core.model_gateway.build_opener", return_value=opener):
+            response = ModelGateway().complete(model_config(), messages)
+    assert response.content == "I will check that now."
 
 
 def test_model_gateway_rejects_tools_without_declared_capability():
