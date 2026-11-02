@@ -17,8 +17,8 @@ Model output, retrieved text, Skill instructions, MCP descriptions and plugin re
 
 ## 2. Technology baseline and architecture
 
-- API: Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic.
-- UI: React, TypeScript, Vite; graph editor may use a mature library, but the serialized workflow format belongs to this platform.
+- Backend: Python 3.12, Django, Django REST Framework and Django Channels/ASGI. Django ORM and native migrations are the persistence integration path.
+- Frontend: Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router; graph editor may use a mature library, but the serialized workflow format belongs to this platform.
 - Persistence: PostgreSQL is authoritative for durable configuration, approvals, runs and audit indexes. S3-compatible storage holds originals/attachments. Vector storage is replaceable (pgvector may be evaluated). Redis is cache/rate-limit/coordination only, never the sole durable task store.
 - Local: Docker Compose and deterministic FakeModel/FakeTool/FakeMCP fixtures.
 - Production direction: Kubernetes, Helm/Kustomize, OIDC and external Secret Manager; not enabled by the local scaffold.
