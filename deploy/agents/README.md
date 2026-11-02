@@ -2,22 +2,24 @@
 
 These manifests are templates. They intentionally do not grant Kubernetes write permissions.
 
+The EPH Agent runs inside a temporary single-node Kubernetes cluster on a RAM-booted bare-metal host. That host is borrowed from the final target compute pool and must later be rebooted into the target worker OS/image and verified by the Target Agent as a Ready worker. The EPH OS, local etcd, Pod filesystem and local credentials are disposable; persist deployment state centrally. See [the EPH lifecycle specification](../../docs/eph-node-lifecycle.md).
+
 ## Build and publish the agent image
 
 Build the repository image and push it to a registry accessible by both management and target clusters. Replace `REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION` in both Deployment manifests with the exact immutable image tag or digest.
 
-## EPH Node Agent (management / EPH cluster)
+## EPH Node Agent (temporary RAM-boot EPH cluster)
 
 1. In the Studio, enroll a node with type `eph_node` in the intended tenant and project.
 2. Store the returned node UUID and one-time token in your secret manager.
 3. Create the Kubernetes Secret `eph-node-agent-credentials` in namespace `ai-agent-system` with keys `control-url`, `node-id` and `token`.
 4. Apply `namespace.yaml`, `rbac.yaml` and `eph-node-agent.yaml`.
 
-The EPH ServiceAccount is read-only for core node/namespace data, CAPI resources and Metal3 resources. It can discover API groups and run preflight/plan checks. It cannot create or modify Cluster, Machine, BareMetalHost or BMC resources.
+The EPH ServiceAccount is read-only for core node/namespace data, CAPI resources and Metal3 resources. It can discover API groups and run preflight/plan checks. It cannot create or modify Cluster, Machine, BareMetalHost or BMC resources. Do not treat this single-node Kubernetes cluster as a persistent management plane. Complete the bootstrap work, persist all required state centrally, revoke the EPH runtime identity, then hand off/reboot the physical host into the final target worker OS.
 
 ## Target Cluster Agent (target cluster)
 
-The target agent must not be required to create the target cluster. After the target API endpoint is available:
+The target agent must not be required to create the target cluster. After the target API endpoint is available, install it in the target cluster. It later verifies that the reclaimed EPH hardware has joined as a Ready worker:
 
 1. Enroll a second node with type `target_cluster`.
 2. Create `target-cluster-agent-credentials` in `ai-agent-system` with the same three keys.
