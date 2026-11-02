@@ -57,7 +57,7 @@ Existing repository names may be retained when boundaries are equivalent. Do not
 ## 5. Phase cards and exit criteria
 
 ### P0 — engineering foundation
-**P0-1 Technology decision and runnable skeleton:** API, independent Worker, React UI, PostgreSQL, migrations, Compose, OpenAPI, health checks, CI and tests. Add ADRs, verification matrix and threat model. Implement deterministic FakeModel, FakeTool and a local FakeMCP fixture. Document clean startup, migration and recovery. Test health, migration round-trip and invalid configuration. A fake MCP fixture is not real protocol compatibility.
+**P0-1 Technology decision and runnable skeleton:** API, independent Worker, Vue UI, PostgreSQL, migrations, Compose, OpenAPI, health checks, CI and tests. Add ADRs, verification matrix and threat model. Implement deterministic FakeModel, FakeTool and a local FakeMCP fixture. Document clean startup, migration and recovery. Test health, migration round-trip and invalid configuration. A fake MCP fixture is not real protocol compatibility.
 
 Exit only when a clean environment starts API/UI/Worker, migrations and checks pass, and dependency versions/unknowns are recorded.
 
