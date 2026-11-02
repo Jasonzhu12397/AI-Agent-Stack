@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41413169641](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41413169641), commit `95dc3d1596c21c923fe01bf0a1270a60ab69c134`, completed successfully across Python, Vue and Compose jobs. Pytest: 50 passed. Ruff, Django system checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed.
+[GitHub Actions run 41420838331](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41420838331), commit `fb453e9d4afff95c220968274b2fe8daf85399fc`, completed successfully across Python, Vue and Compose jobs. Pytest: 60 passed. Ruff, Django checks, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the basic Workflow DAG backend and Workflow Studio UI. Follow-up changes after this commit are being revalidated in newer runs.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -26,8 +26,8 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
-| Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states passed in run 41409745762. Demo handlers only; no general Agent/Workflow execution yet |
-| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue, fake model manager and first Agent Builder/run console passed in run 41413169641 |
+| Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states. Demo, single-turn LLM Agent and basic Workflow Run handlers are connected; Workflow execution evidence is in run 41420838331 |
+| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue, fake model manager, Agent Builder/run console and Workflow Studio JSON editor/publish/run history passed in run 41420838331 |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
@@ -39,9 +39,9 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 |---|---|---|
 | Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Django session login/logout/current-user, CSRF protection, tenant/project RBAC, membership administration, last-owner/last-project-admin protections and membership revocation tested. OIDC/OAuth2, invitations/email workflow, password reset, service identities and fine-grained resource/tool policies remain unimplemented. |
 | Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe demo tasks and text-only Agent Runs; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. No external side-effect handlers or Workflow Engine integration yet |
-| Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Not implemented |
-| Workflow engine | Versioned DAG, branches, recovery | Not implemented |
-| Policy and approval | Default deny, hash-bound one-time approval | Not implemented |
+| Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Partial: published Agent versions and asynchronous single-turn LLM runs work. Multi-step tool calling, model routing/fallback, memory and tool policy integration remain unimplemented |
+| Workflow engine | Versioned DAG, branches, recovery | Partial: immutable versions; start/LLM/condition/end nodes; DAG validation; branch skip; persisted node steps; idempotent run creation. No drag/drop canvas, loop/parallel/join, human approval, HTTP/Code nodes, scheduler/webhook triggers or fault-injection proof of process restart recovery |
+| Policy and approval | Default deny, hash-bound one-time approval | Not implemented; high-risk external actions remain disabled |
 | Real MCP | SDK, transport, negotiation and protocol tests | Not implemented; FakeMCP is an in-process fixture |
 | Plugin isolation / SSRF | Sandboxed executor and network egress controls | Not implemented |
 | RAG / Memory | ACL-filtered ingestion, retrieval and deletion | Not implemented |
