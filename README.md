@@ -4,15 +4,16 @@ An extensible, policy-governed AI Agent platform. The project is developed miles
 
 ## Current status
 
-**M0 foundation — scaffold committed.** The current slice includes:
+**P0 foundation — core CI and Compose smoke checks verified.** The latest successful verification is [GitHub Actions run 41404365864](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41404365864), commit `a76ea2bbb32fca327c36b8e61b48080c8d300db9`. The run passed Python install, Ruff, pytest, PostgreSQL migration round-trip, frontend build, Compose configuration, full stack startup, API liveness/readiness, Web HTTP and Worker-running checks. The current slice includes:
 - React + TypeScript + Vite Web Studio with live API/database status checks.
 - FastAPI service with liveness and PostgreSQL readiness endpoints.
 - Independent Worker process with graceful shutdown and database heartbeat.
 - PostgreSQL 16 as the persistent data store; Redis 7 is auxiliary.
-- Alembic migration baseline for the tenant root entity.
+- Alembic migration baseline for the tenant root entity, with PostgreSQL 16 upgrade/downgrade/upgrade verification.
+- Deterministic FakeModel, FakeTool and in-process FakeMCP fixture with contract tests. FakeMCP is not real MCP protocol compatibility.
 - Docker Compose development environment and GitHub Actions CI workflow.
 
-The Worker does not yet claim or execute durable tasks. Agent authoring, workflows, approvals, MCP, Skills, and Kubernetes adapters are planned milestones, not implemented features.
+The Worker does not yet claim or execute durable tasks. Agent authoring, workflows, approvals, real MCP protocol support, Skills, and Kubernetes adapters are planned milestones, not implemented features. Authentication, tenant authorization, durable task recovery, production security controls and real external connectors are also not implemented.
 
 ## Quick start
 
