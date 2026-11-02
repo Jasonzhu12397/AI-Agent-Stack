@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   createFakeProvider,
   createOpenAICompatibleProvider,
@@ -29,6 +29,9 @@ const testPrompt = ref("Explain what an AI Agent is in one sentence.");
 const testResult = ref<ModelTestResult | null>(null);
 const error = ref("");
 const busy = ref(false);
+const selectedProvider = computed(
+  () => providers.value.find((provider) => provider.id === selectedProviderId.value) ?? null,
+);
 
 async function loadProviders(): Promise<void> {
   if (!props.tenantId) {
@@ -96,7 +99,7 @@ async function addOpenAIProvider(): Promise<void> {
 }
 
 async function addEmbeddingModel(): Promise<void> {
-  if (!selectedProviderId.value) return;
+  if (!selectedProvider.value || selectedProvider.value.provider_type === "fake") return;
   busy.value = true;
   error.value = "";
   try {
@@ -199,11 +202,11 @@ watch(selectedProviderId, () => void loadModels());
         <el-button
           type="success"
           plain
-          :disabled="!selectedProviderId"
+           :disabled="!selectedProvider || selectedProvider.provider_type === 'fake'"
           :loading="busy"
           @click="addEmbeddingModel"
         >Add embedding model</el-button>
-        <p class="task-note">Model versions are immutable. Provider credentials are references only and are never returned to the browser.</p>
+        <p class="task-note">Embedding models require an OpenAI-compatible provider. Model versions are immutable and credentials remain server-side references.</p>
       </div>
     </div>
     <div v-if="models.length" class="model-list">
