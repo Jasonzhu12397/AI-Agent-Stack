@@ -505,15 +505,27 @@ class AgentRuntimePollView(APIView):
                 command.lease_expires_at = None
                 command.save()
                 return Response({"command": None})
-            if command.command_type in MUTATING_COMMANDS and (
+            approval_expired = (
+                command.approved_at is None
+                or command.approved_at < now - datetime.timedelta(minutes=15)
+            )
+            approval_hash_invalid = (
                 not command.approved_plan_hash
                 or not hmac.compare_digest(
                     command.approved_plan_hash,
                     _payload_hash(command.command_type, command.payload),
                 )
+            )
+            if command.command_type in MUTATING_COMMANDS and (
+                approval_expired or approval_hash_invalid
             ):
                 command.status = AgentCommand.Status.FAILED
-                command.error = {"code": "APPROVAL_HASH_MISMATCH", "retryable": False}
+                error_code = (
+                    "APPROVAL_EXPIRED"
+                    if approval_expired
+                    else "APPROVAL_HASH_MISMATCH"
+                )
+                command.error = {"code": error_code, "retryable": False}
                 command.finished_at = now
                 command.save()
                 return Response({"command": None})
