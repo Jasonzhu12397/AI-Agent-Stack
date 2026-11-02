@@ -9,7 +9,7 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
 - **Execution:** independent Python Worker with PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, bounded retries and cooperative cancellation. Safe demo handlers, single-turn LLM Agent runs and a basic persistent Workflow DAG runner are connected.
 - **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. Commands are typed, tenant/project scoped, persisted, lease-protected and approval-hash bound for provisioning/bootstrap operations.
-- **Node agents:** the Python runner supports EPH host preflight, cluster-plan dry runs and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
+- **Node agents:** the Python runner supports EPH preflight, typed Metal3/CAPI cluster-plan validation, dynamic CAPI/Metal3 API discovery and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
@@ -110,9 +110,12 @@ See [Dual-Agent Infrastructure Architecture](docs/dual-agent-infrastructure-arch
 The control plane enrolls an `eph_node` and a `target_cluster` agent independently. Node enrollment returns a one-time token; only its SHA-256 hash is stored. The agent initiates outbound HTTPS heartbeats and command polls. PostgreSQL stores command state, idempotency key, attempts, lease token/expiry, result and error. Provisioning and target-agent bootstrap commands wait for a different tenant administrator to approve the exact plan hash.
 
 The EPH runner currently supports:
-- `node.health`, `host.preflight`, `cluster.plan` (dry-run only);
-- `cluster.health`, `cluster.observe`, `cluster.diagnose`, `cluster.postflight`, `k8s.resource.read` (read-only in-cluster Kubernetes API);
-- `capi.cluster.observe` and `metal3.host.inspect` (API group discovery only).
+- `node.health`, `host.preflight`, `cluster.plan` (validates cluster identity, odd control-plane quorum, provider-version references, network/image inputs, BMH references and credential references; dry-run only);
+- `cluster.health`, `cluster.observe`, `cluster.diagnose`, `cluster.postflight`, `k8s.resource.read` (read-only in-cluster Kubernetes API with output summaries and redaction);
+- `capi.cluster.observe` (discovers installed CAPI API version and reads Cluster/Machine/MachineDeployment summaries);
+- `metal3.host.inspect` (discovers Metal3 API version and reads BareMetalHost summaries without returning BMC credential fields).
+
+Kubernetes Deployment/RBAC templates for running both agent roles as pods are in `deploy/agents/`.
 
 The Target Cluster runner supports node health and read-only Kubernetes inspection after it is installed inside the target cluster. It is not needed to bootstrap the cluster. Production node identity should move to mTLS/short-lived workload identity; the current one-time bearer token is the initial development enrollment mechanism.
 
