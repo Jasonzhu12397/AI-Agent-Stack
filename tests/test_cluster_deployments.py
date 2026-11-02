@@ -291,6 +291,8 @@ def test_target_agent_runs_postflight_and_completes_deployment(cluster_delivery_
     command = AgentCommand.objects.get(pk=postflight.data["command_id"])
     assert command.node_id == target_node.id
     assert command.command_type == "cluster.postflight"
+    assert command.payload["cluster_name"] == "edge-lab"
+    assert "cluster_spec" not in command.payload
 
     target_client = APIClient()
     polled = target_client.post(
