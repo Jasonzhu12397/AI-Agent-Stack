@@ -1,7 +1,11 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from core.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentVersion,
     KnowledgeBase,
     KnowledgeDocument,
     ModelConfig,
@@ -13,6 +17,7 @@ from core.models import (
     TenantMembership,
 )
 from django.utils import timezone
+from worker_app import tasks as worker_tasks
 from worker_app.tasks import execute_knowledge_ingest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
@@ -115,3 +120,101 @@ def test_knowledge_ingest_worker_marks_document_ready(knowledge_scope):
     assert document.chunk_count == 2
     assert document.ingested_at is not None
     ingest.assert_called_once()
+
+
+
+@pytest.mark.django_db
+def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
+    scope = knowledge_scope
+    chat_provider = ModelProvider.objects.create(
+        tenant=scope["tenant"],
+        created_by=scope["user"],
+        name="Chat provider",
+        provider_type=ModelProvider.ProviderType.FAKE,
+    )
+    chat_model = ModelConfig.objects.create(
+        provider=chat_provider,
+        model_name="test-chat-model",
+        display_name="Test chat model",
+        capabilities=["chat"],
+    )
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"],
+        project=scope["project"],
+        created_by=scope["user"],
+        embedding_model=scope["model"],
+        name="Runbooks",
+        slug="runbooks",
+    )
+    agent = AgentDefinition.objects.create(
+        tenant=scope["tenant"],
+        project=scope["project"],
+        created_by=scope["user"],
+        name="Knowledge agent",
+        slug="knowledge-agent",
+    )
+    version = AgentVersion.objects.create(
+        agent=agent,
+        version=1,
+        config_snapshot={
+            "model_config_id": str(chat_model.id),
+            "system_prompt": "Answer operational questions.",
+            "tool_allowlist": [],
+            "knowledge_base_ids": [str(knowledge_base.id)],
+            "max_iterations": 1,
+            "timeout_seconds": 30,
+            "max_tokens": 128,
+        },
+        created_by=scope["user"],
+    )
+    task = Task.objects.create(
+        tenant=scope["tenant"],
+        project=scope["project"],
+        created_by=scope["user"],
+        task_type="agent.run",
+        payload={},
+        idempotency_key="knowledge-agent-run",
+        available_at=timezone.now(),
+    )
+    AgentRun.objects.create(
+        task=task,
+        agent_version=version,
+        input_text="What does the runbook say?",
+    )
+
+    class FakeGateway:
+        def __init__(self):
+            self.messages = None
+
+        def complete(self, model_config, messages, **kwargs):
+            self.messages = list(messages)
+            return SimpleNamespace(
+                content="The runbook says the cluster is healthy.",
+                tool_calls=[],
+                input_tokens=10,
+                output_tokens=8,
+                latency_ms=4,
+                provider="fake",
+                model="test-chat-model",
+            )
+
+    gateway = FakeGateway()
+    with patch(
+        "worker_app.tasks.retrieve_context",
+        return_value=[
+            {
+                "text": "Check that all Kubernetes nodes are Ready.",
+                "score": 0.91,
+                "document_id": "document-1",
+                "chunk_id": "document-1:0",
+            }
+        ],
+    ) as retrieval:
+        with patch.object(worker_tasks, "ModelGateway", return_value=gateway):
+            result = worker_tasks.execute_agent_run(task)
+
+    assert result["content"].startswith("The runbook says")
+    assert "untrusted reference material" in gateway.messages[1]["content"]
+    assert "document-1:0" in gateway.messages[1]["content"]
+    assert "all Kubernetes nodes are Ready" in gateway.messages[1]["content"]
+    retrieval.assert_called_once()
