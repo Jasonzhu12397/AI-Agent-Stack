@@ -269,3 +269,61 @@ def test_plugin_installation_version_is_pinned(plugin_workspace):
     )
 
     assert response.status_code == 409
+
+
+@pytest.mark.django_db
+def test_plugin_upgrade_requires_uninstalling_the_previous_project_version(
+    plugin_workspace,
+):
+    user, tenant, project, client = plugin_workspace
+    first = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{first.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": first.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    next_payload = plugin_payload(tenant)
+    next_payload["version"] = "1.1.0"
+    next_version = client.post("/api/v1/connectors/", next_payload, format="json")
+    client.post(
+        f"/api/v1/connectors/{next_version.data['id']}/approve/",
+        {},
+        format="json",
+    )
+
+    blocked = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": next_version.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/status/",
+        {"status": "uninstalled"},
+        format="json",
+    )
+    upgraded = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": next_version.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert blocked.status_code == 409
+    assert upgraded.status_code == 201
+    assert upgraded.data["plugin_version"] == "1.1.0"
