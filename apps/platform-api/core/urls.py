@@ -1,13 +1,13 @@
 from django.urls import path
 
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
-from core.model_views import ModelConfigListCreateView, ModelProviderListCreateView, ModelTestView
 from core.membership_views import (
     ProjectMemberDetailView,
     ProjectMemberListCreateView,
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
+from core.model_views import ModelConfigListCreateView, ModelProviderListCreateView, ModelTestView
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.views import (
     TenantListView,
