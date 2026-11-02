@@ -15,6 +15,7 @@ from core.models import (
     PluginInstallation,
     PluginTool,
     ProjectMembership,
+    Tenant,
     TenantMembership,
 )
 
@@ -120,7 +121,10 @@ class PluginCatalogListCreateView(APIView):
         tenant_id = request.query_params.get("tenant_id")
         if not tenant_id:
             return Response({"detail": "tenant_id query parameter is required."}, status=400)
-        tenant, _, _ = _tenant_and_project(request, tenant_id, None)
+        tenant = get_object_or_404(
+            Tenant.objects.filter(memberships__user=request.user).distinct(),
+            pk=tenant_id,
+        )
         plugins = PluginDefinition.objects.filter(tenant=tenant).prefetch_related("tools")
         return Response(
             {
@@ -133,7 +137,10 @@ class PluginCatalogListCreateView(APIView):
         if not isinstance(request.data, dict):
             return Response({"detail": "Request body must be a JSON object."}, status=400)
         tenant_id = request.data.get("tenant_id")
-        tenant, _, _ = _tenant_and_project(request, tenant_id, None)
+        tenant = get_object_or_404(
+            Tenant.objects.filter(memberships__user=request.user).distinct(),
+            pk=tenant_id,
+        )
         is_admin = TenantMembership.objects.filter(
             tenant=tenant,
             user=request.user,
@@ -159,8 +166,15 @@ class PluginCatalogListCreateView(APIView):
             return Response({"detail": "A valid plugin version is required."}, status=400)
         if connector_type not in PluginDefinition.ConnectorType.values:
             return Response({"detail": "Unsupported connector_type."}, status=400)
-        if not isinstance(manifest, dict) or not isinstance(tools, list) or not 1 <= len(tools) <= 50:
-            return Response({"detail": "manifest must be an object and tools must contain 1–50 items."}, status=400)
+        if (
+            not isinstance(manifest, dict)
+            or not isinstance(tools, list)
+            or not 1 <= len(tools) <= 50
+        ):
+            return Response(
+                {"detail": "manifest must be an object and tools must contain 1–50 items."},
+                status=400,
+            )
         payload_error = _validate_payload({"manifest": manifest, "tools": tools})
         if payload_error:
             return Response({"detail": payload_error}, status=400)
@@ -217,6 +231,16 @@ class PluginCatalogListCreateView(APIView):
                 or not 1 <= max_attempts <= 3
             ):
                 return Response({"detail": f"Tool {name} max_attempts must be 1–3."}, status=400)
+            backoff_seconds = retry_policy.get("backoff_seconds", 0)
+            if (
+                not isinstance(backoff_seconds, int)
+                or isinstance(backoff_seconds, bool)
+                or not 0 <= backoff_seconds <= 30
+            ):
+                return Response(
+                    {"detail": f"Tool {name} backoff_seconds must be 0–30."},
+                    status=400,
+                )
             if idempotency_mode == PluginTool.IdempotencyMode.NONE and max_attempts != 1:
                 return Response(
                     {"detail": f"Non-idempotent tool {name} must use max_attempts=1."},
