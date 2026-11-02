@@ -46,6 +46,7 @@ TARGET_COMMANDS = {
     "cluster.diagnose",
     "cluster.postflight",
     "cluster.control-plane.verify",
+    "cluster.capi.pivot.target.preflight",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {"cluster.provision", "target-agent.bootstrap"}
