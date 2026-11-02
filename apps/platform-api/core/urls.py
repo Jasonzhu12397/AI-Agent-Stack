@@ -6,6 +6,7 @@ from core.agent_node_views import (
     AgentNodeListCreateView,
     AgentNodeRevokeView,
     AgentRuntimeHeartbeatView,
+    AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
     AgentRuntimeResultView,
 )
@@ -68,6 +69,11 @@ urlpatterns = [
         "api/v1/agent-runtime/commands/poll/",
         AgentRuntimePollView.as_view(),
         name="agent-runtime-poll",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/<uuid:command_id>/lease/renew/",
+        AgentRuntimeLeaseRenewView.as_view(),
+        name="agent-runtime-lease-renew",
     ),
     path(
         "api/v1/agent-runtime/commands/<uuid:command_id>/result/",
