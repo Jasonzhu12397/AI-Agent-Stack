@@ -639,6 +639,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.diagnose",
             "cluster.postflight",
             "cluster.control-plane.verify",
+            "cluster.capi.pivot.target.preflight",
             "k8s.resource.read",
         },
     }
@@ -712,6 +713,141 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "not_ready_control_plane_nodes": not_ready_nodes[:9],
             "worker_provisioning_allowed": ready,
             "capi_pivot_allowed": ready,
+            "side_effects": False,
+        }
+    if command_type == "cluster.capi.pivot.target.preflight":
+        cluster_name = payload.get("cluster_name")
+        namespace = payload.get("namespace", "default")
+        if (
+            not isinstance(cluster_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+            or len(cluster_name) > 63
+        ):
+            raise NodeAgentError("INVALID_CLUSTER_NAME")
+        if (
+            not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or len(namespace) > 63
+        ):
+            raise NodeAgentError("INVALID_NAMESPACE")
+        required_resources = {
+            "cluster.x-k8s.io": {"clusters", "machines", "machinedeployments"},
+            "bootstrap.cluster.x-k8s.io": {"kubeadmconfigs"},
+            "controlplane.cluster.x-k8s.io": {"kubeadmcontrolplanes"},
+            "infrastructure.cluster.x-k8s.io": {
+                "metal3clusters",
+                "metal3machines",
+                "metal3machinetemplates",
+            },
+            "metal3.io": {"baremetalhosts"},
+        }
+        discovery = kubernetes_api_get("/apis")
+        discovered_groups = {
+            item.get("name"): item
+            for item in discovery.get("groups", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        missing_resources = []
+        group_versions = {}
+        for group_name, expected_resources in required_resources.items():
+            group = discovered_groups.get(group_name)
+            preferred = group.get("preferredVersion", {}) if group else {}
+            version = preferred.get("version")
+            if not isinstance(version, str):
+                missing_resources.extend(
+                    f"{group_name}/{resource}" for resource in sorted(expected_resources)
+                )
+                continue
+            group_versions[group_name] = version
+            version_data = kubernetes_api_get(f"/apis/{group_name}/{version}")
+            available = {
+                item.get("name")
+                for item in version_data.get("resources", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            missing_resources.extend(
+                f"{group_name}/{resource}"
+                for resource in sorted(expected_resources - available)
+            )
+        expected_controllers = {
+            "capi-system": "capi-controller-manager",
+            "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+            "capi-kubeadm-control-plane-system": (
+                "capi-kubeadm-control-plane-controller-manager"
+            ),
+            "capm3-system": "capm3-controller-manager",
+        }
+        controller_states = []
+        for controller_namespace, deployment_name in expected_controllers.items():
+            try:
+                deployments = kubernetes_api_get(
+                    f"/apis/apps/v1/namespaces/{controller_namespace}/deployments"
+                )
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_404":
+                    raise
+                deployments = {"items": []}
+            deployment = next(
+                (
+                    item
+                    for item in deployments.get("items", [])
+                    if item.get("metadata", {}).get("name") == deployment_name
+                ),
+                {},
+            )
+            metadata = deployment.get("metadata", {})
+            status_data = deployment.get("status", {})
+            ready = (
+                isinstance(status_data.get("availableReplicas"), int)
+                and status_data.get("availableReplicas") > 0
+                and status_data.get("observedGeneration", 0) >= metadata.get("generation", 1)
+            )
+            controller_states.append(
+                {
+                    "namespace": controller_namespace,
+                    "deployment": deployment_name,
+                    "ready": ready,
+                }
+            )
+        cluster_conflicts = []
+        cluster_api_version = group_versions.get("cluster.x-k8s.io")
+        if cluster_api_version:
+            try:
+                clusters = kubernetes_api_get(
+                    f"/apis/cluster.x-k8s.io/{cluster_api_version}"
+                    f"/namespaces/{namespace}/clusters"
+                )
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_404":
+                    raise
+                clusters = {"items": []}
+            cluster_conflicts = [
+                item.get("metadata", {}).get("name")
+                for item in clusters.get("items", [])
+                if item.get("metadata", {}).get("name") == cluster_name
+            ]
+        controllers_ready = all(item["ready"] for item in controller_states)
+        target_ready = (
+            not missing_resources
+            and controllers_ready
+            and not cluster_conflicts
+        )
+        blockers = []
+        if missing_resources:
+            blockers.append("required_capi_metal3_apis_missing")
+        if not controllers_ready:
+            blockers.append("management_controllers_not_ready")
+        if cluster_conflicts:
+            blockers.append("target_cluster_name_conflict")
+        return {
+            "target_management_plane_ready": target_ready,
+            "pivot_execution_allowed": target_ready,
+            "cluster_name": cluster_name,
+            "namespace": namespace,
+            "missing_resources": missing_resources[:100],
+            "controllers": controller_states,
+            "cluster_name_conflicts": cluster_conflicts[:20],
+            "blockers": blockers,
             "side_effects": False,
         }
     if command_type == "cluster.postflight":
