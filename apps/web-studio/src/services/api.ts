@@ -550,3 +550,133 @@ export function cancelClusterDeployment(deploymentId: string): Promise<ClusterDe
     body: JSON.stringify({}),
   });
 }
+
+
+export type PluginTool = {
+  id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  required_permissions: string[];
+  risk_level: "low" | "medium" | "high" | "critical";
+  timeout_seconds: number;
+  retry_policy: Record<string, unknown>;
+  idempotency_mode: "none" | "read_only" | "idempotent";
+  enabled: boolean;
+};
+
+export type PluginDefinition = {
+  id: string;
+  plugin_key: string;
+  name: string;
+  description: string;
+  version: string;
+  connector_type: "native" | "mcp" | "http" | "openapi" | "custom";
+  maintainer: string;
+  license: string;
+  source_url: string;
+  manifest: Record<string, unknown>;
+  review_status: "draft" | "approved" | "rejected";
+  enabled: boolean;
+  tools: PluginTool[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PluginConnection = {
+  id: string;
+  name: string;
+  auth_type: "none" | "credential_ref" | "oauth_ref";
+  credential_ref: string;
+  status: "pending" | "healthy" | "error" | "disabled";
+  last_health_check_at: string | null;
+};
+
+export type PluginInstallation = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  plugin_id: string;
+  plugin_name: string;
+  plugin_key: string;
+  plugin_version: string;
+  status: "installed" | "disabled" | "uninstalled";
+  granted_permissions: string[];
+  config: Record<string, unknown>;
+  connections: PluginConnection[];
+  created_at: string;
+  updated_at: string;
+};
+
+export function getPluginCatalog(
+  tenantId: string,
+): Promise<{ count: number; results: PluginDefinition[] }> {
+  return request("/api/v1/connectors/?tenant_id=" + encodeURIComponent(tenantId));
+}
+
+export function registerPlugin(payload: Record<string, unknown>): Promise<PluginDefinition> {
+  return request("/api/v1/connectors/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approvePlugin(pluginId: string): Promise<PluginDefinition> {
+  return request("/api/v1/connectors/" + pluginId + "/approve/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getPluginInstallations(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: PluginInstallation[] }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/plugin-installations/",
+  );
+}
+
+export function installPlugin(
+  tenantId: string,
+  projectId: string,
+  pluginId: string,
+  grantedPermissions: string[],
+): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/plugin-installations/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        plugin_id: pluginId,
+        granted_permissions: grantedPermissions,
+        config: {},
+      }),
+    },
+  );
+}
+
+export function setPluginInstallationStatus(
+  installationId: string,
+  status: "installed" | "disabled" | "uninstalled",
+): Promise<PluginInstallation> {
+  return request("/api/v1/plugin-installations/" + installationId + "/status/", {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function createPluginConnection(
+  installationId: string,
+  payload: {
+    name: string;
+    auth_type: "none" | "credential_ref" | "oauth_ref";
+    credential_ref?: string;
+  },
+): Promise<PluginConnection> {
+  return request("/api/v1/plugin-installations/" + installationId + "/connections/", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, config: {} }),
+  });
+}
