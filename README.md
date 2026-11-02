@@ -4,12 +4,13 @@ An extensible, policy-governed AI Agent platform. The project is developed miles
 
 ## Current status
 
-**M0 foundation — initial scaffold committed.** The current slice includes:
+**M0 foundation — scaffold committed.** The current slice includes:
+- React + TypeScript + Vite Web Studio with live API/database status checks.
 - FastAPI service with liveness and PostgreSQL readiness endpoints.
 - Independent Worker process with graceful shutdown and database heartbeat.
 - PostgreSQL 16 as the persistent data store; Redis 7 is auxiliary.
-- Docker Compose development environment.
-- Pytest and Ruff CI workflow.
+- Alembic migration baseline for the tenant root entity.
+- Docker Compose development environment and GitHub Actions CI workflow.
 
 The Worker does not yet claim or execute durable tasks. Agent authoring, workflows, approvals, MCP, Skills, and Kubernetes adapters are planned milestones, not implemented features.
 
@@ -22,6 +23,7 @@ cp .env.example .env
 docker compose --env-file .env -f deploy/docker-compose.yml up --build
 ```
 
+- Web Studio: http://localhost:5173
 - API: http://localhost:8000
 - OpenAPI: http://localhost:8000/docs
 - Liveness: http://localhost:8000/health/live
@@ -47,8 +49,10 @@ pytest
 
 - `apps/platform-api`: HTTP API and application boundary.
 - `apps/worker`: independently deployable background process.
+- `apps/web-studio`: React/TypeScript operator workspace.
 - `packages/`: planned contracts, domain, runtime, integrations, and observability modules.
 - `deploy/`: local and future deployment assets.
+- `migrations/`: Alembic database migrations.
 - `docs/vibe-coding.md`: milestone plan and acceptance principles.
 
 PostgreSQL is the only authoritative persistence layer. Redis must not be used as the sole store for runs, approvals, audit events, or other durable business state.

@@ -34,7 +34,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://agent:agent_dev_password@postgres:5432/agent_stack
       REDIS_URL: redis://redis:6379/0
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     ports:
       - "8000:8000"
     depends_on:
@@ -58,6 +58,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web-studio/Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:
