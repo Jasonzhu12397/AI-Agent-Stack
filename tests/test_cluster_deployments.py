@@ -403,6 +403,16 @@ def test_target_postflight_rejects_boolean_node_count(cluster_delivery_workspace
         format="json",
     )
     assert queued.status_code == 202
+    repeated = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-postflight/",
+        {
+            "target_node_id": str(target_node.id),
+            "confirmation": "cluster_provisioned",
+        },
+        format="json",
+    )
+    assert repeated.status_code == 200
+    assert repeated.data["command_id"] == queued.data["command_id"]
 
     agent_client = APIClient()
     polled = agent_client.post(
