@@ -510,3 +510,84 @@ class AgentCommand(models.Model):
                 name="agent_command_scope_idx",
             ),
         ]
+
+
+class ClusterDeployment(models.Model):
+    class Status(models.TextChoices):
+        PREFLIGHT_QUEUED = "preflight_queued", "Preflight queued"
+        PLANNING = "planning", "Planning"
+        PLAN_READY = "plan_ready", "Plan ready"
+        WAITING_APPROVAL = "waiting_approval", "Waiting approval"
+        PROVISIONING = "provisioning", "Provisioning"
+        CONTROL_PLANE_READY = "control_plane_ready", "Control plane ready"
+        WORKERS_READY = "workers_ready", "Workers ready"
+        TARGET_AGENT_PENDING = "target_agent_pending", "Target agent pending"
+        POSTFLIGHT = "postflight", "Postflight"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="cluster_deployments",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="cluster_deployments",
+    )
+    eph_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="cluster_deployments",
+    )
+    target_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="target_cluster_deployments",
+        null=True,
+        blank=True,
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="cluster_deployments",
+    )
+    cluster_name = models.SlugField(max_length=63)
+    kubernetes_version = models.CharField(max_length=32)
+    spec = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.PREFLIGHT_QUEUED,
+    )
+    idempotency_key = models.CharField(max_length=128)
+    plan_hash = models.CharField(max_length=64, blank=True)
+    preflight_result = models.JSONField(null=True, blank=True)
+    plan_result = models.JSONField(null=True, blank=True)
+    error = models.JSONField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="uniq_cluster_deployment_idempotency",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "project", "status"],
+                name="cluster_deploy_scope_idx",
+            ),
+            models.Index(
+                fields=["eph_node", "status", "created_at"],
+                name="cluster_deploy_node_idx",
+            ),
+        ]
