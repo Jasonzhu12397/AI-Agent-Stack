@@ -386,3 +386,48 @@ def test_complete_cluster_plan_reports_missing_adapter_separately():
     assert result["missing_requirements"] == []
     assert result["adapter_enabled"] is False
     assert result["side_effects"] is False
+
+
+
+@pytest.mark.parametrize(
+    "network",
+    [
+        {"pod_cidr": "10.244.0.0/16"},
+        {"service_cidr": "not-a-cidr"},
+    ],
+)
+def test_cluster_plan_rejects_invalid_network_cidrs(network):
+    with pytest.raises(agent.NodeAgentError, match="INVALID_NETWORK_CIDR"):
+        agent.validate_network_inputs(network)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["192.0.2.10", "192.0.2.10:0", "192.0.2.10:65536", ":6443"],
+)
+def test_cluster_plan_rejects_invalid_control_plane_endpoints(endpoint):
+    with pytest.raises(agent.NodeAgentError, match="INVALID_CONTROL_PLANE_ENDPOINT"):
+        agent.validate_network_inputs({"control_plane_endpoint": endpoint})
+
+
+def test_cluster_plan_rejects_duplicate_baremetal_host_references():
+    hosts = [
+        {"baremetal_host": "metal3-system/bmh-01"},
+        {"baremetal_host": "metal3-system/bmh-01"},
+    ]
+
+    with pytest.raises(agent.NodeAgentError, match="DUPLICATE_BAREMETAL_HOST"):
+        agent.validate_metal3_hosts(hosts)
+
+
+def test_cluster_plan_rejects_invalid_or_duplicate_boot_macs():
+    with pytest.raises(agent.NodeAgentError, match="INVALID_BOOT_MAC"):
+        agent.validate_metal3_hosts([{"boot_mac": "not-a-mac"}])
+
+    with pytest.raises(agent.NodeAgentError, match="DUPLICATE_BOOT_MAC"):
+        agent.validate_metal3_hosts(
+            [
+                {"boot_mac": "02:00:00:00:00:01"},
+                {"boot_mac": "02-00-00-00-00-01"},
+            ]
+        )
