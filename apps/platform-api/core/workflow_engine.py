@@ -298,7 +298,7 @@ def validate_model_references(graph, tenant, project):
 
 def _step_input(node, state):
     config = node["config"]
-    source_node = config.get("input_from")
+    source_node = config.get("input_from") or config.get("source_node")
     if source_node:
         return state.get(source_node)
     input_key = config.get("input_key", "input")
