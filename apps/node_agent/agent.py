@@ -190,16 +190,22 @@ def validate_network_inputs(network: Any) -> None:
     for key in ("pod_cidr", "service_cidr"):
         value = network.get(key)
         if value:
+            if not isinstance(value, str):
+                raise NodeAgentError("INVALID_NETWORK_CIDR")
             try:
                 ipaddress.ip_network(value, strict=False)
-            except (TypeError, ValueError) as exc:
+            except ValueError as exc:
                 raise NodeAgentError("INVALID_NETWORK_CIDR") from exc
     endpoint = network.get("control_plane_endpoint")
     if endpoint:
         if not isinstance(endpoint, str) or ":" not in endpoint:
             raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
         host, separator, port_text = endpoint.rpartition(":")
-        if not separator or not host or not port_text.isdigit():
+        if (
+            not separator
+            or not re.fullmatch(r"(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])", host)
+            or not port_text.isdigit()
+        ):
             raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
         if not 1 <= int(port_text) <= 65535:
             raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
@@ -215,6 +221,11 @@ def validate_metal3_hosts(hosts: Any) -> None:
             continue
         host_name = host.get("baremetal_host")
         if host_name:
+            if not isinstance(host_name, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._/-]{0,252}",
+                host_name,
+            ):
+                raise NodeAgentError("INVALID_BAREMETAL_HOST_REFERENCE")
             if host_name in host_names:
                 raise NodeAgentError("DUPLICATE_BAREMETAL_HOST")
             host_names.add(host_name)
