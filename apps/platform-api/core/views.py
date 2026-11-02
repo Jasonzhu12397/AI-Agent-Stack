@@ -33,7 +33,11 @@ class TenantListView(ListAPIView):
     pagination_class = TenantPagination
 
     def get_queryset(self):
-        return Tenant.objects.filter(memberships__user=self.request.user).order_by("name").distinct()
+        return (
+            Tenant.objects.filter(memberships__user=self.request.user)
+            .order_by("name")
+            .distinct()
+        )
 
 
 class TenantProjectListView(ListAPIView):
