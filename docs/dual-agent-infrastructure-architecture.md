@@ -7,27 +7,38 @@ This document extends the general AI Agent Studio architecture with a remotely m
 ## Components and trust boundaries
 
 1. **Remote Control Plane Agent** runs in the central AI Agent Studio runtime. It receives the operator's request, creates a typed plan, checks tenant/project scope, resolves the target EPH node and target cluster, obtains required approvals, dispatches commands and aggregates progress. It is not a privileged shell on either node.
-2. **EPH Node Agent** is installed on the temporary EPH/management node. It establishes an outbound authenticated connection to the control plane, reports capabilities and health, performs host preflight, talks to the configured management Kubernetes API and coordinates CAPI/Metal3/Ironic provisioning. Its Kubernetes identity is scoped to the management cluster and required namespaces/resources.
-3. **Target Cluster Agent** is bootstrapped only after the target cluster API is reachable. It connects outbound to the same control plane, reports target-cluster health and executes only explicitly granted, typed target-side operations using a dedicated ServiceAccount.
-4. **CAPI / Metal3 / Ironic / IPA / BMC** remain the infrastructure control chain. AI agents submit validated declarative plans through adapters; they do not replace the controllers or treat an API create response as proof that provisioning succeeded.
+2. **EPH Node Agent** runs as a Pod inside a temporary single-node Kubernetes cluster on the EPH bare-metal node. The node boots a RAM-resident OS and is borrowed from the future target compute pool only for the bootstrap window. The local OS, Kubernetes etcd and Pod filesystem are disposable; the central platform is the durable source of truth. The EPH Agent establishes an outbound authenticated connection, performs preflight and temporary-cluster API inspection, and coordinates the approved bootstrap/handoff workflow. The physical node is later rebooted into its target worker image and reclaimed as a worker in the final cluster.
+3. **Target Cluster Agent** is bootstrapped as a Pod only after the final target cluster API is reachable. It connects outbound to the same control plane, reports target-cluster health and executes only explicitly granted, typed target-side operations using a dedicated ServiceAccount. It also verifies that the reclaimed EPH physical machine has joined as a Ready worker.
+4. **CAPI / Metal3 / Ironic / IPA / BMC** remain the infrastructure control chain. Any CAPI/Metal3 management components hosted on the EPH single-node Kubernetes cluster are temporary and must complete their required provisioning work before EPH reclamation. State required after EPH reboot must live in the central platform or a durable external management service; an ephemeral EPH management cluster cannot be treated as a persistent day-2 control plane.
 
-## Bootstrap lifecycle
+## Bootstrap and reclamation lifecycle
+
+The EPH-node is a temporary bare-metal node booted into RAM. It starts a single-node Kubernetes cluster in memory and runs the EPH Agent Pod. It is not a permanent management server. After target cluster provisioning and target-side validation, the same physical machine is handed off, rebooted into the target worker OS/image, and joins the final target cluster as a compute node.
 
 ```text
-Operator
-  -> Remote Control Plane Agent
-  -> EPH Node Agent (enroll, heartbeat, preflight)
-  -> management Kubernetes API
-  -> CAPI Cluster / MachineDeployment / Metal3 resources
-  -> Metal3 controllers -> Ironic -> IPA/BMC -> physical nodes
-  -> observe CAPI/Metal3 Conditions and Events until postconditions hold
-  -> target cluster API becomes reachable
-  -> bootstrap Target Cluster Agent with a short-lived, scoped enrollment
-  -> Target Cluster Agent enrolls and reports cluster health
-  -> remote control plane coordinates both agents for day-2 operations
+Physical capacity pool
+  -> reserve EPH hardware
+  -> network boot RAM OS
+  -> start single-node Kubernetes in memory
+  -> run EPH Agent Pod and enroll with central Supervisor
+  -> preflight + provider/CRD discovery + manifest validation
+  -> approved target cluster provisioning
+  -> target control plane/workers become Ready
+  -> bootstrap Target Agent in target cluster
+  -> Target Agent postflight
+  -> persist handoff intent and worker bootstrap reference centrally
+  -> stop temporary EPH Kubernetes and revoke EPH credentials
+  -> reboot same physical host into target worker OS/image
+  -> join target cluster as worker
+  -> Target Agent verifies hardware identity and Ready condition
+  -> mark EPH reclaimed and deployment complete
 ```
 
-The Target Cluster Agent is not a prerequisite for creating the target cluster. Before bootstrap it is shown as `NOT_ENROLLED`; after the API endpoint and bootstrap credentials are verified, the EPH-side bootstrap operation installs it. The control plane must not claim cluster delivery succeeded until the target-side postflight checks pass.
+The central Studio database is the durable source of truth. EPH local etcd, RAM OS, container writable layers, local kubeconfigs and temporary credentials are disposable. A lost EPH session must resume from central checkpoints after reconciling the physical host and external provisioning state. EPH heartbeat loss during an approved handoff is expected; it is not proof of failure or proof of successful reclamation.
+
+The target cluster is not considered fully delivered until the Target Agent confirms that the same physical EPH host has joined as a Ready worker. The exact worker OS transition mechanism must be environment-configured and tested; no in-place conversion assumption is permitted. The temporary EPH Kubernetes control plane must be stopped before the host joins the target cluster.
+
+See [EPH Node Ephemeral Bootstrap and Reclamation Lifecycle](eph-node-lifecycle.md) for lifecycle invariants, suggested states, durable data requirements and recovery behavior.
 
 ## Agent communication
 
@@ -63,7 +74,7 @@ A command schema validates the payload before it enters the queue and the node a
 
 ## Cluster delivery state model
 
-`REQUESTED -> PREFLIGHT -> PLAN_READY -> WAITING_APPROVAL -> PROVISIONING -> CONTROL_PLANE_READY -> WORKERS_READY -> TARGET_AGENT_BOOTSTRAPPED -> POSTFLIGHT -> SUCCEEDED`
+`EPH_RESERVED -> EPH_RAM_BOOTING -> EPH_LOCAL_K8S_READY -> EPH_AGENT_ENROLLED -> PREFLIGHT -> PLAN_READY -> WAITING_APPROVAL -> TARGET_PROVISIONING -> TARGET_CONTROL_PLANE_READY -> TARGET_AGENT_READY -> EPH_HANDOFF_PENDING -> EPH_REBOOTING -> EPH_TARGET_WORKER_JOINING -> EPH_RECLAIMED -> SUCCEEDED`
 
 Any step may fail with a stable error code and diagnostic reference. A retry is allowed only when the operation is idempotent or the adapter can reconcile the external state. A timeout does not imply that an external provisioning operation did not happen. Deletion, BMC power control, disk wipe and production network changes require separate critical-risk policies and explicit approvals.
 
@@ -81,14 +92,14 @@ Before enabling real provisioning, the operator must configure and verify:
 
 ## Current implementation boundary
 
-The current code supports node enrollment, heartbeat, durable command dispatch, lease-protected results and hash-bound approval. The EPH runner supports safe health/preflight/plan commands. A separately enrolled Target Cluster Agent can now receive a read-only `cluster.postflight` command after an operator explicitly confirms that the cluster was provisioned externally and the EPH plan has no missing prerequisites. The postflight result marks the deployment successful only when at least one node is present and all nodes report Ready. Actual CAPI/Metal3 resource writes, Ironic/BMC power operations and automated target-agent installation remain disabled until a concrete environment compatibility matrix and adapters are supplied and tested.
+The current code supports node enrollment, heartbeat, durable command dispatch, lease-protected results and hash-bound approval. The complete RAM-boot, temporary single-node Kubernetes lifecycle, physical identity correlation, EPH-to-worker handoff, reboot/re-image, and reclaim state machine are not implemented yet. The EPH runner supports safe health/preflight/plan commands. A separately enrolled Target Cluster Agent can now receive a read-only `cluster.postflight` command after an operator explicitly confirms that the cluster was provisioned externally and the EPH plan has no missing prerequisites. The postflight result marks the deployment successful only when at least one node is present and all nodes report Ready. Actual CAPI/Metal3 resource writes, Ironic/BMC power operations and automated target-agent installation remain disabled until a concrete environment compatibility matrix and adapters are supplied and tested.
 
 ## Kubernetes agent deployment
 
 Kubernetes templates are under `deploy/agents/`:
 - `namespace.yaml`: shared `ai-agent-system` namespace;
 - `rbac.yaml`: separate EPH and target ServiceAccounts with read-only CAPI/Metal3 or target workload inspection scopes;
-- `eph-node-agent.yaml`: EPH agent Deployment in the management/EPH cluster;
+- `eph-node-agent.yaml`: EPH Agent Deployment in the temporary single-node Kubernetes cluster booted on the RAM-resident EPH node;
 - `target-cluster-agent.yaml`: target agent Deployment, applied only after target API readiness;
 - `README.md`: image, one-time token Secret and rollout instructions.
 
@@ -131,7 +142,7 @@ The intended control topology has three agent roles:
 2. **EPH Node Agent**: runs in the EPH/management Kubernetes environment, performs preflight, discovers the live CAPI/Metal3 API contract and executes only compiled allowlisted management-cluster operations.
 3. **Target Cluster Agent**: is installed after the target Kubernetes API becomes available, performs target-side readiness/postflight and later receives only target-cluster-scoped operations.
 
-Remote agents do not receive free-form model-generated shell or raw manifests. The control-plane supervisor must convert its plan into a versioned command schema; the server validates tenant/project scope, tool capability, risk, idempotency and approval hash before dispatch. The current implementation has the EPH/Target enrollment and command plane plus persisted EPH preflight/plan workflow. The central LLM-to-node command tool bridge, target-agent bootstrap and CAPI/Metal3 write adapter are still unimplemented.
+Remote agents do not receive free-form model-generated shell or raw manifests. The control-plane supervisor must convert its plan into a versioned command schema; the server validates tenant/project scope, tool capability, risk, idempotency and approval hash before dispatch. The current implementation has the EPH/Target enrollment and command plane plus persisted EPH preflight/plan workflow. The EPH environment is a temporary RAM-booted single-node Kubernetes cluster, not a permanent management cluster; the same hardware must later be re-imaged/rebooted and verified as a target worker. The central LLM-to-node command tool bridge, target-agent bootstrap and CAPI/Metal3 write adapter are still unimplemented.
 
 
 ## Deployment state and completion safeguards
@@ -160,3 +171,10 @@ The EPH Agent provider discovery operation now fetches the installed CRD objects
 The EPH Agent exposes `cluster.manifest.validate`. It accepts a bounded list of candidate custom-resource manifests, resolves each Group/Kind against the installed CAPI, Kubeadm, CAPM3 and Metal3 CRDs, requires the requested API version to be served, checks CRD scope and recursively validates supported OpenAPI schema constraints (types, required fields, enum, string length/pattern, numeric bounds, array item/count constraints, nested properties and additionalProperties). Results contain bounded per-manifest validation errors and never return the CRD schema itself.
 
 The operation is read-only: it uses only CRD GET requests and does not submit manifests to the Kubernetes API. It is not Kubernetes API server admission validation and does not execute CEL rules, conversion webhooks, admission webhooks, cross-resource reference checks or provider compatibility tests. The EPH Role remains read-only. Candidate manifests are limited to 100 objects and a 1 MiB serialized payload. This validation is an additional preflight gate, not authorization to provision; `server_side_dry_run`, `mutation_adapter_enabled` and `provisioning_ready` remain false.
+
+
+## EPH temporary-node ownership and reclaim boundary
+
+The EPH machine is borrowed from the final compute pool. It must not be counted as a target worker before the Target Agent observes the same verified physical identity as a Ready node. EPH Agent identity and Target Agent identity are separate and have separate short-lived credentials. EPH going offline during an approved handoff is an expected event; central deployment state must wait for target-side confirmation rather than interpreting the lost heartbeat as completion.
+
+Any management components hosted in the EPH single-node Kubernetes cluster are temporary. If CAPI/Metal3 controllers or management objects are hosted there, all required provisioning and reconciliation for this bootstrap must finish before EPH is reclaimed. Persistent day-2 management cannot depend on the EPH cluster's etcd or local disk. See [the dedicated lifecycle specification](eph-node-lifecycle.md).
