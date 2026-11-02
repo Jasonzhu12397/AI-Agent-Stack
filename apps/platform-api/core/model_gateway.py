@@ -3,9 +3,14 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from core.models import ModelConfig, ModelProvider
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
 
 
 class ModelGatewayError(Exception):
@@ -104,7 +109,8 @@ class ModelGateway:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=30) as response:
+            opener = build_opener(NoRedirectHandler())
+            with opener.open(request, timeout=30) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             raise ModelGatewayError(
