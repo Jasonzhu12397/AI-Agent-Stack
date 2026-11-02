@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
     AgentNode,
@@ -96,6 +97,9 @@ def _command_data(command):
     return {
         "id": str(command.id),
         "node_id": str(command.node_id),
+        "deployment_id": (
+            str(command.deployment_id) if command.deployment_id else None
+        ),
         "command_type": command.command_type,
         "payload": command.payload,
         "status": command.status,
@@ -656,4 +660,18 @@ class AgentRuntimeResultView(APIView):
                     "updated_at",
                 ]
             )
-        return Response({"id": str(command.id), "status": command.status})
+            handle_deployment_command_result(
+                command,
+                outcome,
+                result,
+                error,
+            )
+        return Response(
+            {
+                "id": str(command.id),
+                "status": command.status,
+                "deployment_id": (
+                    str(command.deployment_id) if command.deployment_id else None
+                ),
+            }
+        )
