@@ -203,7 +203,7 @@ def validate_network_inputs(network: Any) -> None:
         host, separator, port_text = endpoint.rpartition(":")
         if (
             not separator
-            or not re.fullmatch(r"(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])", host)
+            or not re.fullmatch(r"(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])", host)
             or not port_text.isdigit()
         ):
             raise NodeAgentError("INVALID_CONTROL_PLANE_ENDPOINT")
