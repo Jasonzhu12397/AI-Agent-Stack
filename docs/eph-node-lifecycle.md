@@ -123,6 +123,18 @@ The platform now exposes a Control-Plane-first handoff binding endpoint:
 
 This is a durable checkpoint storage and restore API, not yet automatic Pod deployment or automatic CAPI pivot. The caller must currently ensure that the first Control Plane readiness transition to `CONTROL_PLANE_READY` has been independently verified. The CAPI pivot executor, checkpoint-driven workflow scheduler, and worker provisioning gate remain to be implemented.
 
+## Read-only CAPI Pivot target preflight
+
+The Target Agent now exposes `cluster.capi.pivot.target.preflight`. This command is intentionally read-only and validates the destination management plane before any pivot executor can be considered:
+
+- Discover the served API versions for Cluster API, Kubeadm Bootstrap, Kubeadm Control Plane, CAPM3 and Metal3.
+- Confirm the required Cluster, Machine, KubeadmConfig, KubeadmControlPlane, Metal3Cluster, Metal3Machine, Metal3MachineTemplate and BareMetalHost resources are served.
+- Confirm the CAPI core, Kubeadm bootstrap, Kubeadm control-plane and CAPM3 controller Deployments have all desired replicas available and their observed generation is current.
+- Check that the requested cluster name does not already exist in the destination namespace.
+- Return explicit blockers and `pivot_execution_allowed`; missing APIs, unavailable controllers or a cluster-name collision fail closed.
+
+This is only the target-side preflight. It does not inspect the EPH source ownership graph, copy credentials, run `clusterctl move`, transfer provider objects, or prove post-pivot reconciliation. A source-side inventory and version/provider compatibility check are still required before an executor can be enabled.
+
 ## Operational failure handling
 
 - If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
