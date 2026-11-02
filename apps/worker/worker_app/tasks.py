@@ -3,7 +3,8 @@ import uuid
 from datetime import timedelta
 from time import sleep
 
-from core.models import Task
+from core.model_gateway import ModelGateway, ModelGatewayError
+from core.models import AgentRun, ModelConfig, Task
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -13,7 +14,7 @@ class PermanentTaskError(Exception):
     pass
 
 
-def claim_next_task(worker_id, lease_seconds=30):
+def claim_next_task(worker_id, lease_seconds=150):
     now = timezone.now()
     with transaction.atomic():
         task = (
@@ -91,7 +92,7 @@ def claim_next_task(worker_id, lease_seconds=30):
         return task
 
 
-def renew_lease(task_id, lease_token, worker_id, lease_seconds=30):
+def renew_lease(task_id, lease_token, worker_id, lease_seconds=150):
     now = timezone.now()
     updated = Task.objects.filter(
         pk=task_id,
@@ -178,7 +179,56 @@ def fail_task(task_id, lease_token, error, retryable=True):
         return True
 
 
+def execute_agent_run(task):
+    try:
+        agent_run = AgentRun.objects.select_related(
+            "agent_version",
+            "agent_version__agent",
+        ).get(task=task)
+    except AgentRun.DoesNotExist as exc:
+        raise PermanentTaskError("Agent run record is missing") from exc
+    agent = agent_run.agent_version.agent
+    if agent.tenant_id != task.tenant_id or agent.project_id != task.project_id:
+        raise PermanentTaskError("Agent run resource scope does not match its task")
+    config = agent_run.agent_version.config_snapshot
+    try:
+        model_config = ModelConfig.objects.select_related("provider").get(
+            pk=config["model_config_id"],
+            enabled=True,
+            provider__enabled=True,
+        )
+    except (KeyError, ModelConfig.DoesNotExist) as exc:
+        raise PermanentTaskError("Published model configuration is unavailable") from exc
+    if model_config.provider.tenant_id not in (None, task.tenant_id):
+        raise PermanentTaskError("Published model provider is outside the task tenant")
+    messages = [
+        {"role": "system", "content": config["system_prompt"]},
+        {"role": "user", "content": agent_run.input_text},
+    ]
+    try:
+        response = ModelGateway().complete(
+            model_config,
+            messages,
+            max_tokens=config["max_tokens"],
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except ModelGatewayError as exc:
+        if exc.retryable:
+            raise RuntimeError(exc.code) from exc
+        raise PermanentTaskError(exc.code) from exc
+    return {
+        "content": response.content,
+        "input_tokens": response.input_tokens,
+        "output_tokens": response.output_tokens,
+        "provider": response.provider,
+        "model": response.model,
+        "latency_ms": response.latency_ms,
+    }
+
+
 def execute_task(task, worker_id):
+    if task.task_type == "agent.run":
+        return execute_agent_run(task)
     if task.task_type == "demo.echo":
         return {"echo": task.payload}
     if task.task_type == "demo.sleep":
@@ -196,7 +246,19 @@ def execute_task(task, worker_id):
 def process_task(task, worker_id):
     try:
         result = execute_task(task, worker_id)
-        finish_task(task.id, task.lease_token, result)
+        completed = finish_task(task.id, task.lease_token, result)
+        if completed and task.task_type == "agent.run":
+            task.refresh_from_db(fields=["status"])
+            if task.status == Task.Status.SUCCEEDED:
+                AgentRun.objects.filter(task=task).update(
+                    output_text=result["content"],
+                    input_tokens=result["input_tokens"],
+                    output_tokens=result["output_tokens"],
+                    provider_name=result["provider"],
+                    model_name=result["model"],
+                    latency_ms=result["latency_ms"],
+                    finished_at=timezone.now(),
+                )
     except PermanentTaskError as exc:
         fail_task(
             task.id,
@@ -221,7 +283,7 @@ def process_task(task, worker_id):
         )
 
 
-def process_once(worker_id, lease_seconds=30):
+def process_once(worker_id, lease_seconds=150):
     task = claim_next_task(worker_id, lease_seconds=lease_seconds)
     if task is None:
         return False
