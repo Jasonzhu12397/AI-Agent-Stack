@@ -16,11 +16,11 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from django.contrib.auth import get_user_model
 from django.utils import timezone
+from rest_framework.test import APIClient
 from worker_app import tasks as worker_tasks
 from worker_app.tasks import execute_knowledge_ingest
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
 
 
 @pytest.mark.django_db
