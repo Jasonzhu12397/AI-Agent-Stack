@@ -1,7 +1,15 @@
+# ruff: noqa: I001
 import hashlib
 
 import pytest
-from core.models import AgentCommand, AgentNode, Project, ProjectMembership, Tenant, TenantMembership
+from core.models import (
+    AgentCommand,
+    AgentNode,
+    Project,
+    ProjectMembership,
+    Tenant,
+    TenantMembership,
+)
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
@@ -45,7 +53,11 @@ def test_node_agent_enrollment_is_tenant_admin_only(node_workspace):
     user, tenant, project, _ = node_workspace
     member = get_user_model().objects.create_user(username="node-member", password="test-password")
     TenantMembership.objects.create(tenant=tenant, user=member, role=TenantMembership.Role.MEMBER)
-    ProjectMembership.objects.create(project=project, user=member, role=ProjectMembership.Role.EDITOR)
+    ProjectMembership.objects.create(
+        project=project,
+        user=member,
+        role=ProjectMembership.Role.EDITOR,
+    )
     client = APIClient()
     client.force_authenticate(user=member)
 
