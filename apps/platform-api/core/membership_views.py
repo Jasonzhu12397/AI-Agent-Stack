@@ -54,7 +54,11 @@ class TenantMemberListCreateView(APIView):
         tenant = tenant_for_user(request, tenant_id)
         if not require_tenant_admin(request, tenant):
             return Response({"detail": "Tenant administrator permission required."}, status=403)
-        memberships = TenantMembership.objects.filter(tenant=tenant).select_related("user").order_by("user__username")
+        memberships = (
+            TenantMembership.objects.filter(tenant=tenant)
+            .select_related("user")
+            .order_by("user__username")
+        )
         return Response([
             {"id": str(item.id), "user_id": item.user_id, "username": item.user.get_username(), "email": item.user.email, "role": item.role}
             for item in memberships
@@ -108,16 +112,28 @@ class TenantMemberDetailView(APIView):
                 return Response({"detail": "Only an owner can change an owner role."}, status=403)
             if role == TenantMembership.Role.OWNER and not actor_is_owner:
                 return Response({"detail": "Only an owner can grant the owner role."}, status=403)
-            if membership.role == TenantMembership.Role.OWNER and role != TenantMembership.Role.OWNER:
+            if (
+                membership.role == TenantMembership.Role.OWNER
+                and role != TenantMembership.Role.OWNER
+            ):
                 owner_count = TenantMembership.objects.filter(
                     tenant=tenant,
                     role=TenantMembership.Role.OWNER,
                 ).count()
                 if owner_count <= 1:
-                    return Response({"detail": "A tenant must retain at least one owner."}, status=409)
+                    return Response(
+                        {"detail": "A tenant must retain at least one owner."},
+                        status=409,
+                    )
             membership.role = role
             membership.save(update_fields=["role"])
-        return Response({"id": str(membership.id), "username": membership.user.get_username(), "role": membership.role})
+        return Response(
+            {
+                "id": str(membership.id),
+                "username": membership.user.get_username(),
+                "role": membership.role,
+            }
+        )
 
     def delete(self, request, tenant_id, membership_id):
         tenant = tenant_for_user(request, tenant_id)
@@ -156,7 +172,11 @@ class ProjectMemberListCreateView(APIView):
         project = project_for_user(request, tenant, project_id)
         if not require_project_admin(request, tenant, project):
             return Response({"detail": "Project administrator permission required."}, status=403)
-        memberships = ProjectMembership.objects.filter(project=project).select_related("user").order_by("user__username")
+        memberships = (
+            ProjectMembership.objects.filter(project=project)
+            .select_related("user")
+            .order_by("user__username")
+        )
         return Response([
             {"id": str(item.id), "user_id": item.user_id, "username": item.user.get_username(), "email": item.user.email, "role": item.role}
             for item in memberships
@@ -217,6 +237,9 @@ class ProjectMemberDetailView(APIView):
                 role=ProjectMembership.Role.ADMIN,
             ).count()
             if admin_count <= 1:
-                return Response({"detail": "A project must retain at least one administrator."}, status=409)
+                return Response(
+                    {"detail": "A project must retain at least one administrator."},
+                    status=409,
+                )
         membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
