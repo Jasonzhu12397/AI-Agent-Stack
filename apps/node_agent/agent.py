@@ -11,6 +11,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -1119,18 +1120,34 @@ class ControlPlaneClient:
         self.token = token
         self.timeout = timeout
 
-    def request(self, path: str, payload: dict[str, Any], lease_token: str = "") -> dict[str, Any]:
+    def request(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        lease_token: str = "",
+        method: str = "POST",
+    ) -> dict[str, Any]:
+        if method not in {"GET", "POST"}:
+            raise NodeAgentError("UNSUPPORTED_CONTROL_PLANE_METHOD")
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
         if lease_token:
             headers["X-Agent-Lease"] = lease_token
+        request_path = path
+        request_data = None
+        if method == "GET":
+            query = urllib.parse.urlencode(payload or {})
+            if query:
+                request_path = f"{path}?{query}"
+        else:
+            request_data = json.dumps(payload or {}).encode("utf-8")
         request = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=json.dumps(payload).encode("utf-8"),
+            f"{self.base_url}{request_path}",
+            data=request_data,
             headers=headers,
-            method="POST",
+            method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -1139,6 +1156,48 @@ class ControlPlaneClient:
             raise NodeAgentError(f"CONTROL_PLANE_HTTP_{exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise NodeAgentError("CONTROL_PLANE_UNAVAILABLE") from exc
+
+    def restore_deployment_checkpoint(self, deployment_id: str) -> dict[str, Any]:
+        if not deployment_id:
+            raise NodeAgentError("DEPLOYMENT_ID_REQUIRED")
+        checkpoint = self.request(
+            f"/api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/",
+            {"node_id": self.node_id},
+            method="GET",
+        )
+        if checkpoint.get("deployment_id") != deployment_id:
+            raise NodeAgentError("CHECKPOINT_DEPLOYMENT_MISMATCH")
+        if checkpoint.get("resume_available") is True:
+            if not isinstance(checkpoint.get("data"), dict):
+                raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
+            if not isinstance(checkpoint.get("sequence"), int):
+                raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
+            if checkpoint.get("generation") != 1:
+                raise NodeAgentError("CHECKPOINT_GENERATION_UNSUPPORTED")
+        return checkpoint
+
+    def save_deployment_checkpoint(
+        self,
+        deployment_id: str,
+        generation: int,
+        sequence: int,
+        phase: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not deployment_id or generation != 1 or sequence < 1:
+            raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
+        if not isinstance(data, dict) or contains_forbidden_fields(data):
+            raise NodeAgentError("INVALID_DEPLOYMENT_CHECKPOINT")
+        return self.request(
+            f"/api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/",
+            {
+                "node_id": self.node_id,
+                "generation": generation,
+                "sequence": sequence,
+                "phase": phase,
+                "data": data,
+            },
+        )
 
     def heartbeat(self, node_type: str) -> dict[str, Any]:
         capabilities = (
