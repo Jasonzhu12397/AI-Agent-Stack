@@ -600,6 +600,29 @@ class ClusterDeployment(models.Model):
         ]
 
 
+
+class ClusterDeploymentCheckpoint(models.Model):
+    deployment = models.OneToOneField(
+        ClusterDeployment,
+        on_delete=models.CASCADE,
+        related_name="checkpoint",
+    )
+    agent_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="deployment_checkpoints",
+    )
+    generation = models.PositiveIntegerField(default=1)
+    sequence = models.PositiveBigIntegerField(default=0)
+    phase = models.CharField(max_length=64)
+    data = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+
 class PluginDefinition(models.Model):
     class ConnectorType(models.TextChoices):
         NATIVE = "native", "Native"
