@@ -431,3 +431,22 @@ def test_cluster_plan_rejects_invalid_or_duplicate_boot_macs():
                 {"boot_mac": "02-00-00-00-00-01"},
             ]
         )
+
+
+
+def test_cluster_plan_accepts_bracketed_ipv6_control_plane_endpoint():
+    agent.validate_network_inputs(
+        {"control_plane_endpoint": "[2001:db8::10]:6443"}
+    )
+
+
+def test_cluster_plan_rejects_url_as_control_plane_endpoint():
+    with pytest.raises(agent.NodeAgentError, match="INVALID_CONTROL_PLANE_ENDPOINT"):
+        agent.validate_network_inputs(
+            {"control_plane_endpoint": "https://192.0.2.10:6443"}
+        )
+
+
+def test_cluster_plan_rejects_malformed_baremetal_host_reference():
+    with pytest.raises(agent.NodeAgentError, match="INVALID_BAREMETAL_HOST_REFERENCE"):
+        agent.validate_metal3_hosts([{"baremetal_host": ["metal3-system", "bmh-01"]}])
