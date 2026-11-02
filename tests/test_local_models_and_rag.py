@@ -180,9 +180,9 @@ def test_qdrant_upsert_generates_stable_tenant_scoped_point_ids(monkeypatch):
 
 @pytest.mark.django_db
 def test_local_model_provider_can_be_configured_without_api_key():
+    from core.models import Tenant, TenantMembership
     from django.contrib.auth import get_user_model
     from rest_framework.test import APIClient
-    from core.models import Tenant, TenantMembership
 
     user = get_user_model().objects.create_user(
         username="local-model-admin",
