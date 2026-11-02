@@ -209,3 +209,41 @@ def test_local_model_provider_can_be_configured_without_api_key():
     assert response.status_code == 201
     assert response.data["base_url"] == "http://ollama:11434/v1"
     assert response.data["credential_configured"] is False
+
+
+
+def test_qdrant_search_adds_knowledge_base_filter_without_removing_scope(monkeypatch):
+    store = QdrantVectorStore(base_url="http://qdrant:6333")
+    captured = {}
+
+    def fake_request(method, path, body=None):
+        captured.update({"method": method, "path": path, "body": body})
+        return {"result": []}
+
+    monkeypatch.setattr(store, "_request", fake_request)
+    store.search(
+        "tenant-a",
+        "project-b",
+        [0.1, 0.2],
+        metadata_filters={"knowledge_base_id": "kb-123"},
+    )
+
+    filters = captured["body"]["filter"]["must"]
+    assert filters[0] == {"key": "tenant_id", "match": {"value": "tenant-a"}}
+    assert filters[1] == {"key": "project_id", "match": {"value": "project-b"}}
+    assert filters[2] == {
+        "key": "metadata.knowledge_base_id",
+        "match": {"value": "kb-123"},
+    }
+
+
+def test_qdrant_search_rejects_invalid_metadata_filter_keys():
+    store = QdrantVectorStore(base_url="http://qdrant:6333")
+
+    with pytest.raises(VectorStoreError):
+        store.search(
+            "tenant-a",
+            "project-b",
+            [0.1, 0.2],
+            metadata_filters={"metadata.tenant_id": "other-tenant"},
+        )
