@@ -31,3 +31,12 @@ Integration Hub now has registry and installation metadata APIs/screens. General
 ## Visual system
 
 The port keeps the reference's dark slate background, indigo active navigation, compact monospace metadata, bordered panels, responsive two-column workspace and high-density operational tables. Vue/Element Plus components replace React JSX and Tailwind-only interactions. No React bundle is shipped in the Studio.
+
+
+## Knowledge Base and model setup
+
+- `KnowledgeBaseView.vue` is the Knowledge Bases workspace. It creates project-scoped bases, selects an embedding-capable model, accepts text documents up to 1 MB and displays ingestion state/chunk counts.
+- `ModelManagerView.vue` can register an OpenAI-compatible provider using a server-side `env:` credential reference, then create chat/tool or embedding model configurations. Endpoint hosts must already be present in the server's allowlist; the browser never receives credential values.
+- `AgentStudioView.vue` loads project Knowledge Bases and tools from installed connectors. A new Agent draft can pin Knowledge Base IDs and installed PluginTool IDs. The published version freezes those selections.
+- RAG chunks are injected as untrusted user-context material and Qdrant retrieval is filtered by tenant, project and the selected Knowledge Base ID.
+- Provider-specific connector handlers, high-risk human approval, file parsers and document/vector deletion remain outside this milestone.
