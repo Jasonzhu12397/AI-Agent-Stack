@@ -34,7 +34,10 @@ class ModelProviderListCreateView(APIView):
 
     def get(self, request, tenant_id):
         tenant = get_tenant(request, tenant_id)
-        providers = ModelProvider.objects.filter(Q(tenant=tenant) | Q(tenant__isnull=True), enabled=True)
+        providers = ModelProvider.objects.filter(
+            Q(tenant=tenant) | Q(tenant__isnull=True),
+            enabled=True,
+        )
         return Response(ModelProviderReadSerializer(providers, many=True).data)
 
     def post(self, request, tenant_id):
@@ -86,7 +89,19 @@ class ModelConfigListCreateView(APIView):
             )
         serializer = ModelConfigSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        model_config = serializer.save(provider=provider)
+        latest_version = (
+            ModelConfig.objects.filter(
+                provider=provider,
+                model_name=serializer.validated_data["model_name"],
+            )
+            .order_by("-version")
+            .values_list("version", flat=True)
+            .first()
+        )
+        model_config = serializer.save(
+            provider=provider,
+            version=(latest_version or 0) + 1,
+        )
         return Response(
             ModelConfigSerializer(model_config).data,
             status=status.HTTP_201_CREATED,
