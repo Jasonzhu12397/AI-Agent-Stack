@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import LoginView from "./components/LoginView.vue";
 import WorkspaceView from "./components/WorkspaceView.vue";
 import InfrastructureAgentsView from "./components/InfrastructureAgentsView.vue";
@@ -20,6 +20,14 @@ const navItems: { id: ActiveView; label: string }[] = [
   { id: "workflows", label: "Workflow DAG" },
   { id: "infrastructure", label: "Infrastructure Agents" },
 ];
+const workspaceSection = computed<
+  "overview" | "models" | "agents" | "workflows"
+>(() => {
+  if (activeView.value === "dashboard" || activeView.value === "infrastructure") {
+    return "overview";
+  }
+  return activeView.value;
+});
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
 const currentUser = ref<CurrentUser | null>(null);
@@ -125,7 +133,7 @@ onUnmounted(() => {
     </section>
     <WorkspaceView
       v-if="activeView !== 'infrastructure'"
-      :active-section="activeView === 'dashboard' ? 'overview' : activeView"
+      :active-section="workspaceSection"
     />
     <InfrastructureAgentsView v-else />
     <section class="overview">
