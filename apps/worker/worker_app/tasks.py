@@ -1,10 +1,21 @@
 # ruff: noqa: I001
+import json
 import uuid
 from datetime import timedelta
 from time import sleep
 
 from core.model_gateway import ModelGateway, ModelGatewayError
-from core.models import AgentRun, ModelConfig, Task, WorkflowRun
+from core.models import (
+    AgentRun,
+    ModelConfig,
+    PluginConnection,
+    PluginInstallation,
+    PluginTool,
+    Task,
+    WorkflowRun,
+)
+from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
+from core.tool_router import ToolExecutionError, ToolRouter
 from core.workflow_engine import WorkflowValidationError, execute_workflow_run
 from django.db import transaction
 from django.db.models import Q
@@ -220,6 +231,65 @@ def fail_task(task_id, lease_token, error, retryable=True):
         return True
 
 
+
+TOOL_ROUTER = ToolRouter()
+MAX_AGENT_TOOL_CALLS = 32
+
+
+def _load_agent_tools(task, config):
+    tool_ids = config.get("tool_allowlist", [])
+    if not isinstance(tool_ids, list) or len(tool_ids) > 32:
+        raise PermanentTaskError("Published agent tool allowlist is invalid")
+    if not tool_ids:
+        return [], {}
+    tools = list(
+        PluginTool.objects.filter(
+            id__in=tool_ids,
+            enabled=True,
+            plugin__tenant=task.tenant,
+            plugin__enabled=True,
+            plugin__review_status="approved",
+            plugin__installations__tenant=task.tenant,
+            plugin__installations__project=task.project,
+            plugin__installations__status=PluginInstallation.Status.INSTALLED,
+            plugin__installations__plugin_version=__import__("django.db.models", fromlist=["F"]).F(
+                "plugin__version"
+            ),
+        )
+        .select_related("plugin")
+        .distinct()
+    )
+    if len(tools) != len(set(tool_ids)):
+        raise PermanentTaskError("An allowed connector tool is no longer installed or approved")
+    by_name = {f"{tool.plugin.plugin_key}__{tool.name}": tool for tool in tools}
+    offered = to_openai_function_tools(tools)
+    return offered, by_name
+
+
+def _execute_agent_tool(task, tool, arguments):
+    try:
+        installation = PluginInstallation.objects.select_related("plugin").get(
+            tenant=task.tenant,
+            project=task.project,
+            plugin=tool.plugin,
+            status=PluginInstallation.Status.INSTALLED,
+            plugin_version=tool.plugin.version,
+        )
+    except PluginInstallation.DoesNotExist as exc:
+        raise PermanentTaskError("Connector installation is no longer active") from exc
+    connection = PluginConnection.objects.filter(
+        installation=installation,
+        status=PluginConnection.Status.HEALTHY,
+    ).first()
+    return TOOL_ROUTER.execute(
+        installation=installation,
+        tool=tool,
+        arguments=arguments,
+        granted_permissions=installation.granted_permissions,
+        connection=connection,
+        approved=False,
+    )
+
 def execute_agent_run(task):
     try:
         agent_run = AgentRun.objects.select_related(
@@ -242,29 +312,81 @@ def execute_agent_run(task):
         raise PermanentTaskError("Published model configuration is unavailable") from exc
     if model_config.provider.tenant_id not in (None, task.tenant_id):
         raise PermanentTaskError("Published model provider is outside the task tenant")
+    offered_tools, tools_by_name = _load_agent_tools(task, config)
+    if offered_tools and "tools" not in model_config.capabilities:
+        raise PermanentTaskError("Selected model does not declare tools capability")
     messages = [
         {"role": "system", "content": config["system_prompt"]},
         {"role": "user", "content": agent_run.input_text},
     ]
-    try:
-        response = ModelGateway().complete(
-            model_config,
-            messages,
-            max_tokens=config["max_tokens"],
-            timeout_seconds=config["timeout_seconds"],
+    input_tokens = 0
+    output_tokens = 0
+    latency_ms = 0
+    total_tool_calls = 0
+    gateway = ModelGateway()
+    max_iterations = config.get("max_iterations", 1)
+    if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or not 1 <= max_iterations <= 8:
+        raise PermanentTaskError("Published agent max_iterations is invalid")
+    for _ in range(max_iterations):
+        try:
+            response = gateway.complete(
+                model_config,
+                messages,
+                max_tokens=config["max_tokens"],
+                timeout_seconds=config["timeout_seconds"],
+                tools=offered_tools if offered_tools else None,
+                tool_choice="auto" if offered_tools else None,
+            )
+        except ModelGatewayError as exc:
+            if exc.retryable:
+                raise RuntimeError(exc.code) from exc
+            raise PermanentTaskError(exc.code) from exc
+        input_tokens += response.input_tokens
+        output_tokens += response.output_tokens
+        latency_ms += response.latency_ms
+        if not response.tool_calls:
+            return {
+                "content": response.content,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "provider": response.provider,
+                "model": response.model,
+                "latency_ms": latency_ms,
+                "tool_calls": total_tool_calls,
+            }
+        if not offered_tools:
+            raise PermanentTaskError("Model returned tool calls but no tools were authorized")
+        try:
+            calls = parse_openai_tool_calls(
+                {"tool_calls": response.tool_calls},
+                offered_tools,
+            )
+        except ValueError as exc:
+            raise PermanentTaskError("Model returned invalid tool calls") from exc
+        total_tool_calls += len(calls)
+        if total_tool_calls > MAX_AGENT_TOOL_CALLS:
+            raise PermanentTaskError("Agent exceeded the total tool-call limit")
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.content or None,
+                "tool_calls": response.tool_calls,
+            }
         )
-    except ModelGatewayError as exc:
-        if exc.retryable:
-            raise RuntimeError(exc.code) from exc
-        raise PermanentTaskError(exc.code) from exc
-    return {
-        "content": response.content,
-        "input_tokens": response.input_tokens,
-        "output_tokens": response.output_tokens,
-        "provider": response.provider,
-        "model": response.model,
-        "latency_ms": response.latency_ms,
-    }
+        for call in calls:
+            tool = tools_by_name[call["name"]]
+            try:
+                result = _execute_agent_tool(task, tool, call["arguments"])
+            except ToolExecutionError as exc:
+                result = {"ok": False, "error": str(exc)}
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                }
+            )
+    raise PermanentTaskError("Agent reached max_iterations before producing a final answer")
 
 
 def execute_task(task, worker_id):
