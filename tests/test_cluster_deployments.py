@@ -495,9 +495,15 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
         key="durable-target-checkpoint",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
-    deployment.target_node = target_node
-    deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
-    deployment.save(update_fields=["target_node", "status"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+    assert handoff.data["worker_provisioning_allowed"] is False
 
     agent_client = APIClient()
     url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
@@ -565,9 +571,15 @@ def test_target_agent_checkpoint_rejects_replay_and_credentials(
         key="durable-target-checkpoint-replay",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
-    deployment.target_node = target_node
-    deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
-    deployment.save(update_fields=["target_node", "status"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+    assert handoff.data["worker_provisioning_allowed"] is False
     agent_client = APIClient()
     url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
     headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
