@@ -11,7 +11,9 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-const activeView = ref<"workspace" | "infrastructure">("workspace");
+const activeView = ref<
+  "dashboard" | "models" | "agents" | "workflows" | "infrastructure"
+>("dashboard");
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
 const currentUser = ref<CurrentUser | null>(null);
@@ -87,11 +89,19 @@ onUnmounted(() => {
       @close="authError = ''"
     />
     <nav class="main-nav" aria-label="Main navigation">
-      <button :class="{ active: activeView === 'workspace' }" @click="activeView = 'workspace'">
-        Platform Workspace
-      </button>
-      <button :class="{ active: activeView === 'infrastructure' }" @click="activeView = 'infrastructure'">
-        Infrastructure Agents
+      <button
+        v-for="item in [
+          { id: 'dashboard', label: 'Overview' },
+          { id: 'models', label: 'Model Manager' },
+          { id: 'agents', label: 'Agent Studio' },
+          { id: 'workflows', label: 'Workflow DAG' },
+          { id: 'infrastructure', label: 'Infrastructure Agents' },
+        ]"
+        :key="item.id"
+        :class="{ active: activeView === item.id }"
+        @click="activeView = item.id as typeof activeView"
+      >
+        {{ item.label }}
       </button>
     </nav>
     <section class="hero">
@@ -113,7 +123,10 @@ onUnmounted(() => {
         </a>
       </div>
     </section>
-    <WorkspaceView v-if="activeView === 'workspace'" />
+    <WorkspaceView
+      v-if="activeView !== 'infrastructure'"
+      :active-section="activeView === 'dashboard' ? 'overview' : activeView"
+    />
     <InfrastructureAgentsView v-else />
     <section class="overview">
       <div class="section-heading">
