@@ -9,6 +9,22 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agent_stack
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent_stack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://agent:agent_dev_password@localhost:5432/agent_stack
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,6 +39,11 @@ jobs:
         run: ruff check .
       - name: Test
         run: pytest
+      - name: Migration upgrade and downgrade round-trip
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
 
   web:
     runs-on: ubuntu-latest
