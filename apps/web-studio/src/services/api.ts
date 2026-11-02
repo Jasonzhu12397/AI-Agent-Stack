@@ -27,6 +27,37 @@ export type ModelConfig = {
   max_output_tokens: number;
   version: number;
 };
+export type AgentDraft = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  draft_config: Record<string, unknown>;
+  current_version: number;
+  is_archived: boolean;
+};
+export type AgentVersion = {
+  id: string;
+  agent_id: string;
+  version: number;
+  config_snapshot: Record<string, unknown>;
+  published_at: string;
+};
+export type AgentRun = {
+  id: string;
+  task_id: string;
+  agent_version_id: string;
+  task_status: string;
+  input_text: string;
+  output_text: string;
+  input_tokens: number;
+  output_tokens: number;
+  provider_name: string;
+  model_name: string;
+  latency_ms: number;
+  created_at: string;
+  finished_at: string | null;
+};
 export type ModelTestResult = {
   content: string;
   input_tokens: number;
@@ -203,6 +234,47 @@ export function createModelConfig(
       }),
     },
   );
+}
+
+export function getAgents(tenantId: string, projectId: string): Promise<AgentDraft[]> {
+  return request<AgentDraft[]>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agents/`,
+  );
+}
+
+export function createAgent(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    slug: string;
+    description: string;
+    draft_config: Record<string, unknown>;
+  },
+): Promise<AgentDraft> {
+  return request<AgentDraft>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agents/`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function publishAgent(agentId: string): Promise<AgentVersion> {
+  return request<AgentVersion>(`/api/v1/agents/${agentId}/publish/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getAgentRuns(agentId: string): Promise<AgentRun[]> {
+  return request<AgentRun[]>(`/api/v1/agents/${agentId}/runs/`);
+}
+
+export function createAgentRun(agentId: string, input: string): Promise<AgentRun> {
+  return request<AgentRun>(`/api/v1/agents/${agentId}/runs/`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ input }),
+  });
 }
 
 export function testModel(
