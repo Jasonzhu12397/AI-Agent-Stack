@@ -21,11 +21,29 @@ def claim_next_task(worker_id, lease_seconds=30):
             .filter(
                 Q(status=Task.Status.QUEUED, available_at__lte=now)
                 | Q(status=Task.Status.RUNNING, lease_expires_at__lt=now)
+                | Q(status=Task.Status.CANCEL_REQUESTED, lease_expires_at__lt=now)
             )
             .order_by("available_at", "created_at")
             .first()
         )
         if task is None:
+            return None
+        if task.status == Task.Status.CANCEL_REQUESTED:
+            task.status = Task.Status.CANCELLED
+            task.finished_at = now
+            task.lease_owner = None
+            task.lease_token = None
+            task.lease_expires_at = None
+            task.save(
+                update_fields=[
+                    "status",
+                    "finished_at",
+                    "lease_owner",
+                    "lease_token",
+                    "lease_expires_at",
+                    "updated_at",
+                ]
+            )
             return None
         if task.status == Task.Status.RUNNING and task.attempts >= task.max_attempts:
             task.status = Task.Status.FAILED
