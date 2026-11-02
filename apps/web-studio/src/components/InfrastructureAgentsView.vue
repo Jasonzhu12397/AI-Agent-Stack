@@ -9,6 +9,7 @@ import {
   getAgentCommands,
   getAgentNodes,
   getClusterDeployments,
+  runClusterDeploymentPostflight,
   getProjects,
   getTenants,
   revokeAgentNode,
@@ -38,12 +39,16 @@ const commandType = ref("node.health");
 const commandPayload = ref("{}");
 const enrollmentToken = ref("");
 const enrollmentNodeId = ref("");
+const deploymentTargetNodeIds = ref<Record<string, string>>({});
 const error = ref("");
 const info = ref("");
 const loading = ref(false);
 const submitting = ref(false);
 let refreshTimer: number | undefined;
 
+const availableTargetNodes = computed(() =>
+  nodes.value.filter((node) => node.node_type === "target_cluster" && node.status === "online"),
+);
 const selectedNode = computed(
   () => nodes.value.find((node) => node.id === selectedNodeId.value) ?? null,
 );
@@ -160,6 +165,14 @@ async function loadDeployments(): Promise<void> {
       selectedProjectId.value,
     );
     deployments.value = response.results;
+    for (const deployment of deployments.value) {
+      if (!deploymentTargetNodeIds.value[deployment.id]) {
+        const matchingNode = availableTargetNodes.value.find(
+          (node) => !node.cluster_name || node.cluster_name === deployment.cluster_name,
+        );
+        if (matchingNode) deploymentTargetNodeIds.value[deployment.id] = matchingNode.id;
+      }
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load cluster plans.";
   }
@@ -268,6 +281,28 @@ async function dispatchCommand(): Promise<void> {
     await loadCommands();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to dispatch command.";
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function runTargetPostflight(deployment: ClusterDeployment): Promise<void> {
+  const targetNodeId = deploymentTargetNodeIds.value[deployment.id];
+  if (!targetNodeId) {
+    error.value = "Select an online Target Cluster Agent first.";
+    return;
+  }
+  submitting.value = true;
+  error.value = "";
+  info.value = "";
+  try {
+    await runClusterDeploymentPostflight(deployment.id, targetNodeId);
+    selectedNodeId.value = targetNodeId;
+    info.value = "Read-only target cluster postflight command dispatched.";
+    await loadDeployments();
+    await loadCommands();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to dispatch target postflight.";
   } finally {
     submitting.value = false;
   }
@@ -526,6 +561,31 @@ onUnmounted(() => {
                   <li v-for="item in missingRequirements(deployment)" :key="item">{{ item }}</li>
                 </ul>
                 <p v-else>Input prerequisites are complete. Compatibility and real provisioning are still separate gates.</p>
+              </div>
+              <div
+                v-if="['plan_ready', 'control_plane_ready', 'workers_ready'].includes(deployment.status)"
+                class="target-postflight-row"
+              >
+                <el-select
+                  v-model="deploymentTargetNodeIds[deployment.id]"
+                  size="small"
+                  placeholder="Target Cluster Agent"
+                >
+                  <el-option
+                    v-for="node in availableTargetNodes"
+                    :key="node.id"
+                    :label="node.name + ' · ' + (node.cluster_name || 'unassigned')"
+                    :value="node.id"
+                  />
+                </el-select>
+                <el-button
+                  size="small"
+                  type="success"
+                  plain
+                  :disabled="!deploymentTargetNodeIds[deployment.id]"
+                  :loading="submitting"
+                  @click="runTargetPostflight(deployment)"
+                >Run target postflight</el-button>
               </div>
               <el-button
                 v-if="['preflight_queued', 'planning', 'plan_ready'].includes(deployment.status)"
