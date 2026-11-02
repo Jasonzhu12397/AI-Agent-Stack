@@ -792,4 +792,4 @@ class PluginConnection(models.Model):
         ]
 
 
-from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402
+from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
