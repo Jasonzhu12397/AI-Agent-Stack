@@ -55,7 +55,13 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"base_url": "OpenAI-compatible providers require an HTTPS URL."}
                 )
-            if parsed.hostname.lower() not in allowed_hosts:
+            if (
+                parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.hostname.lower() not in allowed_hosts
+            ):
                 raise serializers.ValidationError(
                     {"base_url": "Provider host is not in MODEL_PROVIDER_ALLOWED_HOSTS."}
                 )
