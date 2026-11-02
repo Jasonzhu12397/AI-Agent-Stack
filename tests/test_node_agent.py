@@ -1074,3 +1074,94 @@ def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch
     assert result["pivot_execution_allowed"] is False
     assert "management_controllers_not_ready" in result["blockers"]
     assert result["side_effects"] is False
+
+
+def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "deployment_id": "deployment-123",
+                    "generation": 1,
+                    "sequence": 4,
+                    "phase": "capi_pivot_preflight",
+                    "data": {"completed_steps": ["target_agent_bootstrap"]},
+                    "resume_available": True,
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+
+    checkpoint = client.restore_deployment_checkpoint("deployment-123")
+
+    request = captured["request"]
+    assert request.get_method() == "GET"
+    assert request.full_url.endswith(
+        "/api/v1/agent-runtime/deployments/deployment-123/checkpoint/?node_id=node-123"
+    )
+    assert request.get_header("Authorization") == "Bearer agent-token"
+    assert checkpoint["sequence"] == 4
+    assert checkpoint["resume_available"] is True
+
+
+def test_control_plane_client_saves_checkpoint_without_credentials(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return b'{"sequence":5,"idempotent":false}'
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        return Response()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+
+    result = client.save_deployment_checkpoint(
+        "deployment-123",
+        1,
+        5,
+        "capi_pivot_preflight",
+        {"completed_steps": ["target_agent_bootstrap"]},
+    )
+
+    request = captured["request"]
+    payload = json.loads(request.data.decode("utf-8"))
+    assert request.get_method() == "POST"
+    assert payload["sequence"] == 5
+    assert "token" not in json.dumps(payload).lower()
+    assert result["sequence"] == 5
+
+
+def test_control_plane_client_rejects_checkpoint_credentials():
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+
+    with pytest.raises(agent.NodeAgentError, match="INVALID_DEPLOYMENT_CHECKPOINT"):
+        client.save_deployment_checkpoint(
+            "deployment-123",
+            1,
+            6,
+            "capi_pivot_preflight",
+            {"completed_steps": [], "kubeconfig": "sensitive"},
+        )
