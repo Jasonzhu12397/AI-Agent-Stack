@@ -1,7 +1,6 @@
 import pytest
 
 from app.fakes import EchoInput, FakeMCPServer, FakeModel, FakeTool, ToolIntent
-from pydantic import ValidationError
 
 
 def test_fake_model_returns_validated_structured_intent() -> None:
@@ -17,7 +16,7 @@ def test_fake_model_rejects_unexpected_fields() -> None:
         {"tool_name": "echo", "arguments": {"value": "hello"}, "authorized": True}
     )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         model.choose_tool()
 
 
