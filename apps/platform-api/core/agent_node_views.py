@@ -362,6 +362,8 @@ class AgentRuntimeHeartbeatView(APIView):
     permission_classes = []
 
     def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
@@ -475,6 +477,10 @@ class AgentRuntimeResultView(APIView):
         if node is None:
             return Response({"detail": "Invalid or revoked node credential."}, status=401)
         lease_token = request.headers.get("X-Agent-Lease", "")
+        try:
+            lease_token = uuid.UUID(lease_token)
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "A valid X-Agent-Lease header is required."}, status=400)
         result = request.data.get("result", {})
         error = request.data.get("error")
         outcome = request.data.get("outcome")
