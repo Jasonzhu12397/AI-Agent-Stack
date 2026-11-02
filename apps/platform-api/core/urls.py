@@ -23,6 +23,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentCancelView,
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
+    ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
     KnowledgeBaseDocumentListCreateView,
