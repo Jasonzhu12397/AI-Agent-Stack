@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from core.models import Task
 
 
 class PermanentTaskError(Exception):
