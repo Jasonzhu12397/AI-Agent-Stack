@@ -501,6 +501,12 @@ class AgentCommand(models.Model):
             )
         ]
         indexes = [
-            models.Index(fields=["node", "status", "created_at"], name="agent_command_queue_idx"),
-            models.Index(fields=["tenant", "project", "created_at"], name="agent_command_scope_idx"),
+            models.Index(
+                fields=["node", "status", "created_at"],
+                name="agent_command_queue_idx",
+            ),
+            models.Index(
+                fields=["tenant", "project", "created_at"],
+                name="agent_command_scope_idx",
+            ),
         ]
