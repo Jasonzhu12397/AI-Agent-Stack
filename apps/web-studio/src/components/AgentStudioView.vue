@@ -48,6 +48,10 @@ async function loadWorkspace(): Promise<void> {
   agents.value = [];
   models.value = [];
   runs.value = [];
+  knowledgeBases.value = [];
+  availableTools.value = [];
+  selectedKnowledgeBaseIds.value = [];
+  selectedToolIds.value = [];
   selectedAgentId.value = "";
   selectedModelId.value = "";
   if (!props.tenantId || !props.projectId) return;
@@ -64,6 +68,28 @@ async function loadWorkspace(): Promise<void> {
     );
     models.value = modelPages.flat();
     if (models.value.length > 0) selectedModelId.value = models.value[0].id;
+    const [basePage, catalogPage, installationPage] = await Promise.all([
+      getKnowledgeBases(props.tenantId, props.projectId),
+      getPluginCatalog(props.tenantId),
+      getPluginInstallations(props.tenantId, props.projectId),
+    ]);
+    knowledgeBases.value = basePage.results;
+    const installedPluginIds = new Set(
+      installationPage.results
+        .filter((installation) => installation.status === "installed")
+        .map((installation) => installation.plugin_id),
+    );
+    availableTools.value = catalogPage.results
+      .filter((plugin) => installedPluginIds.has(plugin.id) && plugin.enabled)
+      .flatMap((plugin) =>
+        plugin.tools
+          .filter((tool) => tool.enabled)
+          .map((tool) => ({
+            ...tool,
+            plugin_name: plugin.name,
+            plugin_key: plugin.plugin_key,
+          })),
+      );
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load Agent Studio data.";
   }
@@ -93,9 +119,9 @@ async function createDraft(): Promise<void> {
       draft_config: {
         model_config_id: selectedModel.value.id,
         system_prompt: systemPrompt.value,
-        tool_allowlist: [],
-        knowledge_base_ids: [],
-        max_iterations: 1,
+        tool_allowlist: selectedToolIds.value,
+        knowledge_base_ids: selectedKnowledgeBaseIds.value,
+        max_iterations: selectedToolIds.value.length > 0 ? 4 : 1,
         timeout_seconds: 60,
         max_tokens: Math.min(2048, selectedModel.value.max_output_tokens),
       },
