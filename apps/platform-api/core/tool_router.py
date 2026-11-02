@@ -31,7 +31,11 @@ def _matches_type(value: Any, expected: str) -> bool:
         "array": lambda item: isinstance(item, list),
         "string": lambda item: isinstance(item, str),
         "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
-        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and (isinstance(item, int) or math.isfinite(item)),
+        "number": lambda item: (
+            isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and (isinstance(item, int) or math.isfinite(item))
+        ),
         "boolean": lambda item: isinstance(item, bool),
         "null": lambda item: item is None,
     }
