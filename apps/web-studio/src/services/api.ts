@@ -9,6 +9,32 @@ export type CurrentUser = {
 
 export type Tenant = { id: string; name: string; slug: string };
 export type Project = { id: string; tenant_id: string; name: string; slug: string };
+export type ModelProvider = {
+  id: string;
+  name: string;
+  provider_type: string;
+  base_url: string;
+  credential_configured: boolean;
+  enabled: boolean;
+};
+export type ModelConfig = {
+  id: string;
+  provider_id: string;
+  model_name: string;
+  display_name: string;
+  capabilities: string[];
+  context_window: number;
+  max_output_tokens: number;
+  version: number;
+};
+export type ModelTestResult = {
+  content: string;
+  input_tokens: number;
+  output_tokens: number;
+  provider: string;
+  model: string;
+  latency_ms: number;
+};
 export type Task = {
   id: string;
   task_type: string;
@@ -126,6 +152,73 @@ export function cancelTask(taskId: string): Promise<Task> {
     method: "POST",
     body: JSON.stringify({}),
   });
+}
+
+export function getModelProviders(tenantId: string): Promise<ModelProvider[]> {
+  return request<ModelProvider[]>(`/api/v1/tenants/${tenantId}/model-providers/`);
+}
+
+export function createFakeProvider(
+  tenantId: string,
+  name: string,
+  response: string,
+): Promise<ModelProvider> {
+  return request<ModelProvider>(`/api/v1/tenants/${tenantId}/model-providers/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      provider_type: "fake",
+      base_url: "",
+      credential_ref: "",
+      config: { response },
+    }),
+  });
+}
+
+export function getModelConfigs(
+  tenantId: string,
+  providerId: string,
+): Promise<ModelConfig[]> {
+  return request<ModelConfig[]>(
+    `/api/v1/tenants/${tenantId}/model-providers/${providerId}/models/`,
+  );
+}
+
+export function createModelConfig(
+  tenantId: string,
+  providerId: string,
+  modelName: string,
+  displayName: string,
+): Promise<ModelConfig> {
+  return request<ModelConfig>(
+    `/api/v1/tenants/${tenantId}/model-providers/${providerId}/models/`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model_name: modelName,
+        display_name: displayName,
+        capabilities: ["chat", "tools"],
+        context_window: 32768,
+        max_output_tokens: 4096,
+      }),
+    },
+  );
+}
+
+export function testModel(
+  tenantId: string,
+  modelConfigId: string,
+  message: string,
+): Promise<ModelTestResult> {
+  return request<ModelTestResult>(
+    `/api/v1/tenants/${tenantId}/model-configs/${modelConfigId}/test/`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        messages: [{ role: "user", content: message }],
+      }),
+    },
+  );
 }
 
 export { apiBase };

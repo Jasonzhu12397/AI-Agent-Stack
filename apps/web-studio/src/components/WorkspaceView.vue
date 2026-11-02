@@ -226,6 +226,7 @@ onUnmounted(() => {
           </el-table-column>
         </el-table>
         <p class="task-note">This first queue milestone runs only safe demo.echo and demo.sleep handlers. Agent and Workflow execution will be connected in later milestones.</p>
+        <ModelManagerView :tenant-id="selectedTenantId" />
       </section>
     </div>
   </section>
