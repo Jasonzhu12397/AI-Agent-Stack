@@ -414,7 +414,7 @@ def execute_workflow_run(task, worker_id, renew_lease):
     if workflow.tenant_id != task.tenant_id or workflow.project_id != task.project_id:
         raise WorkflowValidationError("Workflow run scope does not match its task.")
     graph = validate_workflow_definition(workflow_run.workflow_version.definition_snapshot)
-    validate_model_references(graph, workflow.tenant)
+    validate_model_references(graph, workflow.tenant, workflow.project)
     state = dict(workflow_run.state or {})
     state.setdefault("input", workflow_run.input_data)
     active_nodes = set()
