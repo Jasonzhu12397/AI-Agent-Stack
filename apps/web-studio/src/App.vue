@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import LoginView from "./components/LoginView.vue";
 import WorkspaceView from "./components/WorkspaceView.vue";
+import InfrastructureAgentsView from "./components/InfrastructureAgentsView.vue";
 import {
   apiBase,
   getCurrentUser,
@@ -10,6 +11,7 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
+const activeView = ref<"workspace" | "infrastructure">("workspace");
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
 const currentUser = ref<CurrentUser | null>(null);
@@ -72,7 +74,7 @@ onUnmounted(() => {
         <span>AI Agent <strong>Studio</strong></span>
       </a>
       <div class="account-actions">
-        <el-tag effect="plain" type="info">M0 · DEVELOPMENT</el-tag>
+        <el-tag effect="plain" type="info">DUAL-AGENT PREVIEW</el-tag>
         <span v-if="currentUser" class="account-name">{{ currentUser.username }}</span>
         <el-button v-if="currentUser" text @click="signOut">Sign out</el-button>
       </div>
@@ -84,6 +86,14 @@ onUnmounted(() => {
       :closable="true"
       @close="authError = ''"
     />
+    <nav class="main-nav" aria-label="Main navigation">
+      <button :class="{ active: activeView === 'workspace' }" @click="activeView = 'workspace'">
+        Platform Workspace
+      </button>
+      <button :class="{ active: activeView === 'infrastructure' }" @click="activeView = 'infrastructure'">
+        Infrastructure Agents
+      </button>
+    </nav>
     <section class="hero">
       <p class="eyebrow">AGENT PLATFORM</p>
       <h1>Build, orchestrate<br /><span>and govern AI agents.</span></h1>
@@ -103,7 +113,8 @@ onUnmounted(() => {
         </a>
       </div>
     </section>
-    <WorkspaceView />
+    <WorkspaceView v-if="activeView === 'workspace'" />
+    <InfrastructureAgentsView v-else />
     <section class="overview">
       <div class="section-heading">
         <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>
