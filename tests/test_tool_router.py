@@ -36,7 +36,7 @@ def fixture(risk="low"):
         },
         output_schema={
             "type": "object",
-            "properties": {"items": {"type": "array"}},
+            "properties": {"items": {"type": "array", "items": {"type": "string"}}},
             "required": ["items"],
             "additionalProperties": False,
         },
