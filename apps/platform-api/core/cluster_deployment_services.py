@@ -122,7 +122,8 @@ def handle_deployment_command_result(
         node_count = result.get("node_count")
         not_ready_nodes = result.get("not_ready_nodes")
         valid_result = (
-            result.get("ready") is True
+            command.node.node_type == "target_cluster"
+            and result.get("ready") is True
             and isinstance(node_count, int)
             and not isinstance(node_count, bool)
             and node_count > 0
