@@ -188,3 +188,21 @@ def test_kubernetes_resource_summaries_omit_pod_environment_and_redact_event_sec
     assert "do-not-return-this" not in str(pod_summary)
     assert "do-not-return-this" not in event_summary["message"]
     assert "[REDACTED]" in event_summary["message"]
+
+
+def test_agent_health_files_distinguish_process_liveness_from_control_plane_readiness(
+    monkeypatch,
+    tmp_path,
+):
+    liveness = tmp_path / "agent-live"
+    readiness = tmp_path / "agent-ready"
+    monkeypatch.setenv("AGENT_LIVENESS_FILE", str(liveness))
+    monkeypatch.setenv("AGENT_READINESS_FILE", str(readiness))
+
+    agent.touch_health_files()
+    assert agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
+    assert not agent.health_file_is_fresh("AGENT_READINESS_FILE")
+
+    agent.touch_health_files(readiness=True)
+    assert agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
+    assert agent.health_file_is_fresh("AGENT_READINESS_FILE")
