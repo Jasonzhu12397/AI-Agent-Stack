@@ -284,7 +284,7 @@ class AgentPublishView(APIView):
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-            max_iterations = config.get("max_iterations", 1)
+            max_iterations = config.get("max_iterations", 4)
             timeout_seconds = config.get("timeout_seconds", 60)
             max_tokens = config.get("max_tokens", 2048)
             if (
