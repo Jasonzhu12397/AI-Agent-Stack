@@ -28,11 +28,12 @@ def test_session_login_current_user_and_logout():
     assert current_response.status_code == 200
     assert current_response.json()["email"] == "session@example.test"
 
+    refreshed_csrf = client.get("/api/v1/auth/csrf/").json()["csrf_token"]
     logout_response = client.post(
         "/api/v1/auth/logout/",
         {},
         format="json",
-        HTTP_X_CSRFTOKEN=csrf_token,
+        HTTP_X_CSRFTOKEN=refreshed_csrf,
     )
     assert logout_response.status_code == 204
     assert client.get("/api/v1/auth/me/").status_code == 403
