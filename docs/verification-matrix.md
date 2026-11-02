@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41425741918](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41425741918), commit `f496d8d141d5fbdd0b702b070803d379e794d488`, completed successfully across Python, Vue and Compose jobs. Pytest: 95 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, persisted EPH preflight → cluster-plan orchestration, the Vue dashboard and dual-agent console.
+[GitHub Actions run 41426913466](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41426913466), commit `6660ae8e32508ddf543f029b28f994eb6aa03ccb`, completed successfully across Python, Vue and Compose jobs. Pytest: 103 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, persisted EPH preflight → cluster-plan orchestration, Vue dashboard, dual-agent console and Integration Hub registry/installation metadata. Documentation-only updates after this commit are undergoing CI.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
