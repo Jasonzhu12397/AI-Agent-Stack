@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41420995224](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41420995224), commit `02d1ca8c3779ce9ac7bcd3096fec551f0544165a`, completed successfully across Python, Vue and Compose jobs. Pytest: 61 passed. Ruff, Django checks, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the basic Workflow DAG backend, Workflow Studio UI, request validation and idempotency tests. Later documentation commits are being revalidated.
+[GitHub Actions run 41421249429](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421249429), commit `8e2d51233e163b0d0e4661dea1cdd90e0ca47789`, completed successfully across Python, Vue and Compose jobs. Pytest: 61 passed. Ruff, Django checks, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the basic Workflow DAG backend, Workflow Studio UI, request validation, idempotency tests and Workflow implementation documentation.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
