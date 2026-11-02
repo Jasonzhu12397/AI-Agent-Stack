@@ -6,7 +6,7 @@ from django.views.decorators.http import require_GET
 from rest_framework.generics import ListAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from core.models import Project, ProjectMembership, Tenant
+from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from core.pagination import TenantPagination
 from core.permissions import IsTenantAdmin
 from core.serializers import ProjectSerializer, TenantSerializer
@@ -61,14 +61,15 @@ class TenantProjectListView(ListCreateAPIView):
         return self._tenant
 
     def get_queryset(self):
-        return (
-            Project.objects.filter(
-                tenant=self.get_tenant(),
-                memberships__user=self.request.user,
-            )
-            .order_by("name")
-            .distinct()
-        )
+        tenant = self.get_tenant()
+        queryset = Project.objects.filter(tenant=tenant)
+        if not TenantMembership.objects.filter(
+            tenant=tenant,
+            user=self.request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists():
+            queryset = queryset.filter(memberships__user=self.request.user)
+        return queryset.order_by("name").distinct()
 
     def perform_create(self, serializer):
         project = serializer.save(tenant=self.get_tenant())
