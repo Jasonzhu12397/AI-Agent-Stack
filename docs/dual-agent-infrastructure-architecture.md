@@ -141,3 +141,10 @@ The current EPH planner is a read-only dry-run adapter. A plan may be stored as 
 The platform validates the EPH plan hash against the exact immutable cluster specification, checks cluster name/version and replica counts, and validates the preflight CPU count before advancing the deployment state. Target postflight results must come from a Target Cluster Agent and include a positive integer node count with every node Ready. Agent command polling also enforces each enrolled node role's command allowlist, including for commands inserted by internal workflows. Target postflight retries reuse the same idempotent command.
 
 **Provisioning limitation:** the production CAPI/Metal3/Ironic mutation adapter and its provider-specific manifests are not enabled in this milestone. `cluster.provision` remains approval-gated and the node-agent runner refuses to execute it without a configured adapter. Do not interpret `provisioning_ready` from a dry-run as a provisioning-completed signal.
+
+
+## Live Provider API Discovery (read-only)
+
+The EPH command `cluster.provider.discover` queries the connected management API's discovery endpoints and reports the live preferred API version plus required resource availability for CAPI core, Kubeadm bootstrap, Kubeadm control plane, CAPM3 and Metal3. It does not infer provider release versions from Kubernetes API versions. The result separately marks Ironic, IPA, BMC reachability and machine-image verification as unchecked because those are not established by Kubernetes API discovery. Missing CRDs/resources are returned as stable `missing_requirements` entries.
+
+This is a read-only capability check, not a provider compatibility pass: CRD OpenAPI schema validation, controller deployment health, provider release/image verification, manifest generation, server-side dry-run apply and all mutations remain disabled. A successful discovery result must never set `provisioning_ready`; the current command explicitly returns `provisioning_ready: false` and `mutation_adapter_enabled: false`.
