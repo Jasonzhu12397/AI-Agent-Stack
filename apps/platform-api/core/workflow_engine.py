@@ -254,12 +254,17 @@ def validate_model_references(graph, tenant, project):
                 is_archived=False,
                 embedding_model__enabled=True,
                 embedding_model__provider__enabled=True,
-            ).select_related("embedding_model")
+            ).select_related("embedding_model", "embedding_model__provider")
             if knowledge_bases.count() != len(config["knowledge_base_ids"]):
                 raise WorkflowValidationError(
-                    "A workflow knowledge search node references an unavailable project knowledge base."
+                    "A workflow knowledge search node references an unavailable "
+                    "project knowledge base."
                 )
-            if any("embeddings" not in item.embedding_model.capabilities for item in knowledge_bases):
+            if any(
+                "embeddings" not in item.embedding_model.capabilities
+                or item.embedding_model.provider.tenant_id not in (None, tenant.id)
+                for item in knowledge_bases
+            ):
                 raise WorkflowValidationError(
                     "Workflow knowledge search models must support embeddings."
                 )
