@@ -205,7 +205,7 @@ def test_cluster_delivery_runs_preflight_then_plan_and_persists_plan_result(
     deployment.refresh_from_db()
     assert plan_result.status_code == 200
     assert deployment.status == ClusterDeployment.Status.PLAN_READY
-    assert deployment.plan_hash == "a" * 64
+    assert deployment.plan_hash == cluster_plan_hash()
     assert deployment.plan_result["adapter_enabled"] is False
     assert deployment.plan_result["missing_requirements"] == [
         "provider_versions.cluster_api"
