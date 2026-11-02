@@ -191,3 +191,10 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .dashboard-task strong { color: #d3deef; font-size: 10px; overflow-wrap: anywhere; }
 .dashboard-task small { color: #73829a; font: 9px "DM Mono", monospace; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-panels { grid-template-columns: 1fr; } .dashboard-banner { align-items: flex-start; flex-direction: column; } }
+
+.cluster-build-form { margin-bottom: 14px; border-color: #5b638f; background: linear-gradient(145deg, #111b31, #0c1422); }
+.cluster-build-form strong { color: #dce6ff; font-size: 12px; }
+.cluster-build-form p { margin: 5px 0 0; color: #8999b6; font-size: 10px; line-height: 1.6; }
+.replica-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.replica-fields .el-input-number { width: 100%; }
+.replica-fields .el-input-number .el-input__wrapper { background: #0b1321; box-shadow: 0 0 0 1px #34435c inset; }
