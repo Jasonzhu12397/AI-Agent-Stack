@@ -598,3 +598,195 @@ class ClusterDeployment(models.Model):
                 name="cluster_deploy_node_idx",
             ),
         ]
+
+
+class PluginDefinition(models.Model):
+    class ConnectorType(models.TextChoices):
+        NATIVE = "native", "Native"
+        MCP = "mcp", "MCP"
+        HTTP = "http", "HTTP"
+        OPENAPI = "openapi", "OpenAPI"
+        CUSTOM = "custom", "Custom"
+
+    class ReviewStatus(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="plugin_definitions",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_plugin_definitions",
+    )
+    plugin_key = models.SlugField(max_length=100)
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    version = models.CharField(max_length=40)
+    connector_type = models.CharField(max_length=16, choices=ConnectorType.choices)
+    maintainer = models.CharField(max_length=120, blank=True)
+    license = models.CharField(max_length=80, blank=True)
+    source_url = models.URLField(max_length=500, blank=True)
+    manifest = models.JSONField(default=dict)
+    review_status = models.CharField(
+        max_length=16,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.DRAFT,
+    )
+    enabled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "plugin_key", "version"],
+                name="uniq_plugin_key_version_per_tenant",
+            )
+        ]
+
+
+class PluginTool(models.Model):
+    class RiskLevel(models.TextChoices):
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+        CRITICAL = "critical", "Critical"
+
+    class IdempotencyMode(models.TextChoices):
+        NONE = "none", "None"
+        READ_ONLY = "read_only", "Read only"
+        IDEMPOTENT = "idempotent", "Idempotent"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    plugin = models.ForeignKey(
+        PluginDefinition,
+        on_delete=models.CASCADE,
+        related_name="tools",
+    )
+    name = models.SlugField(max_length=100)
+    description = models.TextField(blank=True)
+    input_schema = models.JSONField(default=dict)
+    output_schema = models.JSONField(default=dict)
+    required_permissions = models.JSONField(default=list)
+    risk_level = models.CharField(
+        max_length=16,
+        choices=RiskLevel.choices,
+        default=RiskLevel.LOW,
+    )
+    timeout_seconds = models.PositiveSmallIntegerField(default=30)
+    retry_policy = models.JSONField(default=dict)
+    idempotency_mode = models.CharField(
+        max_length=16,
+        choices=IdempotencyMode.choices,
+        default=IdempotencyMode.NONE,
+    )
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plugin", "name"],
+                name="uniq_plugin_tool_name",
+            )
+        ]
+
+
+class PluginInstallation(models.Model):
+    class Status(models.TextChoices):
+        INSTALLED = "installed", "Installed"
+        DISABLED = "disabled", "Disabled"
+        UNINSTALLED = "uninstalled", "Uninstalled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="plugin_installations",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="plugin_installations",
+    )
+    plugin = models.ForeignKey(
+        PluginDefinition,
+        on_delete=models.PROTECT,
+        related_name="installations",
+    )
+    plugin_version = models.CharField(max_length=40)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.INSTALLED,
+    )
+    granted_permissions = models.JSONField(default=list)
+    config = models.JSONField(default=dict)
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="plugin_installations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["plugin__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "plugin"],
+                name="uniq_plugin_installation_per_project",
+            )
+        ]
+
+
+class PluginConnection(models.Model):
+    class AuthType(models.TextChoices):
+        NONE = "none", "None"
+        CREDENTIAL_REF = "credential_ref", "Credential reference"
+        OAUTH_REF = "oauth_ref", "OAuth reference"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        HEALTHY = "healthy", "Healthy"
+        ERROR = "error", "Error"
+        DISABLED = "disabled", "Disabled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    installation = models.ForeignKey(
+        PluginInstallation,
+        on_delete=models.CASCADE,
+        related_name="connections",
+    )
+    name = models.CharField(max_length=120)
+    auth_type = models.CharField(
+        max_length=20,
+        choices=AuthType.choices,
+        default=AuthType.NONE,
+    )
+    credential_ref = models.CharField(max_length=200, blank=True)
+    config = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    last_health_check_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["installation", "name"],
+                name="uniq_plugin_connection_name",
+            )
+        ]
