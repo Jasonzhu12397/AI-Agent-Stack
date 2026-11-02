@@ -564,7 +564,7 @@ onUnmounted(() => {
                 <p v-else>Input prerequisites are complete. Compatibility and real provisioning are still separate gates.</p>
               </div>
               <div
-                v-if="deployment.status === 'plan_ready' ? deployment.plan_result?.provisioning_ready === true : ['control_plane_ready', 'workers_ready'].includes(deployment.status)"
+                v-if="deployment.status === 'workers_ready' && deployment.plan_result?.adapter_enabled === true && deployment.plan_result?.provisioning_completed === true"
                 class="target-postflight-row"
               >
                 <el-select
