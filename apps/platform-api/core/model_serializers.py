@@ -27,6 +27,27 @@ class ModelProviderReadSerializer(serializers.ModelSerializer):
         return bool(obj.credential_ref)
 
 
+def contains_secret_key(value):
+    secret_names = {
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "authorization",
+        "bearer_token",
+    }
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key.lower() in secret_names or contains_secret_key(child):
+                return True
+    elif isinstance(value, list):
+        return any(contains_secret_key(item) for item in value)
+    return False
+
+
 class ModelProviderWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = ModelProvider
@@ -39,6 +60,10 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
         config = attrs.get("config", {})
         if not isinstance(config, dict):
             raise serializers.ValidationError({"config": "Config must be a JSON object."})
+        if contains_secret_key(config):
+            raise serializers.ValidationError(
+                {"config": "Secret material must be stored through credential_ref, not config."}
+            )
         if provider_type == ModelProvider.ProviderType.FAKE:
             if base_url or credential_ref:
                 raise serializers.ValidationError(
