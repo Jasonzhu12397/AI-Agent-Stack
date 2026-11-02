@@ -376,7 +376,7 @@ def execute_agent_run(task):
     latency_ms = 0
     total_tool_calls = 0
     gateway = ModelGateway()
-    max_iterations = config.get("max_iterations", 1)
+    max_iterations = config.get("max_iterations", 4)
     if (
         not isinstance(max_iterations, int)
         or isinstance(max_iterations, bool)
