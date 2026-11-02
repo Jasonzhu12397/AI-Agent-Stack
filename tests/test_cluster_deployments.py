@@ -1,3 +1,5 @@
+# ruff: noqa: I001
+import datetime
 import hashlib
 
 import pytest
@@ -114,7 +116,7 @@ def test_cluster_deployment_requires_fresh_eph_agent_heartbeat(
     cluster_delivery_workspace,
 ):
     user, tenant, project, node, token, client = cluster_delivery_workspace
-    node.last_seen_at = timezone.now() - timezone.timedelta(minutes=2)
+    node.last_seen_at = timezone.now() - datetime.timedelta(minutes=2)
     node.save(update_fields=["last_seen_at"])
 
     response = create_deployment(client, tenant, project, node)
