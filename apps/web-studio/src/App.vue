@@ -152,7 +152,7 @@ onUnmounted(() => {
             {{ databaseStatus }}
           </el-tag>
         </div>
-        <div class="status-row"><span>Worker</span><el-tag type="info">Heartbeat service</el-tag></div>
+        <div class="status-row"><span>Worker</span><el-tag type="info">Durable PostgreSQL queue</el-tag></div>
       </div>
     </section>
     <section class="milestones">
@@ -160,10 +160,10 @@ onUnmounted(() => {
       <div class="milestone-grid">
         <article
           v-for="(item, index) in [
-            { code: 'M0', title: 'Platform foundation', detail: 'API, Worker, storage and developer environment' },
-            { code: 'M1', title: 'Agent runtime', detail: 'Agent versions, asynchronous runs and tool routing' },
-            { code: 'M2', title: 'Workflow engine', detail: 'Visual DAG authoring and validated execution' },
-            { code: 'M3', title: 'Human approval', detail: 'Policy decisions and hash-bound approvals' }
+            { code: 'M0', title: 'Platform foundation', detail: 'Django API, Vue Studio, PostgreSQL, Worker and Compose' },
+            { code: 'M1', title: 'Agent runtime', detail: 'Published Agent versions and asynchronous LLM runs' },
+            { code: 'M2', title: 'Workflow engine', detail: 'Versioned DAG, LLM/Condition nodes and persisted steps' },
+            { code: 'M3', title: 'Dual-agent control', detail: 'EPH and Target Cluster enrollment, command leases and approval gate' }
           ]"
           :key="item.code"
           class="milestone"
@@ -171,12 +171,12 @@ onUnmounted(() => {
           <span class="milestone-code" :class="{ current: index === 0 }">{{ item.code }}</span>
           <h3>{{ item.title }}</h3>
           <p>{{ item.detail }}</p>
-          <span class="milestone-state">{{ index === 0 ? "IN PROGRESS" : "PLANNED" }}</span>
+          <span class="milestone-state">{{ ["VERIFIED BASELINE", "PARTIAL", "PARTIAL", "IN PROGRESS"][index] }}</span>
         </article>
       </div>
     </section>
     <footer>
-      <span>AI Agent Studio <span class="muted">·</span> M0 foundation</span>
+      <span>AI Agent Studio <span class="muted">·</span> M0 verified, M1–M3 partial</span>
       <span>Policy first. Observable by design.</span>
     </footer>
   </main>
