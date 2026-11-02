@@ -107,7 +107,9 @@ def handle_deployment_command_result(
             deployment.error = {
                 "code": "TARGET_CLUSTER_POSTFLIGHT_FAILED",
                 "not_ready_nodes": (
-                    not_ready_nodes if isinstance(not_ready_nodes, list) else []
+                    [str(item)[:120] for item in not_ready_nodes[:100]]
+                    if isinstance(not_ready_nodes, list)
+                    else []
                 ),
             }
         deployment.finished_at = timezone.now()
