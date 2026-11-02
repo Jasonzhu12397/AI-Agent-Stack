@@ -281,7 +281,10 @@ def test_target_agent_runs_postflight_and_completes_deployment(cluster_delivery_
 
     postflight = client.post(
         f"/api/v1/cluster-deployments/{deployment_id}/target-postflight/",
-        {"target_node_id": str(target_node.id)},
+        {
+            "target_node_id": str(target_node.id),
+            "confirmation": "cluster_provisioned",
+        },
         format="json",
     )
     assert postflight.status_code == 202
