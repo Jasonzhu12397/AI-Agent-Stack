@@ -1,5 +1,9 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 from core.models import (
+    KnowledgeBase,
     ModelConfig,
     ModelProvider,
     Project,
@@ -496,3 +500,128 @@ def test_workflow_run_idempotency_and_request_shape(workflow_workspace):
     assert conflict.status_code == 409
     assert invalid_shape.status_code == 400
     assert Task.objects.filter(task_type="workflow.run").count() == 1
+
+
+
+@pytest.mark.django_db
+def test_workflow_knowledge_search_node_retrieves_pinned_base(workflow_workspace):
+    user, tenant, project, chat_model = workflow_workspace
+    embedding_provider = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="Workflow embedding provider",
+        provider_type=ModelProvider.ProviderType.FAKE,
+    )
+    embedding_model = ModelConfig.objects.create(
+        provider=embedding_provider,
+        model_name="workflow-embedding",
+        display_name="Workflow embedding",
+        capabilities=["embeddings"],
+    )
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        embedding_model=embedding_model,
+        name="Workflow runbooks",
+        slug="workflow-runbooks",
+    )
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "search",
+                "type": "knowledge_search",
+                "config": {
+                    "knowledge_base_ids": [str(knowledge_base.id)],
+                    "query_template": "{{input}}",
+                    "limit": 3,
+                },
+            },
+            {
+                "id": "answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(chat_model.id),
+                    "prompt_template": "Answer using these references: {{input}}",
+                    "input_from": "search",
+                    "max_tokens": 256,
+                    "timeout_seconds": 20,
+                },
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "config": {"source_node": "answer"},
+            },
+        ],
+        "edges": [
+            {"source": "start", "target": "search"},
+            {"source": "search", "target": "answer"},
+            {"source": "answer", "target": "end"},
+        ],
+    }
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Knowledge workflow",
+        slug="knowledge-workflow",
+        draft_definition=definition,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    published = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    run_response = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "How do I check cluster health?"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-knowledge-run",
+    )
+    assert run_response.status_code == 202
+
+    class FakeGateway:
+        def __init__(self):
+            self.messages = []
+
+        def complete(self, model_config, messages, **kwargs):
+            self.messages = list(messages)
+            return SimpleNamespace(
+                content="Check node readiness and API health.",
+                input_tokens=12,
+                output_tokens=8,
+                latency_ms=5,
+                provider="fake",
+                model="workflow-fake",
+                tool_calls=[],
+            )
+
+    gateway = FakeGateway()
+    with patch(
+        "core.workflow_engine.retrieve_context",
+        return_value=[
+            {
+                "text": "Check that all nodes are Ready.",
+                "score": 0.92,
+                "document_id": "doc-1",
+                "chunk_id": "doc-1:0",
+            }
+        ],
+    ) as retrieval:
+        with patch("core.workflow_engine.ModelGateway", return_value=gateway):
+            assert process_once("workflow-knowledge-worker") is True
+
+    run = WorkflowRun.objects.select_related("task").get(pk=run_response.data["id"])
+    search_step = WorkflowStepRun.objects.get(workflow_run=run, node_id="search")
+    assert run.task.status == Task.Status.SUCCEEDED
+    assert run.output_data["content"] == "Check node readiness and API health."
+    assert search_step.output_data["results"][0]["chunk_id"] == "doc-1:0"
+    assert "UNTRUSTED RETRIEVED REFERENCE DATA" in gateway.messages[1]["content"]
+    assert retrieval.call_args.kwargs["metadata_filters"] == {
+        "knowledge_base_id": str(knowledge_base.id)
+    }
