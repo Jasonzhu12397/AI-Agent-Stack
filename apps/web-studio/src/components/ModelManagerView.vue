@@ -2,6 +2,7 @@
 import { ref, watch } from "vue";
 import {
   createFakeProvider,
+  createOpenAICompatibleProvider,
   createModelConfig,
   getModelConfigs,
   getModelProviders,
@@ -19,6 +20,11 @@ const providerName = ref("Local Fake Provider");
 const fakeResponse = ref("Hello. I am the local test model.");
 const modelName = ref("fake-chat");
 const modelDisplayName = ref("Fake Chat");
+const openAIProviderName = ref("Local Ollama");
+const openAIBaseUrl = ref("http://ollama:11434/v1");
+const openAICredentialRef = ref("");
+const embeddingModelName = ref("nomic-embed-text");
+const embeddingDisplayName = ref("Local Embeddings");
 const testPrompt = ref("Explain what an AI Agent is in one sentence.");
 const testResult = ref<ModelTestResult | null>(null);
 const error = ref("");
@@ -65,6 +71,45 @@ async function addFakeProvider(): Promise<void> {
     selectedProviderId.value = provider.id;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create provider.";
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function addOpenAIProvider(): Promise<void> {
+  busy.value = true;
+  error.value = "";
+  try {
+    const provider = await createOpenAICompatibleProvider(
+      props.tenantId,
+      openAIProviderName.value.trim(),
+      openAIBaseUrl.value.trim(),
+      openAICredentialRef.value.trim(),
+    );
+    providers.value = [...providers.value, provider];
+    selectedProviderId.value = provider.id;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to create model provider.";
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function addEmbeddingModel(): Promise<void> {
+  if (!selectedProviderId.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    const model = await createModelConfig(
+      props.tenantId,
+      selectedProviderId.value,
+      embeddingModelName.value.trim(),
+      embeddingDisplayName.value.trim(),
+      ["embeddings"],
+    );
+    models.value = [model, ...models.value];
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to create embedding model.";
   } finally {
     busy.value = false;
   }
@@ -130,12 +175,34 @@ watch(selectedProviderId, () => void loadModels());
         <el-input v-model="providerName" placeholder="New fake provider name" />
         <el-input v-model="fakeResponse" type="textarea" :rows="2" placeholder="Deterministic fake response" />
         <el-button type="primary" plain :loading="busy" @click="addFakeProvider">Add fake provider</el-button>
+        <el-divider content-position="left">OpenAI-compatible provider</el-divider>
+        <el-input v-model="openAIProviderName" placeholder="Provider name" />
+        <el-input v-model="openAIBaseUrl" placeholder="Base URL, e.g. http://ollama:11434/v1" />
+        <el-input v-model="openAICredentialRef" placeholder="Credential reference, e.g. env:OLLAMA_KEY (optional locally)" />
+        <el-button
+          type="primary"
+          plain
+          :loading="busy"
+          :disabled="!openAIProviderName.trim() || !openAIBaseUrl.trim()"
+          @click="addOpenAIProvider"
+        >Add OpenAI-compatible provider</el-button>
+        <p class="task-note">The server must allowlist the endpoint host. Never enter API key values here; use env: references.</p>
       </div>
       <div class="model-manager-form">
         <h4>Model configuration</h4>
         <el-input v-model="modelName" placeholder="Model identifier" />
         <el-input v-model="modelDisplayName" placeholder="Display name" />
-        <el-button type="primary" :disabled="!selectedProviderId" :loading="busy" @click="addModel">Add model version</el-button>
+        <el-button type="primary" :disabled="!selectedProviderId" :loading="busy" @click="addModel">Add chat model version</el-button>
+        <el-divider content-position="left">Embedding model</el-divider>
+        <el-input v-model="embeddingModelName" placeholder="Embedding model identifier" />
+        <el-input v-model="embeddingDisplayName" placeholder="Embedding display name" />
+        <el-button
+          type="success"
+          plain
+          :disabled="!selectedProviderId"
+          :loading="busy"
+          @click="addEmbeddingModel"
+        >Add embedding model</el-button>
         <p class="task-note">Model versions are immutable. Provider credentials are references only and are never returned to the browser.</p>
       </div>
     </div>
