@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -403,12 +404,10 @@ class AgentRuntimePollView(APIView):
                 AgentCommand.objects.select_for_update(skip_locked=True)
                 .filter(node=node)
                 .filter(
-                    (models_q := __import__("django.db.models", fromlist=["Q"]).Q(status=AgentCommand.Status.QUEUED))
-                    | (
-                        __import__("django.db.models", fromlist=["Q"]).Q(
-                            status=AgentCommand.Status.RUNNING,
-                            lease_expires_at__lt=now,
-                        )
+                    Q(status=AgentCommand.Status.QUEUED)
+                    | Q(
+                        status=AgentCommand.Status.RUNNING,
+                        lease_expires_at__lt=now,
                     )
                 )
                 .order_by("created_at")
