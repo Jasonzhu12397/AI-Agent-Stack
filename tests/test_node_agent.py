@@ -338,6 +338,9 @@ def test_complete_cluster_plan_reports_missing_adapter_separately():
             "baremetal_host": f"bmh-{index:02d}",
             "role": "control-plane" if index < 3 else "worker",
             "bmc_credential_ref": f"secret-ref-{index:02d}",
+            "boot_mac": f"02:00:00:00:00:{index:02d}",
+            "root_device_hints": {"deviceName": "/dev/sda"},
+            "network_data_ref": f"network-template-{index:02d}",
         }
         for index in range(4)
     ]
