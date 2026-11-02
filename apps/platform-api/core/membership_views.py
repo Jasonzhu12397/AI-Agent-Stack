@@ -140,13 +140,6 @@ class TenantMemberDetailView(APIView):
                 ).count()
                 if owner_count <= 1:
                     return Response({"detail": "A tenant must retain at least one owner."}, status=409)
-            if membership.role == TenantMembership.Role.OWNER:
-                owner_count = TenantMembership.objects.filter(
-                    tenant=tenant,
-                    role=TenantMembership.Role.OWNER,
-                ).count()
-                if owner_count <= 1:
-                    return Response({"detail": "A tenant must retain at least one owner."}, status=409)
             ProjectMembership.objects.filter(
                 project__tenant=tenant,
                 user=membership.user,
