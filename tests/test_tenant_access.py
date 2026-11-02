@@ -195,3 +195,25 @@ def test_project_slug_must_be_unique_within_tenant(user_factory):
     )
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_authenticated_user_can_create_tenant_and_become_owner(user_factory):
+    user = user_factory("tenant-creator")
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        "/api/v1/tenants/",
+        {"name": "Created tenant", "slug": "created-tenant"},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    tenant = Tenant.objects.get(slug="created-tenant")
+    assert response.data["id"] == str(tenant.id)
+    assert TenantMembership.objects.filter(
+        tenant=tenant,
+        user=user,
+        role=TenantMembership.Role.OWNER,
+    ).exists()
