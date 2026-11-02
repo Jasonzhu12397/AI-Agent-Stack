@@ -565,7 +565,10 @@ class AgentRuntimeResultView(APIView):
         if outcome not in {"succeeded", "failed"}:
             return Response({"detail": "outcome must be succeeded or failed."}, status=400)
         if not isinstance(result, dict) or len(json.dumps(result, ensure_ascii=False)) > 65536:
-            return Response({"detail": "result must be a JSON object no larger than 64 KiB."}, status=400)
+            return Response(
+                {"detail": "result must be a JSON object no larger than 64 KiB."},
+                status=400,
+            )
         if error is not None and not isinstance(error, dict):
             return Response({"detail": "error must be a JSON object."}, status=400)
         with transaction.atomic():
