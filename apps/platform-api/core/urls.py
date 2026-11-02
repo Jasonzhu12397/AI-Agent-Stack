@@ -1,5 +1,12 @@
 from django.urls import path
 
+from core.agent_views import (
+    AgentDetailView,
+    AgentListCreateView,
+    AgentPublishView,
+    AgentRunDetailView,
+    AgentRunListCreateView,
+)
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
 from core.membership_views import (
     ProjectMemberDetailView,
@@ -21,6 +28,31 @@ from core.views import (
 )
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agents/",
+        AgentListCreateView.as_view(),
+        name="agent-list-create",
+    ),
+    path(
+        "api/v1/agents/<uuid:agent_id>/",
+        AgentDetailView.as_view(),
+        name="agent-detail",
+    ),
+    path(
+        "api/v1/agents/<uuid:agent_id>/publish/",
+        AgentPublishView.as_view(),
+        name="agent-publish",
+    ),
+    path(
+        "api/v1/agents/<uuid:agent_id>/runs/",
+        AgentRunListCreateView.as_view(),
+        name="agent-run-list-create",
+    ),
+    path(
+        "api/v1/runs/<uuid:run_id>/",
+        AgentRunDetailView.as_view(),
+        name="agent-run-detail",
+    ),
     path(
         "api/v1/auth/csrf/",
         csrf_cookie,
