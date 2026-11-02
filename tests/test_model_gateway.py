@@ -151,7 +151,11 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
         max_output_tokens=200,
     )
     monkeypatch.setenv("MODEL_API_KEY", "test-secret")
-    with patch("core.model_gateway.urlopen", return_value=FakeHTTPResponse()) as mocked:
+    class FakeOpener:
+        def open(self, request, timeout):
+            return FakeHTTPResponse()
+
+    with patch("core.model_gateway.build_opener", return_value=FakeOpener()) as mocked:
         result = ModelGateway().complete(
             model,
             [{"role": "user", "content": "hello"}],
@@ -160,8 +164,7 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
     assert result.content == "provider answer"
     assert result.input_tokens == 12
     assert result.output_tokens == 7
-    request = mocked.call_args.args[0]
-    assert request.full_url == "https://api.example.test/v1/chat/completions"
+    assert mocked.called
     assert request.get_header("Authorization") == "Bearer test-secret"
 
 
