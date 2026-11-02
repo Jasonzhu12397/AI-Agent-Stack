@@ -506,6 +506,24 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     assert handoff.data["worker_provisioning_allowed"] is False
 
     agent_client = APIClient()
+    heartbeat = agent_client.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": str(target_node.id), "agent_version": "0.1.0"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+    assert heartbeat.status_code == 200
+    assert heartbeat.data["active_deployments"] == [
+        {
+            "deployment_id": str(deployment.id),
+            "cluster_name": deployment.cluster_name,
+            "status": ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            "checkpoint_endpoint": (
+                f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+            ),
+        }
+    ]
+
     url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
     headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
     empty = agent_client.get(url, {"node_id": str(target_node.id)}, **headers)
