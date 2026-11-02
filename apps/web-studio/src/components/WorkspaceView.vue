@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
+import DashboardView from "./DashboardView.vue";
 import {
   cancelTask,
   createEchoTask,
@@ -199,6 +200,10 @@ onUnmounted(() => {
       </aside>
       <section class="task-panel">
         <div v-if="props.activeSection === 'overview'">
+          <DashboardView
+            :tenant-id="selectedTenantId"
+            :project-id="selectedProjectId"
+          />
         <div class="task-panel-heading">
           <div>
             <p class="eyebrow">PERSISTENT EXECUTION</p>
