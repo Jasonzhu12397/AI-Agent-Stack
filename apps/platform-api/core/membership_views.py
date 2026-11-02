@@ -33,13 +33,10 @@ def require_tenant_owner(request, tenant):
 
 
 def project_for_user(request, tenant, project_id):
-    return get_object_or_404(
-        Project.objects.filter(
-            tenant=tenant,
-            memberships__user=request.user,
-        ).distinct(),
-        pk=project_id,
-    )
+    queryset = Project.objects.filter(tenant=tenant)
+    if not require_tenant_admin(request, tenant):
+        queryset = queryset.filter(memberships__user=request.user)
+    return get_object_or_404(queryset.distinct(), pk=project_id)
 
 
 def require_project_admin(request, tenant, project):
@@ -143,6 +140,17 @@ class TenantMemberDetailView(APIView):
                 ).count()
                 if owner_count <= 1:
                     return Response({"detail": "A tenant must retain at least one owner."}, status=409)
+            if membership.role == TenantMembership.Role.OWNER:
+                owner_count = TenantMembership.objects.filter(
+                    tenant=tenant,
+                    role=TenantMembership.Role.OWNER,
+                ).count()
+                if owner_count <= 1:
+                    return Response({"detail": "A tenant must retain at least one owner."}, status=409)
+            ProjectMembership.objects.filter(
+                project__tenant=tenant,
+                user=membership.user,
+            ).delete()
             membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
