@@ -254,7 +254,7 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes in this milestone: start, llm, condition and end.
+            Supported execution nodes: start, llm, knowledge_search, condition and end. Knowledge search retrieves only from the pinned project knowledge bases.
             The server validates graph connectivity, cycles, model scope and credential fields before publishing.
           </p>
           <div class="workflow-actions">
