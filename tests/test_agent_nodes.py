@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import datetime
 import hashlib
 
 import pytest
@@ -317,3 +318,57 @@ def test_agent_runtime_rejects_malformed_node_id(node_workspace):
     )
 
     assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_provisioning_command_approval_expires_before_agent_dispatch(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-expiring-approval", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {
+            "command_type": "cluster.provision",
+            "payload": {"cluster_spec": {"cluster_name": "edge-lab"}},
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="approval-expiry-test",
+    )
+    approver = get_user_model().objects.create_user(
+        username="node-expiry-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{created.data['id']}/approve/",
+        {"plan_hash": created.data["plan_hash"]},
+        format="json",
+    )
+    command = AgentCommand.objects.get(pk=created.data["id"])
+    command.approved_at = command.approved_at - datetime.timedelta(minutes=16)
+    command.save(update_fields=["approved_at"])
+
+    poll = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    command.refresh_from_db()
+    assert approved.status_code == 200
+    assert poll.status_code == 200
+    assert poll.data["command"] is None
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == "APPROVAL_EXPIRED"
