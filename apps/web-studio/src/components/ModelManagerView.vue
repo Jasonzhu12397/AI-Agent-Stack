@@ -213,7 +213,7 @@ watch(selectedProviderId, () => void loadModels());
           <p>{{ model.model_name }} · v{{ model.version }} · {{ model.context_window }} context</p>
         </div>
         <el-button
-          v-if="model.capabilities.includes("chat")"
+          v-if="model.capabilities.includes('chat')"
           size="small"
           :loading="busy"
           @click="runModelTest(model)"
