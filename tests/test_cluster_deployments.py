@@ -320,3 +320,40 @@ def test_target_agent_runs_postflight_and_completes_deployment(cluster_delivery_
     assert result.status_code == 200
     assert deployment.status == ClusterDeployment.Status.SUCCEEDED
     assert deployment.plan_result["postflight"]["ready"] is True
+
+
+
+@pytest.mark.django_db
+def test_target_postflight_rejects_plan_with_missing_prerequisites(cluster_delivery_workspace):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="delivery-target-incomplete",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"target-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(client, tenant, project, eph_node, key="target-postflight-incomplete")
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.PLAN_READY
+    deployment.plan_result = {"provisioning_ready": False}
+    deployment.save(update_fields=["status", "plan_result"])
+
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-postflight/",
+        {
+            "target_node_id": str(target_node.id),
+            "confirmation": "cluster_provisioned",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    ).exists()
