@@ -470,7 +470,8 @@ class PluginInstallationListCreateView(APIView):
                         return Response(
                             {
                                 "detail": (
-                                    "Installed plugin version is pinned; uninstall before upgrading."
+                                    "Installed plugin version is pinned; "
+                                    "uninstall before upgrading."
                                 )
                             },
                             status=409,
