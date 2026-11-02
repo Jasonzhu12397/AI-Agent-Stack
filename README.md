@@ -7,7 +7,7 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
 - **Backend:** Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
 - **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
-- **Execution:** independent Python Worker; durable task claiming and recovery are a later milestone.
+- **Execution:** independent Python Worker with PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, retries and cooperative cancellation. Initial handlers are safe `demo.echo` and `demo.sleep` examples; Agent/Workflow execution is not yet connected.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
 
@@ -35,6 +35,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec api python apps
 ```
 
 Use that account to sign in to the Vue Studio; tenant membership provisioning is still an administrative workflow.
+- Task API: `/api/v1/tenants/{tenant_id}/projects/{project_id}/tasks/` (requires login and an `Idempotency-Key` header)
 - Liveness: http://localhost:8000/health/live
 - Readiness: http://localhost:8000/health/ready
 
