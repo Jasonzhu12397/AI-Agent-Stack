@@ -76,10 +76,14 @@ def test_workflow_validator_rejects_cycles_and_disconnected_nodes():
         "nodes": [
             {"id": "start", "type": "start", "config": {}},
             {"id": "end", "type": "end", "config": {}},
+            {"id": "cycle_a", "type": "condition", "config": {"equals": True}},
+            {"id": "cycle_b", "type": "condition", "config": {"equals": False}},
         ],
         "edges": [
             {"source": "start", "target": "end"},
-            {"source": "end", "target": "start"},
+            {"source": "cycle_a", "target": "cycle_b", "when": True},
+            {"source": "cycle_b", "target": "cycle_a", "when": False},
+            {"source": "cycle_a", "target": "end", "when": False},
         ],
     }
     with pytest.raises(WorkflowValidationError, match="cycle"):
