@@ -48,9 +48,24 @@ def test_cluster_plan_validates_spec_and_has_no_side_effects():
     "spec",
     [
         {},
-        {"cluster_name": "edge-lab", "kubernetes_version": "latest", "control_plane_replicas": 3, "worker_replicas": 2},
-        {"cluster_name": "edge-lab", "kubernetes_version": "v1.32.2", "control_plane_replicas": 0, "worker_replicas": 2},
-        {"cluster_name": "edge-lab", "kubernetes_version": "v1.32.2", "control_plane_replicas": 3, "worker_replicas": -1},
+        {
+            "cluster_name": "edge-lab",
+            "kubernetes_version": "latest",
+            "control_plane_replicas": 3,
+            "worker_replicas": 2,
+        },
+        {
+            "cluster_name": "edge-lab",
+            "kubernetes_version": "v1.32.2",
+            "control_plane_replicas": 0,
+            "worker_replicas": 2,
+        },
+        {
+            "cluster_name": "edge-lab",
+            "kubernetes_version": "v1.32.2",
+            "control_plane_replicas": 3,
+            "worker_replicas": -1,
+        },
     ],
 )
 def test_cluster_plan_rejects_invalid_specs(spec):
