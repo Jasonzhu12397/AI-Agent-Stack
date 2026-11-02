@@ -1,20 +1,16 @@
-import pytest
-from app.config import Settings
+import os
+import subprocess
+import sys
 
 
-def test_settings_accept_valid_environment_and_worker_interval() -> None:
-    settings = Settings(app_env="test", worker_poll_seconds=1.5)
-
-    assert settings.app_env == "test"
-    assert settings.worker_poll_seconds == 1.5
-
-
-def test_settings_reject_unknown_environment() -> None:
-    with pytest.raises(ValueError):
-        Settings(app_env="staging")
-
-
-@pytest.mark.parametrize("interval", [0, -1, 301])
-def test_settings_reject_invalid_worker_poll_interval(interval: float) -> None:
-    with pytest.raises(ValueError):
-        Settings(worker_poll_seconds=interval)
+def test_production_rejects_default_secret_key() -> None:
+    environment = os.environ.copy()
+    environment["APP_ENV"] = "production"
+    environment["SECRET_KEY"] = "local-only-change-before-production"
+    environment["DEBUG"] = "false"
+    result = subprocess.run(
+        [sys.executable, "-c", "import platform_api.settings"],
+        env=environment, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "Production requires DEBUG=false" in result.stderr

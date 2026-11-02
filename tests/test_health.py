@@ -1,16 +1,13 @@
-from app.main import app
-from fastapi.testclient import TestClient
-
-client = TestClient(app)
+from django.test import Client
 
 
 def test_liveness_returns_ok() -> None:
-    response = client.get("/health/live")
+    response = Client().get("/health/live")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_root_exposes_service_identity() -> None:
-    response = client.get("/")
+def test_api_root_exposes_service_identity() -> None:
+    response = Client().get("/api/v1/")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.1.0"
+    assert response.json() == {"name": "AI Agent Stack API", "version": "0.2.0"}

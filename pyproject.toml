@@ -4,32 +4,30 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-agent-stack"
-version = "0.1.0"
+version = "0.2.0"
 description = "An extensible, policy-governed AI Agent platform."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "fastapi>=0.115,<1.0",
-  "uvicorn[standard]>=0.30,<1.0",
-  "pydantic-settings>=2.4,<3.0",
-  "sqlalchemy>=2.0,<3.0",
-  "alembic>=1.13,<2.0",
+  "Django>=5.1,<6.0",
+  "djangorestframework>=3.15,<4.0",
+  "channels[daphne]>=4.1,<5.0",
+  "django-cors-headers>=4.4,<5.0",
+  "dj-database-url>=2.2,<3.0",
   "psycopg[binary]>=3.2,<4.0",
   "redis>=5.0,<7.0",
+  "pydantic>=2.8,<3.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=8.3,<9.0",
-  "httpx>=0.27,<1.0",
-  "ruff>=0.6,<1.0",
-]
+dev = ["pytest>=8.3,<9.0", "pytest-django>=4.9,<5.0", "ruff>=0.6,<1.0"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["apps/platform-api/app", "apps/worker/worker_app"]
+packages = ["apps/platform-api/platform_api", "apps/platform-api/core", "apps/platform-api/app", "apps/worker/worker_app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["apps/platform-api", "apps/worker"]
+DJANGO_SETTINGS_MODULE = "platform_api.settings"
 addopts = "-q"
 
 [tool.ruff]

@@ -1,14 +1,8 @@
 FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /workspace
-
-COPY pyproject.toml README.md alembic.ini ./
+COPY pyproject.toml README.md ./
 COPY apps ./apps
-COPY migrations ./migrations
 RUN pip install .
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "platform_api.asgi:application"]
