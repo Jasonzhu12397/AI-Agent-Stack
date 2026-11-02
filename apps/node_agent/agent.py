@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import shutil
+from pathlib import Path
 import socket
 import ssl
 import time
@@ -388,11 +389,25 @@ class ControlPlaneClient:
         )
 
 
+def touch_health_files(readiness: bool = False) -> None:
+    Path(os.environ.get("AGENT_LIVENESS_FILE", "/tmp/agent-liveness")).touch()
+    if readiness:
+        Path(os.environ.get("AGENT_READINESS_FILE", "/tmp/agent-readiness")).touch()
+
+
+def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
+    path = Path(os.environ.get(name, f"/tmp/{name.lower().replace('agent_', 'agent-')}"))
+    if not path.is_file():
+        return False
+    return time.time() - path.stat().st_mtime <= max_age_seconds
+
+
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     client.heartbeat(node_type)
     envelope = client.poll()
     command = envelope.get("command")
     if not command:
+        touch_health_files(readiness=True)
         return False
     lease_token = command.get("lease_token", "")
     command_id = command.get("id", "")
@@ -407,14 +422,21 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
             {},
             {"code": str(exc), "retryable": False},
         )
+    touch_health_files(readiness=True)
     return True
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Agent Studio remote node agent")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--healthcheck", action="store_true")
+    parser.add_argument("--readiness-check", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=5)
     args = parser.parse_args()
+    if args.healthcheck:
+        raise SystemExit(0 if health_file_is_fresh("AGENT_LIVENESS_FILE") else 1)
+    if args.readiness_check:
+        raise SystemExit(0 if health_file_is_fresh("AGENT_READINESS_FILE") else 1)
     base_url = os.environ.get("AGENT_CONTROL_URL", "").strip()
     node_id = os.environ.get("AGENT_NODE_ID", "").strip()
     token = os.environ.get("AGENT_TOKEN", "").strip()
@@ -436,6 +458,7 @@ def main() -> None:
             if not processed:
                 time.sleep(args.poll_seconds)
         except NodeAgentError as exc:
+            touch_health_files()
             print(json.dumps({"event": "control_plane_error", "code": str(exc)}), flush=True)
             if args.once:
                 raise SystemExit(1) from exc
