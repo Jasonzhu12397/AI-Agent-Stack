@@ -494,3 +494,58 @@ export function approveAgentCommand(
     body: JSON.stringify({ plan_hash: planHash }),
   });
 }
+
+
+export type ClusterDeployment = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  cluster_name: string;
+  kubernetes_version: string;
+  eph_node_id: string;
+  target_node_id: string | null;
+  status: string;
+  spec: Record<string, unknown>;
+  plan_hash: string;
+  preflight_result: Record<string, unknown> | null;
+  plan_result: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+export function getClusterDeployments(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: ClusterDeployment[] }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/",
+  );
+}
+
+export function createClusterDeployment(
+  tenantId: string,
+  projectId: string,
+  ephNodeId: string,
+  clusterSpec: Record<string, unknown>,
+): Promise<ClusterDeployment> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        eph_node_id: ephNodeId,
+        cluster_spec: clusterSpec,
+      }),
+    },
+  );
+}
+
+export function cancelClusterDeployment(deploymentId: string): Promise<ClusterDeployment> {
+  return request("/api/v1/cluster-deployments/" + deploymentId + "/cancel/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
