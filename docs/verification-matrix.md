@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41421249429](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421249429), commit `8e2d51233e163b0d0e4661dea1cdd90e0ca47789`, completed successfully across Python, Vue and Compose jobs. Pytest: 61 passed. Ruff, Django checks, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the basic Workflow DAG backend, Workflow Studio UI, request validation, idempotency tests and Workflow implementation documentation.
+[GitHub Actions run 41423617275](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41423617275), commit `25f227bf5ba964a2380b8973bdbb6c88ddd5c903`, completed successfully across Python, Vue and Compose jobs. Pytest: 83 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the dual-agent API, EPH/Target node runner, command approval/lease tests and the first Vue infrastructure console. Later Dashboard/UI port commits are being revalidated.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -27,7 +27,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states. Demo, single-turn LLM Agent and basic Workflow Run handlers are connected; Workflow execution evidence is in run 41420838331 |
-| Frontend | Vue 3 + TypeScript + Vite | Existing workspace plus a new EPH/Target Cluster Agent console ported from the user's React reference UI; branch build is pending PR CI |
+| Frontend | Vue 3 + TypeScript + Vite | Vue navigation for Overview, Model Manager, Agent Studio, Workflow DAG and Infrastructure Agents; dual-agent console and dashboard reference port added. Core navigation build passed in run 41423617275; DashboardView changes are pending newer CI |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
@@ -64,7 +64,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | EPH and target node enrollment | Tenant/project-scoped AgentNode records; one-time random token returned once; only SHA-256 hash stored; revoke cancels queued commands | Code and API tests added; awaiting PR CI |
 | Remote command queue | PostgreSQL AgentCommand, idempotency key, node binding, attempts, lease token and 90-second lease; stale lease results rejected | Code and API tests added; awaiting PR CI |
 | Approval gate | Cluster provision and target-agent bootstrap begin in WAITING_APPROVAL; separate tenant admin approves canonical payload hash | Self-approval and hash mismatch protection added; awaiting PR CI |
-| Node agent runner | Python stdlib HTTPS client; outbound heartbeat/poll/result; compiled command allowlist; no shell execution | Unit tests added; awaiting PR CI |
+| Node agent runner | Python stdlib HTTPS client; outbound heartbeat/poll/result; compiled command allowlist; no shell execution | 83-test Python CI passed in run 41423617275, including host preflight, cluster plan dry-run, Kubernetes read-only operations and output redaction |
 | EPH safe operations | Host preflight and cluster spec validation/dry-run; CAPI/Metal3 API group discovery | Local logic tests added; no live management cluster tested |
 | Target cluster safe operations | In-cluster ServiceAccount GET requests for Kubernetes version, nodes, namespaces, pods/events/services; readiness and warning-event summaries | Unit tests added; no live target cluster tested |
 | CAPI/Metal3/Ironic provisioning | Version-aware declarative adapter, resource writes, Ironic/BMC lifecycle and target-agent bootstrap | Not implemented; must wait for exact target version/CRD and credential verification |
