@@ -424,6 +424,7 @@ export type EnrolledAgentNode = AgentNode & {
 export type AgentCommand = {
   id: string;
   node_id: string;
+  deployment_id: string | null;
   command_type: string;
   payload: Record<string, unknown>;
   status: "waiting_approval" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -472,6 +473,17 @@ export function getAgentCommands(
   nodeId: string,
 ): Promise<{ count: number; results: AgentCommand[] }> {
   return request("/api/v1/agent-nodes/" + nodeId + "/commands/");
+}
+
+export function getProjectAgentCommands(
+  tenantId: string,
+  projectId: string,
+  limit = 100,
+): Promise<{ count: number; limit: number; offset: number; results: AgentCommand[] }> {
+  const query = new URLSearchParams({ limit: String(limit), offset: "0" });
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-commands/?" + query.toString(),
+  );
 }
 
 export function createAgentCommand(
