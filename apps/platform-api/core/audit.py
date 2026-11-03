@@ -115,3 +115,50 @@ def record_audit_event(
             event_hash=event_hash,
             created_at=timestamp,
         )
+
+
+def verify_audit_chain(tenant):
+    previous_hash = ""
+    verified_count = 0
+    events = AuditEvent.objects.filter(tenant=tenant).order_by("created_at", "id")
+    for event in events.iterator(chunk_size=500):
+        canonical = {
+            "id": str(event.id),
+            "tenant_id": str(event.tenant_id),
+            "project_id": str(event.project_id) if event.project_id else None,
+            "actor_id": event.actor_id,
+            "event_type": event.event_type,
+            "resource_type": event.resource_type,
+            "resource_id": event.resource_id,
+            "outcome": event.outcome,
+            "request_id": event.request_id,
+            "remote_addr": event.remote_addr,
+            "user_agent": event.user_agent,
+            "metadata": event.metadata,
+            "previous_hash": previous_hash,
+            "created_at": event.created_at.isoformat(),
+        }
+        expected_hash = hashlib.sha256(
+            json.dumps(
+                canonical,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if event.previous_hash != previous_hash or event.event_hash != expected_hash:
+            return {
+                "valid": False,
+                "verified_count": verified_count,
+                "invalid_event_id": str(event.id),
+                "expected_previous_hash": previous_hash,
+                "stored_previous_hash": event.previous_hash,
+            }
+        previous_hash = event.event_hash
+        verified_count += 1
+    return {
+        "valid": True,
+        "verified_count": verified_count,
+        "invalid_event_id": None,
+        "head_hash": previous_hash,
+    }
