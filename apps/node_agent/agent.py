@@ -884,6 +884,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 and source_cluster["uid"]
                 and isinstance(source_cluster.get("namespace"), str)
                 and source_cluster["namespace"]
+                and isinstance(source_cluster.get("api_version"), str)
+                and source_cluster["api_version"]
             ):
                 source_cluster_identity = {
                     "name": cluster_name,
