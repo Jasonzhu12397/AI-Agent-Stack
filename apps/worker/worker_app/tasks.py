@@ -18,6 +18,7 @@ from core.models import (
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolExecutionError, ToolRouter
+from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
 from core.workflow_engine import WorkflowValidationError, execute_workflow_run
 from django.db import transaction
@@ -262,6 +263,8 @@ def _load_agent_tools(task, config):
     )
     if len(tools) != len(set(tool_ids)):
         raise PermanentTaskError("An allowed connector tool is no longer installed or approved")
+    for tool in tools:
+        register_http_tool(TOOL_ROUTER, tool)
     by_name = {f"{tool.plugin.plugin_key}__{tool.name}": tool for tool in tools}
     offered = to_openai_function_tools(tools)
     return offered, by_name
