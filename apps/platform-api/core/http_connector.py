@@ -12,7 +12,7 @@ from django.conf import settings
 from django.utils.module_loading import import_string
 
 
-HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+HTTP_METHODS = {"GET", "POST"}
 PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,80}")
 
@@ -108,6 +108,16 @@ def _operation_config(context, tool):
     path = operation.get("path")
     if not isinstance(method, str) or method.upper() not in HTTP_METHODS:
         raise ToolExecutionError("Connector HTTP method is not allowed.")
+    if (
+        method.upper() == "POST"
+        and not (
+            operation.get("read_only") is True
+            and tool.idempotency_mode == "read_only"
+        )
+    ):
+        raise ToolExecutionError(
+            "POST is allowed only for explicitly read-only connector operations."
+        )
     if (
         not isinstance(path, str)
         or not path.startswith("/")
