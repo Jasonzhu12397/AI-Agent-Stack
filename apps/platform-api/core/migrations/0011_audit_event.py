@@ -1,8 +1,9 @@
-import django.db.models.deletion
 import uuid
+
+import django.db.models.deletion
 from django.conf import settings
-from django.utils import timezone
 from django.db import migrations, models
+from django.utils import timezone
 
 
 class Migration(migrations.Migration):
@@ -15,11 +16,30 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="AuditEvent",
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
                 ("event_type", models.CharField(max_length=120)),
                 ("resource_type", models.CharField(max_length=80)),
                 ("resource_id", models.CharField(blank=True, max_length=64)),
-                ("outcome", models.CharField(choices=[("success", "Success"), ("denied", "Denied"), ("failure", "Failure")], default="success", max_length=16)),
+                (
+                    "outcome",
+                    models.CharField(
+                        choices=[
+                            ("success", "Success"),
+                            ("denied", "Denied"),
+                            ("failure", "Failure"),
+                        ],
+                        default="success",
+                        max_length=16,
+                    ),
+                ),
                 ("request_id", models.CharField(blank=True, max_length=64)),
                 ("remote_addr", models.GenericIPAddressField(blank=True, null=True)),
                 ("user_agent", models.CharField(blank=True, max_length=256)),
@@ -27,9 +47,34 @@ class Migration(migrations.Migration):
                 ("previous_hash", models.CharField(blank=True, max_length=64)),
                 ("event_hash", models.CharField(max_length=64, unique=True)),
                 ("created_at", models.DateTimeField(default=timezone.now, editable=False)),
-                ("actor", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="audit_events", to=settings.AUTH_USER_MODEL)),
-                ("project", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="audit_events", to="core.project")),
-                ("tenant", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="audit_events", to="core.tenant")),
+                (
+                    "actor",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="audit_events",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "project",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="audit_events",
+                        to="core.project",
+                    ),
+                ),
+                (
+                    "tenant",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="audit_events",
+                        to="core.tenant",
+                    ),
+                ),
             ],
             options={"ordering": ["-created_at"]},
         ),
@@ -39,6 +84,9 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="auditevent",
-            index=models.Index(fields=["tenant", "event_type", "-created_at"], name="audit_tenant_type_idx"),
+            index=models.Index(
+                fields=["tenant", "event_type", "-created_at"],
+                name="audit_tenant_type_idx",
+            ),
         ),
     ]
