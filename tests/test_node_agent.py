@@ -316,8 +316,6 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
 
     def fake_get(path):
         calls.append(path)
-        query = path.split("?", 1)[1] if "?" in path else ""
-        path = path.split("?", 1)[0]
         if path == "/apis":
             return {
                 "groups": [
@@ -1337,6 +1335,8 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
 
     def fake_get(path):
         calls.append(path)
+        query = path.split("?", 1)[1] if "?" in path else ""
+        path = path.split("?", 1)[0]
         if path == "/apis":
             return {
                 "groups": [
