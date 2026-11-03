@@ -525,7 +525,11 @@ class PluginInstallationListCreateView(APIView):
                 "plugin_installation",
                 installation.id,
                 project=project,
-                metadata={"plugin_key": plugin.plugin_key, "plugin_version": installation.plugin_version, "granted_permissions": installation.granted_permissions},
+                metadata={
+                    "plugin_key": plugin.plugin_key,
+                    "plugin_version": installation.plugin_version,
+                    "granted_permissions": installation.granted_permissions,
+                },
             )
         return Response(
             _installation_data(installation),
