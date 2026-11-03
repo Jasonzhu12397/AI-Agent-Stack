@@ -137,3 +137,39 @@ def test_audit_api_denies_non_admin_tenant_member(audit_workspace):
 
     response = client.get(f"/api/v1/tenants/{tenant.id}/audit-events/")
     assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_worker_connector_tool_event_retains_task_actor(audit_workspace):
+    from types import SimpleNamespace
+
+    from worker_app.tasks import _record_connector_tool_event
+
+    user, tenant, project, _, _ = audit_workspace
+    task = SimpleNamespace(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+    )
+    tool = SimpleNamespace(
+        id="tool-123",
+        plugin=SimpleNamespace(plugin_key="sample", version="1.0.0"),
+        name="lookup",
+        risk_level="low",
+    )
+
+    _record_connector_tool_event(
+        task,
+        tool,
+        None,
+        AuditEvent.Outcome.SUCCESS,
+    )
+
+    event = AuditEvent.objects.get(
+        tenant=tenant,
+        event_type="connector.tool.executed",
+        resource_id="tool-123",
+    )
+    assert event.actor_id == user.id
+    assert event.project_id == project.id
+    assert event.metadata["tool_name"] == "lookup"
