@@ -185,6 +185,29 @@ def test_agent_command_payload_rejects_shell_and_raw_manifest(node_workspace):
 
 
 @pytest.mark.django_db
+def test_agent_command_payload_enforces_utf8_byte_limit(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-unicode-limit", "node_type": "eph_node"},
+        format="json",
+    )
+    payload = {"description": "汉" * 22000}
+
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {"command_type": "cluster.plan", "payload": payload},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="unicode-payload-byte-limit",
+    )
+
+    assert len(str(payload)) < 65536
+    assert response.status_code == 400
+    assert "64 KiB" in response.data["detail"]
+    assert AgentCommand.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_agent_result_requires_current_lease_token(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
