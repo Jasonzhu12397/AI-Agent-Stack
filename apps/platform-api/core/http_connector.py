@@ -140,7 +140,9 @@ def _operation_config(context, tool):
         raise ToolExecutionError("Connector HTTP parameter mapping is invalid.")
     if set(path_params) != placeholders:
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
-    if transport.get("auth_required") is True and not context.credential_ref:
+    if transport.get("auth_required") is True and (
+        context.connection_auth_type == "none" or not context.credential_ref
+    ):
         raise ToolExecutionError("Connector requires an authenticated connection.")
     mapped_args = set(path_params.values()) | set(query_params.values())
     if body_param is not None:
