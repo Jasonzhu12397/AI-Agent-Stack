@@ -187,6 +187,7 @@ class ToolRouter:
             encoded_arguments = json.dumps(
                 arguments,
                 ensure_ascii=False,
+                allow_nan=False,
                 separators=(",", ":"),
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
