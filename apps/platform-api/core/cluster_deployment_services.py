@@ -194,6 +194,9 @@ def handle_deployment_command_result(
                 for version in provider_versions.values()
             )
         )
+        safe_resource_counts = (
+            resource_counts if isinstance(resource_counts, dict) else {}
+        )
         valid_counts = (
             isinstance(resource_counts, dict)
             and set(resource_counts) == expected_resource_keys
@@ -221,11 +224,11 @@ def handle_deployment_command_result(
                 )
                 and isinstance(item.get("owner_references"), list)
                 and len(item.get("owner_references")) <= 10
-                and item.get("resource") in resource_counts
-                and resource_counts.get(item.get("resource"), 0) > 0
+                and item.get("resource") in safe_resource_counts
+                and safe_resource_counts.get(item.get("resource"), 0) > 0
                 for item in inventory
             )
-            and len(inventory) <= sum(resource_counts.values())
+            and len(inventory) <= sum(safe_resource_counts.values())
         )
         preflight_valid = (
             command.node.node_type == "eph_node"
