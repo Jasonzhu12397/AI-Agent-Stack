@@ -296,7 +296,9 @@ def handle_deployment_command_result(
             and owner_graph.get("root_cluster_uid") == source_cluster_identity.get("uid")
             and isinstance(inventory_total_count, int)
             and not isinstance(inventory_total_count, bool)
+            and 1 <= inventory_total_count <= 100000
             and inventory_total_count == sum(safe_resource_counts.values())
+            and inventory_summary_truncated == (len(inventory) < inventory_total_count)
             and owner_graph.get("object_count") == inventory_total_count
             and owner_graph.get("unique_uid_count") == inventory_total_count
             and isinstance(inventory_summary_truncated, bool)
