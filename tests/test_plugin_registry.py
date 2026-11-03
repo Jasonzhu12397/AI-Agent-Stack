@@ -333,7 +333,6 @@ def test_plugin_upgrade_requires_uninstalling_the_previous_project_version(
 @pytest.mark.django_db
 def test_http_plugin_connection_health_check_activates_connection(
     plugin_workspace,
-    monkeypatch,
 ):
     from unittest.mock import patch
 
