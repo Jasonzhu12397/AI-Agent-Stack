@@ -808,6 +808,13 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "pivot_execution_allowed": True,
         "cluster_name": "edge-lab",
         "namespace": "default",
+        "provider_versions": {
+            "cluster.x-k8s.io": "v1beta1",
+            "bootstrap.cluster.x-k8s.io": "v1beta1",
+            "controlplane.cluster.x-k8s.io": "v1beta1",
+            "infrastructure.cluster.x-k8s.io": "v1beta1",
+            "metal3.io": "v1alpha1",
+        },
         "missing_resources": [],
         "controllers": [
             {
