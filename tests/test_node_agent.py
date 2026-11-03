@@ -997,7 +997,7 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
 
     assert result["target_management_plane_ready"] is True
     assert result["pivot_execution_allowed"] is True
-    assert result["provider_versions"] == group_versions
+    assert result["provider_versions"] == {group: "v1beta1" for group in required}
     assert result["missing_resources"] == []
     assert result["blockers"] == []
     assert all(item["ready"] for item in result["controllers"])
