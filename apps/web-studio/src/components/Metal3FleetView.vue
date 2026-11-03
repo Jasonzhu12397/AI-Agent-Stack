@@ -98,6 +98,7 @@ async function refreshData(): Promise<void> {
     nodes.value = [];
     deployments.value = [];
     commands.value = [];
+    commandCount.value = 0;
     return;
   }
   refreshing.value = true;
