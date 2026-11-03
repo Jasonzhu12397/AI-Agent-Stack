@@ -870,6 +870,27 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             and not pagination_required
             and not inventory_truncated
         )
+        source_cluster_matches = [
+            item
+            for item in inventory
+            if item.get("resource") == "cluster.x-k8s.io/clusters"
+            and item.get("name") == cluster_name
+        ]
+        source_cluster_identity = None
+        if len(source_cluster_matches) == 1:
+            source_cluster = source_cluster_matches[0]
+            if (
+                isinstance(source_cluster.get("uid"), str)
+                and source_cluster["uid"]
+                and isinstance(source_cluster.get("namespace"), str)
+                and source_cluster["namespace"]
+            ):
+                source_cluster_identity = {
+                    "name": cluster_name,
+                    "namespace": source_cluster["namespace"],
+                    "uid": source_cluster["uid"],
+                    "api_version": source_cluster.get("api_version"),
+                }
         blockers = []
         if missing_resources:
             blockers.append("required_source_capi_metal3_apis_missing")
@@ -881,10 +902,21 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             blockers.append("source_inventory_truncated")
         if not inventory:
             blockers.append("source_inventory_empty")
+        if not source_cluster_matches:
+            blockers.append("requested_source_cluster_not_found")
+        elif source_cluster_identity is None:
+            blockers.append("requested_source_cluster_identity_invalid")
+        elif len(source_cluster_matches) > 1:
+            blockers.append("requested_source_cluster_identity_ambiguous")
         return {
             "source_management_plane_ready": (
-                inventory_complete and controllers_ready and bool(inventory)
+                inventory_complete
+                and controllers_ready
+                and bool(inventory)
+                and source_cluster_identity is not None
+                and len(source_cluster_matches) == 1
             ),
+            "source_cluster_identity": source_cluster_identity,
             "cluster_name": cluster_name,
             "provider_versions": provider_versions,
             "resource_counts": resource_counts,
