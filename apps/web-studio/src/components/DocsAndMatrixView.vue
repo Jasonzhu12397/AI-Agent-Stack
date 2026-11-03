@@ -8,7 +8,7 @@ const phases = [
   { id: "P5", name: "Knowledge and MCP", status: "partial", detail: "Qdrant-backed knowledge ingestion and retrieval baseline. MCP client/server, durable memory and advanced retrieval remain incomplete." },
   { id: "P6", name: "Enterprise connectors", status: "planned", detail: "GitHub, Jira, Office 365, Teams, maps, weather and external service connectors." },
   { id: "P7", name: "Bare-metal delivery", status: "in_progress", detail: "EPH and Target Agent control, CAPI/Metal3/Ironic preflight evidence and deployment state machine. Actual provisioning and CAPI pivot are not yet enabled." },
-  { id: "P8", name: "Production operations", status: "planned", detail: "Append-only security audit, metrics, tracing, retention, backup/restore and deployment hardening." },
+  { id: "P8", name: "Production operations", status: "partial", detail: "Tenant-scoped append-only hash-chained audit events cover selected sensitive writes. Full event coverage, external hash anchoring, retention, metrics, tracing and backup/restore remain incomplete." },
 ];
 const lifecycle = [
   "Boot EPH with RAM OS and a temporary single-node Kubernetes control plane.",
