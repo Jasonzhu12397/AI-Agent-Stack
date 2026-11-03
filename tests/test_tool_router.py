@@ -194,8 +194,18 @@ class ToolRouterTests(unittest.TestCase):
                 granted_permissions=["sample:read"],
             )
 
-        tool.input_schema = {"type": "object"}
-        tool.output_schema = {"type": "object"}
+        tool.input_schema = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+        tool.output_schema = {
+            "type": "object",
+            "properties": {"payload": {"type": "string", "maxLength": 100000}},
+            "required": ["payload"],
+            "additionalProperties": False,
+        }
         router = ToolRouter()
         router.register(
             "sample",
