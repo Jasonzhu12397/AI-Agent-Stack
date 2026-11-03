@@ -771,6 +771,8 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
             "orphaned_cluster_objects": [],
         },
         "inventory_truncated": False,
+        "inventory_summary_truncated": False,
+        "inventory_total_count": 1,
         "missing_resources": [],
         "pagination_required": [],
         "controllers": [
