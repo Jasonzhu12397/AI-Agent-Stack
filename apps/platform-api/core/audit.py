@@ -54,11 +54,16 @@ def record_audit_event(
     project=None,
     outcome=AuditEvent.Outcome.SUCCESS,
     metadata=None,
+    actor=None,
 ):
     safe_metadata = _safe_metadata(metadata or {})
     timestamp = timezone.now()
     event_id = uuid.uuid4()
-    actor_id = getattr(request.user, "pk", None) if request is not None else None
+    actor_id = (
+        getattr(request.user, "pk", None)
+        if request is not None
+        else getattr(actor, "pk", None)
+    )
     request_id = ""
     remote_addr = None
     user_agent = ""
