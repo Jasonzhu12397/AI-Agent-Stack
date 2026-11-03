@@ -912,8 +912,16 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         ):
             raise NodeAgentError("INVALID_NAMESPACE")
         required_resources = {
-            "cluster.x-k8s.io": {"clusters", "machines", "machinedeployments"},
-            "bootstrap.cluster.x-k8s.io": {"kubeadmconfigs"},
+            "cluster.x-k8s.io": {
+                "clusters",
+                "machines",
+                "machinesets",
+                "machinedeployments",
+            },
+            "bootstrap.cluster.x-k8s.io": {
+                "kubeadmconfigs",
+                "kubeadmconfigtemplates",
+            },
             "controlplane.cluster.x-k8s.io": {"kubeadmcontrolplanes"},
             "infrastructure.cluster.x-k8s.io": {
                 "metal3clusters",
