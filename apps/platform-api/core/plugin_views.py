@@ -794,3 +794,55 @@ class PluginConnectionTestView(APIView):
             metadata={"plugin_key": plugin.plugin_key, "connection_name": connection.name},
         )
         return Response(_installation_data(installation))
+
+
+class PluginConnectionStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, connection_id):
+        connection = get_object_or_404(
+            PluginConnection.objects.select_related(
+                "installation",
+                "installation__tenant",
+                "installation__project",
+                "installation__plugin",
+            ).filter(installation__tenant__memberships__user=request.user),
+            pk=connection_id,
+        )
+        installation = connection.installation
+        if not _can_manage_project(
+            request.user,
+            installation.tenant,
+            installation.project,
+        ):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        status_value = request.data.get("status")
+        if status_value not in {
+            PluginConnection.Status.PENDING,
+            PluginConnection.Status.DISABLED,
+        }:
+            return Response(
+                {"detail": "Connection status can only be set to pending or disabled."},
+                status=400,
+            )
+        previous_status = connection.status
+        connection.status = status_value
+        if status_value == PluginConnection.Status.PENDING:
+            connection.last_health_check_at = None
+        connection.save(
+            update_fields=["status", "last_health_check_at", "updated_at"]
+        )
+        record_audit_event(
+            request,
+            installation.tenant,
+            "connector.connection.status_changed",
+            "plugin_connection",
+            connection.id,
+            project=installation.project,
+            metadata={
+                "plugin_key": installation.plugin.plugin_key,
+                "previous_status": previous_status,
+                "status": status_value,
+            },
+        )
+        return Response(_installation_data(installation))
