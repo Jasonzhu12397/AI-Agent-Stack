@@ -43,6 +43,7 @@ from core.plugin_views import (
     PluginApproveView,
     PluginCatalogListCreateView,
     PluginConnectionListCreateView,
+    PluginConnectionTestView,
     PluginDetailView,
     PluginInstallationListCreateView,
     PluginInstallationStatusView,
@@ -113,6 +114,11 @@ urlpatterns = [
         "api/v1/plugin-installations/<uuid:installation_id>/connections/",
         PluginConnectionListCreateView.as_view(),
         name="plugin-connections",
+    ),
+    path(
+        "api/v1/plugin-connections/<uuid:connection_id>/test/",
+        PluginConnectionTestView.as_view(),
+        name="plugin-connection-test",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
