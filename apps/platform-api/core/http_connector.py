@@ -20,7 +20,11 @@ HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,80}")
 def _validate_base_url(base_url):
     if not isinstance(base_url, str) or len(base_url) > 500:
         raise ToolExecutionError("HTTP connector base URL is invalid.")
-    parsed = urlsplit(base_url)
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ToolExecutionError("HTTP connector base URL is malformed.") from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -28,7 +32,7 @@ def _validate_base_url(base_url):
         or parsed.password
         or parsed.query
         or parsed.fragment
-        or parsed.port not in (None, 443)
+        or port not in (None, 443)
         or re.search(r"%2e", parsed.path, re.IGNORECASE)
         or any(part in {".", ".."} for part in parsed.path.split("/"))
     ):
@@ -203,7 +207,12 @@ def execute_http_operation(arguments, context: ToolContext, tool):
     body = arguments.get(body_param) if body_param else None
     if body is not None:
         try:
-            encoded_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            encoded_body = json.dumps(
+                body,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
         except (TypeError, ValueError) as exc:
             raise ToolExecutionError("Connector request body is not valid JSON.") from exc
         if len(encoded_body) > 65536:
