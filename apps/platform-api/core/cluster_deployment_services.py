@@ -117,6 +117,142 @@ def handle_deployment_command_result(
             update_fields=["preflight_result", "status", "started_at", "updated_at"],
         )
         queue_deployment_command(deployment, "cluster.plan")
+    elif command.command_type == "cluster.capi.pivot.source.preflight":
+        controllers = result.get("controllers")
+        missing_resources = result.get("missing_resources")
+        pagination_required = result.get("pagination_required")
+        blockers = result.get("blockers")
+        provider_versions = result.get("provider_versions")
+        resource_counts = result.get("resource_counts")
+        inventory = result.get("inventory")
+        expected_controllers = {
+            ("capi-system", "capi-controller-manager"),
+            (
+                "capi-kubeadm-bootstrap-system",
+                "capi-kubeadm-bootstrap-controller-manager",
+            ),
+            (
+                "capi-kubeadm-control-plane-system",
+                "capi-kubeadm-control-plane-controller-manager",
+            ),
+            ("capm3-system", "capm3-controller-manager"),
+        }
+        expected_provider_groups = {
+            "cluster.x-k8s.io",
+            "bootstrap.cluster.x-k8s.io",
+            "controlplane.cluster.x-k8s.io",
+            "infrastructure.cluster.x-k8s.io",
+            "metal3.io",
+        }
+        valid_controllers = (
+            isinstance(controllers, list)
+            and len(controllers) == len(expected_controllers)
+            and all(
+                isinstance(item, dict)
+                and isinstance(item.get("namespace"), str)
+                and isinstance(item.get("deployment"), str)
+                and isinstance(item.get("ready"), bool)
+                for item in controllers
+            )
+            and {
+                (item["namespace"], item["deployment"])
+                for item in controllers
+                if isinstance(item, dict)
+                and isinstance(item.get("namespace"), str)
+                and isinstance(item.get("deployment"), str)
+            }
+            == expected_controllers
+        )
+        valid_lists = all(
+            isinstance(items, list)
+            and len(items) <= 100
+            and all(isinstance(item, str) and len(item) <= 200 for item in items)
+            for items in [missing_resources, pagination_required, blockers]
+        )
+        valid_versions = (
+            isinstance(provider_versions, dict)
+            and set(provider_versions) == expected_provider_groups
+            and all(
+                isinstance(version, str)
+                and bool(re.fullmatch(r"[A-Za-z0-9.]+", version))
+                for version in provider_versions.values()
+            )
+        )
+        valid_counts = (
+            isinstance(resource_counts, dict)
+            and 1 <= len(resource_counts) <= 20
+            and all(
+                isinstance(key, str)
+                and len(key) <= 160
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and 0 <= count <= 100000
+                for key, count in resource_counts.items()
+            )
+        )
+        valid_inventory = (
+            isinstance(inventory, list)
+            and 1 <= len(inventory) <= 200
+            and all(
+                isinstance(item, dict)
+                and isinstance(item.get("api_version"), str)
+                and isinstance(item.get("kind"), str)
+                and isinstance(item.get("resource"), str)
+                and isinstance(item.get("name"), str)
+                and (
+                    item.get("namespace") is None
+                    or isinstance(item.get("namespace"), str)
+                )
+                and isinstance(item.get("owner_references"), list)
+                and len(item.get("owner_references")) <= 10
+                for item in inventory
+            )
+        )
+        preflight_valid = (
+            command.node.node_type == "eph_node"
+            and command.node_id == deployment.eph_node_id
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("side_effects") is False
+            and result.get("inventory_truncated") is False
+            and isinstance(result.get("source_management_plane_ready"), bool)
+            and valid_controllers
+            and valid_lists
+            and valid_versions
+            and valid_counts
+            and valid_inventory
+        )
+        if not preflight_valid:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "INVALID_CAPI_SOURCE_PREFLIGHT_RESULT"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "started_at",
+                    "finished_at",
+                    "updated_at",
+                ],
+            )
+            return
+        ready = (
+            result["source_management_plane_ready"] is True
+            and not missing_resources
+            and not pagination_required
+            and not blockers
+            and all(item["ready"] for item in controllers)
+        )
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "capi_pivot_source_preflight": {
+                **result,
+                "preflight_validated": ready,
+            },
+        }
+        deployment.error = None
+        deployment.save(
+            update_fields=["plan_result", "error", "started_at", "updated_at"],
+        )
     elif command.command_type == "cluster.capi.pivot.target.preflight":
         controllers = result.get("controllers")
         missing_resources = result.get("missing_resources")
