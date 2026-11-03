@@ -682,6 +682,13 @@ export function createPluginConnection(
   });
 }
 
+export function testPluginConnection(connectionId: string): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/plugin-connections/" + connectionId + "/test/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 
 export type KnowledgeBase = {
   id: string;
