@@ -1506,9 +1506,14 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
     with open(token_path, encoding="utf-8") as token_file:
         token = token_file.read().strip()
     context = ssl.create_default_context(cafile=ca_path)
+    query_string = urllib.parse.urlencode(
+        {key: values[0] for key, values in query.items()}
+    )
+    request_url = f"https://{host}:{port}{path}"
+    if query_string:
+        request_url = f"{request_url}?{query_string}"
     request = urllib.request.Request(
-        f"https://{host}:{port}{path}"
-        + (f"?{urllib.parse.urlencode({key: values[0] for key, values in query.items()})}" if query else ""),
+        request_url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         method="GET",
     )
