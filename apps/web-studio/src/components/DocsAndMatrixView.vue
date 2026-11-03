@@ -55,6 +55,7 @@ function statusType(status: string): "success" | "warning" | "info" {
         <a href="https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/dual-agent-infrastructure-architecture.md" target="_blank" rel="noreferrer">Dual-agent infrastructure architecture ↗</a>
         <a href="https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/eph-node-lifecycle.md" target="_blank" rel="noreferrer">EPH node lifecycle ↗</a>
         <a href="https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/threat-model.md" target="_blank" rel="noreferrer">Threat model ↗</a>
+        <a href="https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/audit-events.md" target="_blank" rel="noreferrer">Audit event integrity model ↗</a>
         <a href="https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/verification-matrix.md" target="_blank" rel="noreferrer">Verification matrix ↗</a>
       </div>
     </section>
