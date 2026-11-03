@@ -449,3 +449,65 @@ def test_http_plugin_connection_health_check_marks_failure(
     assert response.status_code == 502
     connection_obj = PluginConnection.objects.get(pk=connection.data["id"])
     assert connection_obj.status == PluginConnection.Status.ERROR
+
+
+@pytest.mark.django_db
+def test_plugin_connection_can_only_be_disabled_or_reenabled_pending(plugin_workspace):
+    _, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"] = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": False,
+            "health_check": {"method": "GET", "path": "/health"},
+            "operations": {},
+        }
+    }
+    registered = client.post("/api/v1/connectors/", payload, format="json")
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "github-toggle",
+            "auth_type": "none",
+            "credential_ref": "",
+            "config": {},
+        },
+        format="json",
+    )
+    connection_id = connection.data["id"]
+
+    disabled = client.post(
+        f"/api/v1/plugin-connections/{connection_id}/status/",
+        {"status": "disabled"},
+        format="json",
+    )
+    reenabled = client.post(
+        f"/api/v1/plugin-connections/{connection_id}/status/",
+        {"status": "pending"},
+        format="json",
+    )
+    forced_healthy = client.post(
+        f"/api/v1/plugin-connections/{connection_id}/status/",
+        {"status": "healthy"},
+        format="json",
+    )
+
+    assert disabled.status_code == 200
+    assert disabled.data["connections"][0]["status"] == "disabled"
+    assert reenabled.status_code == 200
+    assert reenabled.data["connections"][0]["status"] == "pending"
+    assert forced_healthy.status_code == 400
