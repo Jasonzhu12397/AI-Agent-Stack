@@ -51,6 +51,7 @@ def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> 
         **plan_result,
         "capi_pivot_provider_compatibility": {
             "checked": True,
+            "basis": "served_api_versions_only",
             "compatible": not mismatches and len(groups) == 5,
             "mismatches": mismatches,
             "execution_allowed": False,
