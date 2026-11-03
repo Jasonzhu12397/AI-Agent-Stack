@@ -733,10 +733,7 @@ def build_capi_owner_graph(
                 )
 
     pending = [cluster_uid] if root_valid else []
-    cursor = 0
-    while cursor < len(pending):
-        owner_uid = pending[cursor]
-        cursor += 1
+    for owner_uid in pending:
         for child_uid in children_by_owner.get(owner_uid, []):
             if child_uid not in reachable:
                 reachable.add(child_uid)
