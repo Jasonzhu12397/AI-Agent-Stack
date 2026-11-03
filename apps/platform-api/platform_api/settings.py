@@ -101,3 +101,10 @@ LOCAL_MODEL_ALLOWED_HOSTS = [
     for value in os.getenv("LOCAL_MODEL_ALLOWED_HOSTS", "").split(",")
     if value.strip()
 ]
+
+PLUGIN_HTTP_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+PLUGIN_CREDENTIAL_RESOLVER = os.getenv("PLUGIN_CREDENTIAL_RESOLVER", "").strip()
