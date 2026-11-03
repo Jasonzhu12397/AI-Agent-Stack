@@ -117,7 +117,7 @@ def test_audit_api_is_tenant_admin_only_and_returns_chain_verification(audit_wor
 
 @pytest.mark.django_db
 def test_audit_api_denies_non_admin_tenant_member(audit_workspace):
-    _, tenant, project, _, request = audit_workspace
+    _, tenant, _, _, _ = audit_workspace
     member = get_user_model().objects.create_user(
         username="audit-member",
         password="test-password",
