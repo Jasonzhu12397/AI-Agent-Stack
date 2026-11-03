@@ -452,3 +452,23 @@ def test_target_agent_capi_pivot_preflight_command_is_allowed(node_workspace):
         HTTP_IDEMPOTENCY_KEY="target-capi-pivot-preflight",
     )
     assert response.status_code == 202
+
+
+@pytest.mark.django_db
+def test_eph_agent_capi_pivot_source_preflight_command_is_allowed(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-capi-pivot-source-preflight", "node_type": "eph_node"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.capi.pivot.source.preflight",
+            "payload": {"cluster_name": "edge-lab"},
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="eph-capi-pivot-source-preflight",
+    )
+    assert response.status_code == 202
