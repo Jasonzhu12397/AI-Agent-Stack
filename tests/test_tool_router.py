@@ -170,6 +170,61 @@ class ToolRouterTests(unittest.TestCase):
                 granted_permissions=["sample:read"],
             )
 
+    def test_bounds_serialized_arguments_and_results(self):
+        installation, tool = fixture()
+        tool.input_schema = {"type": "object"}
+        tool.output_schema = {"type": "object"}
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"ok": True})
+        with self.assertRaisesRegex(ToolExecutionError, "arguments exceed 64 KiB"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"payload": "x" * 70000},
+                granted_permissions=["sample:read"],
+            )
+
+        tool.input_schema = {"type": "object"}
+        tool.output_schema = {"type": "object"}
+        router = ToolRouter()
+        router.register(
+            "sample",
+            "lookup",
+            lambda args, context: {"payload": "x" * 70000},
+        )
+        with self.assertRaisesRegex(ToolExecutionError, "result exceeds 64 KiB"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={},
+                granted_permissions=["sample:read"],
+            )
+
+    def test_dispatches_version_pinned_handler(self):
+        installation, tool = fixture()
+        router = ToolRouter()
+        router.register(
+            "sample",
+            "lookup",
+            lambda args, context: {"items": ["v1"]},
+            plugin_version="1.0.0",
+        )
+        router.register(
+            "sample",
+            "lookup",
+            lambda args, context: {"items": ["v2"]},
+            plugin_version="2.0.0",
+        )
+        installation.plugin.version = "2.0.0"
+        installation.plugin_version = "2.0.0"
+        result = router.execute(
+            installation=installation,
+            tool=tool,
+            arguments={"query": "version"},
+            granted_permissions=["sample:read"],
+        )
+        self.assertEqual(result["result"]["items"], ["v2"])
+
 
 if __name__ == "__main__":
     unittest.main()
