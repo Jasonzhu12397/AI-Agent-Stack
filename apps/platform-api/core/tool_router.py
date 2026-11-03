@@ -116,7 +116,7 @@ class ToolRouter:
     """Policy-enforcing dispatcher; connector transports must register trusted handlers."""
 
     def __init__(self) -> None:
-        self._handlers: dict[tuple[str, str, str], Handler] = {}
+        self._handlers: dict[tuple[str, ...], Handler] = {}
 
     def register(
         self,
@@ -127,7 +127,11 @@ class ToolRouter:
     ) -> None:
         if not plugin_key or not tool_name or not callable(handler) or not plugin_version:
             raise ValueError("A plugin key, version, tool name and callable handler are required.")
-        key = (plugin_key, plugin_version, tool_name)
+        key = (
+            (plugin_key, tool_name)
+            if plugin_version == "*"
+            else (plugin_key, plugin_version, tool_name)
+        )
         if key in self._handlers:
             raise ValueError("A handler is already registered for this connector version and tool.")
         self._handlers[key] = handler
@@ -138,6 +142,11 @@ class ToolRouter:
         tool_name: str,
         plugin_version: str = "*",
     ) -> bool:
+        if plugin_version == "*":
+            return (
+                (plugin_key, tool_name) in self._handlers
+                or (plugin_key, "*", tool_name) in self._handlers
+            )
         return (plugin_key, plugin_version, tool_name) in self._handlers
 
     def execute(
@@ -173,9 +182,11 @@ class ToolRouter:
                 raise ToolExecutionError("Connector connection is not healthy or is out of scope.")
 
         validate_schema(arguments, tool.input_schema)
-        handler = self._handlers.get(
-            (plugin.plugin_key, plugin.version, tool.name)
-        ) or self._handlers.get((plugin.plugin_key, "*", tool.name))
+        handler = (
+            self._handlers.get((plugin.plugin_key, plugin.version, tool.name))
+            or self._handlers.get((plugin.plugin_key, tool.name))
+            or self._handlers.get((plugin.plugin_key, "*", tool.name))
+        )
         if handler is None:
             raise ToolExecutionError("No trusted executor is registered for this connector tool.")
 
