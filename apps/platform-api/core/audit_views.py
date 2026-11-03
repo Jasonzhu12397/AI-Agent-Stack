@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import AuditEvent, Project, ProjectMembership, Tenant, TenantMembership
+from core.models import AuditEvent, Project, Tenant, TenantMembership
 
 
 def _audit_event_data(event):
