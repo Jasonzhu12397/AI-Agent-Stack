@@ -784,3 +784,44 @@ export function runClusterDeploymentPostflight(deploymentId: string, targetNodeI
     { method: "POST", body: JSON.stringify({ target_node_id: targetNodeId, confirmation: "cluster_provisioned" }) },
   );
 }
+
+export type TenantMember = {
+  id: string;
+  user_id: number;
+  username: string;
+  email: string;
+  role: "owner" | "admin" | "member" | "viewer";
+};
+
+export function getTenantMembers(tenantId: string): Promise<TenantMember[]> {
+  return request("/api/v1/tenants/" + tenantId + "/members/");
+}
+
+export function addTenantMember(
+  tenantId: string,
+  username: string,
+  role: TenantMember["role"],
+): Promise<TenantMember> {
+  return request("/api/v1/tenants/" + tenantId + "/members/", {
+    method: "POST",
+    body: JSON.stringify({ username, role }),
+  });
+}
+
+export function updateTenantMember(
+  tenantId: string,
+  membershipId: string,
+  role: TenantMember["role"],
+): Promise<TenantMember> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/members/" + membershipId + "/",
+    { method: "PATCH", body: JSON.stringify({ role }) },
+  );
+}
+
+export function removeTenantMember(tenantId: string, membershipId: string): Promise<void> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/members/" + membershipId + "/",
+    { method: "DELETE" },
+  );
+}
