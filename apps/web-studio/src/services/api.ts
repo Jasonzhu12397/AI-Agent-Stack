@@ -825,3 +825,46 @@ export function removeTenantMember(tenantId: string, membershipId: string): Prom
     { method: "DELETE" },
   );
 }
+
+export type AuditEvent = {
+  id: string;
+  tenant_id: string;
+  project_id: string | null;
+  actor_id: number | null;
+  actor_username: string | null;
+  event_type: string;
+  resource_type: string;
+  resource_id: string;
+  outcome: "success" | "denied" | "failure";
+  request_id: string;
+  remote_addr: string | null;
+  user_agent: string;
+  metadata: Record<string, unknown>;
+  previous_hash: string;
+  event_hash: string;
+  created_at: string;
+};
+
+export type AuditChainVerification = {
+  valid: boolean;
+  verified_count: number;
+  invalid_event_id?: string | null;
+  expected_previous_hash?: string;
+  stored_previous_hash?: string;
+  head_hash?: string;
+};
+
+export function getAuditEvents(
+  tenantId: string,
+  projectId?: string,
+): Promise<{ count: number; limit: number; offset: number; results: AuditEvent[] }> {
+  const query = new URLSearchParams({ limit: "100", offset: "0" });
+  if (projectId) query.set("project_id", projectId);
+  return request(
+    "/api/v1/tenants/" + tenantId + "/audit-events/?" + query.toString(),
+  );
+}
+
+export function verifyAuditChain(tenantId: string): Promise<AuditChainVerification> {
+  return request("/api/v1/tenants/" + tenantId + "/audit-events/verify/");
+}
