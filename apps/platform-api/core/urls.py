@@ -6,6 +6,7 @@ from core.audit_views import AuditEventListView, AuditEventVerifyView
 from core.agent_node_views import (
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
+    AgentProjectCommandListView,
     AgentNodeListCreateView,
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
@@ -165,6 +166,11 @@ urlpatterns = [
         "api/v1/agent-nodes/<uuid:node_id>/commands/",
         AgentNodeCommandListCreateView.as_view(),
         name="agent-node-commands",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-commands/",
+        AgentProjectCommandListView.as_view(),
+        name="project-agent-commands",
     ),
     path(
         "api/v1/agent-commands/<uuid:command_id>/approve/",
