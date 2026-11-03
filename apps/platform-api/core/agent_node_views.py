@@ -1005,3 +1005,55 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             },
             status=201,
         )
+
+
+class AgentProjectCommandListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id):
+        tenant, project, _ = _tenant_and_project(
+            request,
+            tenant_id,
+            project_id,
+        )
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            return Response(
+                {"detail": "limit and offset must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not 1 <= limit <= 200 or offset < 0:
+            return Response(
+                {"detail": "limit must be 1–200 and offset must be non-negative."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        commands = AgentCommand.objects.filter(
+            node__tenant=tenant,
+            node__project=project,
+        ).select_related("node", "deployment")
+        status_filter = request.query_params.get("status")
+        if status_filter:
+            if status_filter not in AgentCommand.Status.values:
+                return Response(
+                    {"detail": "Unknown command status."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            commands = commands.filter(status=status_filter)
+        node_id = request.query_params.get("node_id")
+        if node_id:
+            commands = commands.filter(node_id=node_id)
+        command_type = request.query_params.get("command_type")
+        if command_type:
+            commands = commands.filter(command_type=command_type)
+        total = commands.count()
+        page = commands.order_by("-created_at", "-id")[offset : offset + limit]
+        return Response(
+            {
+                "count": total,
+                "limit": limit,
+                "offset": offset,
+                "results": [_command_data(command) for command in page],
+            }
+        )
