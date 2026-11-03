@@ -76,6 +76,10 @@ def test_audit_events_form_a_tamper_evident_chain_and_filter_sensitive_metadata(
     assert "api_token" not in first.metadata
     assert "password" not in first.metadata["nested"]
     assert first.event_hash == second.previous_hash
+    with pytest.raises(ValueError, match="append-only"):
+        first.save()
+    with pytest.raises(ValueError, match="cannot be deleted"):
+        first.delete()
     assert verify_audit_chain(tenant)["valid"] is True
     assert verify_audit_chain(tenant)["verified_count"] == 2
 
