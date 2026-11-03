@@ -1411,3 +1411,21 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     assert result["inventory_truncated"] is False
     assert result["side_effects"] is False
     assert "/apis/cluster.x-k8s.io/v1beta1/clusters" in calls
+
+    original_get = agent.kubernetes_api_get
+
+    def missing_source_cluster(path):
+        if path.endswith("/clusters"):
+            return {"items": [], "metadata": {}}
+        return original_get(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", missing_source_cluster)
+    blocked = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.source.preflight",
+            "payload": {"cluster_name": "edge-lab"},
+        },
+        "eph_node",
+    )
+    assert blocked["source_management_plane_ready"] is False
+    assert "requested_source_cluster_not_found" in blocked["blockers"]
