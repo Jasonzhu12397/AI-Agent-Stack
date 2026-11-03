@@ -626,6 +626,37 @@ CAPI_PIVOT_TRACKED_OWNER_KINDS = {
 }
 
 
+def list_all_kubernetes_items(path: str, max_items: int = 100000) -> list[dict[str, Any]]:
+    items = []
+    continuation = ""
+    seen_tokens = set()
+    for _ in range(201):
+        query = {"limit": "500"}
+        if continuation:
+            query["continue"] = continuation
+        request_path = f"{path}?{urllib.parse.urlencode(query)}"
+        document = kubernetes_api_get(request_path)
+        page_items = document.get("items", [])
+        metadata = document.get("metadata", {})
+        if not isinstance(page_items, list) or not isinstance(metadata, dict):
+            raise NodeAgentError("KUBERNETES_LIST_RESPONSE_INVALID")
+        if any(not isinstance(item, dict) for item in page_items):
+            raise NodeAgentError("KUBERNETES_LIST_ITEM_INVALID")
+        items.extend(page_items)
+        if len(items) > max_items:
+            raise NodeAgentError("KUBERNETES_INVENTORY_LIMIT_EXCEEDED")
+        next_token = metadata.get("continue", "")
+        if not isinstance(next_token, str):
+            raise NodeAgentError("KUBERNETES_CONTINUE_TOKEN_INVALID")
+        if not next_token:
+            return items
+        if next_token in seen_tokens:
+            raise NodeAgentError("KUBERNETES_CONTINUE_TOKEN_REPEATED")
+        seen_tokens.add(next_token)
+        continuation = next_token
+    raise NodeAgentError("KUBERNETES_INVENTORY_PAGE_LIMIT_EXCEEDED")
+
+
 def build_capi_owner_graph(
     inventory: list[dict[str, Any]],
     cluster_name: str,
@@ -892,7 +923,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         }
         missing_resources = []
         provider_versions = {}
-        inventory = []
+        full_inventory = []
         resource_counts = {}
         pagination_required = []
         for group_name, resource_names in resource_inventory.items():
@@ -912,26 +943,20 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 if isinstance(item, dict) and isinstance(item.get("name"), str)
             }
             for resource_name in resource_names:
-                resource = api_resources.get(resource_name)
-                if resource is None:
+                if api_resources.get(resource_name) is None:
                     missing_resources.append(f"{group_name}/{resource_name}")
                     continue
                 path = f"/apis/{group_name}/{version}/{resource_name}"
-                document = kubernetes_api_get(path)
-                items = document.get("items", [])
-                if not isinstance(items, list):
-                    raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
+                items = list_all_kubernetes_items(path)
                 resource_key = f"{group_name}/{resource_name}"
                 resource_counts[resource_key] = len(items)
-                if document.get("metadata", {}).get("continue") or len(items) > 100:
-                    pagination_required.append(resource_key)
-                for item in items[:100]:
+                for item in items:
                     metadata = item.get("metadata", {})
                     owner_references = metadata.get("ownerReferences", [])
                     labels = metadata.get("labels", {})
                     if not isinstance(owner_references, list) or not isinstance(labels, dict):
                         raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
-                    inventory.append(
+                    full_inventory.append(
                         {
                             "api_version": item.get("apiVersion"),
                             "kind": item.get("kind"),
@@ -1006,15 +1031,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 }
             )
         controllers_ready = all(item["ready"] for item in controller_states)
-        inventory_truncated = len(inventory) > 200
-        inventory_complete = (
-            not missing_resources
-            and not pagination_required
-            and not inventory_truncated
-        )
+        inventory_truncated = False
+        inventory_summary_truncated = len(full_inventory) > 200
+        inventory_complete = not missing_resources
         source_cluster_matches = [
             item
-            for item in inventory
+            for item in full_inventory
             if item.get("resource") == "cluster.x-k8s.io/clusters"
             and item.get("name") == cluster_name
         ]
@@ -1036,20 +1058,23 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     "api_version": source_cluster.get("api_version"),
                 }
         owner_graph = build_capi_owner_graph(
-            inventory,
+            full_inventory,
             cluster_name,
             source_cluster_identity.get("uid") if source_cluster_identity else "",
             inventory_complete,
         )
+        inventory = list(full_inventory[:200])
+        if source_cluster_identity and not any(
+            item.get("uid") == source_cluster_identity["uid"] for item in inventory
+        ):
+            inventory = [source_cluster_matches[0], *inventory[:199]]
         blockers = []
         if missing_resources:
             blockers.append("required_source_capi_metal3_apis_missing")
         if not controllers_ready:
             blockers.append("source_management_controllers_not_ready")
-        if pagination_required:
-            blockers.append("source_inventory_pagination_required")
         if inventory_truncated:
-            blockers.append("source_inventory_truncated")
+            blockers.append("source_inventory_incomplete")
         if not inventory:
             blockers.append("source_inventory_empty")
         if not owner_graph["complete"]:
@@ -1076,6 +1101,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "resource_counts": resource_counts,
             "inventory": inventory[:200],
             "inventory_truncated": inventory_truncated,
+            "inventory_summary_truncated": inventory_summary_truncated,
+            "inventory_total_count": len(full_inventory),
             "missing_resources": missing_resources[:100],
             "pagination_required": sorted(set(pagination_required))[:100],
             "controllers": controller_states,
@@ -1440,6 +1467,15 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
 
 
 def kubernetes_api_get(path: str) -> dict[str, Any]:
+    parsed_path = urllib.parse.urlsplit(path)
+    query = urllib.parse.parse_qs(parsed_path.query, strict_parsing=True)
+    if set(query) - {"continue", "limit"} or any(
+        len(values) != 1 for values in query.values()
+    ):
+        raise NodeAgentError("KUBERNETES_QUERY_NOT_ALLOWLISTED")
+    if "limit" in query and query["limit"][0] != "500":
+        raise NodeAgentError("KUBERNETES_QUERY_NOT_ALLOWLISTED")
+    path = parsed_path.path
     allowed_prefixes = (
         "/version",
         "/api/v1/nodes",
@@ -1448,8 +1484,13 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         "/apis",
         "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/",
     )
-    if not path.startswith(allowed_prefixes) or ".." in path or "?" in path:
+    if not path.startswith(allowed_prefixes) or ".." in path:
         raise NodeAgentError("KUBERNETES_PATH_NOT_ALLOWLISTED")
+    if "continue" in query and (
+        not query["continue"][0]
+        or len(query["continue"][0]) > 4096
+    ):
+        raise NodeAgentError("KUBERNETES_CONTINUE_TOKEN_INVALID")
     host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
     port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
     token_path = os.environ.get(
@@ -1466,7 +1507,8 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         token = token_file.read().strip()
     context = ssl.create_default_context(cafile=ca_path)
     request = urllib.request.Request(
-        f"https://{host}:{port}{path}",
+        f"https://{host}:{port}{path}"
+        + (f"?{urllib.parse.urlencode({key: values[0] for key, values in query.items()})}" if query else ""),
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         method="GET",
     )
