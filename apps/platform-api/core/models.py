@@ -815,4 +815,60 @@ class PluginConnection(models.Model):
         ]
 
 
+
+class AuditEvent(models.Model):
+    class Outcome(models.TextChoices):
+        SUCCESS = "success", "Success"
+        DENIED = "denied", "Denied"
+        FAILURE = "failure", "Failure"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.PROTECT,
+        related_name="audit_events",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+        null=True,
+        blank=True,
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+        null=True,
+        blank=True,
+    )
+    event_type = models.CharField(max_length=120)
+    resource_type = models.CharField(max_length=80)
+    resource_id = models.CharField(max_length=64, blank=True)
+    outcome = models.CharField(
+        max_length=16,
+        choices=Outcome.choices,
+        default=Outcome.SUCCESS,
+    )
+    request_id = models.CharField(max_length=64, blank=True)
+    remote_addr = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=256, blank=True)
+    metadata = models.JSONField(default=dict)
+    previous_hash = models.CharField(max_length=64, blank=True)
+    event_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "-created_at"],
+                name="audit_tenant_time_idx",
+            ),
+            models.Index(
+                fields=["tenant", "event_type", "-created_at"],
+                name="audit_tenant_type_idx",
+            ),
+        ]
+
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
