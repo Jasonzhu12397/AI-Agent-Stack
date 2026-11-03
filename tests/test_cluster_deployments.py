@@ -856,6 +856,12 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert deployment.status == ClusterDeployment.Status.TARGET_AGENT_PENDING
     assert deployment.plan_result["capi_pivot_preflight"]["preflight_validated"] is True
     assert deployment.plan_result["capi_pivot_preflight"]["side_effects"] is False
+    assert deployment.plan_result["capi_pivot_provider_compatibility"] == {
+        "checked": True,
+        "compatible": True,
+        "mismatches": [],
+        "execution_allowed": False,
+    }
     assert deployment.error is None
 
 
