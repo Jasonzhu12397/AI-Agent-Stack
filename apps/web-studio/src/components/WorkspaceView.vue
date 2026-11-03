@@ -7,6 +7,7 @@ import KnowledgeBaseView from "./KnowledgeBaseView.vue";
 import GovernanceView from "./GovernanceView.vue";
 import AuditView from "./AuditView.vue";
 import OrganizationView from "./OrganizationView.vue";
+import DocsAndMatrixView from "./DocsAndMatrixView.vue";
 import {
   cancelTask,
   createEchoTask,
@@ -22,7 +23,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization";
+    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs";
   }>(),
   { activeSection: "overview" },
 );
@@ -187,7 +188,9 @@ onUnmounted(() => {
                           ? "Audit & Activity"
                           : props.activeSection === "organization"
                             ? "Organization Members"
-                            : "Integration Hub"
+                            : props.activeSection === "docs"
+                              ? "Documentation & Matrix"
+                              : "Integration Hub"
           }}
         </h2>
       </div>
@@ -301,6 +304,7 @@ onUnmounted(() => {
           v-if="props.activeSection === 'organization'"
           :tenant-id="selectedTenantId"
         />
+        <DocsAndMatrixView v-if="props.activeSection === 'docs'" />
       </section>
     </div>
   </section>
