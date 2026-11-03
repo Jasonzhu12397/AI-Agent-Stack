@@ -135,7 +135,7 @@ The Target Agent now exposes `cluster.capi.pivot.target.preflight`. This command
 - Check that the requested cluster name does not already exist in the destination namespace.
 - Return explicit blockers and `pivot_execution_allowed`; missing APIs, unavailable controllers or a cluster-name collision fail closed.
 
-This is only the target-side preflight. It does not inspect the EPH source ownership graph, copy credentials, run `clusterctl move`, transfer provider objects, or prove post-pivot reconciliation. A source-side inventory and version/provider compatibility check are still required before an executor can be enabled.
+This is only the target-side preflight. It does not validate the EPH source ownership graph, copy credentials, run `clusterctl move`, transfer provider objects, or prove post-pivot reconciliation. A source-side inventory and version/provider compatibility check are still required before an executor can be enabled.
 
 The Control Plane-first handoff endpoint now queues `cluster.capi.pivot.target.preflight` directly to the assigned Target Agent. The API validates the returned cluster/namespace, exact four-controller inventory, controller readiness, API blockers and the no-side-effects flag before persisting the result in the deployment plan. A successful preflight is recorded as `preflight_validated`; it deliberately does not advance the deployment to worker provisioning or authorize a pivot mutation.
 
@@ -143,7 +143,7 @@ The same handoff now queues `cluster.capi.pivot.source.preflight` to the EPH Age
 
 The destination preflight returns the same five provider API-group versions and checks the complete source inventory resource set, including MachineSets and KubeadmConfigTemplates. The Supervisor validates the destination version map and, once both sides have independently passed their read-only checks, compares every provider group version. The comparison is persisted as `capi_pivot_provider_compatibility`, including explicit source/target mismatches. A version mismatch prevents compatibility from being marked true. Even an exact match is evidence only: `execution_allowed` remains false until a separately reviewed, version-specific pivot executor, credential transfer and post-move reconciliation workflow exist.
 
-The EPH Agent must also find exactly one source `Cluster` object matching the requested deployment cluster name and return its namespace, UID and API version. Missing, ambiguous or incomplete source Cluster identity prevents the source preflight from passing.
+The EPH Agent must also find exactly one source `Cluster` object matching the requested deployment cluster name and return its namespace, UID and API version. Missing, ambiguous or incomplete source Cluster identity prevents the source preflight from passing. The source inventory records owner-reference summaries, but full graph closure and cross-object ownership validation are still separate work and must not be inferred from the presence of those summaries.
 
 ## Operational failure handling
 
