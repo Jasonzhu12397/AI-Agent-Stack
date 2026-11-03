@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,6 +15,7 @@ from core.http_connector import execute_http_operation
 from core.tool_router import ToolContext, ToolExecutionError
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.models import (
+    AuditEvent,
     PluginConnection,
     PluginDefinition,
     PluginInstallation,
