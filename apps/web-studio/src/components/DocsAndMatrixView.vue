@@ -19,6 +19,9 @@ const lifecycle = [
   "Provision remaining Control Plane and Worker nodes from the target management plane.",
   "Reclaim EPH hardware, reinstall it as a Worker and register its new node identity.",
 ];
+function openDocs(): void {
+  window.open("https://github.com/Jasonzhu12397/AI-Agent-Stack/tree/feature/dual-agent-control-plane/docs", "_blank", "noopener");
+}
 function statusType(status: string): "success" | "warning" | "info" {
   if (status === "verified") return "success";
   if (status === "in_progress") return "warning";
@@ -32,7 +35,7 @@ function statusType(status: string): "success" | "warning" | "info" {
       <div><p class="eyebrow">ARCHITECTURE & DELIVERY</p><h3>Documentation & Verification Matrix</h3>
         <p>Delivery state is explicit: partial and planned capabilities are not presented as production-ready.</p>
       </div>
-      <el-button plain @click="window.open('https://github.com/Jasonzhu12397/AI-Agent-Stack/tree/feature/dual-agent-control-plane/docs', '_blank', 'noopener')">Open repository docs ↗</el-button>
+      <el-button plain @click="openDocs">Open repository docs ↗</el-button>
     </header>
     <section class="operations-panel">
       <div class="operations-panel-heading"><h4>Platform delivery matrix</h4><span>P0–P8</span></div>
