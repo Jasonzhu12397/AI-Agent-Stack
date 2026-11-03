@@ -1,6 +1,7 @@
 import django.db.models.deletion
 import uuid
 from django.conf import settings
+from django.utils import timezone
 from django.db import migrations, models
 
 
@@ -25,7 +26,7 @@ class Migration(migrations.Migration):
                 ("metadata", models.JSONField(default=dict)),
                 ("previous_hash", models.CharField(blank=True, max_length=64)),
                 ("event_hash", models.CharField(max_length=64, unique=True)),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("created_at", models.DateTimeField(default=timezone.now, editable=False)),
                 ("actor", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="audit_events", to=settings.AUTH_USER_MODEL)),
                 ("project", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="audit_events", to="core.project")),
                 ("tenant", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="audit_events", to="core.tenant")),
