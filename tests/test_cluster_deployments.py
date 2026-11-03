@@ -879,6 +879,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert deployment.plan_result["capi_pivot_preflight"]["side_effects"] is False
     assert deployment.plan_result["capi_pivot_provider_compatibility"] == {
         "checked": True,
+        "basis": "served_api_versions_only",
         "compatible": True,
         "mismatches": [],
         "execution_allowed": False,
@@ -1011,6 +1012,58 @@ def test_capi_pivot_provider_version_mismatch_fails_closed(
             "group": "metal3.io",
             "source": "v1alpha1",
             "target": "v1beta1",
+        }
+    ]
+    assert compatibility["execution_allowed"] is False
+
+
+@pytest.mark.django_db
+def test_capi_pivot_api_version_mismatch_never_allows_execution(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="provider-api-version-mismatch",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    groups = {
+        "cluster.x-k8s.io",
+        "bootstrap.cluster.x-k8s.io",
+        "controlplane.cluster.x-k8s.io",
+        "infrastructure.cluster.x-k8s.io",
+        "metal3.io",
+    }
+    source_versions = {group: "v1beta1" for group in groups}
+    target_versions = dict(source_versions)
+    target_versions["metal3.io"] = "v1alpha1"
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "preflight_validated": True,
+            "provider_versions": source_versions,
+        },
+        "capi_pivot_preflight": {
+            "preflight_validated": True,
+            "provider_versions": target_versions,
+        },
+    }
+    deployment.save(update_fields=["plan_result"])
+
+    _update_capi_pivot_provider_compatibility(deployment)
+
+    deployment.refresh_from_db()
+    compatibility = deployment.plan_result["capi_pivot_provider_compatibility"]
+    assert compatibility["checked"] is True
+    assert compatibility["basis"] == "served_api_versions_only"
+    assert compatibility["compatible"] is False
+    assert compatibility["mismatches"] == [
+        {
+            "group": "metal3.io",
+            "source": "v1beta1",
+            "target": "v1alpha1",
         }
     ]
     assert compatibility["execution_allowed"] is False
