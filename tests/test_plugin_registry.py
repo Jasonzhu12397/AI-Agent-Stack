@@ -9,6 +9,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.tool_router import ToolExecutionError
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
@@ -336,7 +337,7 @@ def test_http_plugin_connection_health_check_activates_connection(
 ):
     from unittest.mock import patch
 
-    user, tenant, project, client = plugin_workspace
+    _, tenant, project, client = plugin_workspace
     payload = plugin_payload(tenant)
     payload["manifest"] = {
         "http": {
