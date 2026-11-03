@@ -263,6 +263,25 @@ def handle_deployment_command_result(
             )
             and len(inventory) <= sum(safe_resource_counts.values())
         )
+        valid_source_cluster_identity = (
+            isinstance(source_cluster_identity, dict)
+            and source_cluster_identity.get("name") == deployment.cluster_name
+            and isinstance(source_cluster_identity.get("namespace"), str)
+            and bool(source_cluster_identity.get("namespace"))
+            and isinstance(source_cluster_identity.get("uid"), str)
+            and bool(source_cluster_identity.get("uid"))
+            and isinstance(source_cluster_identity.get("api_version"), str)
+            and isinstance(inventory, list)
+            and any(
+                isinstance(item, dict)
+                and item.get("resource") == "cluster.x-k8s.io/clusters"
+                and item.get("name") == source_cluster_identity.get("name")
+                and item.get("namespace") == source_cluster_identity.get("namespace")
+                and item.get("uid") == source_cluster_identity.get("uid")
+                and item.get("api_version") == source_cluster_identity.get("api_version")
+                for item in inventory
+            )
+        )
         preflight_valid = (
             command.node.node_type == "eph_node"
             and command.node_id == deployment.eph_node_id
@@ -275,13 +294,7 @@ def handle_deployment_command_result(
             and valid_versions
             and valid_counts
             and valid_inventory
-            and isinstance(source_cluster_identity, dict)
-            and source_cluster_identity.get("name") == deployment.cluster_name
-            and isinstance(source_cluster_identity.get("namespace"), str)
-            and bool(source_cluster_identity.get("namespace"))
-            and isinstance(source_cluster_identity.get("uid"), str)
-            and bool(source_cluster_identity.get("uid"))
-            and isinstance(source_cluster_identity.get("api_version"), str)
+            and valid_source_cluster_identity
         )
         if not preflight_valid:
             deployment.status = ClusterDeployment.Status.FAILED
