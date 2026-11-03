@@ -177,7 +177,11 @@ class TenantMemberDetailView(APIView):
             "tenant.member.role_changed",
             "tenant_membership",
             membership.id,
-            metadata={"username": membership.user.get_username(), "old_role": old_role, "new_role": role},
+            metadata={
+                "username": membership.user.get_username(),
+                "old_role": old_role,
+                "new_role": role,
+            },
         )
         return Response(membership_payload(membership))
 
