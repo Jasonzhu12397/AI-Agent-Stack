@@ -112,9 +112,14 @@ async function refreshData(): Promise<void> {
     const commandPage = await getProjectAgentCommands(
       selectedTenantId.value,
       selectedProjectId.value,
-      100,
+      {
+        limit: commandPageSize,
+        offset: commandOffset.value,
+        status: commandStatus.value,
+      },
     );
     commands.value = commandPage.results;
+    commandCount.value = commandPage.count;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to refresh Metal3 fleet data.";
   } finally {
