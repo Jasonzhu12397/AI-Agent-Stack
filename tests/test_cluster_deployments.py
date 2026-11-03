@@ -1021,7 +1021,7 @@ def test_capi_pivot_provider_version_mismatch_fails_closed(
 def test_capi_pivot_api_version_mismatch_never_allows_execution(
     cluster_delivery_workspace,
 ):
-    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    _, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
         client,
         tenant,
