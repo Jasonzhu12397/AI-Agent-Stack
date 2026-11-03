@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
+import AgentStudioView from "./AgentStudioView.vue";
+import ModelManagerView from "./ModelManagerView.vue";
 import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
 import KnowledgeBaseView from "./KnowledgeBaseView.vue";
