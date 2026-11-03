@@ -31,6 +31,10 @@ const projects = ref<Project[]>([]);
 const nodes = ref<AgentNode[]>([]);
 const deployments = ref<ClusterDeployment[]>([]);
 const commands = ref<AgentCommand[]>([]);
+const commandCount = ref(0);
+const commandOffset = ref(0);
+const commandStatus = ref("");
+const commandPageSize = 100;
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const loading = ref(false);
@@ -46,7 +50,7 @@ const activeDeployments = computed(() =>
   deployments.value.filter((item) => !["succeeded", "failed", "cancelled"].includes(item.status)),
 );
 const recentCommands = computed(() =>
-  [...commands.value].sort((left, right) => right.created_at.localeCompare(left.created_at)).slice(0, 80),
+  [...commands.value].sort((left, right) => right.created_at.localeCompare(left.created_at)),
 );
 const latestActivity = computed(() => {
   const commandTimes = commands.value.map((item) => item.finished_at ?? item.started_at ?? item.created_at);
@@ -76,6 +80,8 @@ async function loadProjects(tenantId: string): Promise<void> {
   nodes.value = [];
   deployments.value = [];
   commands.value = [];
+  commandCount.value = 0;
+  commandOffset.value = 0;
   selectedProjectId.value = "";
   if (!tenantId) return;
   try {
@@ -114,6 +120,19 @@ async function refreshData(): Promise<void> {
   } finally {
     refreshing.value = false;
   }
+}
+
+function setCommandStatus(value: string): void {
+  commandStatus.value = value;
+  commandOffset.value = 0;
+  void refreshData();
+}
+
+function changeCommandPage(direction: -1 | 1): void {
+  const nextOffset = commandOffset.value + direction * commandPageSize;
+  if (nextOffset < 0 || nextOffset >= commandCount.value) return;
+  commandOffset.value = nextOffset;
+  void refreshData();
 }
 
 function statusType(status: string): "success" | "warning" | "danger" | "info" {
@@ -284,7 +303,23 @@ onUnmounted(() => {
 
     <template v-else-if="activeTab === 'terminal'">
       <section class="fleet-terminal">
-        <div class="fleet-terminal-bar"><span>AGENT COMMAND STREAM</span><span>{{ recentCommands.length }} RECORDS · PERSISTED POLL</span></div>
+        <div class="fleet-terminal-bar">
+          <span>AGENT COMMAND HISTORY</span>
+          <span>{{ commandCount }} TOTAL · PERSISTED POLL</span>
+        </div>
+        <div class="fleet-terminal-controls">
+          <el-select :model-value="commandStatus" size="small" clearable placeholder="All statuses" @change="setCommandStatus">
+            <el-option label="Queued" value="queued" />
+            <el-option label="Running" value="running" />
+            <el-option label="Succeeded" value="succeeded" />
+            <el-option label="Failed" value="failed" />
+            <el-option label="Waiting approval" value="waiting_approval" />
+            <el-option label="Cancelled" value="cancelled" />
+          </el-select>
+          <span>Showing {{ commandCount ? commandOffset + 1 : 0 }}–{{ Math.min(commandOffset + commands.length, commandCount) }} of {{ commandCount }}</span>
+          <el-button size="small" plain :disabled="commandOffset === 0 || refreshing" @click="changeCommandPage(-1)">Previous</el-button>
+          <el-button size="small" plain :disabled="commandOffset + commandPageSize >= commandCount || refreshing" @click="changeCommandPage(1)">Next</el-button>
+        </div>
         <div class="fleet-terminal-body">
           <div v-for="command in recentCommands" :key="command.id" class="fleet-terminal-line">
             <span class="terminal-time">{{ formatTime(command.finished_at ?? command.started_at ?? command.created_at) }}</span>
@@ -346,6 +381,8 @@ onUnmounted(() => {
 .fleet-capabilities span { padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(70, 185, 204, .22); background: rgba(40, 139, 159, .1); color: #7bc9d4; font-size: 10px; }
 .fleet-terminal { overflow: hidden; border: 1px solid rgba(82, 137, 170, .25); border-radius: 12px; background: #07111d; }
 .fleet-terminal-bar { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(93, 134, 164, .2); color: #73a2ba; font-size: 9px; letter-spacing: .12em; }
+.fleet-terminal-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(93, 134, 164, .16); color: #7e9bb4; font-size: 10px; }
+.fleet-terminal-controls .el-select { width: 170px; }
 .fleet-terminal-body { max-height: 600px; overflow: auto; padding: 12px 16px; }
 .fleet-terminal-line { display: grid; grid-template-columns: 150px 110px minmax(140px, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(80, 122, 150, .12); }
 .terminal-time, .terminal-node { color: #6f8da5; font-size: 10px; }
