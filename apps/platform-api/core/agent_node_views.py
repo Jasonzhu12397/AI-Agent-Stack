@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
@@ -231,6 +232,15 @@ class AgentNodeListCreateView(APIView):
                 {"detail": "A node with this name already exists in the project."},
                 status=409,
             )
+        record_audit_event(
+            request,
+            tenant,
+            "agent.node.enrolled",
+            "agent_node",
+            node.id,
+            project=project,
+            metadata={"node_type": node.node_type, "node_name": node.name},
+        )
         data = _node_data(node)
         data["enrollment_token"] = raw_token
         data["token_warning"] = (
@@ -277,6 +287,15 @@ class AgentNodeRevokeView(APIView):
                 lease_token=None,
                 lease_expires_at=None,
             )
+        record_audit_event(
+            request,
+            node.tenant,
+            "agent.node.revoked",
+            "agent_node",
+            node.id,
+            project=node.project,
+            metadata={"node_type": node.node_type, "node_name": node.name},
+        )
         return Response(_node_data(node))
 
 
@@ -375,6 +394,16 @@ class AgentNodeCommandListCreateView(APIView):
                 {"detail": "Idempotency-Key was used for a different command."},
                 status=409,
             )
+        if created:
+            record_audit_event(
+                request,
+                node.tenant,
+                "agent.command.approval_requested" if initial_status == AgentCommand.Status.WAITING_APPROVAL else "agent.command.queued",
+                "agent_command",
+                command.id,
+                project=node.project,
+                metadata={"command_type": command.command_type, "status": command.status, "plan_hash": command.plan_hash},
+            )
         return Response(
             _command_data(command),
             status=status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK,
@@ -431,6 +460,15 @@ class AgentCommandApproveView(APIView):
                 "approved_at",
                 "updated_at",
             ]
+        )
+        record_audit_event(
+            request,
+            command.tenant,
+            "agent.command.approved",
+            "agent_command",
+            command.id,
+            project=command.project,
+            metadata={"command_type": command.command_type, "plan_hash": command.approved_plan_hash},
         )
         return Response(_command_data(command))
 
