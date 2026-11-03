@@ -1304,6 +1304,61 @@ def test_target_capi_pivot_preflight_checks_apis_controllers_and_cluster_conflic
     assert result["side_effects"] is False
 
 
+def test_capi_owner_graph_handles_deep_inventory_without_quadratic_scans():
+    inventory = [
+        {
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "kind": "Cluster",
+            "resource": "cluster.x-k8s.io/clusters",
+            "name": "edge-lab",
+            "uid": "cluster-root",
+            "owner_references": [],
+            "owner_references_truncated": False,
+            "cluster_name": "edge-lab",
+        }
+    ]
+    previous_uid = "cluster-root"
+    previous_kind = "Cluster"
+    previous_name = "edge-lab"
+
+    for index in range(2500):
+        uid = f"machine-{index}"
+        inventory.append(
+            {
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "kind": "Machine",
+                "resource": "cluster.x-k8s.io/machines",
+                "name": uid,
+                "uid": uid,
+                "owner_references": [
+                    {
+                        "api_version": "cluster.x-k8s.io/v1beta1",
+                        "kind": previous_kind,
+                        "name": previous_name,
+                        "uid": previous_uid,
+                    }
+                ],
+                "owner_references_truncated": False,
+                "cluster_name": "edge-lab",
+            }
+        )
+        previous_uid = uid
+        previous_kind = "Machine"
+        previous_name = uid
+
+    result = agent.build_capi_owner_graph(
+        inventory,
+        "edge-lab",
+        "cluster-root",
+        True,
+    )
+
+    assert result["complete"] is True
+    assert result["object_count"] == 2501
+    assert result["unique_uid_count"] == 2501
+    assert result["reachable_object_count"] == 2501
+
+
 def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     monkeypatch,
 ):
