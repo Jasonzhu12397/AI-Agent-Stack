@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
-  getAgentCommands,
   getAgentNodes,
+  getProjectAgentCommands,
   getClusterDeployments,
   getProjects,
   getTenants,
@@ -103,10 +103,12 @@ async function refreshData(): Promise<void> {
     ]);
     nodes.value = nodePage.results;
     deployments.value = deploymentPage.results;
-    const commandPages = await Promise.all(
-      nodes.value.map((node) => getAgentCommands(node.id)),
+    const commandPage = await getProjectAgentCommands(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      100,
     );
-    commands.value = commandPages.flatMap((page) => page.results);
+    commands.value = commandPage.results;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to refresh Metal3 fleet data.";
   } finally {
