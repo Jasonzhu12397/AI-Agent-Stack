@@ -500,3 +500,19 @@ def test_project_agent_command_history_is_scoped_and_paginated(node_workspace):
     assert response.data["limit"] == 1
     assert response.data["results"][0]["id"] == created.data["id"]
     assert response.data["results"][0]["node_id"] == node_id
+
+    filtered = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-commands/?status=queued&node_id={node_id}&command_type=host.preflight",
+    )
+    assert filtered.status_code == 200
+    assert filtered.data["count"] == 1
+
+    invalid_node = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-commands/?node_id=not-a-uuid",
+    )
+    assert invalid_node.status_code == 400
+
+    invalid_limit = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-commands/?limit=201",
+    )
+    assert invalid_limit.status_code == 400
