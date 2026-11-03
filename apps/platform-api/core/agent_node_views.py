@@ -395,14 +395,23 @@ class AgentNodeCommandListCreateView(APIView):
                 status=409,
             )
         if created:
+            event_type = (
+                "agent.command.approval_requested"
+                if initial_status == AgentCommand.Status.WAITING_APPROVAL
+                else "agent.command.queued"
+            )
             record_audit_event(
                 request,
                 node.tenant,
-                "agent.command.approval_requested" if initial_status == AgentCommand.Status.WAITING_APPROVAL else "agent.command.queued",
+                event_type,
                 "agent_command",
                 command.id,
                 project=node.project,
-                metadata={"command_type": command.command_type, "status": command.status, "plan_hash": command.plan_hash},
+                metadata={
+                    "command_type": command.command_type,
+                    "status": command.status,
+                    "plan_hash": command.plan_hash,
+                },
             )
         return Response(
             _command_data(command),
@@ -468,7 +477,10 @@ class AgentCommandApproveView(APIView):
             "agent_command",
             command.id,
             project=command.project,
-            metadata={"command_type": command.command_type, "plan_hash": command.approved_plan_hash},
+            metadata={
+                "command_type": command.command_type,
+                "plan_hash": command.approved_plan_hash,
+            },
         )
         return Response(_command_data(command))
 
