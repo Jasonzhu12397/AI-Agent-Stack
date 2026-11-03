@@ -43,7 +43,8 @@ async function refresh(): Promise<void> {
     const commandPages = await Promise.all(
       nodes.value.map((node) => getAgentCommands(node.id)),
     );
-    commands.value = commandPages.flatMap((page) => page.results);
+    commands.value = commandPages
+      .flatMap((page) => page.results)
       .sort((left, right) => right.created_at.localeCompare(left.created_at));
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load governance data.";
