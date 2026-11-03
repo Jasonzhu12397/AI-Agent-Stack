@@ -23,6 +23,8 @@ The current plugin slice provides tenant-scoped connector metadata and project-s
 | GET/POST | `/api/v1/tenants/{tenant_id}/projects/{project_id}/plugin-installations/` | List/install project connectors |
 | POST | `/api/v1/plugin-installations/{installation_id}/status/` | Enable, disable or uninstall |
 | GET/POST | `/api/v1/plugin-installations/{installation_id}/connections/` | List/create connection references |
+| POST | `/api/v1/plugin-connections/{connection_id}/test/` | Test HTTPS health endpoint and activate one healthy connection |
+| POST | `/api/v1/plugin-connections/{connection_id}/status/` | Disable a connection or return it to pending for re-test |
 
 ## Security constraints
 
