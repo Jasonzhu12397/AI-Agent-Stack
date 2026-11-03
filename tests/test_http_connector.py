@@ -4,7 +4,11 @@ from unittest.mock import patch
 import pytest
 from django.test import override_settings
 
-from core.http_connector import execute_http_operation, register_http_tool
+from core.http_connector import (
+    _resolve_auth_headers,
+    execute_http_operation,
+    register_http_tool,
+)
 from core.tool_router import ToolExecutionError, ToolRouter
 
 
@@ -193,3 +197,51 @@ def test_http_tool_registration_is_version_scoped():
     assert router.has_handler("sample", "search", plugin_version="1.0.0") is True
     assert router.has_handler("sample", "search", plugin_version="2.0.0") is False
     assert register_http_tool(router, tool_model) is False
+
+
+def test_http_connector_resolves_bearer_credentials_from_server_side_reference(monkeypatch):
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "bearer",
+            "token": "server-side-secret",
+        },
+    )
+    with override_settings(PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve"):
+        headers = _resolve_auth_headers(
+            context(
+                auth_type="credential_ref",
+                credential_ref="vault://platform/github",
+            )
+        )
+    assert headers == {"Authorization": "Bearer server-side-secret"}
+
+
+def test_http_connector_rejects_auth_required_without_credential(monkeypatch):
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": True,
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/items/{item_id}",
+                    "path_params": {"item_id": "item_id"},
+                    "query_params": {"q": "query"},
+                }
+            },
+        }
+    }
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with pytest.raises(ToolExecutionError, match="authenticated connection"):
+            execute_http_operation(
+                {"item_id": "item-1", "query": "status"},
+                context(manifest=manifest),
+                tool(),
+            )
