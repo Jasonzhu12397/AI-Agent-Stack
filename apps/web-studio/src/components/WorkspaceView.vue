@@ -4,6 +4,9 @@ import WorkflowStudioView from "./WorkflowStudioView.vue";
 import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
 import KnowledgeBaseView from "./KnowledgeBaseView.vue";
+import GovernanceView from "./GovernanceView.vue";
+import AuditView from "./AuditView.vue";
+import OrganizationView from "./OrganizationView.vue";
 import {
   cancelTask,
   createEchoTask,
@@ -19,7 +22,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge";
+    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization";
   }>(),
   { activeSection: "overview" },
 );
@@ -178,7 +181,13 @@ onUnmounted(() => {
                     ? "Workflow Studio"
                     : props.activeSection === "knowledge"
                       ? "Knowledge Bases"
-                      : "Integration Hub"
+                      : props.activeSection === "governance"
+                        ? "Governance Center"
+                        : props.activeSection === "audit"
+                          ? "Audit & Activity"
+                          : props.activeSection === "organization"
+                            ? "Organization Members"
+                            : "Integration Hub"
           }}
         </h2>
       </div>
@@ -277,6 +286,20 @@ onUnmounted(() => {
           v-if="props.activeSection === 'knowledge'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
+        />
+        <GovernanceView
+          v-if="props.activeSection === 'governance'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <AuditView
+          v-if="props.activeSection === 'audit'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <OrganizationView
+          v-if="props.activeSection === 'organization'"
+          :tenant-id="selectedTenantId"
         />
       </section>
     </div>
