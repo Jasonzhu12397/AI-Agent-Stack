@@ -172,8 +172,8 @@ class ToolRouterTests(unittest.TestCase):
 
     def test_bounds_serialized_arguments_and_results(self):
         installation, tool = fixture()
-        tool.input_schema = {"type": "object"}
-        tool.output_schema = {"type": "object"}
+        tool.input_schema = {"type": "object", "additionalProperties": True}
+        tool.output_schema = {"type": "object", "additionalProperties": True}
         router = ToolRouter()
         router.register("sample", "lookup", lambda args, context: {"ok": True})
         with self.assertRaisesRegex(ToolExecutionError, "arguments exceed 64 KiB"):
