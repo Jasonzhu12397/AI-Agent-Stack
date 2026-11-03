@@ -16,6 +16,7 @@ from core.tool_router import ToolExecutionError, ToolRouter
 class FakeResponse:
     def __init__(self, status_code=200, chunks=None):
         self.status_code = status_code
+        self.headers = {"content-type": "application/json"}
         self.chunks = chunks or [b'{"items": ["ok"]}']
 
     def __enter__(self):
@@ -388,3 +389,38 @@ def test_http_connector_rejects_malformed_base_url_before_network(monkeypatch):
     with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
         with pytest.raises(ToolExecutionError, match="malformed"):
             _validate_base_url("https://api.example.com:not-a-port")
+
+
+@pytest.mark.parametrize(
+    "content_type,chunks,error",
+    [
+        ("text/html", [b'{"items": ["ok"]}'], "content type"),
+        ("application/json", [b'{"value": NaN}'], "UTF-8 JSON"),
+    ],
+)
+def test_http_connector_rejects_non_json_response_formats(
+    monkeypatch,
+    content_type,
+    chunks,
+    error,
+):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    response = FakeResponse(chunks=chunks)
+    response.headers["content-type"] = content_type
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(response, captured),
+        ):
+            with pytest.raises(ToolExecutionError, match=error):
+                execute_http_operation(
+                    {"item_id": "item-1", "query": "status"},
+                    context(),
+                    tool(),
+                )
