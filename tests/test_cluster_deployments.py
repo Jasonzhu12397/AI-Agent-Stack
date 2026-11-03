@@ -730,6 +730,12 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     ]
     source_result = {
         "source_management_plane_ready": True,
+        "source_cluster_identity": {
+            "name": "edge-lab",
+            "namespace": "capi-system",
+            "uid": "cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+        },
         "cluster_name": "edge-lab",
         "provider_versions": {
             group: "v1alpha1" if group == "metal3.io" else "v1beta1"
