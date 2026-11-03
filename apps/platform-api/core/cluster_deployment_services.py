@@ -27,6 +27,38 @@ def _spec_hash(spec: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> None:
+    plan_result = deployment.plan_result or {}
+    source = plan_result.get("capi_pivot_source_preflight", {})
+    target = plan_result.get("capi_pivot_preflight", {})
+    source_versions = source.get("provider_versions")
+    target_versions = target.get("provider_versions")
+    if not source.get("preflight_validated") or not target.get("preflight_validated"):
+        return
+    if not isinstance(source_versions, dict) or not isinstance(target_versions, dict):
+        return
+    groups = sorted(set(source_versions) | set(target_versions))
+    mismatches = [
+        {
+            "group": group,
+            "source": source_versions.get(group),
+            "target": target_versions.get(group),
+        }
+        for group in groups
+        if source_versions.get(group) != target_versions.get(group)
+    ]
+    deployment.plan_result = {
+        **plan_result,
+        "capi_pivot_provider_compatibility": {
+            "checked": True,
+            "compatible": not mismatches and len(groups) == 5,
+            "mismatches": mismatches,
+            "execution_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["plan_result", "updated_at"])
+
+
 def queue_deployment_command(
     deployment: ClusterDeployment,
     command_type: str,
@@ -275,11 +307,29 @@ def handle_deployment_command_result(
         deployment.save(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
+        _update_capi_pivot_provider_compatibility(deployment)
     elif command.command_type == "cluster.capi.pivot.target.preflight":
         controllers = result.get("controllers")
         missing_resources = result.get("missing_resources")
         conflicts = result.get("cluster_name_conflicts")
         blockers = result.get("blockers")
+        provider_versions = result.get("provider_versions")
+        expected_provider_groups = {
+            "cluster.x-k8s.io",
+            "bootstrap.cluster.x-k8s.io",
+            "controlplane.cluster.x-k8s.io",
+            "infrastructure.cluster.x-k8s.io",
+            "metal3.io",
+        }
+        valid_versions = (
+            isinstance(provider_versions, dict)
+            and set(provider_versions) == expected_provider_groups
+            and all(
+                isinstance(version, str)
+                and bool(re.fullmatch(r"[A-Za-z0-9.]+", version))
+                for version in provider_versions.values()
+            )
+        )
         expected_namespace = command.payload.get("namespace", "default")
         expected_controllers = {
             ("capi-system", "capi-controller-manager"),
@@ -328,6 +378,7 @@ def handle_deployment_command_result(
             and result.get("side_effects") is False
             and valid_controllers
             and valid_lists
+            and valid_versions
         )
         if not preflight_valid:
             deployment.status = ClusterDeployment.Status.FAILED
@@ -362,6 +413,7 @@ def handle_deployment_command_result(
         deployment.save(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
+        _update_capi_pivot_provider_compatibility(deployment)
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
