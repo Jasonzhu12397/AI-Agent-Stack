@@ -457,7 +457,7 @@ onMounted(() => void refresh());
           Save credential reference
         </el-button>
       </div>
-      <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER.</p>
+      <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>
     </section>
   </section>
 </template>
