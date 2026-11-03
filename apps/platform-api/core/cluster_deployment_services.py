@@ -161,6 +161,7 @@ def handle_deployment_command_result(
         resource_counts = result.get("resource_counts")
         inventory = result.get("inventory")
         source_cluster_identity = result.get("source_cluster_identity")
+        owner_graph = result.get("owner_graph")
         expected_controllers = {
             ("capi-system", "capi-controller-manager"),
             (
@@ -251,6 +252,9 @@ def handle_deployment_command_result(
                 and isinstance(item.get("kind"), str)
                 and isinstance(item.get("resource"), str)
                 and isinstance(item.get("name"), str)
+                and isinstance(item.get("uid"), str)
+                and bool(item.get("uid"))
+                and isinstance(item.get("owner_references_truncated"), bool)
                 and (
                     item.get("namespace") is None
                     or isinstance(item.get("namespace"), str)
@@ -282,6 +286,29 @@ def handle_deployment_command_result(
                 for item in inventory
             )
         )
+        valid_owner_graph = (
+            isinstance(owner_graph, dict)
+            and owner_graph.get("complete") is True
+            and isinstance(source_cluster_identity, dict)
+            and owner_graph.get("root_cluster_uid") == source_cluster_identity.get("uid")
+            and owner_graph.get("object_count") == len(inventory)
+            and owner_graph.get("unique_uid_count") == len(inventory)
+            and isinstance(owner_graph.get("reachable_object_count"), int)
+            and not isinstance(owner_graph.get("reachable_object_count"), bool)
+            and 1 <= owner_graph.get("reachable_object_count") <= len(inventory)
+            and isinstance(owner_graph.get("cluster_labeled_object_count"), int)
+            and not isinstance(owner_graph.get("cluster_labeled_object_count"), bool)
+            and 0 <= owner_graph.get("cluster_labeled_object_count") <= len(inventory)
+            and all(
+                isinstance(owner_graph.get(key), list) and not owner_graph.get(key)
+                for key in [
+                    "duplicate_uids",
+                    "truncated_owner_references",
+                    "unresolved_owner_references",
+                    "orphaned_cluster_objects",
+                ]
+            )
+        )
         preflight_valid = (
             command.node.node_type == "eph_node"
             and command.node_id == deployment.eph_node_id
@@ -295,6 +322,7 @@ def handle_deployment_command_result(
             and valid_counts
             and valid_inventory
             and valid_source_cluster_identity
+            and valid_owner_graph
         )
         if not preflight_valid:
             deployment.status = ClusterDeployment.Status.FAILED
@@ -315,6 +343,7 @@ def handle_deployment_command_result(
             and not missing_resources
             and not pagination_required
             and not blockers
+            and owner_graph["complete"] is True
             and all(item["ready"] for item in controllers)
         )
         deployment.plan_result = {
