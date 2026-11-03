@@ -478,9 +478,21 @@ export function getAgentCommands(
 export function getProjectAgentCommands(
   tenantId: string,
   projectId: string,
-  limit = 100,
+  options: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    nodeId?: string;
+    commandType?: string;
+  } = {},
 ): Promise<{ count: number; limit: number; offset: number; results: AgentCommand[] }> {
-  const query = new URLSearchParams({ limit: String(limit), offset: "0" });
+  const query = new URLSearchParams({
+    limit: String(options.limit ?? 100),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.status) query.set("status", options.status);
+  if (options.nodeId) query.set("node_id", options.nodeId);
+  if (options.commandType) query.set("command_type", options.commandType);
   return request(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-commands/?" + query.toString(),
   );
