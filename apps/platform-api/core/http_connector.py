@@ -28,6 +28,8 @@ def _validate_base_url(base_url):
         or parsed.query
         or parsed.fragment
         or parsed.port not in (None, 443)
+        or re.search(r"%2e", parsed.path, re.IGNORECASE)
+        or any(part in {".", ".."} for part in parsed.path.split("/"))
     ):
         raise ToolExecutionError("HTTP connectors require an HTTPS origin on port 443.")
     host = parsed.hostname.lower().rstrip(".")
@@ -126,12 +128,20 @@ def _operation_config(context, tool):
     if (
         not isinstance(path_params, dict)
         or not isinstance(query_params, dict)
-        or not all(isinstance(key, str) and isinstance(value, str) for key, value in path_params.items())
-        or not all(isinstance(key, str) and isinstance(value, str) for key, value in query_params.items())
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in path_params.items()
+        )
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in query_params.items()
+        )
     ):
         raise ToolExecutionError("Connector HTTP parameter mapping is invalid.")
     if set(path_params) != placeholders:
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
+    if transport.get("auth_required") is True and not context.credential_ref:
+        raise ToolExecutionError("Connector requires an authenticated connection.")
     mapped_args = set(path_params.values()) | set(query_params.values())
     if body_param is not None:
         if not isinstance(body_param, str) or not body_param:
