@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import datetime
 import re
 import uuid
@@ -186,7 +187,11 @@ class ClusterDeploymentListCreateView(APIView):
                 "cluster_deployment",
                 deployment.id,
                 project=project,
-                metadata={"cluster_name": deployment.cluster_name, "kubernetes_version": deployment.kubernetes_version, "eph_node_id": str(eph_node.id)},
+                metadata={
+                    "cluster_name": deployment.cluster_name,
+                    "kubernetes_version": deployment.kubernetes_version,
+                    "eph_node_id": str(eph_node.id),
+                },
             )
         return Response(
             _deployment_data(deployment),
@@ -345,7 +350,12 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
             "cluster_deployment",
             deployment.id,
             project=deployment.project,
-            metadata={"cluster_name": deployment.cluster_name, "target_node_id": str(target_node.id), "source_preflight_command_id": str(source_preflight_command.id), "target_preflight_command_id": str(preflight_command.id)},
+            metadata={
+                "cluster_name": deployment.cluster_name,
+                "target_node_id": str(target_node.id),
+                "source_preflight_command_id": str(source_preflight_command.id),
+                "target_preflight_command_id": str(preflight_command.id),
+            },
         )
         return Response(
             {
