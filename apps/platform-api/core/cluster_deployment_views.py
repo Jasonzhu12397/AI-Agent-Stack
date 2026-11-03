@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.cluster_deployment_services import queue_deployment_command
 from core.models import (
@@ -177,6 +178,16 @@ class ClusterDeploymentListCreateView(APIView):
                 {"detail": "Idempotency-Key was used for a different cluster plan."},
                 status=409,
             )
+        if created:
+            record_audit_event(
+                request,
+                tenant,
+                "cluster_deployment.created",
+                "cluster_deployment",
+                deployment.id,
+                project=project,
+                metadata={"cluster_name": deployment.cluster_name, "kubernetes_version": deployment.kubernetes_version, "eph_node_id": str(eph_node.id)},
+            )
         return Response(
             _deployment_data(deployment),
             status=202 if created else 200,
@@ -327,6 +338,15 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 "cluster.capi.pivot.target.preflight",
                 node=target_node,
             )
+        record_audit_event(
+            request,
+            deployment.tenant,
+            "cluster_deployment.target_agent_handoff_requested",
+            "cluster_deployment",
+            deployment.id,
+            project=deployment.project,
+            metadata={"cluster_name": deployment.cluster_name, "target_node_id": str(target_node.id), "source_preflight_command_id": str(source_preflight_command.id), "target_preflight_command_id": str(preflight_command.id)},
+        )
         return Response(
             {
                 "deployment": _deployment_data(deployment),
