@@ -1038,6 +1038,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster_name": cluster_name,
             "namespace": namespace,
             "missing_resources": missing_resources[:100],
+            "provider_versions": group_versions,
             "controllers": controller_states,
             "cluster_name_conflicts": cluster_conflicts[:20],
             "blockers": blockers,
