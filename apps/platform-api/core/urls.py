@@ -122,6 +122,11 @@ urlpatterns = [
         name="plugin-connection-test",
     ),
     path(
+        "api/v1/plugin-connections/<uuid:connection_id>/status/",
+        PluginConnectionStatusView.as_view(),
+        name="plugin-connection-status",
+    ),
+    path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
         ClusterDeploymentListCreateView.as_view(),
         name="cluster-deployment-list-create",
