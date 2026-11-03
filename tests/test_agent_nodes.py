@@ -264,6 +264,49 @@ def test_agent_result_requires_current_lease_token(node_workspace):
 
 
 @pytest.mark.django_db
+def test_agent_command_result_enforces_utf8_byte_limit(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-unicode-result", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "node.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="unicode-result-byte-limit",
+    )
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    command = polled.data["command"]
+    result = {"description": "汉" * 22000}
+
+    response = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        {"node_id": node_id, "outcome": "succeeded", "result": result},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
+
+    assert created.status_code == 202
+    assert len(str(result)) < 65536
+    assert response.status_code == 400
+    assert "64 KiB" in response.data["detail"]
+    stored = AgentCommand.objects.get(pk=command["id"])
+    assert stored.status == AgentCommand.Status.RUNNING
+    assert stored.lease_token is not None
+
+
+@pytest.mark.django_db
 def test_heartbeat_marks_node_online_and_revocation_blocks_future_calls(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
