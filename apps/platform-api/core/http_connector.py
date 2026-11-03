@@ -2,7 +2,7 @@ import ipaddress
 import json
 import re
 import socket
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from django.conf import settings
@@ -48,7 +48,7 @@ def _validate_base_url(base_url):
             raise ToolExecutionError("HTTP connector resolved an invalid address.") from exc
         if not parsed_address.is_global:
             raise ToolExecutionError("HTTP connector host resolves to a non-public address.")
-    return parsed
+    return base_url.rstrip("/")
 
 
 def _resolve_auth_headers(context):
@@ -112,6 +112,8 @@ def _operation_config(context, tool):
         or "\\" in path
         or "?" in path
         or "#" in path
+        or re.search(r"%2e", path, re.IGNORECASE)
+        or any(ord(char) < 32 for char in path)
         or any(part in {".", ".."} for part in path.split("/"))
     ):
         raise ToolExecutionError("Connector HTTP path is invalid.")
@@ -127,7 +129,7 @@ def _operation_config(context, tool):
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
     mapped_args = set(path_params.values()) | set(query_params.values())
     if body_param is not None:
-        if not isinstance(body_param, str):
+        if not isinstance(body_param, str) or not body_param:
             raise ToolExecutionError("Connector HTTP body parameter mapping is invalid.")
         mapped_args.add(body_param)
     if len(mapped_args) != len(path_params) + len(query_params) + (1 if body_param else 0):
@@ -153,9 +155,7 @@ def execute_http_operation(arguments, context: ToolContext, tool):
             raise ToolExecutionError("Connector path parameters must be strings or integers.")
         if len(str(value)) > 2048:
             raise ToolExecutionError("Connector path parameter is too long.")
-        path_values[placeholder] = httpx.URL("https://example.invalid/" + str(value)).raw_path.decode(
-            "ascii"
-        ).lstrip("/")
+        path_values[placeholder] = quote(str(value), safe="")
     rendered_path = PATH_PARAMETER.sub(
         lambda match: path_values[match.group(1)],
         path,
