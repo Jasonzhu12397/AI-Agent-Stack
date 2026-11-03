@@ -282,3 +282,97 @@ def test_http_connector_blocks_mutating_post_operations(monkeypatch):
                 context(manifest=manifest),
                 selected_tool,
             )
+
+
+def test_version_pinned_http_handler_executes_through_tool_router(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    def fake_client(**options):
+        captured["client_options"] = options
+        return FakeClient(FakeResponse(), captured)
+
+    plugin = SimpleNamespace(
+        id="plugin-http",
+        plugin_key="sample-http",
+        version="1.0.0",
+        connector_type="http",
+        enabled=True,
+        review_status="approved",
+        manifest={
+            "http": {
+                "base_url": "https://api.example.com",
+                "operations": {
+                    "search": {
+                        "method": "GET",
+                        "path": "/v1/items/{item_id}",
+                        "path_params": {"item_id": "item_id"},
+                        "query_params": {"q": "query"},
+                    }
+                },
+            }
+        },
+    )
+    installation = SimpleNamespace(
+        id="installation-http",
+        tenant_id="tenant-http",
+        project_id="project-http",
+        plugin_id=plugin.id,
+        plugin=plugin,
+        plugin_version=plugin.version,
+        status="installed",
+        granted_permissions=["sample:read"],
+    )
+    tool_model = SimpleNamespace(
+        plugin_id=plugin.id,
+        plugin=plugin,
+        name="search",
+        enabled=True,
+        risk_level="low",
+        required_permissions=["sample:read"],
+        idempotency_mode="read_only",
+        timeout_seconds=5,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string"},
+                "query": {"type": "string"},
+            },
+            "required": ["item_id", "query"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+    )
+    router = ToolRouter()
+    assert register_http_tool(router, tool_model) is True
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with patch(
+            "core.http_connector.httpx.Client",
+            side_effect=fake_client,
+        ):
+            result = router.execute(
+                installation=installation,
+                tool=tool_model,
+                arguments={"item_id": "42", "query": "ready"},
+                granted_permissions=["sample:read"],
+            )
+
+    assert result == {
+        "ok": True,
+        "tool": "search",
+        "result": {"items": ["ok"]},
+    }
+    assert captured["method"] == "GET"
