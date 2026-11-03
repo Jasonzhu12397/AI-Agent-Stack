@@ -94,9 +94,13 @@ def test_http_connector_builds_bounded_request_and_parses_json(monkeypatch):
         ],
     )
     with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        def fake_client(**options):
+            captured["client_options"] = options
+            return FakeClient(FakeResponse(), captured)
+
         with patch(
             "core.http_connector.httpx.Client",
-            return_value=FakeClient(FakeResponse(), captured),
+            side_effect=fake_client,
         ):
             result = execute_http_operation(
                 {"item_id": "a/b?x", "query": "service ready"},
@@ -108,7 +112,8 @@ def test_http_connector_builds_bounded_request_and_parses_json(monkeypatch):
     assert captured["method"] == "GET"
     assert captured["url"] == "https://api.example.com/v1/items/a%2Fb%3Fx"
     assert captured["params"] == [("q", "service ready")]
-    assert captured["follow_redirects"] is False if "follow_redirects" in captured else True
+    assert captured["client_options"]["follow_redirects"] is False
+    assert captured["client_options"]["trust_env"] is False
 
 
 def test_http_connector_rejects_non_public_dns_results(monkeypatch):
