@@ -327,3 +327,125 @@ def test_plugin_upgrade_requires_uninstalling_the_previous_project_version(
     assert blocked.status_code == 409
     assert upgraded.status_code == 201
     assert upgraded.data["plugin_version"] == "1.1.0"
+
+
+@pytest.mark.django_db
+def test_http_plugin_connection_health_check_activates_connection(
+    plugin_workspace,
+    monkeypatch,
+):
+    from unittest.mock import patch
+
+    user, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"] = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": False,
+            "health_check": {"method": "GET", "path": "/health"},
+            "operations": {},
+        }
+    }
+    registered = client.post("/api/v1/connectors/", payload, format="json")
+    approved = client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "github-readonly",
+            "auth_type": "none",
+            "credential_ref": "",
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert approved.status_code == 200
+    assert installed.status_code == 201
+    assert connection.status_code == 201
+    assert connection.data["status"] == PluginConnection.Status.PENDING
+
+    with patch(
+        "core.plugin_views.execute_http_operation",
+        return_value={"healthy": True},
+    ) as health_check:
+        response = client.post(
+            f"/api/v1/plugin-connections/{connection.data['id']}/test/",
+            {},
+            format="json",
+        )
+
+    assert response.status_code == 200
+    assert health_check.call_count == 1
+    connection.refresh_from_db()
+    assert connection.status == PluginConnection.Status.HEALTHY
+    assert connection.last_health_check_at is not None
+
+
+@pytest.mark.django_db
+def test_http_plugin_connection_health_check_marks_failure(
+    plugin_workspace,
+):
+    from unittest.mock import patch
+
+    _, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"] = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": False,
+            "health_check": {"method": "GET", "path": "/health"},
+            "operations": {},
+        }
+    }
+    registered = client.post("/api/v1/connectors/", payload, format="json")
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "github-failed",
+            "auth_type": "none",
+            "credential_ref": "",
+            "config": {},
+        },
+        format="json",
+    )
+
+    with patch(
+        "core.plugin_views.execute_http_operation",
+        side_effect=ToolExecutionError("Connector host is not allowed."),
+    ):
+        response = client.post(
+            f"/api/v1/plugin-connections/{connection.data['id']}/test/",
+            {},
+            format="json",
+        )
+
+    assert response.status_code == 502
+    connection_obj = PluginConnection.objects.get(pk=connection.data["id"])
+    assert connection_obj.status == PluginConnection.Status.ERROR
