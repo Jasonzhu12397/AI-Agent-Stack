@@ -139,6 +139,8 @@ This is only the target-side preflight. It does not inspect the EPH source owner
 
 The Control Plane-first handoff endpoint now queues `cluster.capi.pivot.target.preflight` directly to the assigned Target Agent. The API validates the returned cluster/namespace, exact four-controller inventory, controller readiness, API blockers and the no-side-effects flag before persisting the result in the deployment plan. A successful preflight is recorded as `preflight_validated`; it deliberately does not advance the deployment to worker provisioning or authorize a pivot mutation.
 
+The same handoff now queues `cluster.capi.pivot.source.preflight` to the EPH Agent. It performs read-only discovery of CAPI core, Kubeadm bootstrap/control-plane, CAPM3 and Metal3 APIs; lists required resource kinds across namespaces; records bounded object identity/owner-reference summaries and resource counts; and checks source management-controller Deployments. Missing APIs, incomplete pagination, truncated inventory, unavailable controllers or malformed result data fail closed. The Supervisor validates the EPH node binding, provider API versions, the complete required resource-count key set, object summaries and no-side-effects flag before persisting `capi_pivot_source_preflight`. Both source and destination results are evidence only; neither authorizes `clusterctl move` or worker provisioning.
+
 ## Operational failure handling
 
 - If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
