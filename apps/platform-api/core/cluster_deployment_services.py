@@ -163,6 +163,8 @@ def handle_deployment_command_result(
         inventory = result.get("inventory")
         source_cluster_identity = result.get("source_cluster_identity")
         owner_graph = result.get("owner_graph")
+        inventory_total_count = result.get("inventory_total_count")
+        inventory_summary_truncated = result.get("inventory_summary_truncated")
         expected_controllers = {
             ("capi-system", "capi-controller-manager"),
             (
@@ -292,14 +294,19 @@ def handle_deployment_command_result(
             and owner_graph.get("complete") is True
             and isinstance(source_cluster_identity, dict)
             and owner_graph.get("root_cluster_uid") == source_cluster_identity.get("uid")
-            and owner_graph.get("object_count") == len(inventory)
-            and owner_graph.get("unique_uid_count") == len(inventory)
+            and isinstance(inventory_total_count, int)
+            and not isinstance(inventory_total_count, bool)
+            and inventory_total_count == sum(safe_resource_counts.values())
+            and owner_graph.get("object_count") == inventory_total_count
+            and owner_graph.get("unique_uid_count") == inventory_total_count
+            and isinstance(inventory_summary_truncated, bool)
+            and len(inventory) <= inventory_total_count
             and isinstance(owner_graph.get("reachable_object_count"), int)
             and not isinstance(owner_graph.get("reachable_object_count"), bool)
-            and 1 <= owner_graph.get("reachable_object_count") <= len(inventory)
+            and 1 <= owner_graph.get("reachable_object_count") <= inventory_total_count
             and isinstance(owner_graph.get("cluster_labeled_object_count"), int)
             and not isinstance(owner_graph.get("cluster_labeled_object_count"), bool)
-            and 0 <= owner_graph.get("cluster_labeled_object_count") <= len(inventory)
+            and 0 <= owner_graph.get("cluster_labeled_object_count") <= inventory_total_count
             and all(
                 isinstance(owner_graph.get(key), list) and not owner_graph.get(key)
                 for key in [
