@@ -850,3 +850,84 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert deployment.plan_result["capi_pivot_preflight"]["preflight_validated"] is True
     assert deployment.plan_result["capi_pivot_preflight"]["side_effects"] is False
     assert deployment.error is None
+
+
+@pytest.mark.django_db
+def test_source_capi_pivot_preflight_rejects_malformed_inventory_counts(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="malformed-source-inventory-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"malformed-target-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="malformed-source-inventory",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="host.preflight",
+    ).update(
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=timezone.now(),
+    )
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+
+    source_client = APIClient()
+    polled = source_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+    command = polled.data["command"]
+    assert command["command_type"] == "cluster.capi.pivot.source.preflight"
+
+    submitted = source_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        {
+            "node_id": str(eph_node.id),
+            "outcome": "succeeded",
+            "result": {
+                "cluster_name": "edge-lab",
+                "provider_versions": None,
+                "resource_counts": None,
+                "inventory": [],
+                "inventory_truncated": False,
+                "missing_resources": [],
+                "pagination_required": [],
+                "controllers": [],
+                "blockers": [],
+                "side_effects": False,
+                "source_management_plane_ready": True,
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
+
+    deployment.refresh_from_db()
+    assert submitted.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "INVALID_CAPI_SOURCE_PREFLIGHT_RESULT"
