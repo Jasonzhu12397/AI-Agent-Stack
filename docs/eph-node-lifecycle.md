@@ -143,6 +143,8 @@ The same handoff now queues `cluster.capi.pivot.source.preflight` to the EPH Age
 
 The destination preflight returns the same five provider API-group versions and checks the complete source inventory resource set, including MachineSets and KubeadmConfigTemplates. The Supervisor validates the destination version map and, once both sides have independently passed their read-only checks, compares every provider group version. The comparison is persisted as `capi_pivot_provider_compatibility`, including explicit source/target mismatches. A version mismatch prevents compatibility from being marked true. Even an exact match is evidence only: `execution_allowed` remains false until a separately reviewed, version-specific pivot executor, credential transfer and post-move reconciliation workflow exist.
 
+The EPH Agent must also find exactly one source `Cluster` object matching the requested deployment cluster name and return its namespace, UID and API version. Missing, ambiguous or incomplete source Cluster identity prevents the source preflight from passing.
+
 ## Operational failure handling
 
 - If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
