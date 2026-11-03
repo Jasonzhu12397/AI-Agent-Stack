@@ -689,6 +689,16 @@ export function testPluginConnection(connectionId: string): Promise<PluginInstal
   );
 }
 
+export function setPluginConnectionStatus(
+  connectionId: string,
+  status: "pending" | "disabled",
+): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/plugin-connections/" + connectionId + "/status/",
+    { method: "POST", body: JSON.stringify({ status }) },
+  );
+}
+
 
 export type KnowledgeBase = {
   id: string;
