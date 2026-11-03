@@ -1043,6 +1043,13 @@ class AgentProjectCommandListView(APIView):
             commands = commands.filter(status=status_filter)
         node_id = request.query_params.get("node_id")
         if node_id:
+            try:
+                uuid.UUID(node_id)
+            except (TypeError, ValueError, AttributeError):
+                return Response(
+                    {"detail": "node_id must be a UUID."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             commands = commands.filter(node_id=node_id)
         command_type = request.query_params.get("command_type")
         if command_type:
