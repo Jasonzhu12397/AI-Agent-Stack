@@ -8,6 +8,7 @@ import {
   installPlugin,
   registerPlugin,
   setPluginInstallationStatus,
+  testPluginConnection,
   type PluginDefinition,
   type PluginInstallation,
 } from "../services/api";
@@ -19,7 +20,7 @@ const selectedPluginId = ref("");
 const selectedPermissions = ref<string[]>([]);
 const selectedInstallationId = ref("");
 const connectionName = ref("");
-const authType = ref<"none" | "credential_ref" | "oauth_ref">("credential_ref");
+const authType = ref<"none" | "credential_ref" | "oauth_ref">("none");
 const credentialRef = ref("");
 const loading = ref(false);
 const submitting = ref(false);
@@ -34,7 +35,21 @@ const pluginJson = ref(JSON.stringify({
   maintainer: "Platform Team",
   license: "Apache-2.0",
   source_url: "https://example.invalid/connector.json",
-  manifest: { category: "example" },
+  manifest: {
+    http: {
+      base_url: "https://example.invalid",
+      auth_required: false,
+      health_check: { method: "GET", path: "/health" },
+      operations: {
+        "read-status": {
+          method: "GET",
+          path: "/v1/status/{resource_id}",
+          path_params: { resource_id: "resource_id" },
+          query_params: {}
+        }
+      }
+    }
+  },
   tools: [{
     name: "read-status",
     description: "Read a status document.",
@@ -174,6 +189,22 @@ async function updateInstallation(
   }
 }
 
+async function testConnection(connectionId: string): Promise<void> {
+  submitting.value = true;
+  error.value = "";
+  info.value = "";
+  try {
+    await testPluginConnection(connectionId);
+    info.value = "Connection health check succeeded; this connection is now active.";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Connection health check failed.";
+    await refresh();
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function addConnection(): Promise<void> {
   const installation = selectedInstallation.value;
   if (!installation || !connectionName.value.trim()) return;
@@ -216,7 +247,7 @@ onMounted(() => void refresh());
       <div>
         <p class="eyebrow">CONNECTOR REGISTRY</p>
         <h2>Integration Hub</h2>
-        <p>Register, review, install and configure connector metadata. Tool execution is not enabled by this registry slice.</p>
+        <p>Register, review, install and test allowlisted HTTPS connectors. Provider hosts and credential resolvers are controlled by platform configuration.</p>
       </div>
       <el-button plain :loading="loading" @click="refresh">Refresh catalog</el-button>
     </header>
@@ -328,7 +359,13 @@ onMounted(() => void refresh());
         <small>Granted: {{ installation.granted_permissions.join(", ") || "none" }}</small>
         <div v-for="connection in installation.connections" :key="connection.id" class="connection-row">
           <span>{{ connection.name }} · {{ connection.auth_type }}</span>
-          <el-tag size="small" type="info">{{ connection.status }}</el-tag>
+          <el-tag :type="connection.status === 'healthy' ? 'success' : connection.status === 'error' ? 'danger' : 'info'" size="small">{{ connection.status }}</el-tag>
+          <el-button
+            size="small"
+            plain
+            :loading="submitting"
+            @click="testConnection(connection.id)"
+          >Test connection</el-button>
         </div>
         <div class="installation-actions">
           <el-button
@@ -385,7 +422,7 @@ onMounted(() => void refresh());
           Save credential reference
         </el-button>
       </div>
-      <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. Connector health checks and tool execution are not implemented yet.</p>
+      <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER.</p>
     </section>
   </section>
 </template>
