@@ -504,109 +504,6 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     )
     assert handoff.status_code == 202
     assert handoff.data["worker_provisioning_allowed"] is False
-    source_command = AgentCommand.objects.get(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.source.preflight",
-    )
-    assert source_command.node_id == eph_node.id
-    assert handoff.data["source_preflight_command_id"] == str(source_command.id)
-
-    source_client = APIClient()
-    source_poll = source_client.post(
-        "/api/v1/agent-runtime/commands/poll/",
-        {"node_id": str(eph_node.id)},
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-    )
-    assert source_poll.status_code == 200
-    source_command_data = source_poll.data["command"]
-    assert source_command_data["command_type"] == "cluster.capi.pivot.source.preflight"
-    source_groups = {
-        "cluster.x-k8s.io",
-        "bootstrap.cluster.x-k8s.io",
-        "controlplane.cluster.x-k8s.io",
-        "infrastructure.cluster.x-k8s.io",
-        "metal3.io",
-    }
-    source_resources = [
-        "cluster.x-k8s.io/clusters",
-        "cluster.x-k8s.io/machines",
-        "cluster.x-k8s.io/machinesets",
-        "cluster.x-k8s.io/machinedeployments",
-        "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
-        "bootstrap.cluster.x-k8s.io/kubeadmconfigtemplates",
-        "controlplane.cluster.x-k8s.io/kubeadmcontrolplanes",
-        "infrastructure.cluster.x-k8s.io/metal3clusters",
-        "infrastructure.cluster.x-k8s.io/metal3machines",
-        "infrastructure.cluster.x-k8s.io/metal3machinetemplates",
-        "metal3.io/baremetalhosts",
-    ]
-    source_result = {
-        "source_management_plane_ready": True,
-        "cluster_name": "edge-lab",
-        "provider_versions": {
-            group: "v1alpha1" if group == "metal3.io" else "v1beta1"
-            for group in source_groups
-        },
-        "resource_counts": {
-            resource: 1 if resource == "cluster.x-k8s.io/clusters" else 0
-            for resource in source_resources
-        },
-        "inventory": [
-            {
-                "api_version": "cluster.x-k8s.io/v1beta1",
-                "kind": "Cluster",
-                "resource": "cluster.x-k8s.io/clusters",
-                "name": "edge-lab",
-                "namespace": "capi-system",
-                "uid": "cluster-uid",
-                "owner_references": [],
-                "cluster_name": "edge-lab",
-            }
-        ],
-        "inventory_truncated": False,
-        "missing_resources": [],
-        "pagination_required": [],
-        "controllers": [
-            {
-                "namespace": namespace,
-                "deployment": deployment_name,
-                "ready": True,
-            }
-            for namespace, deployment_name in [
-                ("capi-system", "capi-controller-manager"),
-                (
-                    "capi-kubeadm-bootstrap-system",
-                    "capi-kubeadm-bootstrap-controller-manager",
-                ),
-                (
-                    "capi-kubeadm-control-plane-system",
-                    "capi-kubeadm-control-plane-controller-manager",
-                ),
-                ("capm3-system", "capm3-controller-manager"),
-            ]
-        ],
-        "blockers": [],
-        "side_effects": False,
-    }
-    source_submitted = source_client.post(
-        f"/api/v1/agent-runtime/commands/{source_command_data['id']}/result/",
-        {
-            "node_id": str(eph_node.id),
-            "outcome": "succeeded",
-            "result": source_result,
-        },
-        format="json",
-        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
-        HTTP_X_AGENT_LEASE=source_command_data["lease_token"],
-    )
-    deployment.refresh_from_db()
-    assert source_submitted.status_code == 200
-    assert (
-        deployment.plan_result["capi_pivot_source_preflight"]["preflight_validated"]
-        is True
-    )
-
     agent_client = APIClient()
     heartbeat = agent_client.post(
         "/api/v1/agent-runtime/heartbeat/",
@@ -784,6 +681,109 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     }
     assert handoff.data["preflight_command_id"] == str(command.id)
     assert handoff.data["worker_provisioning_allowed"] is False
+
+    source_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+    )
+    assert source_command.node_id == eph_node.id
+    assert handoff.data["source_preflight_command_id"] == str(source_command.id)
+
+    source_client = APIClient()
+    source_poll = source_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+    assert source_poll.status_code == 200
+    source_command_data = source_poll.data["command"]
+    assert source_command_data["command_type"] == "cluster.capi.pivot.source.preflight"
+    source_groups = {
+        "cluster.x-k8s.io",
+        "bootstrap.cluster.x-k8s.io",
+        "controlplane.cluster.x-k8s.io",
+        "infrastructure.cluster.x-k8s.io",
+        "metal3.io",
+    }
+    source_resources = [
+        "cluster.x-k8s.io/clusters",
+        "cluster.x-k8s.io/machines",
+        "cluster.x-k8s.io/machinesets",
+        "cluster.x-k8s.io/machinedeployments",
+        "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
+        "bootstrap.cluster.x-k8s.io/kubeadmconfigtemplates",
+        "controlplane.cluster.x-k8s.io/kubeadmcontrolplanes",
+        "infrastructure.cluster.x-k8s.io/metal3clusters",
+        "infrastructure.cluster.x-k8s.io/metal3machines",
+        "infrastructure.cluster.x-k8s.io/metal3machinetemplates",
+        "metal3.io/baremetalhosts",
+    ]
+    source_result = {
+        "source_management_plane_ready": True,
+        "cluster_name": "edge-lab",
+        "provider_versions": {
+            group: "v1alpha1" if group == "metal3.io" else "v1beta1"
+            for group in source_groups
+        },
+        "resource_counts": {
+            resource: 1 if resource == "cluster.x-k8s.io/clusters" else 0
+            for resource in source_resources
+        },
+        "inventory": [
+            {
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "kind": "Cluster",
+                "resource": "cluster.x-k8s.io/clusters",
+                "name": "edge-lab",
+                "namespace": "capi-system",
+                "uid": "cluster-uid",
+                "owner_references": [],
+                "cluster_name": "edge-lab",
+            }
+        ],
+        "inventory_truncated": False,
+        "missing_resources": [],
+        "pagination_required": [],
+        "controllers": [
+            {
+                "namespace": namespace,
+                "deployment": deployment_name,
+                "ready": True,
+            }
+            for namespace, deployment_name in [
+                ("capi-system", "capi-controller-manager"),
+                (
+                    "capi-kubeadm-bootstrap-system",
+                    "capi-kubeadm-bootstrap-controller-manager",
+                ),
+                (
+                    "capi-kubeadm-control-plane-system",
+                    "capi-kubeadm-control-plane-controller-manager",
+                ),
+                ("capm3-system", "capm3-controller-manager"),
+            ]
+        ],
+        "blockers": [],
+        "side_effects": False,
+    }
+    source_submitted = source_client.post(
+        f"/api/v1/agent-runtime/commands/{source_command_data['id']}/result/",
+        {
+            "node_id": str(eph_node.id),
+            "outcome": "succeeded",
+            "result": source_result,
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=source_command_data["lease_token"],
+    )
+    deployment.refresh_from_db()
+    assert source_submitted.status_code == 200
+    assert (
+        deployment.plan_result["capi_pivot_source_preflight"]["preflight_validated"]
+        is True
+    )
 
     agent_client = APIClient()
     polled = agent_client.post(
