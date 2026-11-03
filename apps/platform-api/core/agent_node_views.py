@@ -132,10 +132,20 @@ def _payload_hash(command_type, payload):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _json_size_bytes(value):
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
 def _validate_payload(payload):
     if not isinstance(payload, dict):
         return "payload must be a JSON object."
-    if len(json.dumps(payload, ensure_ascii=False)) > 65536:
+    if _json_size_bytes(payload) > 65536:
         return "payload must not exceed 64 KiB."
 
     def visit(value):
@@ -729,7 +739,7 @@ class AgentRuntimeResultView(APIView):
         outcome = request.data.get("outcome")
         if outcome not in {"succeeded", "failed"}:
             return Response({"detail": "outcome must be succeeded or failed."}, status=400)
-        if not isinstance(result, dict) or len(json.dumps(result, ensure_ascii=False)) > 65536:
+        if not isinstance(result, dict) or _json_size_bytes(result) > 65536:
             return Response(
                 {"detail": "result must be a JSON object no larger than 64 KiB."},
                 status=400,
