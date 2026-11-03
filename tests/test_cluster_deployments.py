@@ -659,6 +659,13 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         key="target-capi-preflight-dispatch",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="host.preflight",
+    ).update(
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=timezone.now(),
+    )
     deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
     deployment.save(update_fields=["status"])
 
