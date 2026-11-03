@@ -783,7 +783,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
                 resource_key = f"{group_name}/{resource_name}"
                 resource_counts[resource_key] = len(items)
-                if document.get("metadata", {}).get("continue") or len(items) > 1000:
+                if document.get("metadata", {}).get("continue") or len(items) > 100:
                     pagination_required.append(resource_key)
                 for item in items[:100]:
                     metadata = item.get("metadata", {})
