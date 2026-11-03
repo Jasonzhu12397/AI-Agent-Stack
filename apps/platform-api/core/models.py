@@ -831,7 +831,7 @@ class AuditEvent(models.Model):
     )
     project = models.ForeignKey(
         Project,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         related_name="audit_events",
         null=True,
         blank=True,
@@ -871,5 +871,14 @@ class AuditEvent(models.Model):
                 name="audit_tenant_type_idx",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Audit events are append-only.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Audit events cannot be deleted through the model API.")
+
 
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
