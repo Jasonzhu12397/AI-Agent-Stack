@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Tenant(models.Model):
@@ -856,7 +857,7 @@ class AuditEvent(models.Model):
     metadata = models.JSONField(default=dict)
     previous_hash = models.CharField(max_length=64, blank=True)
     event_hash = models.CharField(max_length=64, unique=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
 
     class Meta:
         ordering = ["-created_at"]
