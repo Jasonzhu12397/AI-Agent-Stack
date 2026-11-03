@@ -931,8 +931,8 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
     monkeypatch,
 ):
     required = {
-        "cluster.x-k8s.io": ["clusters", "machines", "machinedeployments"],
-        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs"],
+        "cluster.x-k8s.io": ["clusters", "machines", "machinesets", "machinedeployments"],
+        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs", "kubeadmconfigtemplates"],
         "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
@@ -1006,8 +1006,8 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
 
 def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch):
     required = {
-        "cluster.x-k8s.io": ["clusters", "machines", "machinedeployments"],
-        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs"],
+        "cluster.x-k8s.io": ["clusters", "machines", "machinesets", "machinedeployments"],
+        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs", "kubeadmconfigtemplates"],
         "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
@@ -1237,8 +1237,8 @@ def test_target_capi_pivot_preflight_checks_apis_controllers_and_cluster_conflic
         "metal3.io": "v1alpha1",
     }
     required_resources = {
-        "cluster.x-k8s.io": ["clusters", "machines", "machinedeployments"],
-        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs"],
+        "cluster.x-k8s.io": ["clusters", "machines", "machinesets", "machinedeployments"],
+        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs", "kubeadmconfigtemplates"],
         "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
