@@ -145,6 +145,19 @@ def handle_deployment_command_result(
             "infrastructure.cluster.x-k8s.io",
             "metal3.io",
         }
+        expected_resource_keys = {
+            "cluster.x-k8s.io/clusters",
+            "cluster.x-k8s.io/machines",
+            "cluster.x-k8s.io/machinesets",
+            "cluster.x-k8s.io/machinedeployments",
+            "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
+            "bootstrap.cluster.x-k8s.io/kubeadmconfigtemplates",
+            "controlplane.cluster.x-k8s.io/kubeadmcontrolplanes",
+            "infrastructure.cluster.x-k8s.io/metal3clusters",
+            "infrastructure.cluster.x-k8s.io/metal3machines",
+            "infrastructure.cluster.x-k8s.io/metal3machinetemplates",
+            "metal3.io/baremetalhosts",
+        }
         valid_controllers = (
             isinstance(controllers, list)
             and len(controllers) == len(expected_controllers)
@@ -181,7 +194,7 @@ def handle_deployment_command_result(
         )
         valid_counts = (
             isinstance(resource_counts, dict)
-            and 1 <= len(resource_counts) <= 20
+            and set(resource_counts) == expected_resource_keys
             and all(
                 isinstance(key, str)
                 and len(key) <= 160
