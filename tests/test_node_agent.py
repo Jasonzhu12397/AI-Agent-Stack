@@ -1392,6 +1392,12 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     )
 
     assert result["source_management_plane_ready"] is True
+    assert result["source_cluster_identity"] == {
+        "name": "edge-lab",
+        "namespace": "capi-system",
+        "uid": "cluster-uid",
+        "api_version": "cluster.x-k8s.io/v1beta1",
+    }
     assert result["provider_versions"] == {
         group: version for group, (version, _) in groups.items()
     }
