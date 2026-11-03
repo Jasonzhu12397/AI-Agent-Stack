@@ -1447,7 +1447,7 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     original_get = agent.kubernetes_api_get
 
     def missing_source_cluster(path):
-        if path.endswith("/clusters"):
+        if path.split("?", 1)[0].endswith("/clusters"):
             return {"items": [], "metadata": {}}
         return original_get(path)
 
