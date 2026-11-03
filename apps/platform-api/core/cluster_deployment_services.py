@@ -160,6 +160,7 @@ def handle_deployment_command_result(
         provider_versions = result.get("provider_versions")
         resource_counts = result.get("resource_counts")
         inventory = result.get("inventory")
+        source_cluster_identity = result.get("source_cluster_identity")
         expected_controllers = {
             ("capi-system", "capi-controller-manager"),
             (
@@ -274,6 +275,13 @@ def handle_deployment_command_result(
             and valid_versions
             and valid_counts
             and valid_inventory
+            and isinstance(source_cluster_identity, dict)
+            and source_cluster_identity.get("name") == deployment.cluster_name
+            and isinstance(source_cluster_identity.get("namespace"), str)
+            and bool(source_cluster_identity.get("namespace"))
+            and isinstance(source_cluster_identity.get("uid"), str)
+            and bool(source_cluster_identity.get("uid"))
+            and isinstance(source_cluster_identity.get("api_version"), str)
         )
         if not preflight_valid:
             deployment.status = ClusterDeployment.Status.FAILED
