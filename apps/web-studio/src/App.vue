@@ -11,7 +11,7 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "infrastructure";
+type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "infrastructure" | "governance" | "audit" | "organization";
 const activeView = ref<ActiveView>("dashboard");
 const navItems: { id: ActiveView; label: string }[] = [
   { id: "dashboard", label: "Overview" },
@@ -20,10 +20,13 @@ const navItems: { id: ActiveView; label: string }[] = [
   { id: "workflows", label: "Workflow DAG" },
   { id: "integrations", label: "Integration Hub" },
   { id: "knowledge", label: "Knowledge Bases" },
-  { id: "infrastructure", label: "Infrastructure Agents" },
+  { id: "infrastructure", label: "Metal3 Fleet" },
+  { id: "governance", label: "Governance" },
+  { id: "audit", label: "Audit & Activity" },
+  { id: "organization", label: "Organization" },
 ];
 const workspaceSection = computed<
-  "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge"
+  "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization"
 >(() => {
   if (activeView.value === "dashboard" || activeView.value === "infrastructure") {
     return "overview";
