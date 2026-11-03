@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.models import (
     PluginConnection,
@@ -388,6 +389,14 @@ class PluginApproveView(APIView):
         plugin.review_status = PluginDefinition.ReviewStatus.APPROVED
         plugin.enabled = True
         plugin.save(update_fields=["review_status", "enabled", "updated_at"])
+        record_audit_event(
+            request,
+            plugin.tenant,
+            "connector.approved",
+            "plugin_definition",
+            plugin.id,
+            metadata={"plugin_key": plugin.plugin_key, "version": plugin.version},
+        )
         return Response(_plugin_data(plugin))
 
 
@@ -508,6 +517,16 @@ class PluginInstallationListCreateView(APIView):
                 {"detail": "Plugin installation conflicts with an existing record."},
                 status=409,
             )
+        if created:
+            record_audit_event(
+                request,
+                tenant,
+                "connector.installed",
+                "plugin_installation",
+                installation.id,
+                project=project,
+                metadata={"plugin_key": plugin.plugin_key, "plugin_version": installation.plugin_version, "granted_permissions": installation.granted_permissions},
+            )
         return Response(
             _installation_data(installation),
             status=201 if created else 200,
@@ -541,6 +560,15 @@ class PluginInstallationStatusView(APIView):
         installation.save(update_fields=["status", "updated_at"])
         if status_value == PluginInstallation.Status.UNINSTALLED:
             installation.connections.update(status=PluginConnection.Status.DISABLED)
+        record_audit_event(
+            request,
+            installation.tenant,
+            "connector.installation.status_changed",
+            "plugin_installation",
+            installation.id,
+            project=installation.project,
+            metadata={"plugin_key": installation.plugin.plugin_key, "status": status_value},
+        )
         return Response(_installation_data(installation))
 
 
