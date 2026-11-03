@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import verify_audit_chain
 from core.models import AuditEvent, Project, Tenant, TenantMembership
 
 
@@ -70,3 +71,25 @@ class AuditEventListView(APIView):
                 "results": [_audit_event_data(event) for event in page],
             }
         )
+
+
+class AuditEventVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id):
+        tenant = Tenant.objects.filter(
+            memberships__user=request.user,
+        ).distinct().filter(pk=tenant_id).first()
+        if tenant is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        is_admin = TenantMembership.objects.filter(
+            tenant=tenant,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        if not is_admin:
+            return Response(
+                {"detail": "Tenant administrator permission required to verify audit events."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response(verify_audit_chain(tenant))
