@@ -1301,3 +1301,106 @@ def test_target_capi_pivot_preflight_checks_apis_controllers_and_cluster_conflic
     assert result["cluster_name_conflicts"] == []
     assert result["blockers"] == []
     assert result["side_effects"] is False
+
+
+def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
+    monkeypatch,
+):
+    groups = {
+        "cluster.x-k8s.io": (
+            "v1beta1",
+            ["clusters", "machines", "machinesets", "machinedeployments"],
+        ),
+        "bootstrap.cluster.x-k8s.io": (
+            "v1beta1",
+            ["kubeadmconfigs", "kubeadmconfigtemplates"],
+        ),
+        "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
+        "infrastructure.cluster.x-k8s.io": (
+            "v1beta1",
+            ["metal3clusters", "metal3machines", "metal3machinetemplates"],
+        ),
+        "metal3.io": ("v1alpha1", ["baremetalhosts"]),
+    }
+    controllers = {
+        "capi-system": "capi-controller-manager",
+        "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+        "capi-kubeadm-control-plane-system": (
+            "capi-kubeadm-control-plane-controller-manager"
+        ),
+        "capm3-system": "capm3-controller-manager",
+    }
+    calls = []
+
+    def fake_get(path):
+        calls.append(path)
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": group,
+                        "preferredVersion": {"version": version},
+                    }
+                    for group, (version, _) in groups.items()
+                ]
+            }
+        if path.startswith("/apis/apps/v1/namespaces/"):
+            namespace = path.split("/")[5]
+            deployment_name = controllers[namespace]
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": deployment_name, "generation": 3},
+                        "spec": {"replicas": 1},
+                        "status": {"availableReplicas": 1, "observedGeneration": 3},
+                    }
+                ]
+            }
+        for group, (version, resources) in groups.items():
+            if path == f"/apis/{group}/{version}":
+                return {"resources": [{"name": name} for name in resources]}
+            prefix = f"/apis/{group}/{version}/"
+            if path.startswith(prefix):
+                resource = path[len(prefix):]
+                assert "?" not in path
+                items = []
+                if resource == "clusters":
+                    items = [
+                        {
+                            "apiVersion": f"{group}/{version}",
+                            "kind": "Cluster",
+                            "metadata": {
+                                "name": "edge-lab",
+                                "namespace": "capi-system",
+                                "uid": "cluster-uid",
+                                "labels": {"cluster.x-k8s.io/cluster-name": "edge-lab"},
+                                "ownerReferences": [],
+                            },
+                        }
+                    ]
+                return {"items": items, "metadata": {}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.source.preflight",
+            "payload": {"cluster_name": "edge-lab"},
+        },
+        "eph_node",
+    )
+
+    assert result["source_management_plane_ready"] is True
+    assert result["provider_versions"] == {
+        group: version for group, (version, _) in groups.items()
+    }
+    assert len(result["resource_counts"]) == 11
+    assert result["resource_counts"]["cluster.x-k8s.io/clusters"] == 1
+    assert result["inventory"][0]["name"] == "edge-lab"
+    assert result["inventory"][0]["namespace"] == "capi-system"
+    assert result["missing_resources"] == []
+    assert result["pagination_required"] == []
+    assert result["blockers"] == []
+    assert result["inventory_truncated"] is False
+    assert result["side_effects"] is False
+    assert "/apis/cluster.x-k8s.io/v1beta1/clusters" in calls
