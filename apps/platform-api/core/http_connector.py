@@ -17,6 +17,10 @@ PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,80}")
 
 
+def _reject_json_constant(value):
+    raise ValueError(f"Non-standard JSON constant: {value}")
+
+
 def _validate_base_url(base_url):
     if not isinstance(base_url, str) or len(base_url) > 500:
         raise ToolExecutionError("HTTP connector base URL is invalid.")
@@ -242,6 +246,12 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                     raise ToolExecutionError("Connector redirects are not allowed.")
                 if not 200 <= response.status_code < 300:
                     raise ToolExecutionError("Connector returned a non-success HTTP status.")
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if not (
+                    content_type == "application/json"
+                    or content_type.endswith("+json")
+                ):
+                    raise ToolExecutionError("Connector response content type must be JSON.")
                 chunks = []
                 total_bytes = 0
                 for chunk in response.iter_bytes():
@@ -256,8 +266,11 @@ def execute_http_operation(arguments, context: ToolContext, tool):
         raise ToolExecutionError("Connector HTTP request failed.") from exc
 
     try:
-        result = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        result = json.loads(
+            payload.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ToolExecutionError("Connector response must be a UTF-8 JSON object.") from exc
     if not isinstance(result, dict):
         raise ToolExecutionError("Connector response must be a JSON object.")
