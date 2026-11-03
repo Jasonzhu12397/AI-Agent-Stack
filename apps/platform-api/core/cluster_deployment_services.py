@@ -219,8 +219,11 @@ def handle_deployment_command_result(
                 )
                 and isinstance(item.get("owner_references"), list)
                 and len(item.get("owner_references")) <= 10
+                and item.get("resource") in resource_counts
+                and resource_counts.get(item.get("resource"), 0) > 0
                 for item in inventory
             )
+            and len(inventory) <= sum(resource_counts.values())
         )
         preflight_valid = (
             command.node.node_type == "eph_node"
