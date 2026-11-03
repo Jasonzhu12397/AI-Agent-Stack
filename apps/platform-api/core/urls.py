@@ -1,7 +1,7 @@
 # ruff: noqa: I001
 from django.urls import path
 
-from core.audit_views import AuditEventListView
+from core.audit_views import AuditEventListView, AuditEventVerifyView
 
 from core.agent_node_views import (
     AgentCommandApproveView,
@@ -64,6 +64,11 @@ from core.workflow_views import (
 
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/audit-events/verify/",
+        AuditEventVerifyView.as_view(),
+        name="audit-event-verify",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/audit-events/",
         AuditEventListView.as_view(),
