@@ -904,10 +904,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             blockers.append("source_inventory_empty")
         if not source_cluster_matches:
             blockers.append("requested_source_cluster_not_found")
-        elif source_cluster_identity is None:
-            blockers.append("requested_source_cluster_identity_invalid")
         elif len(source_cluster_matches) > 1:
             blockers.append("requested_source_cluster_identity_ambiguous")
+        elif source_cluster_identity is None:
+            blockers.append("requested_source_cluster_identity_invalid")
         return {
             "source_management_plane_ready": (
                 inventory_complete
