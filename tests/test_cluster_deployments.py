@@ -18,6 +18,8 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.cluster_deployment_services import _update_capi_pivot_provider_compatibility
+
 
 @pytest.fixture
 def cluster_delivery_workspace(db):
@@ -944,3 +946,52 @@ def test_source_capi_pivot_preflight_rejects_malformed_inventory_counts(
     assert submitted.status_code == 200
     assert deployment.status == ClusterDeployment.Status.FAILED
     assert deployment.error["code"] == "INVALID_CAPI_SOURCE_PREFLIGHT_RESULT"
+
+
+@pytest.mark.django_db
+def test_capi_pivot_provider_version_mismatch_fails_closed(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="provider-version-mismatch",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    source_versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "bootstrap.cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1beta1",
+        "metal3.io": "v1alpha1",
+    }
+    target_versions = {**source_versions, "metal3.io": "v1beta1"}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "preflight_validated": True,
+            "provider_versions": source_versions,
+        },
+        "capi_pivot_preflight": {
+            "preflight_validated": True,
+            "provider_versions": target_versions,
+        },
+    }
+    deployment.save(update_fields=["plan_result"])
+    
+    _update_capi_pivot_provider_compatibility(deployment)
+
+    deployment.refresh_from_db()
+    compatibility = deployment.plan_result["capi_pivot_provider_compatibility"]
+    assert compatibility["checked"] is True
+    assert compatibility["compatible"] is False
+    assert compatibility["mismatches"] == [
+        {
+            "group": "metal3.io",
+            "source": "v1alpha1",
+            "target": "v1beta1",
+        }
+    ]
+    assert compatibility["execution_allowed"] is False
