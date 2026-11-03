@@ -20,6 +20,9 @@ class ToolContext:
     tool_name: str
     connection_id: str | None
     connection_config: dict[str, Any]
+    connection_auth_type: str
+    credential_ref: str
+    plugin_manifest: dict[str, Any]
 
 
 Handler = Callable[[dict[str, Any], ToolContext], Any]
@@ -123,6 +126,9 @@ class ToolRouter:
             raise ValueError("A handler is already registered for this tool.")
         self._handlers[key] = handler
 
+    def has_handler(self, plugin_key: str, tool_name: str) -> bool:
+        return (plugin_key, tool_name) in self._handlers
+
     def execute(
         self,
         *,
@@ -169,6 +175,9 @@ class ToolRouter:
             tool_name=tool.name,
             connection_id=str(connection.id) if connection else None,
             connection_config=dict(connection.config) if connection else {},
+            connection_auth_type=connection.auth_type if connection else "none",
+            credential_ref=connection.credential_ref if connection else "",
+            plugin_manifest=dict(plugin.manifest) if isinstance(plugin.manifest, dict) else {},
         )
         try:
             result = handler(dict(arguments), context)
