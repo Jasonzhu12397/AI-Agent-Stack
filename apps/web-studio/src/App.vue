@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import LoginView from "./components/LoginView.vue";
 import WorkspaceView from "./components/WorkspaceView.vue";
-import InfrastructureAgentsView from "./components/InfrastructureAgentsView.vue";
+import Metal3FleetView from "./components/Metal3FleetView.vue";
 import {
   apiBase,
   getCurrentUser,
@@ -141,7 +141,7 @@ onUnmounted(() => {
       v-if="activeView !== 'infrastructure'"
       :active-section="workspaceSection"
     />
-    <InfrastructureAgentsView v-else />
+    <Metal3FleetView v-else />
     <section class="overview">
       <div class="section-heading">
         <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>
