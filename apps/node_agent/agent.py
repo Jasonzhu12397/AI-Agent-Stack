@@ -611,6 +611,146 @@ def validate_metal3_hosts(hosts: Any) -> None:
             boot_macs.add(normalized_mac)
 
 
+CAPI_PIVOT_TRACKED_OWNER_KINDS = {
+    "Cluster",
+    "Machine",
+    "MachineSet",
+    "MachineDeployment",
+    "KubeadmConfig",
+    "KubeadmConfigTemplate",
+    "KubeadmControlPlane",
+    "Metal3Cluster",
+    "Metal3Machine",
+    "Metal3MachineTemplate",
+    "BareMetalHost",
+}
+
+
+def build_capi_owner_graph(
+    inventory: list[dict[str, Any]],
+    cluster_name: str,
+    cluster_uid: str,
+    inventory_complete: bool,
+) -> dict[str, Any]:
+    uid_map = {}
+    duplicate_uids = []
+    unresolved_owner_references = []
+    truncated_owner_references = []
+    for item in inventory:
+        uid = item.get("uid")
+        if not isinstance(uid, str) or not uid:
+            duplicate_uids.append("missing_uid")
+            continue
+        if uid in uid_map:
+            duplicate_uids.append(uid)
+            continue
+        uid_map[uid] = item
+        if item.get("owner_references_truncated") is True:
+            truncated_owner_references.append(uid)
+
+    root = uid_map.get(cluster_uid)
+    root_valid = (
+        isinstance(root, dict)
+        and root.get("kind") == "Cluster"
+        and root.get("name") == cluster_name
+        and root.get("resource") == "cluster.x-k8s.io/clusters"
+    )
+    reachable = {cluster_uid} if root_valid else set()
+
+    for item in inventory:
+        owner_references = item.get("owner_references", [])
+        if not isinstance(owner_references, list):
+            unresolved_owner_references.append(
+                {"uid": item.get("uid"), "reason": "owner_references_invalid"}
+            )
+            continue
+        for owner in owner_references:
+            if not isinstance(owner, dict):
+                unresolved_owner_references.append(
+                    {"uid": item.get("uid"), "reason": "owner_reference_invalid"}
+                )
+                continue
+            if owner.get("kind") not in CAPI_PIVOT_TRACKED_OWNER_KINDS:
+                continue
+            owner_uid = owner.get("uid")
+            owner_item = uid_map.get(owner_uid)
+            if owner_item is None:
+                unresolved_owner_references.append(
+                    {
+                        "uid": item.get("uid"),
+                        "owner_uid": owner_uid,
+                        "owner_kind": owner.get("kind"),
+                        "reason": "tracked_owner_missing",
+                    }
+                )
+            elif (
+                owner_item.get("kind") != owner.get("kind")
+                or owner_item.get("name") != owner.get("name")
+                or owner_item.get("api_version") != owner.get("api_version")
+            ):
+                unresolved_owner_references.append(
+                    {
+                        "uid": item.get("uid"),
+                        "owner_uid": owner_uid,
+                        "owner_kind": owner.get("kind"),
+                        "reason": "tracked_owner_identity_mismatch",
+                    }
+                )
+
+    for _ in range(len(inventory)):
+        changed = False
+        for item in inventory:
+            uid = item.get("uid")
+            if not isinstance(uid, str) or uid in reachable:
+                continue
+            owners = item.get("owner_references", [])
+            if isinstance(owners, list) and any(
+                isinstance(owner, dict) and owner.get("uid") in reachable
+                for owner in owners
+            ):
+                reachable.add(uid)
+                changed = True
+        if not changed:
+            break
+
+    cluster_labeled_objects = [
+        item
+        for item in inventory
+        if item.get("cluster_name") == cluster_name
+    ]
+    orphaned_cluster_objects = [
+        {
+            "resource": item.get("resource"),
+            "namespace": item.get("namespace"),
+            "name": item.get("name"),
+            "uid": item.get("uid"),
+        }
+        for item in cluster_labeled_objects
+        if item.get("uid") not in reachable
+    ]
+    complete = (
+        inventory_complete
+        and root_valid
+        and len(uid_map) == len(inventory)
+        and not duplicate_uids
+        and not unresolved_owner_references
+        and not truncated_owner_references
+        and not orphaned_cluster_objects
+    )
+    return {
+        "complete": complete,
+        "root_cluster_uid": cluster_uid if root_valid else None,
+        "object_count": len(inventory),
+        "unique_uid_count": len(uid_map),
+        "reachable_object_count": len(reachable),
+        "cluster_labeled_object_count": len(cluster_labeled_objects),
+        "duplicate_uids": duplicate_uids[:100],
+        "truncated_owner_references": truncated_owner_references[:100],
+        "unresolved_owner_references": unresolved_owner_references[:100],
+        "orphaned_cluster_objects": orphaned_cluster_objects[:100],
+    }
+
+
 def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     command_type = command.get("command_type")
     payload = command.get("payload", {})
@@ -788,6 +928,9 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for item in items[:100]:
                     metadata = item.get("metadata", {})
                     owner_references = metadata.get("ownerReferences", [])
+                    labels = metadata.get("labels", {})
+                    if not isinstance(owner_references, list) or not isinstance(labels, dict):
+                        raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
                     inventory.append(
                         {
                             "api_version": item.get("apiVersion"),
@@ -807,9 +950,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                                 for owner in owner_references[:10]
                                 if isinstance(owner, dict)
                             ],
-                            "cluster_name": metadata.get("labels", {}).get(
-                                "cluster.x-k8s.io/cluster-name"
-                            ),
+                            "owner_references_truncated": len(owner_references) > 10,
+                            "cluster_name": labels.get("cluster.x-k8s.io/cluster-name"),
                         }
                     )
         expected_controllers = {
@@ -893,6 +1035,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     "uid": source_cluster["uid"],
                     "api_version": source_cluster.get("api_version"),
                 }
+        owner_graph = build_capi_owner_graph(
+            inventory,
+            cluster_name,
+            source_cluster_identity.get("uid") if source_cluster_identity else "",
+            inventory_complete,
+        )
         blockers = []
         if missing_resources:
             blockers.append("required_source_capi_metal3_apis_missing")
@@ -904,6 +1052,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             blockers.append("source_inventory_truncated")
         if not inventory:
             blockers.append("source_inventory_empty")
+        if not owner_graph["complete"]:
+            blockers.append("source_owner_graph_incomplete")
         if not source_cluster_matches:
             blockers.append("requested_source_cluster_not_found")
         elif len(source_cluster_matches) > 1:
@@ -917,8 +1067,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 and bool(inventory)
                 and source_cluster_identity is not None
                 and len(source_cluster_matches) == 1
+                and owner_graph["complete"]
             ),
             "source_cluster_identity": source_cluster_identity,
+            "owner_graph": owner_graph,
             "cluster_name": cluster_name,
             "provider_versions": provider_versions,
             "resource_counts": resource_counts,
