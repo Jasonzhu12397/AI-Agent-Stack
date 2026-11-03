@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.models import Project, ProjectMembership, Tenant, TenantMembership
 
 
@@ -105,6 +106,14 @@ class TenantMemberListCreateView(APIView):
                 {"detail": "User is already a tenant member."},
                 status=status.HTTP_409_CONFLICT,
             )
+        record_audit_event(
+            request,
+            tenant,
+            "tenant.member.added",
+            "tenant_membership",
+            membership.id,
+            metadata={"username": user.get_username(), "role": membership.role},
+        )
         return Response(
             membership_payload(membership),
             status=status.HTTP_201_CREATED,
@@ -159,8 +168,17 @@ class TenantMemberDetailView(APIView):
                         {"detail": "A tenant must retain at least one owner."},
                         status=status.HTTP_409_CONFLICT,
                     )
+            old_role = membership.role
             membership.role = role
             membership.save(update_fields=["role"])
+        record_audit_event(
+            request,
+            tenant,
+            "tenant.member.role_changed",
+            "tenant_membership",
+            membership.id,
+            metadata={"username": membership.user.get_username(), "old_role": old_role, "new_role": role},
+        )
         return Response(membership_payload(membership))
 
     def delete(self, request, tenant_id, membership_id):
@@ -197,7 +215,18 @@ class TenantMemberDetailView(APIView):
                 project__tenant=tenant,
                 user=membership.user,
             ).delete()
+            removed_username = membership.user.get_username()
+            removed_role = membership.role
+            removed_membership_id = membership.id
             membership.delete()
+        record_audit_event(
+            request,
+            tenant,
+            "tenant.member.removed",
+            "tenant_membership",
+            removed_membership_id,
+            metadata={"username": removed_username, "role": removed_role},
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
