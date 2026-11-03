@@ -123,7 +123,12 @@ def _operation_config(context, tool):
     path_params = operation.get("path_params", {})
     query_params = operation.get("query_params", {})
     body_param = operation.get("body_param")
-    if not isinstance(path_params, dict) or not isinstance(query_params, dict):
+    if (
+        not isinstance(path_params, dict)
+        or not isinstance(query_params, dict)
+        or not all(isinstance(key, str) and isinstance(value, str) for key, value in path_params.items())
+        or not all(isinstance(key, str) and isinstance(value, str) for key, value in query_params.items())
+    ):
         raise ToolExecutionError("Connector HTTP parameter mapping is invalid.")
     if set(path_params) != placeholders:
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
@@ -230,11 +235,20 @@ def execute_http_operation(arguments, context: ToolContext, tool):
 def register_http_tool(router, tool):
     if tool.plugin.connector_type not in {"http", "openapi"}:
         return False
-    if router.has_handler(tool.plugin.plugin_key, tool.name):
+    if router.has_handler(
+        tool.plugin.plugin_key,
+        tool.name,
+        plugin_version=tool.plugin.version,
+    ):
         return False
 
     def handler(arguments, context):
         return execute_http_operation(arguments, context, tool)
 
-    router.register(tool.plugin.plugin_key, tool.name, handler)
+    router.register(
+        tool.plugin.plugin_key,
+        tool.name,
+        handler,
+        plugin_version=tool.plugin.version,
+    )
     return True
