@@ -38,6 +38,8 @@ def queue_deployment_command(
     elif command_type == "cluster.capi.pivot.target.preflight":
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+    elif command_type == "cluster.capi.pivot.source.preflight":
+        payload["cluster_name"] = deployment.cluster_name
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
