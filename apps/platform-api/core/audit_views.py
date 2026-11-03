@@ -60,7 +60,10 @@ class AuditEventListView(APIView):
         except ValueError:
             return Response({"detail": "limit and offset must be integers."}, status=400)
         if not 1 <= limit <= 100 or offset < 0:
-            return Response({"detail": "limit must be 1–100 and offset must be non-negative."}, status=400)
+            return Response(
+                {"detail": "limit must be 1–100 and offset must be non-negative."},
+                status=400,
+            )
         total = events.count()
         page = events.order_by("-created_at", "-id")[offset : offset + limit]
         return Response(
