@@ -632,6 +632,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "metal3.host.inspect",
             "cluster.provider.discover",
             "cluster.manifest.validate",
+            "cluster.capi.pivot.source.preflight",
         },
         "target_cluster": {
             "node.health",
@@ -714,6 +715,178 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "not_ready_control_plane_nodes": not_ready_nodes[:9],
             "worker_provisioning_allowed": ready,
             "capi_pivot_allowed": ready,
+            "side_effects": False,
+        }
+    if command_type == "cluster.capi.pivot.source.preflight":
+        cluster_name = payload.get("cluster_name")
+        if (
+            not isinstance(cluster_name, str)
+            or len(cluster_name) > 63
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+        ):
+            raise NodeAgentError("INVALID_CLUSTER_NAME")
+        resource_inventory = {
+            "cluster.x-k8s.io": [
+                "clusters",
+                "machines",
+                "machinesets",
+                "machinedeployments",
+            ],
+            "bootstrap.cluster.x-k8s.io": [
+                "kubeadmconfigs",
+                "kubeadmconfigtemplates",
+            ],
+            "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
+            "infrastructure.cluster.x-k8s.io": [
+                "metal3clusters",
+                "metal3machines",
+                "metal3machinetemplates",
+            ],
+            "metal3.io": ["baremetalhosts"],
+        }
+        discovery = kubernetes_api_get("/apis")
+        discovered_groups = {
+            item.get("name"): item
+            for item in discovery.get("groups", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        missing_resources = []
+        provider_versions = {}
+        inventory = []
+        resource_counts = {}
+        pagination_required = []
+        for group_name, resource_names in resource_inventory.items():
+            group = discovered_groups.get(group_name)
+            preferred = group.get("preferredVersion", {}) if group else {}
+            version = preferred.get("version")
+            if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9.]+", version):
+                missing_resources.extend(
+                    f"{group_name}/{resource_name}" for resource_name in resource_names
+                )
+                continue
+            provider_versions[group_name] = version
+            version_document = kubernetes_api_get(f"/apis/{group_name}/{version}")
+            api_resources = {
+                item.get("name"): item
+                for item in version_document.get("resources", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            for resource_name in resource_names:
+                resource = api_resources.get(resource_name)
+                if resource is None:
+                    missing_resources.append(f"{group_name}/{resource_name}")
+                    continue
+                path = f"/apis/{group_name}/{version}/{resource_name}?limit=1001"
+                document = kubernetes_api_get(path)
+                items = document.get("items", [])
+                if not isinstance(items, list):
+                    raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
+                resource_key = f"{group_name}/{resource_name}"
+                resource_counts[resource_key] = len(items)
+                if document.get("metadata", {}).get("continue") or len(items) > 1000:
+                    pagination_required.append(resource_key)
+                for item in items[:100]:
+                    metadata = item.get("metadata", {})
+                    owner_references = metadata.get("ownerReferences", [])
+                    inventory.append(
+                        {
+                            "api_version": item.get("apiVersion"),
+                            "kind": item.get("kind"),
+                            "resource": resource_key,
+                            "name": metadata.get("name"),
+                            "namespace": metadata.get("namespace"),
+                            "uid": metadata.get("uid"),
+                            "owner_references": [
+                                {
+                                    "api_version": owner.get("apiVersion"),
+                                    "kind": owner.get("kind"),
+                                    "name": owner.get("name"),
+                                    "uid": owner.get("uid"),
+                                    "controller": owner.get("controller", False),
+                                }
+                                for owner in owner_references[:10]
+                                if isinstance(owner, dict)
+                            ],
+                            "cluster_name": metadata.get("labels", {}).get(
+                                "cluster.x-k8s.io/cluster-name"
+                            ),
+                        }
+                    )
+        expected_controllers = {
+            "capi-system": "capi-controller-manager",
+            "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+            "capi-kubeadm-control-plane-system": (
+                "capi-kubeadm-control-plane-controller-manager"
+            ),
+            "capm3-system": "capm3-controller-manager",
+        }
+        controller_states = []
+        for controller_namespace, deployment_name in expected_controllers.items():
+            try:
+                deployments = kubernetes_api_get(
+                    f"/apis/apps/v1/namespaces/{controller_namespace}/deployments"
+                )
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_404":
+                    raise
+                deployments = {"items": []}
+            deployment = next(
+                (
+                    item
+                    for item in deployments.get("items", [])
+                    if item.get("metadata", {}).get("name") == deployment_name
+                ),
+                {},
+            )
+            metadata = deployment.get("metadata", {})
+            status_data = deployment.get("status", {})
+            desired = deployment.get("spec", {}).get("replicas", 1)
+            available = status_data.get("availableReplicas")
+            generation = metadata.get("generation", 1)
+            observed = status_data.get("observedGeneration", 0)
+            controller_states.append(
+                {
+                    "namespace": controller_namespace,
+                    "deployment": deployment_name,
+                    "ready": (
+                        isinstance(desired, int)
+                        and not isinstance(desired, bool)
+                        and desired > 0
+                        and isinstance(available, int)
+                        and not isinstance(available, bool)
+                        and available >= desired
+                        and isinstance(generation, int)
+                        and not isinstance(generation, bool)
+                        and isinstance(observed, int)
+                        and not isinstance(observed, bool)
+                        and observed >= generation
+                    ),
+                }
+            )
+        controllers_ready = all(item["ready"] for item in controller_states)
+        inventory_complete = not missing_resources and not pagination_required
+        blockers = []
+        if missing_resources:
+            blockers.append("required_source_capi_metal3_apis_missing")
+        if not controllers_ready:
+            blockers.append("source_management_controllers_not_ready")
+        if pagination_required:
+            blockers.append("source_inventory_pagination_required")
+        if not inventory:
+            blockers.append("source_inventory_empty")
+        return {
+            "source_management_plane_ready": (
+                inventory_complete and controllers_ready and bool(inventory)
+            ),
+            "cluster_name": cluster_name,
+            "provider_versions": provider_versions,
+            "resource_counts": resource_counts,
+            "inventory": inventory[:500],
+            "inventory_truncated": len(inventory) > 500,
+            "missing_resources": missing_resources[:100],
+            "pagination_required": sorted(set(pagination_required))[:100],
+            "controllers": controller_states,
+            "blockers": blockers,
             "side_effects": False,
         }
     if command_type == "cluster.capi.pivot.target.preflight":
@@ -1249,6 +1422,7 @@ class ControlPlaneClient:
                 "metal3.host.inspect",
                 "cluster.provider.discover",
                 "cluster.manifest.validate",
+                "cluster.capi.pivot.source.preflight",
             ]
             if node_type == "eph_node"
             else [
