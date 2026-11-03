@@ -472,3 +472,31 @@ def test_eph_agent_capi_pivot_source_preflight_command_is_allowed(node_workspace
         HTTP_IDEMPOTENCY_KEY="eph-capi-pivot-source-preflight",
     )
     assert response.status_code == 202
+
+
+@pytest.mark.django_db
+def test_project_agent_command_history_is_scoped_and_paginated(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "fleet-history-eph", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "host.preflight", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="fleet-history-command-1",
+    )
+    assert created.status_code == 202
+
+    response = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-commands/?limit=1&offset=0",
+    )
+
+    assert response.status_code == 200
+    assert response.data["count"] == 1
+    assert response.data["limit"] == 1
+    assert response.data["results"][0]["id"] == created.data["id"]
+    assert response.data["results"][0]["node_id"] == node_id
