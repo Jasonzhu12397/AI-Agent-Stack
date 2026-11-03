@@ -141,8 +141,6 @@ def test_audit_api_denies_non_admin_tenant_member(audit_workspace):
 
 @pytest.mark.django_db
 def test_worker_connector_tool_event_retains_task_actor(audit_workspace):
-    from types import SimpleNamespace
-
     from worker_app.tasks import _record_connector_tool_event
 
     user, tenant, project, _, _ = audit_workspace
