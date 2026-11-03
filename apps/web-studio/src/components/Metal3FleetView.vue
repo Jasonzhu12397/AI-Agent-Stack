@@ -12,7 +12,6 @@ import {
   type Project,
   type Tenant,
 } from "../services/api";
-import { Monitor } from "@element-plus/icons-vue";
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
 
 type FleetTab = "dashboard" | "fleet" | "eph" | "clusters" | "terminal" | "operations";
@@ -190,7 +189,7 @@ onUnmounted(() => {
         <section class="fleet-panel">
           <div class="fleet-panel-heading"><h3>Agent topology</h3><span>{{ nodes.length }} NODES</span></div>
           <div v-for="node in nodes" :key="node.id" class="fleet-node-row">
-            <div class="fleet-node-icon"><el-icon><Monitor /></el-icon></div>
+            <div class="fleet-node-icon"><span class="fleet-node-glyph">▦</span></div>
             <div class="fleet-node-main">
               <strong>{{ node.name }}</strong>
               <small>{{ node.node_type === "eph_node" ? "EPH bootstrap" : "Target cluster" }} · {{ node.cluster_name || "cluster unassigned" }}</small>
@@ -329,6 +328,7 @@ onUnmounted(() => {
 .fleet-panel-heading span { color: #6f8ba5; font-size: 9px; letter-spacing: .12em; }
 .fleet-node-row, .fleet-deployment-row { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-top: 1px solid rgba(119, 151, 180, .12); }
 .fleet-node-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(52, 161, 188, .13); color: #55c7d8; }
+.fleet-node-glyph { font-size: 18px; line-height: 1; }
 .fleet-node-main, .fleet-deployment-row > div { min-width: 0; display: grid; gap: 4px; flex: 1; }
 .fleet-node-main strong, .fleet-deployment-row strong { color: #dce9f6; font-size: 12px; }
 .fleet-node-main small, .fleet-deployment-row small { color: #7791aa; font-size: 10px; }
