@@ -736,7 +736,13 @@ class PluginConnectionTestView(APIView):
             )
         manifest = dict(plugin.manifest)
         transport_config = dict(transport)
-        operations = dict(transport_config.get("operations", {}))
+        configured_operations = transport_config.get("operations", {})
+        if not isinstance(configured_operations, dict):
+            return Response(
+                {"detail": "Connector HTTP operation map is invalid."},
+                status=409,
+            )
+        operations = dict(configured_operations)
         operations["__health_check__"] = health_check
         transport_config["operations"] = operations
         manifest["http"] = transport_config
