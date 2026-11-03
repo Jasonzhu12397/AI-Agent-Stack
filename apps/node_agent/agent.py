@@ -1032,7 +1032,6 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             )
         controllers_ready = all(item["ready"] for item in controller_states)
         inventory_truncated = False
-        inventory_summary_truncated = len(full_inventory) > 200
         inventory_complete = not missing_resources
         source_cluster_matches = [
             item
@@ -1063,11 +1062,31 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             source_cluster_identity.get("uid") if source_cluster_identity else "",
             inventory_complete,
         )
-        inventory = list(full_inventory[:200])
-        if source_cluster_identity and not any(
-            item.get("uid") == source_cluster_identity["uid"] for item in inventory
-        ):
-            inventory = [source_cluster_matches[0], *inventory[:199]]
+        summary_candidates = list(full_inventory)
+        if source_cluster_identity:
+            root_item = source_cluster_matches[0]
+            summary_candidates = [
+                root_item,
+                *[
+                    item
+                    for item in full_inventory
+                    if item.get("uid") != source_cluster_identity["uid"]
+                ],
+            ]
+        inventory = []
+        for item in summary_candidates:
+            if len(inventory) >= 200:
+                break
+            candidate = [*inventory, item]
+            encoded_candidate = json.dumps(
+                candidate,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if len(encoded_candidate) > 48 * 1024:
+                break
+            inventory.append(item)
+        inventory_summary_truncated = len(inventory) < len(full_inventory)
         blockers = []
         if missing_resources:
             blockers.append("required_source_capi_metal3_apis_missing")
