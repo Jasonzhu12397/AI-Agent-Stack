@@ -246,7 +246,12 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                     raise ToolExecutionError("Connector redirects are not allowed.")
                 if not 200 <= response.status_code < 300:
                     raise ToolExecutionError("Connector returned a non-success HTTP status.")
-                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                content_type = (
+                    response.headers.get("content-type", "")
+                    .split(";", 1)[0]
+                    .strip()
+                    .lower()
+                )
                 if not (
                     content_type == "application/json"
                     or content_type.endswith("+json")
