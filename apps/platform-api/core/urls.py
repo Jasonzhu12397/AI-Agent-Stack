@@ -44,6 +44,7 @@ from core.plugin_views import (
     PluginCatalogListCreateView,
     PluginConnectionListCreateView,
     PluginConnectionTestView,
+    PluginConnectionStatusView,
     PluginDetailView,
     PluginInstallationListCreateView,
     PluginInstallationStatusView,
