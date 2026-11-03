@@ -116,18 +116,29 @@ class ToolRouter:
     """Policy-enforcing dispatcher; connector transports must register trusted handlers."""
 
     def __init__(self) -> None:
-        self._handlers: dict[tuple[str, str], Handler] = {}
+        self._handlers: dict[tuple[str, str, str], Handler] = {}
 
-    def register(self, plugin_key: str, tool_name: str, handler: Handler) -> None:
-        if not plugin_key or not tool_name or not callable(handler):
-            raise ValueError("A plugin key, tool name and callable handler are required.")
-        key = (plugin_key, tool_name)
+    def register(
+        self,
+        plugin_key: str,
+        tool_name: str,
+        handler: Handler,
+        plugin_version: str = "*",
+    ) -> None:
+        if not plugin_key or not tool_name or not callable(handler) or not plugin_version:
+            raise ValueError("A plugin key, version, tool name and callable handler are required.")
+        key = (plugin_key, plugin_version, tool_name)
         if key in self._handlers:
-            raise ValueError("A handler is already registered for this tool.")
+            raise ValueError("A handler is already registered for this connector version and tool.")
         self._handlers[key] = handler
 
-    def has_handler(self, plugin_key: str, tool_name: str) -> bool:
-        return (plugin_key, tool_name) in self._handlers
+    def has_handler(
+        self,
+        plugin_key: str,
+        tool_name: str,
+        plugin_version: str = "*",
+    ) -> bool:
+        return (plugin_key, plugin_version, tool_name) in self._handlers
 
     def execute(
         self,
@@ -162,7 +173,9 @@ class ToolRouter:
                 raise ToolExecutionError("Connector connection is not healthy or is out of scope.")
 
         validate_schema(arguments, tool.input_schema)
-        handler = self._handlers.get((plugin.plugin_key, tool.name))
+        handler = self._handlers.get(
+            (plugin.plugin_key, plugin.version, tool.name)
+        ) or self._handlers.get((plugin.plugin_key, "*", tool.name))
         if handler is None:
             raise ToolExecutionError("No trusted executor is registered for this connector tool.")
 
