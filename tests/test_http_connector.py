@@ -376,3 +376,15 @@ def test_version_pinned_http_handler_executes_through_tool_router(monkeypatch):
         "result": {"items": ["ok"]},
     }
     assert captured["method"] == "GET"
+
+
+def test_http_connector_rejects_malformed_base_url_before_network(monkeypatch):
+    from core.http_connector import _validate_base_url
+
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: pytest.fail("DNS must not run for malformed URLs"),
+    )
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with pytest.raises(ToolExecutionError, match="malformed"):
+            _validate_base_url("https://api.example.com:not-a-port")
