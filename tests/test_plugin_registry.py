@@ -389,9 +389,9 @@ def test_http_plugin_connection_health_check_activates_connection(
 
     assert response.status_code == 200
     assert health_check.call_count == 1
-    connection.refresh_from_db()
-    assert connection.status == PluginConnection.Status.HEALTHY
-    assert connection.last_health_check_at is not None
+    connection_record = PluginConnection.objects.get(pk=connection.data["id"])
+    assert connection_record.status == PluginConnection.Status.HEALTHY
+    assert connection_record.last_health_check_at is not None
 
 
 @pytest.mark.django_db
