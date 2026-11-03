@@ -281,10 +281,17 @@ def _execute_agent_tool(task, tool, arguments):
         )
     except PluginInstallation.DoesNotExist as exc:
         raise PermanentTaskError("Connector installation is no longer active") from exc
-    connection = PluginConnection.objects.filter(
-        installation=installation,
-        status=PluginConnection.Status.HEALTHY,
-    ).first()
+    connections = list(
+        PluginConnection.objects.filter(
+            installation=installation,
+            status=PluginConnection.Status.HEALTHY,
+        ).order_by("created_at")[:2]
+    )
+    if len(connections) > 1:
+        raise PermanentTaskError(
+            "Multiple healthy connector connections require an explicit connection binding"
+        )
+    connection = connections[0] if connections else None
     return TOOL_ROUTER.execute(
         installation=installation,
         tool=tool,
