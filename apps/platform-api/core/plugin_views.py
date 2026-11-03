@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import re
 import uuid
+from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -9,6 +10,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.audit import record_audit_event
+from core.http_connector import execute_http_operation
+from core.tool_router import ToolContext, ToolExecutionError
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.models import (
     PluginConnection,
@@ -675,3 +678,111 @@ class PluginConnectionListCreateView(APIView):
             },
             status=201,
         )
+
+
+class PluginConnectionTestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, connection_id):
+        connection = get_object_or_404(
+            PluginConnection.objects.select_related(
+                "installation",
+                "installation__tenant",
+                "installation__project",
+                "installation__plugin",
+            ).filter(installation__tenant__memberships__user=request.user),
+            pk=connection_id,
+        )
+        installation = connection.installation
+        plugin = installation.plugin
+        if not _can_manage_project(
+            request.user,
+            installation.tenant,
+            installation.project,
+        ):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        if installation.status != PluginInstallation.Status.INSTALLED:
+            return Response({"detail": "Plugin installation is not active."}, status=409)
+        if plugin.connector_type not in {
+            PluginDefinition.ConnectorType.HTTP,
+            PluginDefinition.ConnectorType.OPENAPI,
+        }:
+            return Response(
+                {"detail": "Connection health checks require an HTTP or OpenAPI connector."},
+                status=409,
+            )
+        transport = plugin.manifest.get("http") if isinstance(plugin.manifest, dict) else None
+        health_check = transport.get("health_check") if isinstance(transport, dict) else None
+        if not isinstance(health_check, dict):
+            return Response(
+                {"detail": "Connector manifest does not define http.health_check."},
+                status=409,
+            )
+        healthy_connection_exists = PluginConnection.objects.filter(
+            installation=installation,
+            status=PluginConnection.Status.HEALTHY,
+        ).exclude(pk=connection.pk).exists()
+        if healthy_connection_exists:
+            return Response(
+                {
+                    "detail": (
+                        "Another healthy connection is already active for this installation. "
+                        "Disable it before activating a different connection."
+                    )
+                },
+                status=409,
+            )
+        manifest = dict(plugin.manifest)
+        transport_config = dict(transport)
+        operations = dict(transport_config.get("operations", {}))
+        operations["__health_check__"] = health_check
+        transport_config["operations"] = operations
+        manifest["http"] = transport_config
+        context = ToolContext(
+            tenant_id=str(installation.tenant_id),
+            project_id=str(installation.project_id),
+            installation_id=str(installation.id),
+            plugin_key=plugin.plugin_key,
+            plugin_version=plugin.version,
+            tool_name="__health_check__",
+            connection_id=str(connection.id),
+            connection_config=dict(connection.config),
+            connection_auth_type=connection.auth_type,
+            credential_ref=connection.credential_ref,
+            plugin_manifest=manifest,
+        )
+        try:
+            execute_http_operation(
+                {},
+                context,
+                SimpleNamespace(name="__health_check__", timeout_seconds=15),
+            )
+        except ToolExecutionError as exc:
+            connection.status = PluginConnection.Status.ERROR
+            connection.last_health_check_at = timezone.now()
+            connection.save(update_fields=["status", "last_health_check_at", "updated_at"])
+            record_audit_event(
+                request,
+                installation.tenant,
+                "connector.connection.health_check",
+                "plugin_connection",
+                connection.id,
+                project=installation.project,
+                outcome=AuditEvent.Outcome.FAILURE,
+                metadata={"plugin_key": plugin.plugin_key, "connection_name": connection.name},
+            )
+            return Response({"detail": str(exc)}, status=502)
+
+        connection.status = PluginConnection.Status.HEALTHY
+        connection.last_health_check_at = timezone.now()
+        connection.save(update_fields=["status", "last_health_check_at", "updated_at"])
+        record_audit_event(
+            request,
+            installation.tenant,
+            "connector.connection.health_check",
+            "plugin_connection",
+            connection.id,
+            project=installation.project,
+            metadata={"plugin_key": plugin.plugin_key, "connection_name": connection.name},
+        )
+        return Response(_installation_data(installation))
