@@ -544,8 +544,14 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     source_result = {
         "source_management_plane_ready": True,
         "cluster_name": "edge-lab",
-        "provider_versions": {group: "v1beta1" for group in source_groups},
-        "resource_counts": {resource: 0 for resource in source_resources},
+        "provider_versions": {
+            group: "v1alpha1" if group == "metal3.io" else "v1beta1"
+            for group in source_groups
+        },
+        "resource_counts": {
+            resource: 1 if resource == "cluster.x-k8s.io/clusters" else 0
+            for resource in source_resources
+        },
         "inventory": [
             {
                 "api_version": "cluster.x-k8s.io/v1beta1",
