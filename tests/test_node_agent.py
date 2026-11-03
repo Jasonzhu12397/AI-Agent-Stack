@@ -316,6 +316,8 @@ def test_provider_discovery_reports_live_api_versions_and_missing_resources(monk
 
     def fake_get(path):
         calls.append(path)
+        query = path.split("?", 1)[1] if "?" in path else ""
+        path = path.split("?", 1)[0]
         if path == "/apis":
             return {
                 "groups": [
@@ -1379,6 +1381,29 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
                             },
                         }
                     ]
+                if resource == "machines":
+                    owner = {
+                        "apiVersion": "cluster.x-k8s.io/v1beta1",
+                        "kind": "Cluster",
+                        "name": "edge-lab",
+                        "uid": "cluster-uid",
+                    }
+                    page = 2 if "continue=page-2" in query else 1
+                    items = [
+                        {
+                            "apiVersion": f"{group}/{version}",
+                            "kind": "Machine",
+                            "metadata": {
+                                "name": f"machine-{page}",
+                                "namespace": "capi-system",
+                                "uid": f"machine-uid-{page}",
+                                "labels": {"cluster.x-k8s.io/cluster-name": "edge-lab"},
+                                "ownerReferences": [owner],
+                            },
+                        }
+                    ]
+                    metadata = {"continue": "page-2"} if page == 1 else {}
+                    return {"items": items, "metadata": metadata}
                 return {"items": items, "metadata": {}}
         raise AssertionError(path)
 
@@ -1403,6 +1428,9 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     }
     assert len(result["resource_counts"]) == 11
     assert result["resource_counts"]["cluster.x-k8s.io/clusters"] == 1
+    assert result["resource_counts"]["cluster.x-k8s.io/machines"] == 2
+    assert result["owner_graph"]["object_count"] == 3
+    assert result["owner_graph"]["unique_uid_count"] == 3
     assert result["inventory"][0]["name"] == "edge-lab"
     assert result["inventory"][0]["namespace"] == "capi-system"
     assert result["missing_resources"] == []
@@ -1410,7 +1438,11 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     assert result["blockers"] == []
     assert result["inventory_truncated"] is False
     assert result["side_effects"] is False
-    assert "/apis/cluster.x-k8s.io/v1beta1/clusters" in calls
+    assert any(
+        path.startswith("/apis/cluster.x-k8s.io/v1beta1/clusters?limit=500")
+        for path in calls
+    )
+    assert any("continue=page-2" in path for path in calls)
 
     original_get = agent.kubernetes_api_get
 
