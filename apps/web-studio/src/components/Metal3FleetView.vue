@@ -41,6 +41,7 @@ const loading = ref(false);
 const refreshing = ref(false);
 const error = ref("");
 let refreshTimer: number | undefined;
+let refreshGeneration = 0;
 
 const ephNodes = computed(() => nodes.value.filter((node) => node.node_type === "eph_node"));
 const targetAgents = computed(() => nodes.value.filter((node) => node.node_type === "target_cluster"));
@@ -94,11 +95,13 @@ async function loadProjects(tenantId: string): Promise<void> {
 }
 
 async function refreshData(): Promise<void> {
+  const generation = ++refreshGeneration;
   if (!selectedTenantId.value || !selectedProjectId.value) {
     nodes.value = [];
     deployments.value = [];
     commands.value = [];
     commandCount.value = 0;
+    refreshing.value = false;
     return;
   }
   refreshing.value = true;
@@ -108,8 +111,7 @@ async function refreshData(): Promise<void> {
       getAgentNodes(selectedTenantId.value, selectedProjectId.value),
       getClusterDeployments(selectedTenantId.value, selectedProjectId.value),
     ]);
-    nodes.value = nodePage.results;
-    deployments.value = deploymentPage.results;
+    if (generation !== refreshGeneration) return;
     const commandPage = await getProjectAgentCommands(
       selectedTenantId.value,
       selectedProjectId.value,
@@ -119,12 +121,16 @@ async function refreshData(): Promise<void> {
         status: commandStatus.value,
       },
     );
+    if (generation !== refreshGeneration) return;
+    nodes.value = nodePage.results;
+    deployments.value = deploymentPage.results;
     commands.value = commandPage.results;
     commandCount.value = commandPage.count;
   } catch (cause) {
+    if (generation !== refreshGeneration) return;
     error.value = cause instanceof Error ? cause.message : "Unable to refresh Metal3 fleet data.";
   } finally {
-    refreshing.value = false;
+    if (generation === refreshGeneration) refreshing.value = false;
   }
 }
 
