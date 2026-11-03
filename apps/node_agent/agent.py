@@ -667,6 +667,7 @@ def build_capi_owner_graph(
     duplicate_uids = []
     unresolved_owner_references = []
     truncated_owner_references = []
+    children_by_owner = {}
     for item in inventory:
         uid = item.get("uid")
         if not isinstance(uid, str) or not uid:
@@ -701,9 +702,12 @@ def build_capi_owner_graph(
                     {"uid": item.get("uid"), "reason": "owner_reference_invalid"}
                 )
                 continue
+            owner_uid = owner.get("uid")
+            child_uid = item.get("uid")
+            if isinstance(owner_uid, str) and isinstance(child_uid, str):
+                children_by_owner.setdefault(owner_uid, []).append(child_uid)
             if owner.get("kind") not in CAPI_PIVOT_TRACKED_OWNER_KINDS:
                 continue
-            owner_uid = owner.get("uid")
             owner_item = uid_map.get(owner_uid)
             if owner_item is None:
                 unresolved_owner_references.append(
@@ -728,21 +732,15 @@ def build_capi_owner_graph(
                     }
                 )
 
-    for _ in range(len(inventory)):
-        changed = False
-        for item in inventory:
-            uid = item.get("uid")
-            if not isinstance(uid, str) or uid in reachable:
-                continue
-            owners = item.get("owner_references", [])
-            if isinstance(owners, list) and any(
-                isinstance(owner, dict) and owner.get("uid") in reachable
-                for owner in owners
-            ):
-                reachable.add(uid)
-                changed = True
-        if not changed:
-            break
+    pending = [cluster_uid] if root_valid else []
+    cursor = 0
+    while cursor < len(pending):
+        owner_uid = pending[cursor]
+        cursor += 1
+        for child_uid in children_by_owner.get(owner_uid, []):
+            if child_uid not in reachable:
+                reachable.add(child_uid)
+                pending.append(child_uid)
 
     cluster_labeled_objects = [
         item
