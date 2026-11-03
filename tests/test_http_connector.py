@@ -246,3 +246,39 @@ def test_http_connector_rejects_auth_required_without_credential(monkeypatch):
                 context(manifest=manifest),
                 tool(),
             )
+
+
+def test_http_connector_blocks_mutating_post_operations(monkeypatch):
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "POST",
+                    "path": "/v1/items/search",
+                    "path_params": {},
+                    "query_params": {},
+                    "body_param": "payload",
+                    "read_only": False,
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search",
+        timeout_seconds=5,
+        idempotency_mode="none",
+    )
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with pytest.raises(ToolExecutionError, match="read-only"):
+            execute_http_operation(
+                {"payload": {"query": "status"}},
+                context(manifest=manifest),
+                selected_tool,
+            )
