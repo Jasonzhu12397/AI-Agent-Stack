@@ -38,7 +38,7 @@ The current plugin slice provides tenant-scoped connector metadata and project-s
 
 ## Not implemented in this milestone
 
-The Worker now has an application-owned HTTP/OpenAPI contract executor for connectors that provide a normalized `manifest.http` contract. It requires HTTPS, an exact host in `PLUGIN_HTTP_ALLOWED_HOSTS`, public DNS results, no redirects, no environment proxy, bounded request/response sizes, JSON object responses and tool-schema validation. The Integration Hub can test a configured `manifest.http.health_check` and only then mark one connection healthy. Credential-backed calls require a configured `PLUGIN_CREDENTIAL_RESOLVER` dotted path; the resolver receives the credential reference and returns a supported bearer or header credential. No secret value is persisted.
+The Worker now has an application-owned HTTP/OpenAPI contract executor for connectors that provide a normalized `manifest.http` contract. It requires HTTPS, an exact host in `PLUGIN_HTTP_ALLOWED_HOSTS`, public DNS results, no redirects, no environment proxy, bounded request/response sizes, JSON object responses and tool-schema validation. Only GET and explicitly read-only POST operations are enabled; mutating HTTP methods remain blocked until human approval and durable idempotency are implemented. The Integration Hub can test a configured `manifest.http.health_check` and only then mark one connection healthy. Credential-backed calls require a configured `PLUGIN_CREDENTIAL_RESOLVER` dotted path; the resolver receives the credential reference and returns a supported bearer or header credential. No secret value is persisted.
 
 A connector manifest can define:
 ```json
