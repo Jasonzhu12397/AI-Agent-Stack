@@ -952,7 +952,7 @@ def test_source_capi_pivot_preflight_rejects_malformed_inventory_counts(
 def test_capi_pivot_provider_version_mismatch_fails_closed(
     cluster_delivery_workspace,
 ):
-    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    _, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
         client,
         tenant,
@@ -980,7 +980,7 @@ def test_capi_pivot_provider_version_mismatch_fails_closed(
         },
     }
     deployment.save(update_fields=["plan_result"])
-    
+
     _update_capi_pivot_provider_compatibility(deployment)
 
     deployment.refresh_from_db()
