@@ -7,7 +7,7 @@ The platform API stores selected security-sensitive mutations as tenant-scoped a
 - Tenant member creation, role changes and removal.
 - Agent node enrollment and revocation.
 - Agent command queueing, approval requests and approvals.
-- Connector approval, installation and installation status changes.
+- Connector approval, installation, installation status changes, connection health checks and connection enable/disable changes.
 - Cluster deployment creation, cancellation and Target Agent handoff requests.
 
 The event writer intentionally stores identifiers and bounded operational metadata only. Credential-like keys are removed recursively. It does not store command payloads, model prompts, connector secrets, enrollment tokens or kubeconfig data.
