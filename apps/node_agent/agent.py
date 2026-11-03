@@ -776,7 +776,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 if resource is None:
                     missing_resources.append(f"{group_name}/{resource_name}")
                     continue
-                path = f"/apis/{group_name}/{version}/{resource_name}?limit=1001"
+                path = f"/apis/{group_name}/{version}/{resource_name}"
                 document = kubernetes_api_get(path)
                 items = document.get("items", [])
                 if not isinstance(items, list):
@@ -864,7 +864,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 }
             )
         controllers_ready = all(item["ready"] for item in controller_states)
-        inventory_complete = not missing_resources and not pagination_required
+        inventory_truncated = len(inventory) > 200
+        inventory_complete = (
+            not missing_resources
+            and not pagination_required
+            and not inventory_truncated
+        )
         blockers = []
         if missing_resources:
             blockers.append("required_source_capi_metal3_apis_missing")
@@ -872,6 +877,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             blockers.append("source_management_controllers_not_ready")
         if pagination_required:
             blockers.append("source_inventory_pagination_required")
+        if inventory_truncated:
+            blockers.append("source_inventory_truncated")
         if not inventory:
             blockers.append("source_inventory_empty")
         return {
@@ -881,8 +888,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster_name": cluster_name,
             "provider_versions": provider_versions,
             "resource_counts": resource_counts,
-            "inventory": inventory[:500],
-            "inventory_truncated": len(inventory) > 500,
+            "inventory": inventory[:200],
+            "inventory_truncated": inventory_truncated,
             "missing_resources": missing_resources[:100],
             "pagination_required": sorted(set(pagination_required))[:100],
             "controllers": controller_states,
