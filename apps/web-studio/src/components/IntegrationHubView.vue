@@ -9,6 +9,7 @@ import {
   registerPlugin,
   setPluginInstallationStatus,
   testPluginConnection,
+  setPluginConnectionStatus,
   type PluginDefinition,
   type PluginInstallation,
 } from "../services/api";
@@ -189,6 +190,26 @@ async function updateInstallation(
   }
 }
 
+async function updateConnectionStatus(
+  connectionId: string,
+  status: "pending" | "disabled",
+): Promise<void> {
+  submitting.value = true;
+  error.value = "";
+  info.value = "";
+  try {
+    await setPluginConnectionStatus(connectionId, status);
+    info.value = status === "disabled"
+      ? "Connection disabled."
+      : "Connection re-enabled; run a health check before tool execution.";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to update connection status.";
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function testConnection(connectionId: string): Promise<void> {
   submitting.value = true;
   error.value = "";
@@ -361,11 +382,25 @@ onMounted(() => void refresh());
           <span>{{ connection.name }} · {{ connection.auth_type }}</span>
           <el-tag :type="connection.status === 'healthy' ? 'success' : connection.status === 'error' ? 'danger' : 'info'" size="small">{{ connection.status }}</el-tag>
           <el-button
+            v-if="connection.status !== 'disabled'"
             size="small"
             plain
             :loading="submitting"
             @click="testConnection(connection.id)"
           >Test connection</el-button>
+          <el-button
+            v-if="connection.status !== 'disabled'"
+            size="small"
+            text
+            @click="updateConnectionStatus(connection.id, 'disabled')"
+          >Disable</el-button>
+          <el-button
+            v-else
+            size="small"
+            text
+            type="primary"
+            @click="updateConnectionStatus(connection.id, 'pending')"
+          >Enable</el-button>
         </div>
         <div class="installation-actions">
           <el-button
