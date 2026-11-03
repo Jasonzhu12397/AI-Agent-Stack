@@ -201,7 +201,11 @@ class ToolRouter:
             connection_config=dict(connection.config) if connection else {},
             connection_auth_type=connection.auth_type if connection else "none",
             credential_ref=connection.credential_ref if connection else "",
-            plugin_manifest=dict(plugin.manifest) if isinstance(plugin.manifest, dict) else {},
+            plugin_manifest=(
+                dict(getattr(plugin, "manifest", {}))
+                if isinstance(getattr(plugin, "manifest", {}), dict)
+                else {}
+            ),
         )
         try:
             result = handler(dict(arguments), context)
