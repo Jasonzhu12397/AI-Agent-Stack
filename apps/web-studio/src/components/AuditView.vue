@@ -122,7 +122,7 @@ onMounted(() => void refresh());
         </el-table-column>
       </el-table>
       <el-empty v-if="!loading && !auditEvents.length && !auditError" description="No security audit events recorded yet" :image-size="56" />
-      <p class="operations-note">The per-tenant hash chain detects event alteration or removal within the retained chain. Current event coverage includes Agent node enrollment/revocation, command queue/approval, connector approval/installation/status changes and cluster deployment create/cancel/handoff. Backup, retention and external WORM export are still required for production-grade immutability.</p>
+      <p class="operations-note">The per-tenant hash chain detects event alteration or removal within the retained chain. Current event coverage includes tenant member changes, Agent node enrollment/revocation, command queue/approval, connector approval/installation/status changes and cluster deployment create/cancel/handoff. A hash chain detects alteration and middle-of-chain deletion; deletion of the latest tail requires an externally anchored head hash. Backup, retention and external WORM export are still required for production-grade immutability.</p>
     </div>
     <div class="operations-panel">
       <div class="operations-panel-heading"><h4>Recent activity</h4><span>LAST 100 RECORDS</span></div>
