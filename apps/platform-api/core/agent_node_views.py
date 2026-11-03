@@ -38,6 +38,7 @@ EPH_COMMANDS = {
     "metal3.host.inspect",
     "cluster.provider.discover",
     "cluster.manifest.validate",
+    "cluster.capi.pivot.source.preflight",
 }
 TARGET_COMMANDS = {
     "node.health",
