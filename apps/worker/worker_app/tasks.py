@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 import json
+import logging
 import uuid
 from datetime import timedelta
 from time import sleep
@@ -7,6 +8,7 @@ from time import sleep
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
     AgentRun,
+    AuditEvent,
     KnowledgeBase,
     KnowledgeDocument,
     ModelConfig,
@@ -19,7 +21,6 @@ from core.models import (
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolExecutionError, ToolRouter
 from core.audit import record_audit_event
-from core.models import AuditEvent
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
 from core.workflow_engine import WorkflowValidationError, execute_workflow_run
