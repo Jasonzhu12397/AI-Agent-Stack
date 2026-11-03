@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -182,6 +183,16 @@ class ToolRouter:
                 raise ToolExecutionError("Connector connection is not healthy or is out of scope.")
 
         validate_schema(arguments, tool.input_schema)
+        try:
+            encoded_arguments = json.dumps(
+                arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ToolExecutionError("Tool arguments are not valid JSON.") from exc
+        if len(encoded_arguments) > 65536:
+            raise ToolExecutionError("Tool arguments exceed 64 KiB.")
         handler = (
             self._handlers.get((plugin.plugin_key, plugin.version, tool.name))
             or self._handlers.get((plugin.plugin_key, tool.name))
@@ -210,6 +221,13 @@ class ToolRouter:
         try:
             result = handler(dict(arguments), context)
             validate_schema(result, tool.output_schema)
+            encoded_result = json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if len(encoded_result) > 65536:
+                raise ToolExecutionError("Tool result exceeds 64 KiB.")
         except ToolExecutionError:
             raise
         except Exception as exc:
