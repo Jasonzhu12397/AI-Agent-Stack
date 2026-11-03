@@ -3,6 +3,10 @@ import { computed, onMounted, ref, watch } from "vue";
 import {
   getAgentCommands,
   getAgentNodes,
+  getAuditEvents,
+  verifyAuditChain,
+  type AuditEvent,
+  type AuditChainVerification,
   getClusterDeployments,
   getTasks,
   type AgentCommand,
@@ -16,6 +20,9 @@ const nodes = ref<AgentNode[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const deployments = ref<ClusterDeployment[]>([]);
 const tasks = ref<Task[]>([]);
+const auditEvents = ref<AuditEvent[]>([]);
+const chainVerification = ref<AuditChainVerification | null>(null);
+const auditError = ref("");
 const loading = ref(false);
 const error = ref("");
 
@@ -38,7 +45,7 @@ const activities = computed<Activity[]>(() => [
 
 async function refresh(): Promise<void> {
   if (!props.tenantId || !props.projectId) {
-    nodes.value = []; commands.value = []; deployments.value = []; tasks.value = [];
+    nodes.value = []; commands.value = []; deployments.value = []; tasks.value = []; auditEvents.value = []; chainVerification.value = null;
     return;
   }
   loading.value = true;
@@ -54,6 +61,19 @@ async function refresh(): Promise<void> {
     deployments.value = deploymentPage.results;
     const commandPages = await Promise.all(nodes.value.map((node) => getAgentCommands(node.id)));
     commands.value = commandPages.flatMap((page) => page.results);
+    auditError.value = "";
+    try {
+      const [auditPage, verification] = await Promise.all([
+        getAuditEvents(props.tenantId, props.projectId),
+        verifyAuditChain(props.tenantId),
+      ]);
+      auditEvents.value = auditPage.results;
+      chainVerification.value = verification;
+    } catch (cause) {
+      auditEvents.value = [];
+      chainVerification.value = null;
+      auditError.value = cause instanceof Error ? cause.message : "Audit access is unavailable.";
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load operational history.";
   } finally {
@@ -80,8 +100,30 @@ onMounted(() => void refresh());
       </div>
       <el-button plain :loading="loading" @click="refresh">Refresh</el-button>
     </header>
-    <el-alert type="warning" :closable="false" show-icon title="Operational history, not yet an immutable security audit log. Dedicated append-only audit events and retention controls remain backend work." />
+    <el-alert v-if="chainVerification?.valid" type="success" :closable="false" show-icon :title="'Audit hash chain verified: ' + chainVerification.verified_count + ' events.'">
+    </el-alert>
+    <el-alert v-else-if="chainVerification && !chainVerification.valid" type="error" :closable="false" show-icon :title="'Audit chain integrity failure at event ' + chainVerification.invalid_event_id" />
+    <el-alert v-if="auditError" :title="auditError" type="warning" show-icon :closable="true" @close="auditError = ''" />
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
+    <div class="operations-panel">
+      <div class="operations-panel-heading"><h4>Security audit events</h4><span>APPEND-ONLY · HASH-CHAINED</span></div>
+      <el-table :data="auditEvents" size="small" class="task-table">
+        <el-table-column label="Time" min-width="165">
+          <template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column prop="actor_username" label="Actor" min-width="120" />
+        <el-table-column prop="event_type" label="Event" min-width="210" />
+        <el-table-column prop="resource_type" label="Resource" min-width="140" />
+        <el-table-column label="Outcome" min-width="100">
+          <template #default="scope"><el-tag :type="scope.row.outcome === 'success' ? 'success' : scope.row.outcome === 'denied' ? 'warning' : 'danger'" size="small">{{ scope.row.outcome }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="Event hash" min-width="150">
+          <template #default="scope"><code>{{ scope.row.event_hash.slice(0, 16) }}</code></template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!loading && !auditEvents.length && !auditError" description="No security audit events recorded yet" :image-size="56" />
+      <p class="operations-note">The per-tenant hash chain detects event alteration or removal within the retained chain. Current event coverage includes Agent node enrollment/revocation, command queue/approval, connector approval/installation/status changes and cluster deployment create/cancel/handoff. Backup, retention and external WORM export are still required for production-grade immutability.</p>
+    </div>
     <div class="operations-panel">
       <div class="operations-panel-heading"><h4>Recent activity</h4><span>LAST 100 RECORDS</span></div>
       <el-table :data="activities" size="small" class="task-table">
