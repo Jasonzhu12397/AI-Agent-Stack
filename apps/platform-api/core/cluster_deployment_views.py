@@ -278,6 +278,15 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 {"detail": "The selected Target Agent must have a fresh heartbeat."},
                 status=409,
             )
+        if deployment.eph_node.status != AgentNode.Status.ONLINE or (
+            deployment.eph_node.last_seen_at is None
+            or deployment.eph_node.last_seen_at
+            < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response(
+                {"detail": "The EPH source Agent must have a fresh heartbeat for pivot inventory."},
+                status=409,
+            )
         if target_node.cluster_name != deployment.cluster_name:
             return Response(
                 {"detail": "Target Agent must be enrolled for the deployment cluster name."},
@@ -308,6 +317,11 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
             deployment.target_node = target_node
             deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
             deployment.save(update_fields=["target_node", "status", "updated_at"])
+            source_preflight_command = queue_deployment_command(
+                deployment,
+                "cluster.capi.pivot.source.preflight",
+                node=deployment.eph_node,
+            )
             preflight_command = queue_deployment_command(
                 deployment,
                 "cluster.capi.pivot.target.preflight",
@@ -320,6 +334,8 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 "checkpoint_endpoint": (
                     f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
                 ),
+                "source_preflight_command_id": str(source_preflight_command.id),
+                "source_preflight_command_status": source_preflight_command.status,
                 "preflight_command_id": str(preflight_command.id),
                 "preflight_command_status": preflight_command.status,
                 "worker_provisioning_allowed": False,
