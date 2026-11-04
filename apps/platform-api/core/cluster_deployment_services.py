@@ -928,12 +928,29 @@ def handle_deployment_command_result(
             and result.get("execution_allowed") is True
             and result.get("side_effects") is result.get("created")
             and isinstance(result.get("created"), bool)
+            and result.get("worker_creation_performed") is result.get("created")
+            and result.get("idempotent_reconciliation") is (not result.get("created"))
+            and result.get("network_profile_hash")
+            == _spec_hash(
+                deployment.spec.get("worker_provisioning", {}).get(
+                    "network_profile", {}
+                )
+            )
             and result.get("worker_readiness_verified") is True
             and result.get("worker_machine_count")
             == deployment.spec.get("worker_replicas")
             and result.get("ready_worker_machine_count")
             == deployment.spec.get("worker_replicas")
             and result.get("not_ready_worker_machine_names") == []
+            and isinstance(result.get("worker_node_names"), list)
+            and len(result.get("worker_node_names"))
+            == deployment.spec.get("worker_replicas")
+            and all(
+                isinstance(name, str) and name
+                for name in result.get("worker_node_names", [])
+            )
+            and len(set(result.get("worker_node_names", [])))
+            == deployment.spec.get("worker_replicas")
         )
         if not valid_result:
             deployment.status = ClusterDeployment.Status.FAILED
