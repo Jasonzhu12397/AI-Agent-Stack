@@ -82,6 +82,22 @@ The plan validator checks the declared network roles, CIDRs/gateway, explicitly 
 The RBAC template grants read-only access to node metadata, NetworkAttachmentDefinitions and Pods in `kube-system` only for component discovery. Extend workload namespace access only through separately reviewed namespace-scoped Roles and RoleBindings.
 For workload attachment checks, dispatch `cluster.network.inspect` with `workload_namespaces` and `expected_attachments` (for example `{"workload_namespaces":["app-ns"],"expected_attachments":["app-ns/sriov-data"]}`). The Agent reads only Pods in the explicitly named namespaces and returns each Pod's Multus network-status interface/IP summary plus missing expected attachments. A namespace without an explicit read-only Pod Role/RoleBinding is reported as unavailable (for example HTTP 403); it is not silently treated as passing. The supplied RBAC grants Pod listing in `default` and `kube-system` only, so add narrowly scoped Role/RoleBinding pairs for each approved application namespace.
 
+## Read-only CAPI to Metal3 lifecycle observation
+
+The Target Agent exposes `cluster.metal3.observe`. It follows each Machine belonging to the requested Cluster through `spec.infrastructureRef` to the namespaced Metal3Machine, then resolves the BareMetalHost through the BMH `spec.consumerRef` including the Metal3Machine UID. Missing, cross-namespace, ambiguous, or stale ownership links fail closed. A BMH is considered provisioned only when it is online, its provisioning state is `provisioned` or `externally provisioned`, its operational status is absent or `OK`, and it has no reported error.
+
+This command is read-only. It does not claim direct Ironic API health: unless a separately authenticated Ironic adapter is configured, the response explicitly reports `ironic.status=not_configured`. The Target Agent RBAC grants read-only access to Metal3Machine objects in the configured target namespace and BareMetalHosts only in the explicitly bound Metal3 namespaces.
+
+Example command payload:
+
+```json
+{
+  "cluster_name": "edge-lab",
+  "namespace": "default",
+  "baremetal_host_namespace": "metal3-system"
+}
+```
+
 ## Configuration
 
 Set these environment variables from a protected secret source:
