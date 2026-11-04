@@ -8,6 +8,23 @@ The EPH Agent runs inside a temporary single-node Kubernetes cluster on a RAM-bo
 
 Build the repository image and push it to a registry accessible by both management and target clusters. Replace `REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION` in both Deployment manifests with the exact immutable image tag or digest.
 
+## Build the CAPI pivot-capable node-agent image
+
+Build the dedicated node-agent image with a Cluster API `clusterctl` version selected from the deployment compatibility matrix. The checksum is mandatory and must be obtained from the trusted release artifact used by your build pipeline:
+
+```bash
+docker build -f Dockerfile.node-agent \
+  --build-arg CLUSTERCTL_VERSION=<verified-release-tag> \
+  --build-arg CLUSTERCTL_SHA256=<verified-linux-amd64-or-arm64-sha256> \
+  -t <registry>/ai-agent-node-agent:<immutable-tag> .
+```
+
+Do not guess the Cluster API version or checksum. The image build fails if either argument is missing or the checksum does not match. Use this image in both node-agent Deployment templates when enabling the pivot dry-run command.
+
+The EPH Agent's optional `cluster.capi.pivot.dry-run` command requires a Secret named `capi-pivot-kubeconfigs` in `ai-agent-system` with keys `source.kubeconfig` and `target.kubeconfig`. These are mounted read-only under `/var/run/secrets/ai-agent/capi-pivot`; the source file identifies the temporary EPH management cluster and the target file identifies the target management cluster. Grant only the Kubernetes permissions required for discovery and CAPI move dry-run. Do not place kubeconfig contents in command payloads or Git.
+
+The dry-run invokes `clusterctl move --dry-run` only. It reports that the namespace scope includes all CAPI objects in the selected namespace; it does not perform a move, install providers, bootstrap the Target Agent, or authorize worker provisioning. A successful dry-run is not proof that a real pivot is safe.
+
 ## EPH Node Agent (temporary RAM-boot EPH cluster)
 
 1. In the Studio, enroll a node with type `eph_node` in the intended tenant and project.
