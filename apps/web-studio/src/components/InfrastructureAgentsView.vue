@@ -35,6 +35,7 @@ const buildClusterName = ref("");
 const buildKubernetesVersion = ref("");
 const buildControlPlaneReplicas = ref(3);
 const buildWorkerReplicas = ref(3);
+const buildNetworkProfile = ref("");
 const commandType = ref("node.health");
 const commandPayload = ref("{}");
 const enrollmentToken = ref("");
@@ -57,6 +58,7 @@ const availableCommands = computed(() => {
     return [
       "node.health",
       "cluster.health",
+      "cluster.network.inspect",
       "cluster.observe",
       "cluster.diagnose",
       "cluster.postflight",
@@ -79,6 +81,7 @@ function defaultPayload(type: string): string {
     "node.health": {},
     "host.preflight": {},
     "cluster.health": {},
+    "cluster.network.inspect": {},
     "cluster.observe": {},
     "cluster.diagnose": { namespace: "default" },
     "cluster.postflight": {},
@@ -248,16 +251,24 @@ async function generateClusterPlan(): Promise<void> {
   error.value = "";
   info.value = "";
   try {
+    const clusterSpec: Record<string, unknown> = {
+      cluster_name: buildClusterName.value.trim(),
+      kubernetes_version: buildKubernetesVersion.value.trim(),
+      control_plane_replicas: buildControlPlaneReplicas.value,
+      worker_replicas: buildWorkerReplicas.value,
+    };
+    if (buildNetworkProfile.value.trim()) {
+      const networkProfile: unknown = JSON.parse(buildNetworkProfile.value);
+      if (networkProfile === null || Array.isArray(networkProfile) || typeof networkProfile !== "object") {
+        throw new Error("Network profile must be a JSON object.");
+      }
+      clusterSpec.network_profile = networkProfile;
+    }
     const deployment = await createClusterDeployment(
       selectedTenantId.value,
       selectedProjectId.value,
       selectedNode.value.id,
-      {
-        cluster_name: buildClusterName.value.trim(),
-        kubernetes_version: buildKubernetesVersion.value.trim(),
-        control_plane_replicas: buildControlPlaneReplicas.value,
-        worker_replicas: buildWorkerReplicas.value,
-      },
+      clusterSpec,
     );
     info.value =
       deployment.status === "plan_ready"
@@ -520,6 +531,15 @@ onUnmounted(() => {
             </label>
             <label>Kubernetes version
               <el-input v-model="buildKubernetesVersion" placeholder="v1.x.y" />
+            </label>
+            <label>Dual-network profile (optional JSON)
+              <el-input
+                v-model="buildNetworkProfile"
+                type="textarea"
+                :rows="6"
+                spellcheck="false"
+                placeholder="Paste the site-specific network_profile JSON; do not use example NIC names."
+              />
             </label>
             <div class="replica-fields">
               <label>Control plane replicas
