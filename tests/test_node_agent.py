@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import datetime
 import json
 import time
 
@@ -2124,7 +2125,7 @@ def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatc
                         "schema_version": "v1",
                         "node_name": "worker-01",
                         "node_uid": "node-uid-01",
-                        "collected_at": "2026-11-04T00:00:00+00:00",
+                        "collected_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         "hardware": {
                             "status": "observed",
                             "interfaces": [{"name": "eno1"}],
