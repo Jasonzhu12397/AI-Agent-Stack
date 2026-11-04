@@ -42,6 +42,8 @@ A Pivot timeout or expired running lease has an unknown outcome and is never aut
 
 Both Agent roles expose the read-only `cluster.network.inspect` command. It discovers Kubernetes node allocatable extended resources (including advertised SR-IOV resources and hugepages), Multus NetworkAttachmentDefinitions and plugin type names, and likely Calico/Multus/OVS/SR-IOV component Pods in `kube-system`. It also reports the Agent Pod's own network namespace interfaces and default routes.
 
+When the Agent Deployment mounts host `/sys` read-only at `/host/sys`, the same command also reports physical NIC names/MAC/MTU/link state, PCI network devices and drivers, PF/VF counts, NUMA node assignments and hugepage totals/free counts. Without that mount the host hardware section is explicitly `not_configured`; the container sysfs is never mislabeled as host inventory. This requires a site-approved read-only `hostPath` policy exception; the Agent remains non-root, non-privileged, without host networking or host PID access.
+
 The command deliberately does not claim that a host PF/VF is healthy, that a VF is attached to a workload Pod, or that DPDK is ready. The Pod's `/sys/class/net` and `/proc/net/route` are the Agent container network namespace, not the physical host namespace. A NetworkAttachmentDefinition is configuration evidence, not proof of dataplane connectivity. Host PCI, IOMMU/VFIO binding, hugepages per NUMA node, CPU pinning and actual application Pod route validation require a dedicated host/network adapter and environment-level integration tests.
 
 A cluster plan may include a versioned `network_profile`:
