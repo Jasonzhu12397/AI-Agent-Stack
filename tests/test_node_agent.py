@@ -1596,10 +1596,18 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
             "items": [
                 {
                     "metadata": {"name": "edge-lab-control-plane-0"},
+                    "spec": {"clusterName": "edge-lab"},
                     "status": {
                         "conditions": [{"type": "Ready", "status": "True"}]
                     },
-                }
+                },
+                {
+                    "metadata": {"name": "unrelated-cluster-worker"},
+                    "spec": {"clusterName": "another-cluster"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "False"}]
+                    },
+                },
             ]
         },
         "/apis/apps/v1/namespaces/capi-system/deployments/capi-controller-manager": {
@@ -1652,10 +1660,91 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
     assert result["cluster_uid"] == "source-uid"
     assert result["machine_count"] == 1
     assert result["ready_machine_count"] == 1
+    assert result["not_ready_machine_names"] == []
     assert result["machine_inventory_ready"] is True
     assert result["controllers_ready"] is True
     assert len(result["controllers"]) == 4
     assert result["side_effects"] is False
+
+
+def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch):
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": "cluster.x-k8s.io",
+                    "preferredVersion": {"version": "v1beta1"},
+                }
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
+            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
+            "items": [
+                {
+                    "metadata": {"name": "edge-lab-control-plane-0"},
+                    "spec": {"clusterName": "edge-lab"},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                },
+                {
+                    "metadata": {"name": "edge-lab-worker-0"},
+                    "spec": {"clusterName": "edge-lab"},
+                    "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+                },
+                {
+                    "metadata": {"name": "other-cluster-machine"},
+                    "spec": {"clusterName": "other-cluster"},
+                    "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+                },
+            ]
+        },
+        "/apis/apps/v1/namespaces/capi-system/deployments/capi-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-bootstrap-system/deployments/"
+            "capi-kubeadm-bootstrap-controller-manager"
+        ): {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-control-plane-system/deployments/"
+            "capi-kubeadm-control-plane-controller-manager"
+        ): {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        "/apis/apps/v1/namespaces/capm3-system/deployments/capm3-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+    }
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.target.verify",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "namespace": "metal3",
+                "expected_cluster_uid": "source-uid",
+            },
+        },
+        "target_cluster",
+    )
+
+    assert result["machine_count"] == 2
+    assert result["ready_machine_count"] == 1
+    assert result["not_ready_machine_names"] == ["edge-lab-worker-0"]
+    assert result["machine_inventory_ready"] is False
+    assert result["pivot_adoption_verified"] is False
 
 
 def test_eph_agent_cannot_run_target_adoption_verification():
