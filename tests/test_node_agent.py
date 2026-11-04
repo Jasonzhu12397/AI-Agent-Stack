@@ -2051,6 +2051,9 @@ def test_network_profile_rejects_invalid_routing_or_cni_composition(mutate, erro
 
 def test_dpdk_network_profile_requires_hugepages_and_numa_policy():
     profile = valid_dual_network_profile()
+    profile["data_plane"].pop("hugepages")
+    profile["data_plane"].pop("numa_policy")
+    profile["data_plane"].pop("cpu_manager_policy")
     profile["data_plane"]["cni"]["attachments"].append(
         {
             "name": "dpdk-vf",
@@ -2960,6 +2963,13 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     {"name": group, "preferredVersion": {"version": version}}
                     for group, version in versions.items()
                 ]
+            }
+        if path.startswith("/apis/apps/v1/namespaces/") and "/deployments/" in path:
+            deployment_name = path.rsplit("/", 1)[-1]
+            return {
+                "metadata": {"name": deployment_name, "generation": 1},
+                "spec": {"replicas": 1},
+                "status": {"availableReplicas": 1, "observedGeneration": 1},
             }
         if path.endswith("/clusters/edge-lab"):
             return {"metadata": {"uid": "cluster-uid-1"}}
