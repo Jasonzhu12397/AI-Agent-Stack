@@ -342,6 +342,8 @@ def handle_deployment_command_result(
         valid_source_cluster_identity = (
             isinstance(source_cluster_identity, dict)
             and source_cluster_identity.get("name") == deployment.cluster_name
+            and source_cluster_identity.get("namespace")
+            == deployment.spec.get("capi_namespace", "default")
             and isinstance(source_cluster_identity.get("namespace"), str)
             and bool(source_cluster_identity.get("namespace"))
             and isinstance(source_cluster_identity.get("uid"), str)
