@@ -43,6 +43,8 @@ spec:
               value: production
             - name: AGENT_NODE_TYPE
               value: target_cluster
+            - name: AGENT_HOST_SYSFS_PATH
+              value: /host/sys
             - name: AGENT_CONTROL_URL
               valueFrom:
                 secretKeyRef:
@@ -73,6 +75,9 @@ spec:
           volumeMounts:
             - name: agent-health
               mountPath: /tmp
+            - name: host-sysfs
+              mountPath: /host/sys
+              readOnly: true
           readinessProbe:
             exec:
               command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
@@ -86,6 +91,10 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
       volumes:
+        - name: host-sysfs
+          hostPath:
+            path: /sys
+            type: Directory
         - name: agent-health
           emptyDir:
             sizeLimit: 1Mi
