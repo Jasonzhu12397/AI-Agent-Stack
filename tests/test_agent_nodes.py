@@ -650,3 +650,29 @@ def test_capi_pivot_execution_requires_separate_admin_approval(node_workspace):
     assert AgentCommand.objects.get(pk=created.data["id"]).status == (
         AgentCommand.Status.RUNNING
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("node_type", ["eph_node", "target_cluster"])
+def test_network_inspection_command_can_be_queued_for_both_agent_roles(
+    node_workspace,
+    node_type,
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": f"network-inspector-{node_type}", "node_type": node_type},
+        format="json",
+    )
+
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {"command_type": "cluster.network.inspect", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY=f"network-inspect-{node_type}",
+    )
+
+    assert response.status_code == 202
+    assert response.data["command_type"] == "cluster.network.inspect"
+    assert response.data["status"] == AgentCommand.Status.QUEUED
+    assert response.data["approved_at"] is None
