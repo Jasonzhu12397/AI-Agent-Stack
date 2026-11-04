@@ -990,6 +990,7 @@ def inspect_host_network_hardware() -> dict[str, Any]:
             "driver": driver,
             "numa_node": _read_sysfs_text(device / "numa_node"),
             "network_interfaces": network_interfaces[:32],
+            "iommu_group_present": (device / "iommu_group").exists(),
             "is_virtual_function": (device / "physfn").exists(),
             "virtual_function_count": sum(
                 1 for item in device.glob("virtfn*")
