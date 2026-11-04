@@ -3139,3 +3139,37 @@ def test_machine_deployment_create_server_errors_are_ambiguous(
             },
             dry_run=False,
         )
+
+def test_worker_provisioning_preflight_requires_sriov_dpdk(monkeypatch):
+    profile = valid_dual_network_profile()
+    profile["data_plane"]["cni"]["attachments"][1]["dpdk"] = False
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(AssertionError(path)),
+    )
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK",
+    ):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.worker.preflight",
+                "payload": {
+                    "cluster_name": "edge-lab",
+                    "namespace": "default",
+                    "expected_worker_replicas": 2,
+                    "worker_provisioning": {
+                        "machine_deployment_name": "edge-workers",
+                        "infrastructure_template_name": "worker-template",
+                        "bootstrap_template_name": "worker-bootstrap",
+                        "baremetal_host_namespace": "metal3-system",
+                        "host_selector": {"pool": "workers"},
+                        "network_profile": profile,
+                    },
+                },
+            },
+            "target_cluster",
+        )
+
