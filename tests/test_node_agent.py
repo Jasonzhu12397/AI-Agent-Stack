@@ -2608,7 +2608,10 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
     profile["data_plane"]["cpu_manager_policy"] = "static"
     profile["data_plane"]["cni"]["attachments"][1]["dpdk"] = True
     groups = {
-        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
+        "cluster.x-k8s.io": (
+            "v1beta1",
+            ["clusters", "machines", "machinedeployments"],
+        ),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
@@ -2646,6 +2649,11 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                     "name": "worker-template",
                     "namespace": "default",
                     "uid": "infra-template-uid",
+                    "annotations": {
+                        "ai-agent-stack.io/network-profile-hash": (
+                            agent.canonical_hash(profile)
+                        )
+                    },
                 },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
@@ -2701,7 +2709,10 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
 def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hosts(monkeypatch):
     profile = valid_dual_network_profile()
     groups = {
-        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
+        "cluster.x-k8s.io": (
+            "v1beta1",
+            ["clusters", "machines", "machinedeployments"],
+        ),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
@@ -2736,6 +2747,11 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
                     "name": "worker-template",
                     "namespace": "default",
                     "uid": "infra-template-uid",
+                    "annotations": {
+                        "ai-agent-stack.io/network-profile-hash": (
+                            agent.canonical_hash(profile)
+                        )
+                    },
                 },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
@@ -2781,7 +2797,10 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
 def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypatch):
     profile = valid_dual_network_profile()
     groups = {
-        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
+        "cluster.x-k8s.io": (
+            "v1beta1",
+            ["clusters", "machines", "machinedeployments"],
+        ),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
@@ -2817,6 +2836,11 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
                     "name": "worker-template",
                     "namespace": "default",
                     "uid": "infra-template-uid",
+                    "annotations": {
+                        "ai-agent-stack.io/network-profile-hash": (
+                            agent.canonical_hash(profile)
+                        )
+                    },
                 },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
