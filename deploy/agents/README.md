@@ -49,7 +49,7 @@ The Target Agent Deployment is pinned to a control-plane node so it can start be
 1. Apply `namespace.yaml` and `rbac.yaml`.
 2. Replace the DaemonSet image with the same immutable node-agent image used by the Target Agent.
 3. Apply `network-inventory-agent.yaml` to schedule one small, non-root publisher on every node, including tainted control-plane nodes.
-4. Each publisher reads host `/sys` read-only and writes a bounded hardware report to a node-specific ConfigMap in `ai-agent-system`. It has only `get` access to Nodes and `get/create/update` access to ConfigMaps in that namespace.
+4. Each publisher reads host `/sys` read-only and writes a bounded hardware report to a node-specific ConfigMap in `ai-agent-inventory`. It has only `get` access to Nodes and `get/create/update` access to ConfigMaps in `ai-agent-inventory`.
 5. The Target Agent reads those ConfigMaps, correlates each report with the live Node UID, ignores stale reports from replaced nodes, and returns the per-node NIC/PCI/VF/IOMMU/NUMA/hugepage inventory in `cluster.network.inspect`.
 
 The DaemonSet does not use host networking, host PID, privileged mode, or writable host mounts. Its Pods reach the Kubernetes API over their normal Pod network, which must be routed on the Data Plane as required by the site policy. A read-only hostPath admission exception for `/sys` is required; if prohibited, do not weaken the Agent security context—use a separately approved host inventory integration. Reports contain hardware inventory (including MAC addresses), not BMC credentials or Pod secrets.
