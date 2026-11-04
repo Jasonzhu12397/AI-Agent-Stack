@@ -16,6 +16,8 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
+from .capi_pivot import CapiPivotError, run_capi_pivot_dry_run
+
 
 class NodeAgentError(Exception):
     pass
@@ -799,6 +801,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.provider.discover",
             "cluster.manifest.validate",
             "cluster.capi.pivot.source.preflight",
+            "cluster.capi.pivot.dry-run",
         },
         "target_cluster": {
             "node.health",
@@ -1336,6 +1339,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for item in data.get("items", [])[:100]
             ],
         }
+    if command_type == "cluster.capi.pivot.dry-run":
+        try:
+            return run_capi_pivot_dry_run(payload)
+        except CapiPivotError as exc:
+            raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.provider.discover":
         return discover_provider_apis()
     if command_type == "cluster.manifest.validate":
@@ -1686,6 +1694,7 @@ class ControlPlaneClient:
                 "cluster.provider.discover",
                 "cluster.manifest.validate",
                 "cluster.capi.pivot.source.preflight",
+                "cluster.capi.pivot.dry-run",
             ]
             if node_type == "eph_node"
             else [
