@@ -170,3 +170,11 @@ The Supervisor compares the source and target discovery versions for the five re
 ## Target adoption readiness invariant
 
 The Target Agent's post-pivot verification scopes Machine inventory by `spec.clusterName`; Machines from other clusters in the same namespace are excluded. Every matching Machine must have a Kubernetes/CAPI `Ready=True` condition, every Machine must have a unique non-empty name, and the inventory must contain at least one matching Machine. The control plane independently requires `ready_machine_count == machine_count` and an empty `not_ready_machine_names` list before recording Target Agent ownership. A partial Machine inventory can never authorize EPH reclamation. This is still an adoption verification gate, not a worker-reclaim implementation.
+
+## Durable checkpoint transition gates
+
+Target Agent checkpoints are persisted with a monotonically increasing sequence and a server-enforced phase transition graph: `target_agent_bootstrap` → `capi_pivot_preflight` → `capi_pivot_verified` → `worker_provisioning` → `worker_pool_verified`. Repeated updates within the current phase are allowed, but skipped or backward transitions are rejected. The first checkpoint must be `target_agent_bootstrap`.
+
+The Supervisor accepts `capi_pivot_verified` only after its own CAPI adoption verification has set `target_agent_owns_cluster=true` and confirmed that the target Cluster UID matches the source Cluster UID. Worker provisioning checkpoints are blocked until that ownership gate has passed. A worker-pool verification checkpoint must report a positive worker count, an equal ready-worker count, and an empty not-ready worker list.
+
+**EPH reclaim remains explicitly disabled.** Checkpoint submissions for `eph_reclaim_pending` and `completed` return HTTP 409 with `EPH_RECLAIM_EXECUTOR_NOT_ENABLED`. The checkpoint API is progress persistence, not authorization to shut down, wipe, reboot, or release a physical node. A future reclaim implementation must add a separate idempotent command flow and verify hardware-management acknowledgement, reset/reimage completion, storage sanitization, and Agent shutdown before the node can be returned to the compute pool.
