@@ -2287,6 +2287,9 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         selected_hosts = []
         unavailable_hosts = []
+        invalid_host_identities = []
+        seen_host_names = set()
+        seen_host_uids = set()
         for host in bmh_items:
             metadata = host.get("metadata", {})
             labels = metadata.get("labels", {})
@@ -2294,22 +2297,53 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 labels.get(key) != value for key, value in host_selector.items()
             ):
                 continue
+            host_name = metadata.get("name")
+            host_uid = metadata.get("uid")
+            if (
+                not isinstance(host_name, str)
+                or not host_name
+                or not isinstance(host_uid, str)
+                or not host_uid
+                or host_name in seen_host_names
+                or host_uid in seen_host_uids
+            ):
+                invalid_host_identities.append(
+                    {
+                        "name": host_name if isinstance(host_name, str) else None,
+                        "uid": host_uid if isinstance(host_uid, str) else None,
+                    }
+                )
+                continue
+            seen_host_names.add(host_name)
+            seen_host_uids.add(host_uid)
             status = host.get("status", {})
+            status = status if isinstance(status, dict) else {}
             provisioning = status.get("provisioning", {})
-            state = provisioning.get("state") if isinstance(provisioning, dict) else None
-            consumer = host.get("spec", {}).get("consumerRef")
+            provisioning = provisioning if isinstance(provisioning, dict) else {}
+            spec = host.get("spec", {})
+            spec = spec if isinstance(spec, dict) else {}
+            state = provisioning.get("state")
+            consumer = spec.get("consumerRef")
+            operational_status = status.get("operationalStatus")
+            error_message = status.get("errorMessage")
+            host_error = bool(status.get("error")) or (
+                isinstance(error_message, str) and bool(error_message.strip())
+            )
             host_ready = (
-                host.get("spec", {}).get("online") is True
+                spec.get("online") is True
                 and state == "available"
                 and not consumer
-                and not status.get("error")
+                and not host_error
+                and operational_status in (None, "OK")
             )
             entry = {
-                "name": metadata.get("name"),
-                "uid": metadata.get("uid"),
+                "name": host_name,
+                "uid": host_uid,
                 "provisioning_state": state,
-                "online": host.get("spec", {}).get("online") is True,
+                "operational_status": operational_status,
+                "online": spec.get("online") is True,
                 "has_consumer": bool(consumer),
+                "has_error": host_error,
                 "ready": host_ready,
             }
             if host_ready:
@@ -2317,17 +2351,39 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             else:
                 unavailable_hosts.append(entry)
         blockers = []
+        if invalid_host_identities:
+            blockers.append("baremetal_host_identity_invalid_or_duplicate")
         if existing_md is not None:
             blockers.append("machine_deployment_name_already_exists")
         if len(selected_hosts) < expected_replicas:
             blockers.append("insufficient_available_baremetal_hosts")
+        infrastructure_metadata = infrastructure_template.get("metadata", {})
+        bootstrap_metadata = bootstrap_template.get("metadata", {})
         if (
-            not isinstance(infrastructure_template.get("metadata", {}).get("uid"), str)
-            or not infrastructure_template.get("metadata", {}).get("uid")
-            or not isinstance(bootstrap_template.get("metadata", {}).get("uid"), str)
-            or not bootstrap_template.get("metadata", {}).get("uid")
+            not isinstance(infrastructure_metadata.get("uid"), str)
+            or not infrastructure_metadata.get("uid")
+            or not isinstance(bootstrap_metadata.get("uid"), str)
+            or not bootstrap_metadata.get("uid")
+            or infrastructure_metadata.get("name") != infrastructure_template_name
+            or bootstrap_metadata.get("name") != bootstrap_template_name
+            or infrastructure_metadata.get("namespace") != namespace
+            or bootstrap_metadata.get("namespace") != namespace
         ):
-            blockers.append("worker_template_identity_missing")
+            blockers.append("worker_template_identity_or_namespace_invalid")
+        if infrastructure_template.get("apiVersion") != (
+            "infrastructure.cluster.x-k8s.io/" + infra_version
+        ):
+            blockers.append("metal3_machine_template_api_version_mismatch")
+        if bootstrap_template.get("apiVersion") != (
+            "bootstrap.cluster.x-k8s.io/" + bootstrap_version
+        ):
+            blockers.append("kubeadm_config_template_api_version_mismatch")
+        if any(
+            item.get("has_error") is True
+            or item.get("operational_status") not in (None, "OK")
+            for item in unavailable_hosts
+        ):
+            blockers.append("matching_baremetal_host_operational_error")
         ready = not blockers
         return {
             "ready": ready,
