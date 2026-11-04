@@ -2508,7 +2508,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             or isinstance(expected_replicas, bool)
             or not 1 <= expected_replicas <= 1000
             or not isinstance(kubernetes_version, str)
-            or not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+", kubernetes_version)
+            or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", kubernetes_version)
             or not isinstance(config, dict)
             or not isinstance(expected_cluster_uid, str)
             or not expected_cluster_uid
@@ -2591,9 +2591,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         infra_template = kubernetes_api_get(infra_path)
         bootstrap_template = kubernetes_api_get(bootstrap_path)
-        network_template_hash = infra_template.get("metadata", {}).get(
-            "annotations", {}
-        ).get("ai-agent-stack.io/network-profile-hash")
+        infra_annotations = infra_template.get("metadata", {}).get("annotations", {})
+        network_template_hash = (
+            infra_annotations.get("ai-agent-stack.io/network-profile-hash")
+            if isinstance(infra_annotations, dict)
+            else None
+        )
         if (
             infra_template.get("metadata", {}).get("uid") != expected_infra_uid
             or infra_template.get("apiVersion") != expected_infra_api_version
@@ -2686,13 +2689,34 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 },
             },
         }
+        def matches_expected_machine_deployment(item: dict[str, Any]) -> bool:
+            metadata = item.get("metadata", {})
+            annotations = metadata.get("annotations", {})
+            spec = item.get("spec", {})
+            template_spec = spec.get("template", {}).get("spec", {})
+            return (
+                item.get("apiVersion") == manifest["apiVersion"]
+                and metadata.get("name") == deployment_name
+                and metadata.get("namespace") == namespace
+                and isinstance(annotations, dict)
+                and all(
+                    annotations.get(key) == value
+                    for key, value in expected_annotations.items()
+                )
+                and spec.get("clusterName") == cluster_name
+                and spec.get("replicas") == expected_replicas
+                and spec.get("selector", {}).get("matchLabels") == labels
+                and spec.get("template", {}).get("metadata", {}).get("labels") == labels
+                and template_spec.get("clusterName") == cluster_name
+                and template_spec.get("version") == kubernetes_version
+                and template_spec.get("bootstrap", {}).get("configRef")
+                == manifest["spec"]["template"]["spec"]["bootstrap"]["configRef"]
+                and template_spec.get("infrastructureRef")
+                == manifest["spec"]["template"]["spec"]["infrastructureRef"]
+            )
+
         if existing is not None:
-            if (
-                existing.get("metadata", {}).get("annotations", {})
-                != expected_annotations
-                or existing.get("spec") != manifest["spec"]
-                or existing.get("apiVersion") != manifest["apiVersion"]
-            ):
+            if not matches_expected_machine_deployment(existing):
                 raise NodeAgentError("MACHINE_DEPLOYMENT_NAME_CONFLICT")
             created = False
             machine_deployment = existing
@@ -2714,11 +2738,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 if str(exc) != "KUBERNETES_API_HTTP_409":
                     raise
                 machine_deployment = kubernetes_api_get(md_path)
-                if (
-                    machine_deployment.get("metadata", {}).get("annotations", {})
-                    != expected_annotations
-                    or machine_deployment.get("spec") != manifest["spec"]
-                ):
+                if not matches_expected_machine_deployment(machine_deployment):
                     raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_CONFLICT") from exc
                 created = False
         machine_deployment_uid = machine_deployment.get("metadata", {}).get("uid")
