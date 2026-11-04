@@ -2218,7 +2218,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         required = {
             "cluster.x-k8s.io": {"machinedeployments"},
             "bootstrap.cluster.x-k8s.io": {"kubeadmconfigtemplates"},
-            "infrastructure.cluster.x-k8s.io": {"metal3machinetemplates"},
+            "infrastructure.cluster.x-k8s.io": {"metal3machines", "metal3machinetemplates"},
             "metal3.io": {"baremetalhosts"},
         }
         versions = {}
@@ -2253,6 +2253,52 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 "side_effects": False,
                 "worker_creation_performed": False,
             }
+        expected_controllers = {
+            "capi-system": "capi-controller-manager",
+            "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+            "capi-kubeadm-control-plane-system": (
+                "capi-kubeadm-control-plane-controller-manager"
+            ),
+            "capm3-system": "capm3-controller-manager",
+        }
+        controller_states = []
+        for controller_namespace, controller_name in expected_controllers.items():
+            try:
+                controller = kubernetes_api_get(
+                    f"/apis/apps/v1/namespaces/{controller_namespace}"
+                    f"/deployments/{controller_name}"
+                )
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_404":
+                    raise
+                controller = {}
+            metadata = controller.get("metadata", {})
+            spec = controller.get("spec", {})
+            status = controller.get("status", {})
+            desired = spec.get("replicas", 1)
+            available = status.get("availableReplicas", 0)
+            generation = metadata.get("generation", 1)
+            observed = status.get("observedGeneration", 0)
+            controller_ready = (
+                isinstance(desired, int)
+                and not isinstance(desired, bool)
+                and desired > 0
+                and isinstance(available, int)
+                and not isinstance(available, bool)
+                and available >= desired
+                and isinstance(generation, int)
+                and not isinstance(generation, bool)
+                and isinstance(observed, int)
+                and not isinstance(observed, bool)
+                and observed >= generation
+            )
+            controller_states.append(
+                {
+                    "namespace": controller_namespace,
+                    "deployment": controller_name,
+                    "ready": controller_ready,
+                }
+            )
         cluster_version = versions["cluster.x-k8s.io"]
         cluster_path = (
             f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/{namespace}/clusters/{cluster_name}"
@@ -2351,6 +2397,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             else:
                 unavailable_hosts.append(entry)
         blockers = []
+        if not all(item["ready"] for item in controller_states):
+            blockers.append("required_capi_provider_controllers_not_ready")
         if invalid_host_identities:
             blockers.append("baremetal_host_identity_invalid_or_duplicate")
         if existing_md is not None:
@@ -2410,6 +2458,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "unavailable_matching_hosts": unavailable_hosts[:100],
             "network_profile": network_profile,
             "provider_versions": versions,
+            "controllers": controller_states,
+            "controllers_ready": all(item["ready"] for item in controller_states),
             "blockers": blockers,
             "side_effects": False,
             "worker_creation_performed": False,
