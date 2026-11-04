@@ -1024,7 +1024,7 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         try:
             workload_pods = list_all_kubernetes_items(
                 f"/api/v1/namespaces/{namespace}/pods",
-                max_items=10000,
+                max_items=5000,
             )
         except NodeAgentError as exc:
             workload_results.append({
@@ -1058,11 +1058,17 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
             attached_names = {
                 item["name"] for item in networks if isinstance(item.get("name"), str)
             }
-            missing = [
-                name for name in expected_attachments
-                if name not in attached_names
-                and name.split("/", 1)[-1] not in attached_names
-            ]
+            missing = []
+            for expected in expected_attachments:
+                if "/" in expected:
+                    attached = expected in attached_names
+                else:
+                    attached = any(
+                        item == expected or item.rsplit("/", 1)[-1] == expected
+                        for item in attached_names
+                    )
+                if not attached:
+                    missing.append(expected)
             pod_results.append({
                 "name": metadata.get("name"),
                 "phase": pod.get("status", {}).get("phase"),
@@ -1075,10 +1081,12 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
             "namespace": namespace,
             "inspection_status": "observed",
             "pod_count": len(pod_results),
+            "inspected_pod_count": min(len(pod_results), 500),
+            "inspection_truncated": len(pod_results) > 500,
             "pods_missing_expected_attachments": [
-                item["name"] for item in pod_results if not item["attachments_valid"]
-            ][:500],
-            "pods": pod_results[:1000],
+                item["name"] for item in pod_results[:500] if not item["attachments_valid"]
+            ],
+            "pods": pod_results[:500],
         })
     return {
         "inspection_status": "observed",
