@@ -902,7 +902,7 @@ def _pod_network_namespace_snapshot() -> dict[str, Any]:
 def inspect_network_environment() -> dict[str, Any]:
     version = kubernetes_api_get("/version")
     nodes = list_all_kubernetes_items("/api/v1/nodes", max_items=5000)
-    pods = list_all_kubernetes_items("/api/v1/pods", max_items=20000)
+    pods = list_all_kubernetes_items("/api/v1/namespaces/kube-system/pods", max_items=5000)
     api_groups = kubernetes_api_get("/apis").get("groups", [])
     group = next(
         (item for item in api_groups if item.get("name") == "k8s.cni.cncf.io"),
@@ -1029,6 +1029,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         "target_cluster": {
             "node.health",
             "cluster.health",
+            "cluster.network.inspect",
             "cluster.observe",
             "cluster.diagnose",
             "cluster.postflight",
