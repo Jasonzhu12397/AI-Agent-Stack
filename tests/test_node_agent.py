@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 import json
+import time
 
 import pytest
 
@@ -1531,7 +1532,6 @@ def test_long_running_command_renews_its_lease(monkeypatch):
         time.sleep(0.06)
         return {"ready": True}
 
-    import time
 
     monkeypatch.setattr(agent, "execute_command", slow_command)
     result = agent.execute_command_with_lease(
