@@ -857,6 +857,12 @@ def handle_deployment_command_result(
             and bootstrap.get("api_version")
             and isinstance(network, dict)
             and network.get("valid") is True
+            and network.get("pod_traffic_default") == "data_plane"
+            and network.get("primary_cni") == "calico"
+            and network.get("meta_cni") == "multus"
+            and network.get("dpdk_requested") is True
+            and isinstance(network.get("attachment_count"), int)
+            and network.get("attachment_count") > 0
             and network.get("profile_hash") == _spec_hash(config.get("network_profile", {}))
             and result.get("network_template_profile_verified") is True
             and result.get("network_template_profile_hash") == network.get("profile_hash")
