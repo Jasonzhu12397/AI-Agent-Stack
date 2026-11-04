@@ -3421,8 +3421,12 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         with urllib.request.urlopen(request, context=context, timeout=15) as response:
             payload = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            # A server-side error can be returned after the create was committed.
+            # Treat it as ambiguous and let the caller reconcile by resource identity.
+            raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
         raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
     if len(payload) > 1024 * 1024:
         raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
