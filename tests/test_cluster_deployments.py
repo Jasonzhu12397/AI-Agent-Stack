@@ -1340,6 +1340,9 @@ def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory
         command,
         "succeeded",
         {
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "expected_worker_replicas": 4,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
@@ -1404,6 +1407,9 @@ def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
         command,
         "succeeded",
         {
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "expected_worker_replicas": 4,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
