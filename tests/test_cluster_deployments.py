@@ -540,11 +540,11 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
         "node_id": str(target_node.id),
         "generation": 1,
         "sequence": 1,
-        "phase": "capi_pivot_preflight",
+        "phase": "target_agent_bootstrap",
         "data": {
             "cluster_name": "edge-lab",
-            "completed_steps": ["target_agent_bootstrap"],
-            "pending_step": "capi_pivot_preflight",
+            "completed_steps": [],
+            "pending_step": "target_agent_bootstrap",
         },
     }
     saved = agent_client.post(url, checkpoint_payload, format="json", **headers)
@@ -561,13 +561,117 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     assert restored.data["data"] == checkpoint_payload["data"]
 
     checkpoint_payload["sequence"] = 2
+    checkpoint_payload["phase"] = "capi_pivot_preflight"
+    checkpoint_payload["data"]["completed_steps"].append("target_agent_bootstrap")
+    checkpoint_payload["data"]["pending_step"] = "capi_pivot_preflight"
+    advanced = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert advanced.status_code == 201
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "capi_pivot_preflight"
+
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "checkpoint-source-cluster-uid"}
+        },
+        "dual_agent": {
+            "target_agent_owns_cluster": True,
+            "target_agent_cluster_uid": "checkpoint-source-cluster-uid",
+        },
+    }
+    deployment.save(update_fields=["plan_result"])
+    checkpoint_payload["sequence"] = 3
     checkpoint_payload["phase"] = "capi_pivot_verified"
     checkpoint_payload["data"]["completed_steps"].append("capi_pivot_preflight")
     advanced = agent_client.post(url, checkpoint_payload, format="json", **headers)
     assert advanced.status_code == 201
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
-    assert checkpoint.sequence == 2
+    assert checkpoint.sequence == 3
     assert checkpoint.phase == "capi_pivot_verified"
+
+
+@pytest.mark.django_db
+def test_target_agent_checkpoint_blocks_phase_skips_and_eph_reclaim(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-checkpoint-gate-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="checkpoint-gate-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="checkpoint-phase-gates",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+
+    agent_client = APIClient()
+    url = f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {target_token}"}
+    bootstrap = agent_client.post(
+        url,
+        {
+            "node_id": str(target_node.id),
+            "generation": 1,
+            "sequence": 1,
+            "phase": "target_agent_bootstrap",
+            "data": {},
+        },
+        format="json",
+        **headers,
+    )
+    assert bootstrap.status_code == 201
+
+    skipped = agent_client.post(
+        url,
+        {
+            "node_id": str(target_node.id),
+            "generation": 1,
+            "sequence": 2,
+            "phase": "capi_pivot_verified",
+            "data": {},
+        },
+        format="json",
+        **headers,
+    )
+    assert skipped.status_code == 409
+
+    reclaim = agent_client.post(
+        url,
+        {
+            "node_id": str(target_node.id),
+            "generation": 1,
+            "sequence": 2,
+            "phase": "eph_reclaim_pending",
+            "data": {"intent_id": "must-not-authorize-reclaim"},
+        },
+        format="json",
+        **headers,
+    )
+    assert reclaim.status_code == 409
+    assert reclaim.data["code"] == "EPH_RECLAIM_EXECUTOR_NOT_ENABLED"
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 1
+    assert checkpoint.phase == "target_agent_bootstrap"
 
 
 @pytest.mark.django_db
