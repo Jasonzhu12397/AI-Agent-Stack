@@ -1088,7 +1088,7 @@ def inspect_cluster_node_hardware_inventory(
             if collected_time.tzinfo is None:
                 raise ValueError("timezone_required")
             report_age = (
-                datetime.datetime.now(datetime.timezone.utc) - collected_time
+                datetime.datetime.now(datetime.UTC) - collected_time
             ).total_seconds()
         except (TypeError, ValueError):
             stale_node_names.append(report.get("node_name"))
