@@ -2631,16 +2631,16 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                    "metadata": {"name": "worker-template", "uid": "infra-template-uid"}}
+                    "metadata": {"name": "worker-template", "namespace": "default", "uid": "infra-template-uid"}}
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {"apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
-                    "metadata": {"name": "worker-bootstrap", "uid": "bootstrap-template-uid"}}
+                    "metadata": {"name": "worker-bootstrap", "namespace": "default", "uid": "bootstrap-template-uid"}}
         if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [
                 {"metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
                               "labels": {"pool": "workers"}},
                  "spec": {"online": True},
-                 "status": {"provisioning": {"state": "available"}}},
+                 "status": {"operationalStatus": "OK", "provisioning": {"state": "available"}}},
                 {"metadata": {"name": "bmh-02", "uid": "bmh-uid-02",
                               "labels": {"pool": "workers"}},
                  "spec": {"online": True},
@@ -2698,15 +2698,15 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
         if path.endswith("/metal3machinetemplates/worker-template"):
-            return {"metadata": {"uid": "infra-template-uid"}}
+            return {"metadata": {"name": "worker-template", "namespace": "default", "uid": "infra-template-uid"}}
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
-            return {"metadata": {"uid": "bootstrap-template-uid"}}
+            return {"metadata": {"name": "worker-bootstrap", "namespace": "default", "uid": "bootstrap-template-uid"}}
         if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [{
                 "metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
                              "labels": {"pool": "workers"}},
                 "spec": {"online": True},
-                "status": {"provisioning": {"state": "available"}},
+                "status": {"operationalStatus": "OK", "provisioning": {"state": "available"}},
             }], "metadata": {}}
         raise AssertionError(path)
 
@@ -2731,3 +2731,104 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
     assert result["ready"] is False
     assert result["execution_allowed"] is False
     assert "insufficient_available_baremetal_hosts" in result["blockers"]
+
+
+def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypatch):
+    profile = valid_dual_network_profile()
+    groups = {
+        "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
+        "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
+        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machinetemplates"]),
+        "metal3.io": ("v1alpha1", ["baremetalhosts"]),
+    }
+
+    def fake_get(path):
+        if path == "/apis":
+            return {"groups": [
+                {"name": name, "preferredVersion": {"version": version}}
+                for name, (version, _) in groups.items()
+            ]}
+        for name, (version, resources) in groups.items():
+            if path == f"/apis/{name}/{version}":
+                return {"resources": [{"name": item} for item in resources]}
+        if path.endswith("/clusters/edge-lab"):
+            return {"metadata": {"uid": "cluster-uid-1"}}
+        if path.endswith("/machinedeployments/edge-workers"):
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        if path.endswith("/metal3machinetemplates/worker-template"):
+            return {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "metadata": {
+                    "name": "worker-template",
+                    "namespace": "default",
+                    "uid": "infra-template-uid",
+                },
+            }
+        if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
+            return {
+                "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
+                "metadata": {
+                    "name": "worker-bootstrap",
+                    "namespace": "default",
+                    "uid": "bootstrap-template-uid",
+                },
+            }
+        if path.endswith("/baremetalhosts"):
+            return {"items": [
+                {
+                    "metadata": {
+                        "name": "bmh-01",
+                        "uid": "bmh-uid-01",
+                        "labels": {"pool": "workers"},
+                    },
+                    "spec": {"online": True},
+                    "status": {
+                        "operationalStatus": "error",
+                        "errorMessage": "BMC inspection failed",
+                        "provisioning": {"state": "available"},
+                    },
+                },
+                {
+                    "metadata": {
+                        "name": "bmh-02",
+                        "uid": "bmh-uid-02",
+                        "labels": {"pool": "workers"},
+                    },
+                    "spec": {"online": True},
+                    "status": {
+                        "operationalStatus": "OK",
+                        "provisioning": {"state": "available"},
+                    },
+                },
+            ], "metadata": {}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.worker.preflight",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "namespace": "default",
+                "expected_worker_replicas": 2,
+                "worker_provisioning": {
+                    "machine_deployment_name": "edge-workers",
+                    "infrastructure_template_name": "worker-template",
+                    "bootstrap_template_name": "worker-bootstrap",
+                    "baremetal_host_namespace": "metal3-system",
+                    "host_selector": {"pool": "workers"},
+                    "network_profile": profile,
+                },
+            },
+        },
+        "target_cluster",
+    )
+
+    assert result["ready"] is False
+    assert result["available_baremetal_host_count"] == 1
+    assert "insufficient_available_baremetal_hosts" in result["blockers"]
+    assert "matching_baremetal_host_operational_error" in result["blockers"]
+    assert result["side_effects"] is False
+    assert result["execution_allowed"] is False
+    assert result["worker_creation_performed"] is False
+
