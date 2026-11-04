@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1769,6 +1770,52 @@ def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
     return time.time() - path.stat().st_mtime <= max_age_seconds
 
 
+def execute_command_with_lease(
+    client: ControlPlaneClient,
+    command: dict[str, Any],
+    node_type: str,
+    renew_interval: int = 30,
+) -> dict[str, Any]:
+    if not isinstance(renew_interval, (int, float)) or renew_interval <= 0:
+        raise NodeAgentError("INVALID_LEASE_RENEW_INTERVAL")
+    command_id = command.get("id", "")
+    lease_token = command.get("lease_token", "")
+    if not command_id or not lease_token:
+        raise NodeAgentError("COMMAND_LEASE_REQUIRED")
+
+    stop_event = threading.Event()
+    renewal_errors: list[NodeAgentError] = []
+
+    def renew_until_stopped() -> None:
+        while not stop_event.wait(renew_interval):
+            try:
+                client.renew_lease(command_id, lease_token)
+            except NodeAgentError as exc:
+                renewal_errors.append(exc)
+                stop_event.set()
+            except Exception as exc:
+                renewal_errors.append(
+                    NodeAgentError("COMMAND_LEASE_RENEWAL_FAILED")
+                )
+                stop_event.set()
+
+    renewer = threading.Thread(
+        target=renew_until_stopped,
+        name=f"agent-lease-{command_id}",
+        daemon=True,
+    )
+    renewer.start()
+    try:
+        result = execute_command(command, node_type)
+    finally:
+        stop_event.set()
+        renewer.join()
+
+    if renewal_errors:
+        raise NodeAgentError("COMMAND_LEASE_LOST") from renewal_errors[0]
+    return result
+
+
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     heartbeat = client.heartbeat(node_type)
     if node_type == "target_cluster":
@@ -1800,7 +1847,7 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     lease_token = command.get("lease_token", "")
     command_id = command.get("id", "")
     try:
-        result = execute_command(command, node_type)
+        result = execute_command_with_lease(client, command, node_type)
         client.submit_result(command_id, lease_token, "succeeded", result)
     except NodeAgentError as exc:
         client.submit_result(
