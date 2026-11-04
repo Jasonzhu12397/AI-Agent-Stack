@@ -1741,6 +1741,8 @@ def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch
 
     def fake_list(path, max_items=100000):
         calls.append(path)
+        if path == "/api/v1/namespaces/ai-agent-system/configmaps":
+            return []
         if path == "/api/v1/nodes":
             return [
                 {
@@ -1913,7 +1915,11 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
         raise AssertionError(path)
 
     def fake_list(path, max_items=100000):
-        if path in {"/api/v1/nodes", "/api/v1/namespaces/kube-system/pods"}:
+        if path in {
+            "/api/v1/nodes",
+            "/api/v1/namespaces/kube-system/pods",
+            "/api/v1/namespaces/ai-agent-system/configmaps",
+        }:
             return []
         if path == "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions":
             return [
