@@ -129,7 +129,6 @@ def test_dry_run_converts_timeout_to_stable_error(tmp_path):
         )
 
 
-
 def test_dry_run_rejects_unexpected_payload_fields(tmp_path):
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_PAYLOAD_FIELD_NOT_ALLOWED"):
         run_capi_pivot_dry_run(
