@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import datetime
 import hashlib
+import io
 import json
 import time
 
@@ -3172,4 +3173,67 @@ def test_worker_provisioning_preflight_requires_sriov_dpdk(monkeypatch):
             },
             "target_cluster",
         )
+
+@pytest.mark.parametrize(
+    ("dry_run", "expected_query"),
+    [
+        (True, "?dryRun=All&fieldValidation=Strict"),
+        (False, "?fieldValidation=Strict"),
+    ],
+)
+def test_machine_deployment_create_uses_strict_api_validation(
+    monkeypatch,
+    dry_run,
+    expected_query,
+):
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", "/tmp/agent-token")
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", "/tmp/agent-ca")
+    monkeypatch.setattr(agent.os.path, "isfile", lambda path: True)
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda *args, **kwargs: io.StringIO("test-service-account-token"),
+    )
+    monkeypatch.setattr(agent.ssl, "create_default_context", lambda cafile: object())
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size):
+            return json.dumps(
+                {
+                    "kind": "MachineDeployment",
+                    "metadata": {"name": "edge-workers", "namespace": "default"},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, context, timeout):
+        assert request.method == "POST"
+        assert request.full_url.endswith(expected_query)
+        assert request.get_header("Authorization") == (
+            "Bearer test-service-account-token"
+        )
+        assert json.loads(request.data.decode("utf-8"))["kind"] == "MachineDeployment"
+        assert timeout == 30
+        return FakeResponse()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    result = agent.kubernetes_api_create_machine_deployment(
+        "v1beta1",
+        "default",
+        {
+            "apiVersion": "cluster.x-k8s.io/v1beta1",
+            "kind": "MachineDeployment",
+            "metadata": {"name": "edge-workers", "namespace": "default"},
+            "spec": {},
+        },
+        dry_run=dry_run,
+    )
+
+    assert result["kind"] == "MachineDeployment"
 
