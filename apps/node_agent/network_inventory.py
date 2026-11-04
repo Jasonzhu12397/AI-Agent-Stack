@@ -130,11 +130,14 @@ def publish_inventory(node_name):
     else:
         method = "POST"
         path = "/api/v1/namespaces/ai-agent-system/configmaps"
+    inventory_json = json.dumps(report, separators=(",", ":"))
+    if len(inventory_json.encode("utf-8")) > 900 * 1024:
+        raise NetworkInventoryError("INVENTORY_REPORT_TOO_LARGE")
     document = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": metadata,
-        "data": {"inventory.json": json.dumps(report, separators=(",", ":"))},
+        "data": {"inventory.json": inventory_json},
     }
     kubernetes_request(path, method, document)
     return {
