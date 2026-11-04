@@ -1737,3 +1737,130 @@ def test_control_plane_rejects_worker_preflight_without_healthy_provider_control
     assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
+@pytest.mark.django_db
+def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_workspace):
+    deployment, preflight_command, preflight_result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-provisioning-execution",
+    )
+    handle_deployment_command_result(
+        preflight_command,
+        "succeeded",
+        preflight_result,
+        None,
+    )
+    deployment.refresh_from_db()
+    provision_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    )
+    assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
+
+    user = cluster_delivery_workspace[0]
+    approver = get_user_model().objects.create_user(
+        username="worker-provisioning-approver",
+        password="test-password",
+    )
+    provision_command.status = AgentCommand.Status.SUCCEEDED
+    provision_command.approved_by = approver
+    provision_command.approved_at = timezone.now()
+    provision_command.approved_plan_hash = provision_command.plan_hash
+    provision_command.save(
+        update_fields=[
+            "status",
+            "approved_by",
+            "approved_at",
+            "approved_plan_hash",
+        ]
+    )
+    result = {
+        "deployment_id": str(deployment.id),
+        "cluster_name": deployment.cluster_name,
+        "namespace": "default",
+        "machine_deployment_name": "edge-workers",
+        "machine_deployment_uid": "machine-deployment-uid",
+        "cluster_uid": provision_command.payload["expected_cluster_uid"],
+        "provisioning_plan_hash": provision_command.payload[
+            "provisioning_plan_hash"
+        ],
+        "created": True,
+        "idempotent_reconciliation": False,
+        "dry_run_passed": True,
+        "side_effects": True,
+        "execution_allowed": True,
+        "worker_creation_performed": True,
+        "worker_readiness_verified": True,
+        "worker_machine_count": 4,
+        "ready_worker_machine_count": 4,
+        "not_ready_worker_machine_names": [],
+        "worker_node_names": [
+            "worker-01",
+            "worker-02",
+            "worker-03",
+            "worker-04",
+        ],
+    }
+
+    handle_deployment_command_result(provision_command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.POSTFLIGHT
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "worker_provisioned_waiting_postflight"
+    )
+    postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    )
+    assert postflight.node_id == deployment.target_node_id
+    assert postflight.payload["expected_worker_replicas"] == 4
+
+
+@pytest.mark.django_db
+def test_worker_provisioning_result_without_independent_approval_is_rejected(
+    cluster_delivery_workspace,
+):
+    deployment, preflight_command, preflight_result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-provisioning-no-approval",
+    )
+    handle_deployment_command_result(
+        preflight_command,
+        "succeeded",
+        preflight_result,
+        None,
+    )
+    provision_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    )
+    provision_command.status = AgentCommand.Status.SUCCEEDED
+    provision_command.save(update_fields=["status"])
+    result = {
+        "deployment_id": str(deployment.id),
+        "cluster_name": deployment.cluster_name,
+        "namespace": "default",
+        "machine_deployment_name": "edge-workers",
+        "machine_deployment_uid": "machine-deployment-uid",
+        "cluster_uid": provision_command.payload["expected_cluster_uid"],
+        "provisioning_plan_hash": provision_command.payload[
+            "provisioning_plan_hash"
+        ],
+        "created": True,
+        "dry_run_passed": True,
+        "side_effects": True,
+        "execution_allowed": True,
+        "worker_creation_performed": True,
+        "worker_readiness_verified": True,
+        "worker_machine_count": 4,
+        "ready_worker_machine_count": 4,
+        "not_ready_worker_machine_names": [],
+    }
+
+    handle_deployment_command_result(provision_command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
+
