@@ -3498,8 +3498,10 @@ def kubernetes_api_create_machine_deployment(
         with urllib.request.urlopen(request, context=context, timeout=30) as response:
             payload = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
         raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
     if len(payload) > 1024 * 1024:
         raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
