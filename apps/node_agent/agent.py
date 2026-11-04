@@ -1037,6 +1037,8 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         for pod in workload_pods:
             metadata = pod.get("metadata", {})
             annotations = metadata.get("annotations", {})
+            if not isinstance(annotations, dict):
+                annotations = {}
             raw_status = annotations.get("k8s.v1.cni.cncf.io/network-status", "[]")
             try:
                 status_items = json.loads(raw_status) if isinstance(raw_status, str) else []
