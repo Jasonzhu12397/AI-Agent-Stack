@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -87,6 +88,11 @@ def build_inventory_report(node_name, node_uid):
     }
 
 
+def configmap_name_for_node(node_name):
+    digest = hashlib.sha256(node_name.encode("utf-8")).hexdigest()[:20]
+    return "network-inventory-" + digest
+
+
 def publish_inventory(node_name):
     if (
         not isinstance(node_name, str)
@@ -102,7 +108,7 @@ def publish_inventory(node_name):
     if not isinstance(node_uid, str) or not node_uid:
         raise NetworkInventoryError("KUBERNETES_NODE_UID_MISSING")
     report = build_inventory_report(node_name, node_uid)
-    configmap_name = "network-inventory-" + node_name
+    configmap_name = configmap_name_for_node(node_name)
     encoded_configmap_name = urllib.parse.quote(configmap_name, safe="")
     configmap_path = (
         "/api/v1/namespaces/ai-agent-system/configmaps/"
