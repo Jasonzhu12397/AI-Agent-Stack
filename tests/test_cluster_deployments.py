@@ -1642,6 +1642,8 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
         },
         "baremetal_host_namespace": "metal3-system",
         "host_selector": {"pool": "workers"},
+        "template_host_selector": {"pool": "workers"},
+        "template_host_selector_verified": True,
         "available_baremetal_host_count": 4,
         "selected_baremetal_hosts": [
             {"name": f"bmh-{index}", "uid": f"bmh-uid-{index}", "ready": True}
