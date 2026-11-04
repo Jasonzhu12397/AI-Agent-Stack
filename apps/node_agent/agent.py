@@ -1071,7 +1071,9 @@ def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
             report = json.loads(raw_report) if isinstance(raw_report, str) else {}
         except json.JSONDecodeError:
             report = {}
-        hardware = report.get("hardware", {}) if isinstance(report, dict) else {}
+        if not isinstance(report, dict):
+            continue
+        hardware = report.get("hardware", {})
         if (
             report.get("schema_version") != "v1"
             or not isinstance(report.get("node_name"), str)
