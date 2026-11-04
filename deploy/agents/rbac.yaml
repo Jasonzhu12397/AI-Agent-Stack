@@ -123,10 +123,9 @@ rules:
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: target-cluster-agent-capi-provisioner
-  namespace: default
 rules:
   - apiGroups: ["cluster.x-k8s.io"]
     resources: ["clusters", "machines"]
@@ -144,7 +143,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: target-cluster-agent-capi-provisioner
+  name: target-cluster-agent-capi-provisioner-default
   namespace: default
 subjects:
   - kind: ServiceAccount
@@ -152,14 +151,27 @@ subjects:
     namespace: ai-agent-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: target-cluster-agent-capi-provisioner
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-capi-provisioner-metal3
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-capi-provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
   name: target-cluster-agent-metal3-host-inventory
-  namespace: metal3-system
 rules:
   - apiGroups: ["metal3.io"]
     resources: ["baremetalhosts"]
@@ -168,7 +180,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: target-cluster-agent-metal3-host-inventory
+  name: target-cluster-agent-metal3-host-inventory-metal3-system
   namespace: metal3-system
 subjects:
   - kind: ServiceAccount
@@ -176,7 +188,21 @@ subjects:
     namespace: ai-agent-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
+  name: target-cluster-agent-metal3-host-inventory
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-metal3-host-inventory-metal3
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
   name: target-cluster-agent-metal3-host-inventory
 ---
 apiVersion: rbac.authorization.k8s.io/v1
