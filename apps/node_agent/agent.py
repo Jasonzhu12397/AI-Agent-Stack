@@ -2151,7 +2151,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         nodes = kubernetes_api_get("/api/v1/nodes")
         items = nodes.get("items", [])
         not_ready = []
+        node_ready_by_name = {}
         for item in items:
+            metadata = item.get("metadata", {})
+            name = metadata.get("name")
             conditions = item.get("status", {}).get("conditions", [])
             ready = next(
                 (
@@ -2161,13 +2164,114 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 ),
                 {},
             )
-            if ready.get("status") != "True":
-                not_ready.append(item.get("metadata", {}).get("name"))
-        return {
+            is_ready = isinstance(name, str) and bool(name) and ready.get("status") == "True"
+            if isinstance(name, str) and name:
+                node_ready_by_name[name] = is_ready
+            if not is_ready:
+                not_ready.append(name)
+
+        result = {
             "node_count": len(items),
             "ready": len(items) > 0 and not not_ready,
             "not_ready_nodes": not_ready,
         }
+        expected_workers = payload.get("expected_worker_replicas")
+        if expected_workers is None:
+            return result
+        namespace = payload.get("namespace")
+        cluster_name = payload.get("cluster_name")
+        if (
+            not isinstance(expected_workers, int)
+            or isinstance(expected_workers, bool)
+            or expected_workers < 0
+            or expected_workers > 10000
+            or not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or not isinstance(cluster_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+        ):
+            raise NodeAgentError("INVALID_CAPI_WORKER_POSTFLIGHT_SPEC")
+        api_groups = kubernetes_api_get("/apis").get("groups", [])
+        capi_group = next(
+            (
+                group
+                for group in api_groups
+                if isinstance(group, dict) and group.get("name") == "cluster.x-k8s.io"
+            ),
+            {},
+        )
+        machine_version = capi_group.get("preferredVersion", {}).get("version")
+        if not isinstance(machine_version, str) or not re.fullmatch(
+            r"v[0-9]+(alpha[0-9]+|beta[0-9]+)?", machine_version
+        ):
+            raise NodeAgentError("CAPI_MACHINE_API_UNAVAILABLE")
+        machine_path = (
+            f"/apis/cluster.x-k8s.io/{machine_version}/namespaces/"
+            f"{namespace}/machines"
+        )
+        machines = list_all_kubernetes_items(machine_path)
+        worker_machines = []
+        machine_names = set()
+        for machine in machines:
+            metadata = machine.get("metadata", {})
+            spec = machine.get("spec", {})
+            labels = metadata.get("labels", {})
+            if spec.get("clusterName") != cluster_name:
+                continue
+            if "cluster.x-k8s.io/control-plane" in labels:
+                continue
+            machine_name = metadata.get("name")
+            if not isinstance(machine_name, str) or not machine_name:
+                raise NodeAgentError("CAPI_WORKER_MACHINE_IDENTITY_INVALID")
+            if machine_name in machine_names:
+                raise NodeAgentError("CAPI_WORKER_MACHINE_IDENTITY_DUPLICATE")
+            machine_names.add(machine_name)
+            worker_machines.append(machine)
+
+        not_ready_workers = []
+        ready_worker_node_names = []
+        for machine in worker_machines:
+            metadata = machine.get("metadata", {})
+            machine_name = metadata["name"]
+            conditions = machine.get("status", {}).get("conditions", [])
+            machine_ready = next(
+                (
+                    condition
+                    for condition in conditions
+                    if condition.get("type") == "Ready"
+                ),
+                {},
+            )
+            node_ref = machine.get("status", {}).get("nodeRef", {})
+            node_name = node_ref.get("name") if isinstance(node_ref, dict) else None
+            if (
+                machine_ready.get("status") != "True"
+                or not isinstance(node_name, str)
+                or not node_name
+                or node_ready_by_name.get(node_name) is not True
+            ):
+                not_ready_workers.append(machine_name)
+            else:
+                ready_worker_node_names.append(node_name)
+
+        inventory_complete = (
+            len(worker_machines) == expected_workers
+            and len(ready_worker_node_names) == expected_workers
+            and len(not_ready_workers) == 0
+            and len(set(ready_worker_node_names)) == expected_workers
+        )
+        result.update(
+            {
+                "expected_worker_replicas": expected_workers,
+                "worker_machine_count": len(worker_machines),
+                "ready_worker_machine_count": len(ready_worker_node_names),
+                "not_ready_worker_machine_names": not_ready_workers,
+                "worker_node_names": ready_worker_node_names,
+                "capi_worker_inventory_complete": inventory_complete,
+                "side_effects": False,
+            }
+        )
+        return result
     if command_type == "cluster.diagnose":
         namespace = payload.get("namespace", "default")
         if not isinstance(namespace, str) or not namespace or "/" in namespace:
