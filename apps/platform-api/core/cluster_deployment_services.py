@@ -754,6 +754,10 @@ def handle_deployment_command_result(
             and result.get("execution_allowed") is False
             and result.get("worker_creation_performed") is False
             and result.get("side_effects") is False
+            and result.get("baremetal_host_namespace")
+            == config.get("baremetal_host_namespace")
+            and result.get("host_selector") == config.get("host_selector")
+            and result.get("blockers") == []
             and isinstance(result.get("available_baremetal_host_count"), int)
             and not isinstance(result.get("available_baremetal_host_count"), bool)
             and result.get("available_baremetal_host_count") >= expected_workers
@@ -769,18 +773,29 @@ def handle_deployment_command_result(
                 for host in hosts[:expected_workers]
             )
             and len({host.get("name") for host in hosts if isinstance(host, dict)}) == len(hosts)
+            and len({host.get("uid") for host in hosts if isinstance(host, dict)}) == len(hosts)
             and isinstance(infrastructure, dict)
             and infrastructure.get("name") == config.get("infrastructure_template_name")
             and isinstance(infrastructure.get("uid"), str)
             and infrastructure.get("uid")
+            and isinstance(infrastructure.get("api_version"), str)
+            and infrastructure.get("api_version")
             and isinstance(bootstrap, dict)
             and bootstrap.get("name") == config.get("bootstrap_template_name")
             and isinstance(bootstrap.get("uid"), str)
             and bootstrap.get("uid")
+            and isinstance(bootstrap.get("api_version"), str)
+            and bootstrap.get("api_version")
             and isinstance(network, dict)
             and network.get("valid") is True
             and network.get("profile_hash") == _spec_hash(config.get("network_profile", {}))
             and isinstance(versions, dict)
+            and set(versions) == {
+                "cluster.x-k8s.io",
+                "bootstrap.cluster.x-k8s.io",
+                "infrastructure.cluster.x-k8s.io",
+                "metal3.io",
+            }
             and all(isinstance(value, str) and value for value in versions.values())
         )
         if not valid_result:
