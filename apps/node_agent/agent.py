@@ -1907,21 +1907,33 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             f"/namespaces/{namespace}/machines"
         )
         machine_items = machines.get("items", [])
+        if not isinstance(machine_items, list):
+            raise NodeAgentError("INVALID_TARGET_MACHINE_INVENTORY")
+        cluster_machines = [
+            item
+            for item in machine_items
+            if isinstance(item, dict)
+            and item.get("spec", {}).get("clusterName") == cluster_name
+        ]
         machine_names = [
             item.get("metadata", {}).get("name")
-            for item in machine_items
-            if isinstance(item, dict)
+            for item in cluster_machines
+            if isinstance(item.get("metadata", {}).get("name"), str)
+            and item.get("metadata", {}).get("name")
         ]
+        if len(machine_names) != len(cluster_machines) or len(set(machine_names)) != len(machine_names):
+            raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
         ready_machines = [
             item.get("metadata", {}).get("name")
-            for item in machine_items
-            if isinstance(item, dict)
-            and any(
-                condition.get("type") == "Ready"
+            for item in cluster_machines
+            if any(
+                isinstance(condition, dict)
+                and condition.get("type") == "Ready"
                 and condition.get("status") == "True"
                 for condition in item.get("status", {}).get("conditions", [])
             )
         ]
+        not_ready_machines = sorted(set(machine_names) - set(ready_machines))
         expected_controllers = {
             "capi-system": "capi-controller-manager",
             "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
@@ -1957,7 +1969,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 }
             )
         controllers_ready = all(item["ready"] for item in controller_states)
-        machine_inventory_ready = bool(machine_names) and bool(ready_machines)
+        machine_inventory_ready = bool(machine_names) and len(ready_machines) == len(machine_names)
         adoption_verified = controllers_ready and machine_inventory_ready
         return {
             "cluster_name": cluster_name,
@@ -1969,6 +1981,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "machine_names": machine_names[:200],
             "ready_machine_count": len(ready_machines),
             "ready_machine_names": ready_machines[:200],
+            "not_ready_machine_names": not_ready_machines[:200],
             "machine_inventory_ready": machine_inventory_ready,
             "controllers": controller_states,
             "controllers_ready": controllers_ready,
