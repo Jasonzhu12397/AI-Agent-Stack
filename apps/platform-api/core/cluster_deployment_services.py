@@ -599,6 +599,14 @@ def handle_deployment_command_result(
             and result.get("cluster_uid") == expected_uid
             and result.get("source_cluster_uid") == expected_uid
             and result.get("pivot_adoption_verified") is True
+            and result.get("machine_inventory_ready") is True
+            and result.get("controllers_ready") is True
+            and isinstance(result.get("machine_count"), int)
+            and not isinstance(result.get("machine_count"), bool)
+            and result.get("machine_count") > 0
+            and isinstance(result.get("ready_machine_count"), int)
+            and not isinstance(result.get("ready_machine_count"), bool)
+            and result.get("ready_machine_count") > 0
             and result.get("side_effects") is False
         )
         if not valid_verification:
