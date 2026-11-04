@@ -213,6 +213,163 @@ def run_capi_pivot_dry_run(
 
 
 
+def _kubectl_json(runner, kubectl, kubeconfig, args, process_env, error_code):
+    command = [kubectl, "--kubeconfig", str(kubeconfig), *args]
+    try:
+        completed = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CapiPivotError(error_code) from exc
+    if completed.returncode != 0:
+        raise CapiPivotError(error_code)
+    try:
+        document = json.loads(completed.stdout or "")
+    except (TypeError, ValueError) as exc:
+        raise CapiPivotError(error_code) from exc
+    if not isinstance(document, dict):
+        raise CapiPivotError(error_code)
+    return document
+
+
+def _verify_target_management_plane(
+    runner,
+    kubectl,
+    kubeconfig,
+    namespace,
+    cluster_name,
+    process_env,
+):
+    discovery = _kubectl_json(
+        runner,
+        kubectl,
+        kubeconfig,
+        ["get", "--raw", "/apis"],
+        process_env,
+        "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED",
+    )
+    groups = {
+        item.get("name"): item
+        for item in discovery.get("groups", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    required_resources = {
+        "cluster.x-k8s.io": {
+            "clusters", "machines", "machinesets", "machinedeployments"
+        },
+        "bootstrap.cluster.x-k8s.io": {
+            "kubeadmconfigs", "kubeadmconfigtemplates"
+        },
+        "controlplane.cluster.x-k8s.io": {"kubeadmcontrolplanes"},
+        "infrastructure.cluster.x-k8s.io": {
+            "metal3clusters", "metal3machines", "metal3machinetemplates"
+        },
+        "metal3.io": {"baremetalhosts"},
+    }
+    versions = {}
+    for group_name, expected in required_resources.items():
+        group = groups.get(group_name)
+        version = (
+            group.get("preferredVersion", {}).get("version")
+            if isinstance(group, dict)
+            else None
+        )
+        if not isinstance(version, str) or not version:
+            raise CapiPivotError("CAPI_PIVOT_TARGET_APIS_NOT_READY")
+        version_data = _kubectl_json(
+            runner,
+            kubectl,
+            kubeconfig,
+            ["get", "--raw", f"/apis/{group_name}/{version}"],
+            process_env,
+            "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED",
+        )
+        available = {
+            item.get("name")
+            for item in version_data.get("resources", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        if not expected.issubset(available):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_APIS_NOT_READY")
+        versions[group_name] = version
+
+    controllers = {
+        "capi-system": "capi-controller-manager",
+        "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+        "capi-kubeadm-control-plane-system": "capi-kubeadm-control-plane-controller-manager",
+        "capm3-system": "capm3-controller-manager",
+    }
+    for controller_namespace, deployment_name in controllers.items():
+        deployment = _kubectl_json(
+            runner,
+            kubectl,
+            kubeconfig,
+            [
+                "get",
+                "deployment",
+                deployment_name,
+                "--namespace",
+                controller_namespace,
+                "-o",
+                "json",
+            ],
+            process_env,
+            "CAPI_PIVOT_TARGET_CONTROLLERS_NOT_READY",
+        )
+        desired = deployment.get("spec", {}).get("replicas", 1)
+        available = deployment.get("status", {}).get("availableReplicas", 0)
+        observed = deployment.get("status", {}).get("observedGeneration", 0)
+        generation = deployment.get("metadata", {}).get("generation", 1)
+        if (
+            not isinstance(desired, int)
+            or isinstance(desired, bool)
+            or desired < 1
+            or not isinstance(available, int)
+            or isinstance(available, bool)
+            or available < desired
+            or not isinstance(observed, int)
+            or not isinstance(generation, int)
+            or observed < generation
+        ):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_CONTROLLERS_NOT_READY")
+
+    cluster_list = _kubectl_json(
+        runner,
+        kubectl,
+        kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "clusters.cluster.x-k8s.io",
+            "-o",
+            "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_TARGET_CLUSTER_CHECK_FAILED",
+    )
+    items = cluster_list.get("items")
+    if not isinstance(items, list):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_CHECK_FAILED")
+    if any(
+        isinstance(item, dict)
+        and item.get("metadata", {}).get("name") == cluster_name
+        for item in items
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_NAME_CONFLICT")
+    return {
+        "provider_versions": versions,
+        "controllers_ready": True,
+        "target_cluster_name_available": True,
+    }
+
+
 def run_capi_pivot(
     payload: dict[str, Any],
     environ: dict[str, str] | None = None,
@@ -238,11 +395,26 @@ def run_capi_pivot(
         secret_root,
     )
     clusterctl = lookup("clusterctl")
+    kubectl = lookup("kubectl")
     if not clusterctl:
         raise CapiPivotError("CLUSTERCTL_NOT_INSTALLED")
+    if not kubectl:
+        raise CapiPivotError("KUBECTL_NOT_INSTALLED")
 
     cluster_name = dry_run["cluster_name"]
     namespace = dry_run["namespace"]
+    target_process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+    }
+    target_preflight = _verify_target_management_plane(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        namespace,
+        cluster_name,
+        target_process_env,
+    )
     command = [
         clusterctl,
         "move",
@@ -285,6 +457,10 @@ def run_capi_pivot(
         "execution_mode": "clusterctl_move",
         "dry_run_passed": True,
         "source_namespace_scope_verified": True,
+        "target_management_plane_verified": True,
+        "target_provider_versions": target_preflight["provider_versions"],
+        "target_controllers_ready": target_preflight["controllers_ready"],
+        "target_cluster_name_available": target_preflight["target_cluster_name_available"],
         "side_effects": True,
         "automatic_retry_allowed": False,
         "exit_code": completed.returncode,
