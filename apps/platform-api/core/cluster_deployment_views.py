@@ -332,7 +332,19 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 )
             deployment.target_node = target_node
             deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
-            deployment.save(update_fields=["target_node", "status", "updated_at"])
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "dual_agent": {
+                    "phase": "source_preflight_pending",
+                    "source_agent_id": str(deployment.eph_node_id),
+                    "target_agent_id": str(target_node.id),
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(
+                update_fields=["target_node", "status", "plan_result", "updated_at"],
+            )
             source_preflight_command = queue_deployment_command(
                 deployment,
                 "cluster.capi.pivot.source.preflight",
