@@ -974,7 +974,9 @@ def inspect_host_network_hardware() -> dict[str, Any]:
             network_interfaces = sorted(item.name for item in net_directory.iterdir())
         except OSError:
             network_interfaces = []
-        if not network_interfaces and not (device / "physfn").exists():
+        virtual_function_links = list(device.glob("virtfn*"))
+        is_virtual_function = (device / "physfn").exists()
+        if not network_interfaces and not is_virtual_function and not virtual_function_links:
             continue
         driver = None
         try:
@@ -992,10 +994,8 @@ def inspect_host_network_hardware() -> dict[str, Any]:
             "numa_node": _read_sysfs_text(device / "numa_node"),
             "network_interfaces": network_interfaces[:32],
             "iommu_group_present": (device / "iommu_group").exists(),
-            "is_virtual_function": (device / "physfn").exists(),
-            "virtual_function_count": sum(
-                1 for item in device.glob("virtfn*")
-            ),
+            "is_virtual_function": is_virtual_function,
+            "virtual_function_count": len(virtual_function_links),
         })
     hugepages = []
     hugepage_root = root / "kernel" / "mm" / "hugepages"
