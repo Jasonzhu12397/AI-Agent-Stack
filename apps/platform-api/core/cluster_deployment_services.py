@@ -721,8 +721,8 @@ def handle_deployment_command_result(
             and not not_ready_worker_names
             and isinstance(worker_node_names, list)
             and len(worker_node_names) == expected_worker_replicas
-            and len(set(worker_node_names)) == expected_worker_replicas
             and all(isinstance(name, str) and name for name in worker_node_names)
+            and len(set(worker_node_names)) == expected_worker_replicas
             and result.get("capi_worker_inventory_complete") is True
         )
         if valid_result:
