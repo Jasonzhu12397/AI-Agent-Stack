@@ -2,9 +2,9 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from node_agent.capi_pivot import CapiPivotError, run_capi_pivot_dry_run
+
+import pytest
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
