@@ -1921,7 +1921,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if isinstance(item.get("metadata", {}).get("name"), str)
             and item.get("metadata", {}).get("name")
         ]
-        if len(machine_names) != len(cluster_machines) or len(set(machine_names)) != len(machine_names):
+        if (
+            len(machine_names) != len(cluster_machines)
+            or len(set(machine_names)) != len(machine_names)
+        ):
             raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
         ready_machines = [
             item.get("metadata", {}).get("name")
