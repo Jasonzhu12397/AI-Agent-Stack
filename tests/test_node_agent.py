@@ -2109,6 +2109,74 @@ def test_network_inspection_validates_pod_data_plane_default_network(
     assert validation["passed"] is expected_pass
 
 
+
+@pytest.mark.parametrize(
+    ("routes", "expected_pass"),
+    [
+        ([{"interface": "net1", "gateway": "192.0.2.1"}], True),
+        ([{"interface": "eth0", "gateway": "10.244.0.1"}], False),
+        ([{"interface": "net1", "gateway": "192.0.2.254"}], False),
+        ([], False),
+    ],
+)
+def test_network_inspection_validates_agent_pod_default_route(
+    monkeypatch,
+    routes,
+    expected_pass,
+):
+    def fake_get(path):
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {"groups": []}
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        if path in {
+            "/api/v1/nodes",
+            "/api/v1/namespaces/kube-system/pods",
+        }:
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(
+        agent,
+        "_pod_network_namespace_snapshot",
+        lambda: {
+            "scope": "agent_pod_network_namespace",
+            "interfaces": ["eth0", "net1"],
+            "default_routes": routes,
+        },
+    )
+
+    result = agent.inspect_network_environment(
+        {
+            "expected_agent_default_interface": "net1",
+            "expected_agent_default_gateway": "192.0.2.1",
+        }
+    )
+
+    validation = result["agent_pod_default_route_validation"]
+    assert validation["requested"] is True
+    assert validation["scope"] == "agent_pod_network_namespace"
+    assert validation["passed"] is expected_pass
+
+
+def test_network_inspection_rejects_invalid_expected_agent_default_route():
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="INVALID_EXPECTED_AGENT_DEFAULT_GATEWAY",
+    ):
+        agent.inspect_network_environment(
+            {
+                "expected_agent_default_interface": "net1",
+                "expected_agent_default_gateway": 123,
+            }
+        )
+
+
 def test_network_inspection_requires_namespace_scope_for_default_network_check():
     with pytest.raises(
         agent.NodeAgentError,
