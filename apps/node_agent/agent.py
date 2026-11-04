@@ -2262,6 +2262,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         result.update(
             {
+                "cluster_name": cluster_name,
+                "namespace": namespace,
                 "expected_worker_replicas": expected_workers,
                 "worker_machine_count": len(worker_machines),
                 "ready_worker_machine_count": len(ready_worker_node_names),
