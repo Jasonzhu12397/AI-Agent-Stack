@@ -2178,15 +2178,6 @@ def test_network_inspection_rejects_invalid_expected_agent_default_route():
 
 
 
-@pytest.mark.parametrize(
-    ("routes", "expected_pass"),
-    [
-        ([{"interface": "net1", "gateway": "192.0.2.1"}], True),
-        ([{"interface": "eth0", "gateway": "10.244.0.1"}], False),
-        ([{"interface": "net1", "gateway": "192.0.2.254"}], False),
-        ([], False),
-    ],
-)
 def test_network_inspection_requires_namespace_scope_for_default_network_check():
     with pytest.raises(
         agent.NodeAgentError,
