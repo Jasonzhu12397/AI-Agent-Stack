@@ -448,6 +448,11 @@ class AgentNodeCommandListCreateView(APIView):
         allowed = EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
         if not isinstance(command_type, str) or command_type not in allowed:
             return Response({"detail": "Command is not allowed for this agent type."}, status=400)
+        if command_type == "cluster.capi.worker.provision":
+            return Response(
+                {"detail": "Worker provisioning commands can only be queued by the deployment workflow."},
+                status=403,
+            )
         payload = request.data.get("payload", {})
         payload_error = _validate_payload(payload)
         if payload_error:
