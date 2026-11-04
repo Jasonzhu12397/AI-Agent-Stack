@@ -611,6 +611,31 @@ def test_capi_pivot_execution_requires_separate_admin_approval(node_workspace):
     assert created.status_code == 202
     assert created.data["status"] == AgentCommand.Status.WAITING_APPROVAL
 
+    self_approval = client.post(
+        f"/api/v1/agent-commands/{created.data['id']}/approve/",
+        {"plan_hash": created.data["plan_hash"]},
+        format="json",
+    )
+    approver = get_user_model().objects.create_user(
+        username="pivot-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{created.data['id']}/approve/",
+        {"plan_hash": created.data["plan_hash"]},
+        format="json",
+    )
+    assert self_approval.status_code == 403
+    assert approved.status_code == 200
+    assert approved.data["status"] == AgentCommand.Status.QUEUED
+
     polled = APIClient().post(
         "/api/v1/agent-runtime/commands/poll/",
         {"node_id": node_id},
@@ -619,7 +644,9 @@ def test_capi_pivot_execution_requires_separate_admin_approval(node_workspace):
     )
 
     assert polled.status_code == 200
-    assert polled.data["command"] is None
+    assert polled.data["command"]["id"] == created.data["id"]
+    assert polled.data["command"]["command_type"] == "cluster.capi.pivot.execute"
+    assert polled.data["command"]["lease_token"]
     assert AgentCommand.objects.get(pk=created.data["id"]).status == (
-        AgentCommand.Status.WAITING_APPROVAL
+        AgentCommand.Status.RUNNING
     )
