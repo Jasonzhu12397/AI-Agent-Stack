@@ -2783,7 +2783,10 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
     groups = {
         "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
-        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machinetemplates"]),
+        "infrastructure.cluster.x-k8s.io": (
+            "v1beta1",
+            ["metal3machines", "metal3machinetemplates"],
+        ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
 
