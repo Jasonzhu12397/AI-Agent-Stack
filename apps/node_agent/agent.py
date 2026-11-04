@@ -2217,7 +2217,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if isinstance(item, dict) and isinstance(item.get("name"), str)
         }
         required = {
-            "cluster.x-k8s.io": {"machinedeployments"},
+            "cluster.x-k8s.io": {"machines", "machinedeployments"},
             "bootstrap.cluster.x-k8s.io": {"kubeadmconfigtemplates"},
             "infrastructure.cluster.x-k8s.io": {"metal3machines", "metal3machinetemplates"},
             "metal3.io": {"baremetalhosts"},
@@ -2478,6 +2478,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         kubernetes_version = payload.get("kubernetes_version")
         config = payload.get("worker_provisioning")
         expected_cluster_uid = payload.get("expected_cluster_uid")
+        expected_cluster_api_version = payload.get("expected_cluster_api_version")
         expected_infra_uid = payload.get("expected_infrastructure_template_uid")
         expected_bootstrap_uid = payload.get("expected_bootstrap_template_uid")
         expected_infra_api_version = payload.get("infrastructure_api_version")
@@ -2498,6 +2499,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             or not isinstance(config, dict)
             or not isinstance(expected_cluster_uid, str)
             or not expected_cluster_uid
+            or not isinstance(expected_cluster_api_version, str)
+            or not expected_cluster_api_version
             or not isinstance(expected_infra_uid, str)
             or not expected_infra_uid
             or not isinstance(expected_bootstrap_uid, str)
@@ -2549,7 +2552,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             versions[group_name] = version
         if (
             "cluster.x-k8s.io/" + versions["cluster.x-k8s.io"]
-            != "cluster.x-k8s.io/" + versions["cluster.x-k8s.io"]
+            != expected_cluster_api_version
             or "infrastructure.cluster.x-k8s.io/" + versions["infrastructure.cluster.x-k8s.io"]
             != expected_infra_api_version
             or "bootstrap.cluster.x-k8s.io/" + versions["bootstrap.cluster.x-k8s.io"]
@@ -2704,6 +2707,84 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         machine_deployment_uid = machine_deployment.get("metadata", {}).get("uid")
         if not isinstance(machine_deployment_uid, str) or not machine_deployment_uid:
             raise NodeAgentError("MACHINE_DEPLOYMENT_UID_MISSING")
+        machine_version = versions["cluster.x-k8s.io"]
+        worker_machine_names = []
+        ready_worker_machine_names = []
+        not_ready_worker_machine_names = []
+        for _attempt in range(120):
+            machines = list_all_kubernetes_items(
+                f"/apis/cluster.x-k8s.io/{machine_version}/namespaces/"
+                f"{namespace}/machines",
+                max_items=10000,
+            )
+            nodes_document = kubernetes_api_get("/api/v1/nodes")
+            node_ready = {}
+            for node_item in nodes_document.get("items", []):
+                node_name = node_item.get("metadata", {}).get("name")
+                conditions = node_item.get("status", {}).get("conditions", [])
+                ready_condition = next(
+                    (
+                        item for item in conditions
+                        if item.get("type") == "Ready"
+                    ),
+                    {},
+                )
+                if isinstance(node_name, str) and node_name:
+                    node_ready[node_name] = ready_condition.get("status") == "True"
+            selected_machines = []
+            for machine in machines:
+                spec = machine.get("spec", {})
+                labels = machine.get("metadata", {}).get("labels", {})
+                if (
+                    spec.get("clusterName") == cluster_name
+                    and not (
+                        isinstance(labels, dict)
+                        and "cluster.x-k8s.io/control-plane" in labels
+                    )
+                ):
+                    selected_machines.append(machine)
+            worker_machine_names = [
+                item.get("metadata", {}).get("name")
+                for item in selected_machines
+            ]
+            if len(worker_machine_names) > expected_replicas:
+                raise NodeAgentError("UNEXPECTED_WORKER_MACHINE_COUNT")
+            if (
+                any(not isinstance(name, str) or not name for name in worker_machine_names)
+                or len(set(worker_machine_names)) != len(worker_machine_names)
+            ):
+                raise NodeAgentError("WORKER_MACHINE_IDENTITY_INVALID")
+            ready_worker_machine_names = []
+            not_ready_worker_machine_names = []
+            for machine in selected_machines:
+                metadata = machine.get("metadata", {})
+                conditions = machine.get("status", {}).get("conditions", [])
+                ready_condition = next(
+                    (
+                        item for item in conditions
+                        if item.get("type") == "Ready"
+                    ),
+                    {},
+                )
+                node_name = machine.get("status", {}).get("nodeRef", {}).get("name")
+                is_ready = (
+                    ready_condition.get("status") == "True"
+                    and isinstance(node_name, str)
+                    and node_ready.get(node_name) is True
+                )
+                if is_ready:
+                    ready_worker_machine_names.append(metadata.get("name"))
+                else:
+                    not_ready_worker_machine_names.append(metadata.get("name"))
+            if (
+                len(selected_machines) == expected_replicas
+                and len(ready_worker_machine_names) == expected_replicas
+            ):
+                break
+            if _attempt < 119:
+                time.sleep(15)
+        else:
+            raise NodeAgentError("WORKER_POOL_READINESS_TIMEOUT")
         return {
             "deployment_id": deployment_id,
             "cluster_name": cluster_name,
@@ -2721,6 +2802,14 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "network_profile_hash": hashlib.sha256(
                 json.dumps(network_profile, sort_keys=True).encode("utf-8")
             ).hexdigest(),
+            "worker_readiness_verified": True,
+            "worker_machine_count": len(worker_machine_names),
+            "ready_worker_machine_count": len(ready_worker_machine_names),
+            "not_ready_worker_machine_names": not_ready_worker_machine_names,
+            "worker_node_names": [
+                machine.get("status", {}).get("nodeRef", {}).get("name")
+                for machine in selected_machines
+            ],
         }
     if command_type == "cluster.postflight":
         nodes = kubernetes_api_get("/api/v1/nodes")
