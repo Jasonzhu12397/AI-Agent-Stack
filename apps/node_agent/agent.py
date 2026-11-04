@@ -2412,6 +2412,17 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             blockers.append("insufficient_available_baremetal_hosts")
         infrastructure_metadata = infrastructure_template.get("metadata", {})
         bootstrap_metadata = bootstrap_template.get("metadata", {})
+        template_annotations = infrastructure_metadata.get("annotations", {})
+        network_template_profile_hash = (
+            template_annotations.get("ai-agent-stack.io/network-profile-hash")
+            if isinstance(template_annotations, dict)
+            else None
+        )
+        network_template_profile_verified = (
+            network_template_profile_hash == network_profile.get("profile_hash")
+        )
+        if not network_template_profile_verified:
+            blockers.append("metal3_template_network_profile_hash_mismatch")
         if (
             not isinstance(infrastructure_metadata.get("uid"), str)
             or not infrastructure_metadata.get("uid")
@@ -2462,6 +2473,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "selected_baremetal_hosts": selected_hosts[:100],
             "unavailable_matching_hosts": unavailable_hosts[:100],
             "network_profile": network_profile,
+            "network_template_profile_hash": network_template_profile_hash,
+            "network_template_profile_verified": network_template_profile_verified,
             "provider_versions": versions,
             "controllers": controller_states,
             "controllers_ready": all(item["ready"] for item in controller_states),
@@ -2578,13 +2591,17 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         infra_template = kubernetes_api_get(infra_path)
         bootstrap_template = kubernetes_api_get(bootstrap_path)
+        network_template_hash = infra_template.get("metadata", {}).get(
+            "annotations", {}
+        ).get("ai-agent-stack.io/network-profile-hash")
         if (
             infra_template.get("metadata", {}).get("uid") != expected_infra_uid
             or infra_template.get("apiVersion") != expected_infra_api_version
             or bootstrap_template.get("metadata", {}).get("uid") != expected_bootstrap_uid
             or bootstrap_template.get("apiVersion") != expected_bootstrap_api_version
+            or network_template_hash != network_profile.get("profile_hash")
         ):
-            raise NodeAgentError("WORKER_PROVISIONING_TEMPLATE_IDENTITY_CHANGED")
+            raise NodeAgentError("WORKER_PROVISIONING_TEMPLATE_IDENTITY_OR_NETWORK_CHANGED")
         bmh_version = versions["metal3.io"]
         bmh_items = list_all_kubernetes_items(
             f"/apis/metal3.io/{bmh_version}/namespaces/{host_namespace}/baremetalhosts",
