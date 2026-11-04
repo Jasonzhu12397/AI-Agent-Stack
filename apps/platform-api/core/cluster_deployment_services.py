@@ -60,6 +60,62 @@ def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> 
     deployment.save(update_fields=["plan_result", "updated_at"])
 
 
+
+
+def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
+    plan_result = deployment.plan_result or {}
+    source = plan_result.get("capi_pivot_source_preflight", {})
+    target = plan_result.get("capi_pivot_preflight", {})
+    compatibility = plan_result.get("capi_pivot_provider_compatibility", {})
+    if (
+        not isinstance(source, dict)
+        or source.get("preflight_validated") is not True
+        or not isinstance(target, dict)
+        or target.get("preflight_validated") is not True
+        or not isinstance(compatibility, dict)
+        or compatibility.get("compatible") is not True
+        or deployment.target_node_id is None
+    ):
+        return
+    existing = AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+    ).first()
+    if existing is not None:
+        return
+    payload = {
+        "deployment_id": str(deployment.id),
+        "cluster_name": deployment.cluster_name,
+        "namespace": deployment.spec.get("capi_namespace", "default"),
+    }
+    command, _ = AgentCommand.objects.get_or_create(
+        tenant=deployment.tenant,
+        idempotency_key=f"cluster-deployment:{deployment.id}:cluster.capi.pivot.execute",
+        defaults={
+            "project": deployment.project,
+            "node": deployment.eph_node,
+            "requested_by": deployment.requested_by,
+            "deployment": deployment,
+            "command_type": "cluster.capi.pivot.execute",
+            "payload": payload,
+            "status": AgentCommand.Status.WAITING_APPROVAL,
+            "plan_hash": _payload_hash("cluster.capi.pivot.execute", payload),
+        },
+    )
+    deployment.plan_result = {
+        **plan_result,
+        "dual_agent": {
+            "phase": "pivot_waiting_approval",
+            "source_agent_id": str(deployment.eph_node_id),
+            "target_agent_id": str(deployment.target_node_id),
+            "pivot_command_id": str(command.id),
+            "approval_required": True,
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["plan_result", "updated_at"])
+
 def queue_deployment_command(
     deployment: ClusterDeployment,
     command_type: str,
@@ -73,6 +129,15 @@ def queue_deployment_command(
         payload["namespace"] = deployment.spec.get("capi_namespace", "default")
     elif command_type == "cluster.capi.pivot.source.preflight":
         payload["cluster_name"] = deployment.cluster_name
+    elif command_type == "cluster.capi.pivot.execute":
+        payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+    elif command_type == "cluster.capi.pivot.target.verify":
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        identity = source.get("source_cluster_identity", {})
+        payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+        payload["expected_cluster_uid"] = identity.get("uid")
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
@@ -86,7 +151,11 @@ def queue_deployment_command(
             "deployment": deployment,
             "command_type": command_type,
             "payload": payload,
-            "status": AgentCommand.Status.QUEUED,
+            "status": (
+                AgentCommand.Status.WAITING_APPROVAL
+                if command_type == "cluster.capi.pivot.execute"
+                else AgentCommand.Status.QUEUED
+            ),
             "plan_hash": _payload_hash(command_type, payload),
         },
     )
@@ -368,6 +437,7 @@ def handle_deployment_command_result(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
         _update_capi_pivot_provider_compatibility(deployment)
+        _maybe_queue_capi_pivot(deployment)
     elif command.command_type == "cluster.capi.pivot.target.preflight":
         controllers = result.get("controllers")
         missing_resources = result.get("missing_resources")
@@ -474,6 +544,84 @@ def handle_deployment_command_result(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
         _update_capi_pivot_provider_compatibility(deployment)
+        _maybe_queue_capi_pivot(deployment)
+    elif command.command_type == "cluster.capi.pivot.execute":
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        source_identity = source.get("source_cluster_identity", {})
+        valid_pivot = (
+            command.node.node_type == "eph_node"
+            and command.node_id == deployment.eph_node_id
+            and result.get("pivot_executed") is True
+            and result.get("dry_run_passed") is True
+            and result.get("source_namespace_scope_verified") is True
+            and result.get("target_management_plane_verified") is True
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == deployment.spec.get("capi_namespace", "default")
+            and isinstance(source_identity.get("uid"), str)
+            and bool(source_identity.get("uid"))
+            and result.get("automatic_retry_allowed") is False
+        )
+        if not valid_pivot:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "INVALID_CAPI_PIVOT_EXECUTION_RESULT"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=["status", "error", "finished_at", "started_at", "updated_at"],
+            )
+            return
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "capi_pivot_execution": result,
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "phase": "target_agent_verification_pending",
+                "pivot_completed": True,
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
+        queue_deployment_command(
+            deployment,
+            "cluster.capi.pivot.target.verify",
+            node=deployment.target_node,
+        )
+    elif command.command_type == "cluster.capi.pivot.target.verify":
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        source_identity = source.get("source_cluster_identity", {})
+        expected_uid = source_identity.get("uid")
+        valid_verification = (
+            command.node.node_type == "target_cluster"
+            and command.node_id == deployment.target_node_id
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == deployment.spec.get("capi_namespace", "default")
+            and result.get("cluster_identity_preserved") is True
+            and result.get("cluster_uid") == expected_uid
+            and result.get("source_cluster_uid") == expected_uid
+            and result.get("pivot_adoption_verified") is True
+            and result.get("side_effects") is False
+        )
+        if not valid_verification:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"}
+            deployment.finished_at = timezone.now()
+            deployment.save(
+                update_fields=["status", "error", "finished_at", "started_at", "updated_at"],
+            )
+            return
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "capi_pivot_target_verification": result,
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "phase": "target_agent_adopted",
+                "pivot_completed": True,
+                "target_agent_owns_cluster": True,
+                "target_agent_cluster_uid": expected_uid,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
