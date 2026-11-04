@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: network-inventory-agent
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: network-inventory-agent
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: network-inventory-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: network-inventory-agent
+    spec:
+      serviceAccountName: network-inventory-agent
+      automountServiceAccountToken: true
+      tolerations:
+        - operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: inventory
+          image: REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - apps.node_agent.network_inventory
+            - --poll-seconds
+            - "60"
+          env:
+            - name: APP_ENV
+              value: production
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: AGENT_HOST_SYSFS_PATH
+              value: /host/sys
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: host-sysfs
+              mountPath: /host/sys
+              readOnly: true
+      volumes:
+        - name: host-sysfs
+          hostPath:
+            path: /sys
+            type: Directory
