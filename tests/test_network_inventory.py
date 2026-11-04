@@ -1,5 +1,4 @@
 import pytest
-
 from node_agent import network_inventory
 
 
