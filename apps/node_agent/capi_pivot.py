@@ -210,3 +210,84 @@ def run_capi_pivot_dry_run(
         "stdout_summary": stdout,
         "stderr_summary": stderr,
     }
+
+
+
+def run_capi_pivot(
+    payload: dict[str, Any],
+    environ: dict[str, str] | None = None,
+    executable_lookup=None,
+    process_runner=None,
+) -> dict[str, Any]:
+    env = dict(os.environ if environ is None else environ)
+    lookup = executable_lookup or shutil.which
+    runner = process_runner or subprocess.run
+
+    dry_run = run_capi_pivot_dry_run(
+        payload,
+        environ=env,
+        executable_lookup=lookup,
+        process_runner=runner,
+    )
+    secret_root = Path(
+        env.get("CAPI_PIVOT_SECRET_DIR", "/var/run/secrets/ai-agent/capi-pivot")
+    )
+    target_kubeconfig = _resolve_kubeconfig(
+        env,
+        "CAPI_PIVOT_TARGET_KUBECONFIG",
+        secret_root,
+    )
+    clusterctl = lookup("clusterctl")
+    if not clusterctl:
+        raise CapiPivotError("CLUSTERCTL_NOT_INSTALLED")
+
+    cluster_name = dry_run["cluster_name"]
+    namespace = dry_run["namespace"]
+    command = [
+        clusterctl,
+        "move",
+        "--to-kubeconfig",
+        str(target_kubeconfig),
+        "--namespace",
+        namespace,
+        "-v",
+        "5",
+    ]
+    process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+        "KUBECONFIG": env["CAPI_PIVOT_SOURCE_KUBECONFIG"],
+    }
+    try:
+        completed = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_TIMEOUT_OUTCOME_UNKNOWN") from exc
+    except OSError as exc:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
+
+    stdout = _safe_output(completed.stdout or "")
+    stderr = _safe_output(completed.stderr or "")
+    if completed.returncode != 0:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED")
+
+    return {
+        "cluster_name": cluster_name,
+        "namespace": namespace,
+        "pivot_executed": True,
+        "execution_mode": "clusterctl_move",
+        "dry_run_passed": True,
+        "source_namespace_scope_verified": True,
+        "side_effects": True,
+        "automatic_retry_allowed": False,
+        "exit_code": completed.returncode,
+        "stdout_summary": stdout,
+        "stderr_summary": stderr,
+    }
