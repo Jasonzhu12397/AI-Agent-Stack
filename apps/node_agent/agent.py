@@ -1047,7 +1047,62 @@ def inspect_host_network_hardware() -> dict[str, Any]:
     }
 
 
-def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+
+def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
+    try:
+        configmaps = list_all_kubernetes_items(
+            "/api/v1/namespaces/ai-agent-system/configmaps",
+            max_items=5000,
+        )
+    except NodeAgentError as exc:
+        return {
+            "status": "unavailable",
+            "error_code": str(exc),
+            "nodes": [],
+        }
+    reports = []
+    for configmap in configmaps:
+        labels = configmap.get("metadata", {}).get("labels", {})
+        if labels.get("app.kubernetes.io/name") != "network-inventory-agent":
+            continue
+        data = configmap.get("data", {})
+        raw_report = data.get("inventory.json") if isinstance(data, dict) else None
+        try:
+            report = json.loads(raw_report) if isinstance(raw_report, str) else {}
+        except json.JSONDecodeError:
+            report = {}
+        hardware = report.get("hardware", {}) if isinstance(report, dict) else {}
+        if (
+            report.get("schema_version") != "v1"
+            or not isinstance(report.get("node_name"), str)
+            or not isinstance(report.get("node_uid"), str)
+            or not isinstance(hardware, dict)
+            or hardware.get("status") != "observed"
+        ):
+            continue
+        reports.append({
+            "node_name": report["node_name"],
+            "node_uid": report["node_uid"],
+            "collected_at": report.get("collected_at"),
+            "cpu_online": hardware.get("cpu_online"),
+            "interfaces": hardware.get("interfaces", [])[:256],
+            "pci_network_devices": hardware.get("pci_network_devices", [])[:4096],
+            "hugepages": hardware.get("hugepages", [])[:16],
+            "numa_nodes": hardware.get("numa_nodes", [])[:128],
+        })
+    reports.sort(key=lambda item: item["node_name"])
+    return {
+        "status": "observed",
+        "node_count": len(reports),
+        "nodes": reports[:1000],
+        "truncated": len(reports) > 1000,
+    }
+
+
+def inspect_network_environment(
+    payload: dict[str, Any] | None = None,
+    node_type: str = "",
+) -> dict[str, Any]:
     payload = payload or {}
     workload_namespaces = payload.get("workload_namespaces", [])
     expected_attachments = payload.get("expected_attachments", [])
@@ -1279,6 +1334,11 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         "missing_expected_network_attachment_definitions": missing_network_definitions,
         "node_network_resources": node_network_resources[:500],
         "host_network_hardware": inspect_host_network_hardware(),
+        "physical_node_hardware_inventory": (
+            inspect_cluster_node_hardware_inventory()
+            if node_type == "target_cluster"
+            else {"status": "not_applicable", "nodes": []}
+        ),
         "agent_pod_network": _pod_network_namespace_snapshot(),
         "limitations": [
             "Pod namespace interfaces are not host NIC inventory.",
@@ -1345,7 +1405,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         version = kubernetes_api_get("/version")
         return {"api_reachable": True, "kubernetes_version": version.get("gitVersion")}
     if command_type == "cluster.network.inspect":
-        return inspect_network_environment(payload)
+        return inspect_network_environment(payload, node_type)
     if command_type == "cluster.observe":
         version = kubernetes_api_get("/version")
         nodes = kubernetes_api_get("/api/v1/nodes")
