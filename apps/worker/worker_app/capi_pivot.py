@@ -4,7 +4,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -19,10 +19,10 @@ class CapiObjectRef:
     kind: str
     name: str
     uid: str
-    namespace: Optional[str] = None
+    namespace: str | None = None
 
     @classmethod
-    def from_dict(cls, value: dict) -> "CapiObjectRef":
+    def from_dict(cls, value: dict) -> CapiObjectRef:
         metadata = value.get("metadata") or {}
         kind = value.get("kind")
         name = metadata.get("name")
@@ -93,7 +93,7 @@ def _get_object(
     kubeconfig: str,
     item: CapiObjectRef,
     timeout: int,
-) -> Optional[dict]:
+) -> dict | None:
     command = ["kubectl", "--kubeconfig", kubeconfig, "get", item.kind, item.name]
     if item.namespace:
         command.extend(["--namespace", item.namespace])
