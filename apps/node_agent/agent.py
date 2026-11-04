@@ -2301,14 +2301,16 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             )
         cluster_version = versions["cluster.x-k8s.io"]
         cluster_path = (
-            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/{namespace}/clusters/{cluster_name}"
+            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/"
+            f"{namespace}/clusters/{cluster_name}"
         )
         cluster = kubernetes_api_get(cluster_path)
         cluster_uid = cluster.get("metadata", {}).get("uid")
         if not isinstance(cluster_uid, str) or not cluster_uid:
             raise NodeAgentError("TARGET_CLUSTER_UID_MISSING")
         md_path = (
-            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/{namespace}/machinedeployments/{deployment_name}"
+            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/"
+            f"{namespace}/machinedeployments/{deployment_name}"
         )
         existing_md = None
         try:
@@ -2318,11 +2320,13 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 raise
         infra_version = versions["infrastructure.cluster.x-k8s.io"]
         infra_path = (
-            f"/apis/infrastructure.cluster.x-k8s.io/{infra_version}/namespaces/{namespace}/metal3machinetemplates/{infrastructure_template_name}"
+            f"/apis/infrastructure.cluster.x-k8s.io/{infra_version}/namespaces/"
+            f"{namespace}/metal3machinetemplates/{infrastructure_template_name}"
         )
         bootstrap_version = versions["bootstrap.cluster.x-k8s.io"]
         bootstrap_path = (
-            f"/apis/bootstrap.cluster.x-k8s.io/{bootstrap_version}/namespaces/{namespace}/kubeadmconfigtemplates/{bootstrap_template_name}"
+            f"/apis/bootstrap.cluster.x-k8s.io/{bootstrap_version}/namespaces/"
+            f"{namespace}/kubeadmconfigtemplates/{bootstrap_template_name}"
         )
         infrastructure_template = kubernetes_api_get(infra_path)
         bootstrap_template = kubernetes_api_get(bootstrap_path)
