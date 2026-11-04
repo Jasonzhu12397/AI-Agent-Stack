@@ -1,0 +1,22 @@
+FROM alpine:3.21 AS clusterctl
+ARG CLUSTERCTL_VERSION
+ARG CLUSTERCTL_SHA256
+ARG TARGETARCH
+RUN test -n "$CLUSTERCTL_VERSION" && test -n "$CLUSTERCTL_SHA256" && \
+    case "$TARGETARCH" in \
+      amd64) ASSET_ARCH=amd64 ;; \
+      arm64) ASSET_ARCH=arm64 ;; \
+      *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    wget -q -O /tmp/clusterctl "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-${ASSET_ARCH}" && \
+    echo "${CLUSTERCTL_SHA256}  /tmp/clusterctl" | sha256sum -c - && \
+    install -m 0755 /tmp/clusterctl /usr/local/bin/clusterctl
+
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /workspace
+COPY pyproject.toml README.md ./
+COPY apps ./apps
+RUN pip install .
+COPY --from=clusterctl /usr/local/bin/clusterctl /usr/local/bin/clusterctl
+USER 10001:10001
