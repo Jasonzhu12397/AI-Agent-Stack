@@ -95,7 +95,7 @@ def test_dry_run_checks_source_scope_before_clusterctl(tmp_path):
     assert move_kwargs["env"]["KUBECONFIG"] == str(
         (tmp_path / "secrets" / "source.kubeconfig").resolve()
     )
-    assert move_kwargs["timeout"] == 300
+    assert move_kwargs["timeout"] == 60
     assert result["dry_run_passed"] is True
     assert result["side_effects"] is False
     assert result["source_cluster_count"] == 1
@@ -198,7 +198,7 @@ def test_dry_run_converts_clusterctl_timeout_to_stable_error(tmp_path):
             return subprocess.CompletedProcess(
                 command, 0, _cluster_list("target-cluster"), ""
             )
-        raise subprocess.TimeoutExpired(command, 300)
+        raise subprocess.TimeoutExpired(command, 60)
 
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_DRY_RUN_TIMEOUT"):
         _execute(tmp_path, runner=runner)
