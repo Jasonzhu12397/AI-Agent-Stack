@@ -257,3 +257,65 @@ def test_target_agent_cannot_execute_source_pivot_dry_run():
             "target_cluster",
         )
 
+
+
+
+def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
+    calls, runner = _runner_for()
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert len(calls) == 3
+    assert calls[1][0][1:3] == ["move", "--dry-run"]
+    assert calls[2][0][1] == "move"
+    assert "--dry-run" not in calls[2][0]
+    assert calls[2][1]["timeout"] == 1800
+    assert result["pivot_executed"] is True
+    assert result["dry_run_passed"] is True
+    assert result["side_effects"] is True
+    assert result["automatic_retry_allowed"] is False
+
+
+def test_pivot_execution_does_not_mutate_when_dry_run_fails(tmp_path):
+    calls, runner = _runner_for(move_returncode=1)
+
+    with pytest.raises(CapiPivotError, match="CAPI_PIVOT_DRY_RUN_FAILED"):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert len(calls) == 2
+
+
+def test_pivot_execution_timeout_reports_unknown_outcome_without_retry(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0].endswith("kubectl"):
+            return subprocess.CompletedProcess(
+                command, 0, _cluster_list("target-cluster"), ""
+            )
+        if "--dry-run" in command:
+            return subprocess.CompletedProcess(command, 0, "dry run complete", "")
+        raise subprocess.TimeoutExpired(command, 1800)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_EXECUTION_TIMEOUT_OUTCOME_UNKNOWN",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert len(calls) == 3
