@@ -1625,7 +1625,6 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         }
     if command_type == "cluster.capi.pivot.source.preflight":
         cluster_name = payload.get("cluster_name")
-        machine_deployment_name = payload.get("machine_deployment_name")
         if (
             not isinstance(cluster_name, str)
             or len(cluster_name) > 63
@@ -2897,6 +2896,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             return result
         namespace = payload.get("namespace")
         cluster_name = payload.get("cluster_name")
+        machine_deployment_name = payload.get("machine_deployment_name")
         if (
             not isinstance(expected_workers, int)
             or isinstance(expected_workers, bool)
