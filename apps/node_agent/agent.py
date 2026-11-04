@@ -3479,7 +3479,11 @@ def kubernetes_api_create_machine_deployment(
         f"/apis/cluster.x-k8s.io/{version}/namespaces/"
         f"{namespace}/machinedeployments"
     )
-    query = "?dryRun=All" if dry_run else ""
+    query = (
+        "?dryRun=All&fieldValidation=Strict"
+        if dry_run
+        else "?fieldValidation=Strict"
+    )
     request = urllib.request.Request(
         f"https://{host}:{port}{path}{query}",
         data=json.dumps(manifest).encode("utf-8"),
