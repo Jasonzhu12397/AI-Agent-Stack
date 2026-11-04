@@ -117,6 +117,7 @@ The EPH runner currently supports:
 - `cluster.health`, `cluster.observe`, `cluster.diagnose`, `cluster.postflight`, `k8s.resource.read` (read-only in-cluster Kubernetes API with output summaries and redaction);
 - `capi.cluster.observe` (discovers installed CAPI API version and reads Cluster/Machine/MachineDeployment summaries);
 - `metal3.host.inspect` (discovers Metal3 API version and reads BareMetalHost summaries without returning BMC credential fields).
+- `cluster.capi.pivot.dry-run` (EPH-only; invokes `clusterctl move --dry-run` using source and target kubeconfigs mounted from a Kubernetes Secret; reports namespace-wide scope and never mutates resources).
 
 Kubernetes Deployment/RBAC templates for running both agent roles as pods are in `deploy/agents/`.
 
