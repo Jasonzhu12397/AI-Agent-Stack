@@ -800,10 +800,17 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         control_gateway = ipaddress.ip_address(gateway)
     except (TypeError, ValueError) as exc:
         raise NodeAgentError("INVALID_CONTROL_PLANE_ADDRESSING") from exc
-    if control_network.version != control_gateway.version or control_gateway not in control_network.network:
+    if (
+        control_network.version != control_gateway.version
+        or control_gateway not in control_network.network
+    ):
         raise NodeAgentError("CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR")
     control_mtu = control_plane.get("mtu", 1500)
-    if not isinstance(control_mtu, int) or isinstance(control_mtu, bool) or not 576 <= control_mtu <= 9216:
+    if (
+        not isinstance(control_mtu, int)
+        or isinstance(control_mtu, bool)
+        or not 576 <= control_mtu <= 9216
+    ):
         raise NodeAgentError("INVALID_CONTROL_PLANE_MTU")
     interfaces = data_plane.get("interfaces")
     if not isinstance(interfaces, list) or not interfaces:
@@ -994,7 +1001,7 @@ def inspect_network_environment() -> dict[str, Any]:
             "Pod namespace interfaces are not host NIC inventory.",
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
             "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA and device binding validation.",
-            "Component presence is inferred from Kubernetes Pod names and is not a dataplane connectivity test.",
+            "Component presence is inferred from Pod names, not dataplane connectivity tests.",
         ],
         "side_effects": False,
     }
