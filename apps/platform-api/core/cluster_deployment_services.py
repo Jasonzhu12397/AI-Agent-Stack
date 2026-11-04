@@ -775,7 +775,10 @@ def handle_deployment_command_result(
             } == {
                 ("capi-system", "capi-controller-manager"),
                 ("capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"),
-                ("capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"),
+                (
+                    "capi-kubeadm-control-plane-system",
+                    "capi-kubeadm-control-plane-controller-manager",
+                ),
                 ("capm3-system", "capm3-controller-manager"),
             }
             and result.get("baremetal_host_namespace")
