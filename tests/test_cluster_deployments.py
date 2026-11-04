@@ -1706,3 +1706,21 @@ def test_control_plane_rejects_worker_preflight_with_duplicate_host_identity(
     assert deployment.status == ClusterDeployment.Status.FAILED
     assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
 
+@pytest.mark.django_db
+def test_control_plane_rejects_worker_preflight_without_healthy_provider_controllers(
+    cluster_delivery_workspace,
+):
+    deployment, command, result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-preflight-controller-unhealthy",
+    )
+    result["controllers"][2]["ready"] = False
+    result["controllers_ready"] = False
+
+    handle_deployment_command_result(command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
