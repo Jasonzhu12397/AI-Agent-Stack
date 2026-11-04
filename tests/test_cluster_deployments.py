@@ -809,6 +809,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         deployment.plan_result["capi_pivot_source_preflight"]["preflight_validated"]
         is True
     )
+    assert deployment.plan_result["dual_agent"]["phase"] == "target_preflight_pending"
     command = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.pivot.target.preflight",
@@ -887,6 +888,13 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "mismatches": [],
         "execution_allowed": False,
     }
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
+    pivot_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+    )
+    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert pivot_command.node_id == eph_node.id
     assert deployment.error is None
 
 
