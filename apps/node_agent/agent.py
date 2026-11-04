@@ -1103,6 +1103,18 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
             ],
             "pods": pod_results[:500],
         })
+    workload_inspection_complete = (
+        len(workload_results) == len(workload_namespaces)
+        and all(item.get("inspection_status") == "observed" for item in workload_results)
+    )
+    workload_attachments_valid = (
+        not missing_network_definitions
+        and all(
+            not item.get("pods_missing_expected_attachments")
+            for item in workload_results
+            if item.get("inspection_status") == "observed"
+        )
+    )
     return {
         "inspection_status": "observed",
         "kubernetes_version": version.get("gitVersion"),
@@ -1111,6 +1123,15 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         "network_attachment_definition_count": len(network_attachments),
         "network_attachments": network_attachments[:500],
         "workload_namespace_results": workload_results,
+        "workload_attachment_validation": {
+            "requested": bool(workload_namespaces or expected_attachments),
+            "complete": workload_inspection_complete,
+            "passed": (
+                workload_attachments_valid
+                if expected_attachments and workload_inspection_complete
+                else None
+            ),
+        },
         "observed_attachment_plugin_types": plugin_types,
         "missing_expected_network_attachment_definitions": missing_network_definitions,
         "node_network_resources": node_network_resources[:500],
