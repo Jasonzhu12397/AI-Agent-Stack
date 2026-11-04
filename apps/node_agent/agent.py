@@ -17,7 +17,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
-from .capi_pivot import CapiPivotError, run_capi_pivot_dry_run
+from .capi_pivot import CapiPivotError, run_capi_pivot, run_capi_pivot_dry_run
 
 
 class NodeAgentError(Exception):
@@ -803,6 +803,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.manifest.validate",
             "cluster.capi.pivot.source.preflight",
             "cluster.capi.pivot.dry-run",
+            "cluster.capi.pivot.execute",
         },
         "target_cluster": {
             "node.health",
@@ -1345,6 +1346,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             return run_capi_pivot_dry_run(payload)
         except CapiPivotError as exc:
             raise NodeAgentError(str(exc)) from exc
+    if command_type == "cluster.capi.pivot.execute":
+        try:
+            return run_capi_pivot(payload)
+        except CapiPivotError as exc:
+            raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.provider.discover":
         return discover_provider_apis()
     if command_type == "cluster.manifest.validate":
@@ -1696,6 +1702,7 @@ class ControlPlaneClient:
                 "cluster.manifest.validate",
                 "cluster.capi.pivot.source.preflight",
                 "cluster.capi.pivot.dry-run",
+                "cluster.capi.pivot.execute",
             ]
             if node_type == "eph_node"
             else [
