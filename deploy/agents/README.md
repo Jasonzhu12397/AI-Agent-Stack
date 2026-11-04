@@ -69,6 +69,8 @@ The target agent must not be required to create the first target Control Plane. 
 
 The supplied target Role/RoleBinding grants read access to pods, events and services in the `default` namespace only. Add equivalent Role/RoleBinding pairs for each explicitly approved workload namespace. The ClusterRole grants read-only node/namespace discovery.
 
+The target Agent's CAPI worker executor has a separate least-privilege grant in `rbac.yaml`: a ClusterRole containing read access to Cluster/Machine/template resources and `get/list/create` on MachineDeployments, bound only within the `default` and `metal3` namespaces. A separate Metal3 inventory ClusterRole is bound only in `metal3-system` and `metal3`. The Agent does not receive patch, update, delete, BMH mutation, Secret, or cluster-admin permissions. If the target CAPI namespace or BMH namespace differs, add a RoleBinding to the corresponding ClusterRole in that exact namespace; do not bind these roles cluster-wide. The CAPI API Server-Side Dry-Run remains the final RBAC/schema gate before creation.
+
 ## Security and operation
 
 - The Deployment runs as UID/GID 10001, drops all Linux capabilities, disallows privilege escalation, uses a read-only root filesystem and the RuntimeDefault seccomp profile.
@@ -77,5 +79,5 @@ The supplied target Role/RoleBinding grants read access to pods, events and serv
 - Readiness requires a successful control-plane heartbeat/poll. Liveness checks that the process loop is still running.
 - Agents initiate outbound HTTPS; no inbound Service or SSH listener is exposed.
 - Create credentials with an external Secret Manager / External Secrets integration in production. Do not commit token values or plaintext Secret manifests.
-- The current EPH and target RBAC are read-only. The actual CAPI/Metal3/Ironic provisioning adapter is not enabled by these manifests. Do not add `cluster-admin` as a workaround.
+- The EPH RBAC remains read-only. The Target Agent has only the namespaced CAPI MachineDeployment create permission described above; Metal3 BMH access is read-only. Do not add `cluster-admin` as a workaround.
 - The initial bearer token is a development enrollment mechanism. Production must replace it with mTLS or short-lived workload identity before broad deployment.
