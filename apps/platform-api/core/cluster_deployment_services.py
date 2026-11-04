@@ -441,11 +441,17 @@ def handle_deployment_command_result(
             and owner_graph["complete"] is True
             and all(item["ready"] for item in controllers)
         )
+        current_dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "capi_pivot_source_preflight": {
                 **result,
                 "preflight_validated": ready,
+            },
+            "dual_agent": {
+                **current_dual_agent,
+                "phase": "target_preflight_pending" if ready else "source_preflight_blocked",
+                "source_preflight_validated": ready,
             },
         }
         deployment.error = None
@@ -557,11 +563,17 @@ def handle_deployment_command_result(
             and not blockers
             and all(item["ready"] for item in controllers)
         )
+        current_dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "capi_pivot_preflight": {
                 **result,
                 "preflight_validated": ready,
+            },
+            "dual_agent": {
+                **current_dual_agent,
+                "phase": "pivot_preflight_blocked" if not ready else "provider_compatibility_check",
+                "target_preflight_validated": ready,
             },
         }
         deployment.error = None
