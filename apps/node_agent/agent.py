@@ -813,6 +813,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.postflight",
             "cluster.control-plane.verify",
             "cluster.capi.pivot.target.preflight",
+            "cluster.capi.pivot.target.verify",
             "k8s.resource.read",
         },
     }
@@ -1126,6 +1127,80 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "pagination_required": sorted(set(pagination_required))[:100],
             "controllers": controller_states,
             "blockers": blockers,
+            "side_effects": False,
+        }
+    if command_type == "cluster.capi.pivot.target.verify":
+        cluster_name = payload.get("cluster_name")
+        namespace = payload.get("namespace", "default")
+        expected_uid = payload.get("expected_cluster_uid")
+        if (
+            not isinstance(cluster_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+            or len(cluster_name) > 63
+        ):
+            raise NodeAgentError("INVALID_CLUSTER_NAME")
+        if (
+            not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or len(namespace) > 63
+        ):
+            raise NodeAgentError("INVALID_NAMESPACE")
+        if not isinstance(expected_uid, str) or not expected_uid:
+            raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
+        discovery = kubernetes_api_get("/apis")
+        cluster_group = next(
+            (
+                item for item in discovery.get("groups", [])
+                if item.get("name") == "cluster.x-k8s.io"
+            ),
+            None,
+        )
+        version = (
+            cluster_group.get("preferredVersion", {}).get("version")
+            if isinstance(cluster_group, dict)
+            else None
+        )
+        if not isinstance(version, str):
+            raise NodeAgentError("TARGET_CAPI_API_NOT_DISCOVERED")
+        cluster = kubernetes_api_get(
+            f"/apis/cluster.x-k8s.io/{version}"
+            f"/namespaces/{namespace}/clusters/{cluster_name}"
+        )
+        metadata = cluster.get("metadata", {})
+        actual_uid = metadata.get("uid")
+        if actual_uid != expected_uid:
+            raise NodeAgentError("TARGET_CLUSTER_UID_MISMATCH")
+        machines = kubernetes_api_get(
+            f"/apis/cluster.x-k8s.io/{version}"
+            f"/namespaces/{namespace}/machines"
+        )
+        machine_items = machines.get("items", [])
+        machine_names = [
+            item.get("metadata", {}).get("name")
+            for item in machine_items
+            if isinstance(item, dict)
+        ]
+        ready_machines = [
+            item.get("metadata", {}).get("name")
+            for item in machine_items
+            if isinstance(item, dict)
+            and any(
+                condition.get("type") == "Ready"
+                and condition.get("status") == "True"
+                for condition in item.get("status", {}).get("conditions", [])
+            )
+        ]
+        return {
+            "cluster_name": cluster_name,
+            "namespace": namespace,
+            "cluster_uid": actual_uid,
+            "source_cluster_uid": expected_uid,
+            "cluster_identity_preserved": True,
+            "machine_count": len(machine_names),
+            "machine_names": machine_names[:200],
+            "ready_machine_count": len(ready_machines),
+            "ready_machine_names": ready_machines[:200],
+            "pivot_adoption_verified": True,
             "side_effects": False,
         }
     if command_type == "cluster.capi.pivot.target.preflight":
