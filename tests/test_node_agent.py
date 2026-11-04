@@ -2635,13 +2635,6 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                 "spec": {"replicas": 1},
                 "status": {"availableReplicas": 1, "observedGeneration": 1},
             }
-        if path.startswith("/apis/apps/v1/namespaces/") and "/deployments/" in path:
-            deployment_name = path.rsplit("/", 1)[-1]
-            return {
-                "metadata": {"name": deployment_name, "generation": 1},
-                "spec": {"replicas": 1},
-                "status": {"availableReplicas": 1, "observedGeneration": 1},
-            }
         if path.endswith("/clusters/edge-lab"):
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
