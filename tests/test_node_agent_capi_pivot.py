@@ -127,3 +127,26 @@ def test_dry_run_converts_timeout_to_stable_error(tmp_path):
             executable_lookup=lambda name: "/usr/bin/clusterctl",
             process_runner=runner,
         )
+
+
+
+def test_dry_run_rejects_unexpected_payload_fields(tmp_path):
+    with pytest.raises(CapiPivotError, match="CAPI_PIVOT_PAYLOAD_FIELD_NOT_ALLOWED"):
+        run_capi_pivot_dry_run(
+            {"cluster_name": "target-cluster", "shell": "not-allowed"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: "/usr/bin/clusterctl",
+            process_runner=lambda *args, **kwargs: None,
+        )
+
+
+def test_dry_run_rejects_same_source_and_target_kubeconfig(tmp_path):
+    env = _environment(tmp_path)
+    env["CAPI_PIVOT_TARGET_KUBECONFIG"] = env["CAPI_PIVOT_SOURCE_KUBECONFIG"]
+    with pytest.raises(CapiPivotError, match="CAPI_PIVOT_KUBECONFIGS_MUST_DIFFER"):
+        run_capi_pivot_dry_run(
+            {"cluster_name": "target-cluster"},
+            environ=env,
+            executable_lookup=lambda name: "/usr/bin/clusterctl",
+            process_runner=lambda *args, **kwargs: None,
+        )
