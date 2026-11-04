@@ -1993,6 +1993,8 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
     assert namespace_result["pods"][0]["attachments_valid"] is True
     assert namespace_result["pods"][0]["networks"][1]["interface"] == "net1"
     assert namespace_result["pods"][1]["attachments_valid"] is False
+    assert result["workload_attachment_validation"]["complete"] is True
+    assert result["workload_attachment_validation"]["passed"] is False
 
 
 def test_network_inspection_requires_namespace_scope_for_workload_checks():
@@ -2033,3 +2035,5 @@ def test_network_inspection_reports_namespace_rbac_denial_without_failing_global
             "error_code": "KUBERNETES_API_HTTP_403",
         }
     ]
+    assert result["workload_attachment_validation"]["complete"] is False
+    assert result["workload_attachment_validation"]["passed"] is None
