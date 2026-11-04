@@ -146,6 +146,8 @@ def queue_deployment_command(
     payload = {"deployment_id": str(deployment.id)}
     if command_type == "cluster.postflight":
         payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = _deployment_capi_namespace(deployment)
+        payload["expected_worker_replicas"] = deployment.spec.get("worker_replicas")
     elif command_type == "cluster.capi.pivot.target.preflight":
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
@@ -680,6 +682,11 @@ def handle_deployment_command_result(
             },
         }
         deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
+        queue_deployment_command(
+            deployment,
+            "cluster.postflight",
+            node=deployment.target_node,
+        )
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
@@ -687,14 +694,36 @@ def handle_deployment_command_result(
         }
         node_count = result.get("node_count")
         not_ready_nodes = result.get("not_ready_nodes")
+        expected_worker_replicas = deployment.spec.get("worker_replicas")
+        worker_machine_count = result.get("worker_machine_count")
+        ready_worker_machine_count = result.get("ready_worker_machine_count")
+        not_ready_worker_names = result.get("not_ready_worker_machine_names")
+        worker_node_names = result.get("worker_node_names")
         valid_result = (
             command.node.node_type == "target_cluster"
+            and command.node_id == deployment.target_node_id
             and result.get("ready") is True
             and isinstance(node_count, int)
             and not isinstance(node_count, bool)
             and node_count > 0
             and isinstance(not_ready_nodes, list)
             and not not_ready_nodes
+            and isinstance(expected_worker_replicas, int)
+            and not isinstance(expected_worker_replicas, bool)
+            and expected_worker_replicas >= 0
+            and isinstance(worker_machine_count, int)
+            and not isinstance(worker_machine_count, bool)
+            and worker_machine_count == expected_worker_replicas
+            and isinstance(ready_worker_machine_count, int)
+            and not isinstance(ready_worker_machine_count, bool)
+            and ready_worker_machine_count == expected_worker_replicas
+            and isinstance(not_ready_worker_names, list)
+            and not not_ready_worker_names
+            and isinstance(worker_node_names, list)
+            and len(worker_node_names) == expected_worker_replicas
+            and len(set(worker_node_names)) == expected_worker_replicas
+            and all(isinstance(name, str) and name for name in worker_node_names)
+            and result.get("capi_worker_inventory_complete") is True
         )
         if valid_result:
             deployment.status = ClusterDeployment.Status.SUCCEEDED
@@ -708,6 +737,13 @@ def handle_deployment_command_result(
                     if isinstance(not_ready_nodes, list)
                     else []
                 ),
+                "not_ready_worker_machine_names": (
+                    [str(item)[:120] for item in not_ready_worker_names[:100]]
+                    if isinstance(not_ready_worker_names, list)
+                    else []
+                ),
+                "worker_machine_count": worker_machine_count,
+                "expected_worker_replicas": expected_worker_replicas,
             }
         deployment.finished_at = timezone.now()
         deployment.save(
