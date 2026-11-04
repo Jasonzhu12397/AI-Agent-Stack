@@ -1088,7 +1088,7 @@ def inspect_cluster_node_hardware_inventory(
             or not isinstance(hardware, dict)
             or hardware.get("status") != "observed"
             or (
-                expected_node_uids
+                cluster_nodes is not None
                 and expected_node_uids.get(report.get("node_name")) != report.get("node_uid")
             )
         ):
