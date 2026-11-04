@@ -75,7 +75,7 @@ A cluster plan may include a versioned `network_profile`:
 }
 ```
 
-The plan validator checks the declared network roles, CIDRs/gateway, MTU bounds, Calico+Multus composition, unique attachment names, supported OVS/SR-IOV attachment types and SR-IOV extended resource names. DPDK declarations additionally require hugepages and an explicit NUMA policy. It hashes the complete profile into the cluster plan. This is input validation only; it does not install CNI components, create NetworkAttachmentDefinitions, alter routes, or bind devices.
+The plan validator checks the declared network roles, CIDRs/gateway, explicitly supplied MTUs, Calico+Multus composition, unique attachment names, supported OVS/SR-IOV attachment types and SR-IOV extended resource names. It does not invent interface names or MTU values. DPDK declarations additionally require hugepages, an explicit NUMA policy and the Kubernetes CPU Manager `static` policy. It hashes the complete profile into the cluster plan. This is input validation only; it does not install CNI components, create NetworkAttachmentDefinitions, alter routes, or bind devices.
 
 The RBAC template grants read-only access to node metadata, NetworkAttachmentDefinitions and Pods in `kube-system` only for component discovery. Extend workload namespace access only through separately reviewed namespace-scoped Roles and RoleBindings.
 
