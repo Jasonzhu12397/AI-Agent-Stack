@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import count
 
 from .agent import inspect_host_network_hardware
@@ -83,7 +83,7 @@ def build_inventory_report(node_name, node_uid):
         "schema_version": "v1",
         "node_name": node_name,
         "node_uid": node_uid,
-        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "collected_at": datetime.now(UTC).isoformat(),
         "hardware": hardware,
     }
 
