@@ -23,7 +23,7 @@ def kubernetes_request(path, method, payload=None):
         raise NetworkInventoryError("UNSUPPORTED_KUBERNETES_METHOD")
     allowed_prefixes = (
         "/api/v1/nodes/",
-        "/api/v1/namespaces/ai-agent-system/configmaps",
+        "/api/v1/namespaces/ai-agent-inventory/configmaps",
     )
     if not path.startswith(allowed_prefixes) or ".." in path:
         raise NetworkInventoryError("KUBERNETES_PATH_NOT_ALLOWLISTED")
@@ -111,13 +111,13 @@ def publish_inventory(node_name):
     configmap_name = configmap_name_for_node(node_name)
     encoded_configmap_name = urllib.parse.quote(configmap_name, safe="")
     configmap_path = (
-        "/api/v1/namespaces/ai-agent-system/configmaps/"
+        "/api/v1/namespaces/ai-agent-inventory/configmaps/"
         + encoded_configmap_name
     )
     existing = kubernetes_request(configmap_path, "GET")
     metadata = {
         "name": configmap_name,
-        "namespace": "ai-agent-system",
+        "namespace": "ai-agent-inventory",
         "labels": {"app.kubernetes.io/name": "network-inventory-agent"},
     }
     if isinstance(existing, dict):
@@ -129,7 +129,7 @@ def publish_inventory(node_name):
         path = configmap_path
     else:
         method = "POST"
-        path = "/api/v1/namespaces/ai-agent-system/configmaps"
+        path = "/api/v1/namespaces/ai-agent-inventory/configmaps"
     inventory_json = json.dumps(report, separators=(",", ":"))
     if len(inventory_json.encode("utf-8")) > 900 * 1024:
         raise NetworkInventoryError("INVENTORY_REPORT_TOO_LARGE")
