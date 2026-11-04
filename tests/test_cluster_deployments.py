@@ -1211,7 +1211,32 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         last_seen_at=timezone.now(),
     )
     deployment.target_node = target_node
-    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
+    deployment.spec = {
+        **deployment.spec,
+        "capi_namespace": "metal3",
+        "worker_provisioning": {
+            "machine_deployment_name": "edge-workers",
+            "infrastructure_template_name": "edge-worker-template",
+            "bootstrap_template_name": "edge-worker-bootstrap",
+            "baremetal_host_namespace": "metal3",
+            "host_selector": {"pool": "workers"},
+            "network_profile": {
+                "version": "v1",
+                "control_plane": {
+                    "interface": "eno1",
+                    "cidr": "192.0.2.10/24",
+                    "gateway": "192.0.2.1",
+                    "mtu": 1500,
+                },
+                "data_plane": {
+                    "interfaces": ["ens2f0"],
+                    "mtu": 9000,
+                    "cni": {"primary": "calico", "meta": "multus", "attachments": []},
+                },
+                "pod_traffic_default": "data_plane",
+            },
+        },
+    }
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "preflight_validated": True,
@@ -1287,14 +1312,18 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     assert deployment.plan_result["dual_agent"]["phase"] == "target_agent_adopted"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    postflight = AgentCommand.objects.get(
+    worker_preflight = AgentCommand.objects.get(
         deployment=deployment,
-        command_type="cluster.postflight",
+        command_type="cluster.capi.worker.preflight",
     )
-    assert postflight.node_id == target_node.id
-    assert postflight.payload["cluster_name"] == "edge-lab"
-    assert postflight.payload["namespace"] == "metal3"
-    assert postflight.payload["expected_worker_replicas"] == 4
+    assert worker_preflight.node_id == target_node.id
+    assert worker_preflight.payload["cluster_name"] == "edge-lab"
+    assert worker_preflight.payload["namespace"] == "metal3"
+    assert worker_preflight.payload["expected_worker_replicas"] == 4
+    assert worker_preflight.payload["worker_provisioning"]["machine_deployment_name"] == (
+        "edge-workers"
+    )
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
 
 
 @pytest.mark.django_db
