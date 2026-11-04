@@ -1545,6 +1545,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.capi.pivot.target.preflight",
             "cluster.capi.pivot.target.verify",
             "cluster.capi.worker.preflight",
+            "cluster.capi.worker.provision",
             "k8s.resource.read",
         },
     }
@@ -2469,6 +2470,258 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "worker_creation_performed": False,
             "execution_allowed": False,
         }
+    if command_type == "cluster.capi.worker.provision":
+        deployment_id = payload.get("deployment_id")
+        cluster_name = payload.get("cluster_name")
+        namespace = payload.get("namespace")
+        expected_replicas = payload.get("expected_worker_replicas")
+        kubernetes_version = payload.get("kubernetes_version")
+        config = payload.get("worker_provisioning")
+        expected_cluster_uid = payload.get("expected_cluster_uid")
+        expected_infra_uid = payload.get("expected_infrastructure_template_uid")
+        expected_bootstrap_uid = payload.get("expected_bootstrap_template_uid")
+        expected_infra_api_version = payload.get("infrastructure_api_version")
+        expected_bootstrap_api_version = payload.get("bootstrap_api_version")
+        plan_hash = payload.get("provisioning_plan_hash")
+        if (
+            not isinstance(deployment_id, str)
+            or not re.fullmatch(r"[0-9a-f-]{36}", deployment_id)
+            or not isinstance(cluster_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+            or not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or not isinstance(expected_replicas, int)
+            or isinstance(expected_replicas, bool)
+            or not 1 <= expected_replicas <= 1000
+            or not isinstance(kubernetes_version, str)
+            or not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+", kubernetes_version)
+            or not isinstance(config, dict)
+            or not isinstance(expected_cluster_uid, str)
+            or not expected_cluster_uid
+            or not isinstance(expected_infra_uid, str)
+            or not expected_infra_uid
+            or not isinstance(expected_bootstrap_uid, str)
+            or not expected_bootstrap_uid
+            or not isinstance(expected_infra_api_version, str)
+            or not isinstance(expected_bootstrap_api_version, str)
+            or not isinstance(plan_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan_hash)
+        ):
+            raise NodeAgentError("INVALID_WORKER_PROVISIONING_APPROVAL_PAYLOAD")
+        deployment_name = config.get("machine_deployment_name")
+        infrastructure_template_name = config.get("infrastructure_template_name")
+        bootstrap_template_name = config.get("bootstrap_template_name")
+        host_namespace = config.get("baremetal_host_namespace")
+        host_selector = config.get("host_selector")
+        network_profile = validate_network_profile(config.get("network_profile"))
+        for value in (
+            deployment_name,
+            infrastructure_template_name,
+            bootstrap_template_name,
+            host_namespace,
+        ):
+            if (
+                not isinstance(value, str)
+                or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", value)
+                or len(value) > 63
+            ):
+                raise NodeAgentError("INVALID_WORKER_PROVISIONING_REFERENCE")
+        if not isinstance(host_selector, dict) or not host_selector:
+            raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
+        discovery = kubernetes_api_get("/apis")
+        versions = {}
+        for group_name in (
+            "cluster.x-k8s.io",
+            "bootstrap.cluster.x-k8s.io",
+            "infrastructure.cluster.x-k8s.io",
+            "metal3.io",
+        ):
+            group = next(
+                (
+                    item for item in discovery.get("groups", [])
+                    if item.get("name") == group_name
+                ),
+                None,
+            )
+            version = group.get("preferredVersion", {}).get("version") if group else None
+            if not isinstance(version, str):
+                raise NodeAgentError("WORKER_PROVISIONING_API_GROUP_MISSING")
+            versions[group_name] = version
+        if (
+            "cluster.x-k8s.io/" + versions["cluster.x-k8s.io"]
+            != "cluster.x-k8s.io/" + versions["cluster.x-k8s.io"]
+            or "infrastructure.cluster.x-k8s.io/" + versions["infrastructure.cluster.x-k8s.io"]
+            != expected_infra_api_version
+            or "bootstrap.cluster.x-k8s.io/" + versions["bootstrap.cluster.x-k8s.io"]
+            != expected_bootstrap_api_version
+        ):
+            raise NodeAgentError("WORKER_PROVISIONING_API_VERSION_CHANGED")
+        cluster_path = (
+            f"/apis/cluster.x-k8s.io/{versions['cluster.x-k8s.io']}"
+            f"/namespaces/{namespace}/clusters/{cluster_name}"
+        )
+        cluster = kubernetes_api_get(cluster_path)
+        if cluster.get("metadata", {}).get("uid") != expected_cluster_uid:
+            raise NodeAgentError("WORKER_PROVISIONING_CLUSTER_UID_CHANGED")
+        infra_path = (
+            f"/apis/infrastructure.cluster.x-k8s.io/"
+            f"{versions['infrastructure.cluster.x-k8s.io']}/namespaces/"
+            f"{namespace}/metal3machinetemplates/{infrastructure_template_name}"
+        )
+        bootstrap_path = (
+            f"/apis/bootstrap.cluster.x-k8s.io/"
+            f"{versions['bootstrap.cluster.x-k8s.io']}/namespaces/"
+            f"{namespace}/kubeadmconfigtemplates/{bootstrap_template_name}"
+        )
+        infra_template = kubernetes_api_get(infra_path)
+        bootstrap_template = kubernetes_api_get(bootstrap_path)
+        if (
+            infra_template.get("metadata", {}).get("uid") != expected_infra_uid
+            or infra_template.get("apiVersion") != expected_infra_api_version
+            or bootstrap_template.get("metadata", {}).get("uid") != expected_bootstrap_uid
+            or bootstrap_template.get("apiVersion") != expected_bootstrap_api_version
+        ):
+            raise NodeAgentError("WORKER_PROVISIONING_TEMPLATE_IDENTITY_CHANGED")
+        bmh_version = versions["metal3.io"]
+        bmh_items = list_all_kubernetes_items(
+            f"/apis/metal3.io/{bmh_version}/namespaces/{host_namespace}/baremetalhosts",
+            max_items=10000,
+        )
+        available_hosts = []
+        for host in bmh_items:
+            metadata = host.get("metadata", {})
+            labels = metadata.get("labels", {})
+            if not isinstance(labels, dict) or any(
+                labels.get(key) != value for key, value in host_selector.items()
+            ):
+                continue
+            spec = host.get("spec", {})
+            status = host.get("status", {})
+            provisioning = status.get("provisioning", {})
+            if (
+                spec.get("online") is True
+                and provisioning.get("state") == "available"
+                and not spec.get("consumerRef")
+                and not status.get("error")
+                and not status.get("errorMessage")
+                and status.get("operationalStatus") in (None, "OK")
+            ):
+                available_hosts.append(metadata.get("uid"))
+        if len(available_hosts) < expected_replicas:
+            raise NodeAgentError("WORKER_PROVISIONING_BMH_CAPACITY_CHANGED")
+        md_version = versions["cluster.x-k8s.io"]
+        md_path = (
+            f"/apis/cluster.x-k8s.io/{md_version}/namespaces/"
+            f"{namespace}/machinedeployments/{deployment_name}"
+        )
+        annotation_key = "ai-agent-stack.io/deployment-id"
+        plan_annotation = "ai-agent-stack.io/provisioning-plan-hash"
+        cluster_annotation = "ai-agent-stack.io/cluster-uid"
+        expected_annotations = {
+            annotation_key: deployment_id,
+            plan_annotation: plan_hash,
+            cluster_annotation: expected_cluster_uid,
+        }
+        try:
+            existing = kubernetes_api_get(md_path)
+        except NodeAgentError as exc:
+            if str(exc) != "KUBERNETES_API_HTTP_404":
+                raise
+            existing = None
+        labels = {
+            "cluster.x-k8s.io/cluster-name": cluster_name,
+            "cluster.x-k8s.io/deployment-name": deployment_name,
+        }
+        manifest = {
+            "apiVersion": "cluster.x-k8s.io/" + md_version,
+            "kind": "MachineDeployment",
+            "metadata": {
+                "name": deployment_name,
+                "namespace": namespace,
+                "labels": labels,
+                "annotations": expected_annotations,
+            },
+            "spec": {
+                "clusterName": cluster_name,
+                "replicas": expected_replicas,
+                "selector": {"matchLabels": labels},
+                "template": {
+                    "metadata": {"labels": labels},
+                    "spec": {
+                        "clusterName": cluster_name,
+                        "version": kubernetes_version,
+                        "bootstrap": {
+                            "configRef": {
+                                "apiVersion": expected_bootstrap_api_version,
+                                "kind": "KubeadmConfigTemplate",
+                                "name": bootstrap_template_name,
+                            }
+                        },
+                        "infrastructureRef": {
+                            "apiVersion": expected_infra_api_version,
+                            "kind": "Metal3MachineTemplate",
+                            "name": infrastructure_template_name,
+                        },
+                    },
+                },
+            },
+        }
+        if existing is not None:
+            if (
+                existing.get("metadata", {}).get("annotations", {})
+                != expected_annotations
+                or existing.get("spec") != manifest["spec"]
+                or existing.get("apiVersion") != manifest["apiVersion"]
+            ):
+                raise NodeAgentError("MACHINE_DEPLOYMENT_NAME_CONFLICT")
+            created = False
+            machine_deployment = existing
+        else:
+            dry_run_result = kubernetes_api_create_machine_deployment(
+                md_version, namespace, manifest, dry_run=True
+            )
+            if (
+                dry_run_result.get("kind") != "MachineDeployment"
+                or dry_run_result.get("metadata", {}).get("name") != deployment_name
+            ):
+                raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_RESPONSE_INVALID")
+            try:
+                machine_deployment = kubernetes_api_create_machine_deployment(
+                    md_version, namespace, manifest, dry_run=False
+                )
+                created = True
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_409":
+                    raise
+                machine_deployment = kubernetes_api_get(md_path)
+                if (
+                    machine_deployment.get("metadata", {}).get("annotations", {})
+                    != expected_annotations
+                    or machine_deployment.get("spec") != manifest["spec"]
+                ):
+                    raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_CONFLICT") from exc
+                created = False
+        machine_deployment_uid = machine_deployment.get("metadata", {}).get("uid")
+        if not isinstance(machine_deployment_uid, str) or not machine_deployment_uid:
+            raise NodeAgentError("MACHINE_DEPLOYMENT_UID_MISSING")
+        return {
+            "deployment_id": deployment_id,
+            "cluster_name": cluster_name,
+            "namespace": namespace,
+            "machine_deployment_name": deployment_name,
+            "machine_deployment_uid": machine_deployment_uid,
+            "cluster_uid": expected_cluster_uid,
+            "provisioning_plan_hash": plan_hash,
+            "created": created,
+            "idempotent_reconciliation": not created,
+            "dry_run_passed": True,
+            "side_effects": created,
+            "worker_creation_performed": created,
+            "execution_allowed": True,
+            "network_profile_hash": hashlib.sha256(
+                json.dumps(network_profile, sort_keys=True).encode("utf-8")
+            ).hexdigest(),
+        }
     if command_type == "cluster.postflight":
         nodes = kubernetes_api_get("/api/v1/nodes")
         items = nodes.get("items", [])
@@ -2848,6 +3101,71 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
     )
     try:
         with urllib.request.urlopen(request, context=context, timeout=15) as response:
+            payload = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+    if len(payload) > 1024 * 1024:
+        raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_JSON") from exc
+    if not isinstance(result, dict):
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_SHAPE")
+    return result
+
+
+def kubernetes_api_create_machine_deployment(
+    version: str,
+    namespace: str,
+    manifest: dict[str, Any],
+    dry_run: bool,
+) -> dict[str, Any]:
+    if (
+        not isinstance(version, str)
+        or not re.fullmatch(r"v[0-9]+(alpha|beta)[0-9]+", version)
+        or not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+        or not isinstance(manifest, dict)
+        or manifest.get("kind") != "MachineDeployment"
+        or manifest.get("apiVersion") != "cluster.x-k8s.io/" + version
+        or manifest.get("metadata", {}).get("namespace") != namespace
+    ):
+        raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_REQUEST_INVALID")
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    token_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    )
+    ca_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_CA_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    )
+    if not host or not os.path.isfile(token_path) or not os.path.isfile(ca_path):
+        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
+    with open(token_path, encoding="utf-8") as token_file:
+        token = token_file.read().strip()
+    context = ssl.create_default_context(cafile=ca_path)
+    path = (
+        f"/apis/cluster.x-k8s.io/{version}/namespaces/"
+        f"{namespace}/machinedeployments"
+    )
+    query = "?dryRun=All" if dry_run else ""
+    request = urllib.request.Request(
+        f"https://{host}:{port}{path}{query}",
+        data=json.dumps(manifest).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=30) as response:
             payload = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
         raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
