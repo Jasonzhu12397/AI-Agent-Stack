@@ -1048,7 +1048,9 @@ def inspect_host_network_hardware() -> dict[str, Any]:
 
 
 
-def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
+def inspect_cluster_node_hardware_inventory(
+    cluster_nodes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     try:
         configmaps = list_all_kubernetes_items(
             "/api/v1/namespaces/ai-agent-system/configmaps",
@@ -1060,6 +1062,11 @@ def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
             "error_code": str(exc),
             "nodes": [],
         }
+    expected_node_uids = {
+        item.get("metadata", {}).get("name"): item.get("metadata", {}).get("uid")
+        for item in (cluster_nodes or [])
+        if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("uid")
+    }
     reports = []
     for configmap in configmaps:
         labels = configmap.get("metadata", {}).get("labels", {})
@@ -1080,6 +1087,10 @@ def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
             or not isinstance(report.get("node_uid"), str)
             or not isinstance(hardware, dict)
             or hardware.get("status") != "observed"
+            or (
+                expected_node_uids
+                and expected_node_uids.get(report.get("node_name")) != report.get("node_uid")
+            )
         ):
             continue
         reports.append({
@@ -1093,9 +1104,14 @@ def inspect_cluster_node_hardware_inventory() -> dict[str, Any]:
             "numa_nodes": hardware.get("numa_nodes", [])[:128],
         })
     reports.sort(key=lambda item: item["node_name"])
+    reported_names = {item["node_name"] for item in reports}
+    expected_names = set(expected_node_uids)
     return {
         "status": "observed",
         "node_count": len(reports),
+        "expected_node_count": len(expected_node_uids),
+        "inventory_complete": bool(expected_node_uids) and expected_names.issubset(reported_names),
+        "missing_node_names": sorted(expected_names - reported_names)[:1000],
         "nodes": reports[:1000],
         "truncated": len(reports) > 1000,
     }
@@ -1337,7 +1353,7 @@ def inspect_network_environment(
         "node_network_resources": node_network_resources[:500],
         "host_network_hardware": inspect_host_network_hardware(),
         "physical_node_hardware_inventory": (
-            inspect_cluster_node_hardware_inventory()
+            inspect_cluster_node_hardware_inventory(nodes)
             if node_type == "target_cluster"
             else {"status": "not_applicable", "nodes": []}
         ),
