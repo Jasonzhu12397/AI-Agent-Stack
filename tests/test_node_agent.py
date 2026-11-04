@@ -1532,7 +1532,6 @@ def test_long_running_command_renews_its_lease(monkeypatch):
         time.sleep(0.06)
         return {"ready": True}
 
-
     monkeypatch.setattr(agent, "execute_command", slow_command)
     result = agent.execute_command_with_lease(
         FakeClient(),
@@ -1554,8 +1553,6 @@ def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatc
     def slow_command(command, node_type):
         time.sleep(0.04)
         return {"ready": True}
-
-    import time
 
     monkeypatch.setattr(agent, "execute_command", slow_command)
     with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_LOST"):
