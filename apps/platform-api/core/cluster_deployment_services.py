@@ -898,7 +898,12 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.capi.worker.provision":
         expected = command.payload
         valid_result = (
-            command.node.node_type == "target_cluster"
+            command.status == AgentCommand.Status.SUCCEEDED
+            and command.approved_at is not None
+            and command.approved_by_id is not None
+            and command.approved_by_id != command.requested_by_id
+            and command.approved_plan_hash == command.plan_hash
+            and command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("deployment_id") == str(deployment.id)
             and result.get("cluster_name") == deployment.cluster_name
