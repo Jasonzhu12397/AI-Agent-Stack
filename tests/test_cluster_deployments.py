@@ -1643,6 +1643,21 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
             "infrastructure.cluster.x-k8s.io": "v1beta1",
             "metal3.io": "v1alpha1",
         },
+        "controllers": [
+            {"namespace": "capi-system", "deployment": "capi-controller-manager", "ready": True},
+            {
+                "namespace": "capi-kubeadm-bootstrap-system",
+                "deployment": "capi-kubeadm-bootstrap-controller-manager",
+                "ready": True,
+            },
+            {
+                "namespace": "capi-kubeadm-control-plane-system",
+                "deployment": "capi-kubeadm-control-plane-controller-manager",
+                "ready": True,
+            },
+            {"namespace": "capm3-system", "deployment": "capm3-controller-manager", "ready": True},
+        ],
+        "controllers_ready": True,
         "blockers": [],
         "side_effects": False,
         "worker_creation_performed": False,
