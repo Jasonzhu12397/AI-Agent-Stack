@@ -1,19 +1,54 @@
-# Remote Node Agent
+# Dual Node Agent Runtime
 
-The same small Python agent package supports two enrollment roles:
+The EPH Agent and Target Agent use the same Python runtime with strict, role-specific command allowlists. They are independently enrolled nodes with separate credentials, heartbeats, command leases, and audit history.
 
-- `eph_node`: EPH/management-node health, host preflight and cluster-plan dry run.
-- `target_cluster`: target-cluster node identity/health heartbeat. Target Kubernetes API adapters are not enabled in this first slice.
+## Agent roles
+
+### EPH Agent (AGENT_NODE_TYPE=eph_node)
+
+Runs on the temporary EPH management node. Its responsibilities are:
+- Report host health and validate the temporary management environment.
+- Inspect the source Kubernetes, Cluster API, Metal3 and Ironic inventory.
+- Produce a validated deployment plan and source-side Pivot preflight.
+- Execute an explicitly approved cluster.capi.pivot.execute command.
+- Never declare ownership transferred merely because clusterctl move returned success.
+
+### Target Agent (AGENT_NODE_TYPE=target_cluster)
+
+Runs inside the target Kubernetes cluster. Its responsibilities are:
+- Report target cluster health and Kubernetes identity.
+- Validate the target CAPI/Metal3 APIs and controller readiness before handoff.
+- After the source Pivot command completes, verify that the expected Cluster object exists and retains the source Cluster UID.
+- Report Machine inventory and Ready counts to the control plane.
+- Persist and restore deployment checkpoints across agent restarts.
+
+The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run target adoption verification commands.
+
+## Current handoff sequence
+
+1. The EPH Agent completes source inventory and source management-plane preflight.
+2. The Target Agent completes target API/controller preflight.
+3. The control plane compares the five required provider API versions and fails closed on mismatch.
+4. The control plane creates a source-side Pivot command in waiting_approval.
+5. A different tenant administrator approves the immutable command payload hash.
+6. The EPH Agent receives a 90-second command lease, renews it while executing, runs dry-run and then clusterctl move.
+7. The control plane validates the source command result and queues cluster.capi.pivot.target.verify.
+8. The Target Agent verifies the Cluster UID and Machine inventory. Only then is target_agent_owns_cluster recorded as true.
+
+A Pivot timeout or expired running lease has an unknown outcome and is never automatically retried. Reconcile the source and target API inventories before creating another Pivot attempt.
 
 ## Configuration
 
 Set these environment variables from a protected secret source:
+- AGENT_CONTROL_URL: control-plane origin, for example https://studio.example.com.
+- AGENT_NODE_ID: UUID returned when this node was enrolled.
+- AGENT_TOKEN: one-time enrollment token returned by the control plane; do not commit it.
+- AGENT_NODE_TYPE: eph_node or target_cluster.
+- APP_ENV=production enforces HTTPS.
+- The EPH Agent must have source and target kubeconfig secret files mounted at the paths configured by CAPI_PIVOT_SOURCE_KUBECONFIG and CAPI_PIVOT_TARGET_KUBECONFIG.
+- The Target Agent must have read-only access to the target Kubernetes API for adoption verification.
 
-- `AGENT_CONTROL_URL`: control-plane origin, for example `https://studio.example.com`.
-- `AGENT_NODE_ID`: UUID returned when the node was enrolled.
-- `AGENT_TOKEN`: one-time enrollment token returned by the control plane; do not commit it.
-- `AGENT_NODE_TYPE`: `eph_node` or `target_cluster`.
-- `APP_ENV=production` enforces HTTPS.
+## Run
 
 Run one heartbeat/poll/command cycle:
 
@@ -27,6 +62,8 @@ Run continuously:
 python -m apps.node_agent.agent --poll-seconds 5
 ```
 
-The agent does not invoke a shell, execute arbitrary Python, apply manifests, or access a kubeconfig. It only runs the locally compiled allowlist. The first version supports node health, EPH host preflight and a validated cluster-plan dry run. CAPI/Metal3/Ironic mutations and target-cluster operations remain disabled until a versioned adapter and target environment compatibility tests are delivered.
+## Explicitly not enabled yet
 
-For production, replace the development bearer credential with mTLS/short-lived workload identity and install the agent with a dedicated OS user or Kubernetes ServiceAccount.
+This skeleton does not yet retire the EPH in-memory Kubernetes, reboot the physical EPH host, or join that host as a worker. It also does not perform real-cluster end-to-end verification. EPH reclamation must remain disabled until the target Agent has verified adoption and a separate, audited host-reclaim adapter has been implemented and tested.
+
+The agent does not invoke a shell, execute arbitrary Python, or accept credentials/manifests from command payloads. Production deployment should replace development bearer credentials with mTLS or short-lived workload identity and run each agent under a dedicated OS user or Kubernetes ServiceAccount.
