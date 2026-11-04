@@ -2082,6 +2082,14 @@ def test_host_sysfs_inspection_reports_nic_sriov_pci_numa_and_hugepages(
     (pci / "driver").symlink_to(driver, target_is_directory=True)
     (pci / "iommu_group").symlink_to(pci, target_is_directory=True)
     (pci / "virtfn0").symlink_to(pci, target_is_directory=True)
+    vf = root / "bus" / "pci" / "devices" / "0000:03:00.1"
+    vf_driver = root / "bus" / "pci" / "drivers" / "vfio-pci"
+    vf.mkdir(parents=True)
+    vf_driver.mkdir(parents=True)
+    for name, value in [("vendor", "0x8086"), ("device", "0x1572"), ("class", "0x020000")]:
+        (vf / name).write_text(value, encoding="ascii")
+    (vf / "physfn").symlink_to(pci, target_is_directory=True)
+    (vf / "driver").symlink_to(vf_driver, target_is_directory=True)
     (interface / "device").symlink_to(
         "../../../bus/pci/devices/0000:03:00.0",
         target_is_directory=True,
@@ -2098,6 +2106,8 @@ def test_host_sysfs_inspection_reports_nic_sriov_pci_numa_and_hugepages(
     assert result["interfaces"][0]["sriov_total_vfs"] == "64"
     assert result["pci_network_devices"][0]["driver"] == "ixgbe"
     assert result["pci_network_devices"][0]["iommu_group_present"] is True
+    assert result["pci_network_devices"][1]["is_virtual_function"] is True
+    assert result["pci_network_devices"][1]["driver"] == "vfio-pci"
     assert result["pci_network_devices"][0]["is_virtual_function"] is False
     assert result["pci_network_devices"][0]["virtual_function_count"] == 1
     assert result["hugepages"][0]["free"] == "480"
