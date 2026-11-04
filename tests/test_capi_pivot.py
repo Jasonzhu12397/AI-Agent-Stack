@@ -2,6 +2,7 @@ import json
 import subprocess
 
 import pytest
+
 from worker_app.capi_pivot import (
     CapiObjectRef,
     CommandResult,
