@@ -2610,7 +2610,10 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
     groups = {
         "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
-        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machines", "metal3machinetemplates"]),
+        "infrastructure.cluster.x-k8s.io": (
+            "v1beta1",
+            ["metal3machines", "metal3machinetemplates"],
+        ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
     calls = []
@@ -2663,7 +2666,8 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                 {"metadata": {"name": "bmh-02", "uid": "bmh-uid-02",
                               "labels": {"pool": "workers"}},
                  "spec": {"online": True},
-                 "status": {"provisioning": {"state": "available"}}},
+                 "status": {"operationalStatus": "OK",
+                            "provisioning": {"state": "available"}}},
             ], "metadata": {}}
         raise AssertionError(path)
 
@@ -2699,7 +2703,10 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
     groups = {
         "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
-        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machinetemplates"]),
+        "infrastructure.cluster.x-k8s.io": (
+            "v1beta1",
+            ["metal3machines", "metal3machinetemplates"],
+        ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
 
