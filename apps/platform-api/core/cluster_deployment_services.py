@@ -62,6 +62,17 @@ def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> 
 
 
 
+
+
+def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
+    source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+    identity = source.get("source_cluster_identity", {}) if isinstance(source, dict) else {}
+    namespace = identity.get("namespace") if isinstance(identity, dict) else None
+    if isinstance(namespace, str) and namespace:
+        return namespace
+    configured = deployment.spec.get("capi_namespace", "default")
+    return configured if isinstance(configured, str) and configured else "default"
+
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     plan_result = deployment.plan_result or {}
     source = plan_result.get("capi_pivot_source_preflight", {})
@@ -86,7 +97,7 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     payload = {
         "deployment_id": str(deployment.id),
         "cluster_name": deployment.cluster_name,
-        "namespace": deployment.spec.get("capi_namespace", "default"),
+        "namespace": _deployment_capi_namespace(deployment),
     }
     command, _ = AgentCommand.objects.get_or_create(
         tenant=deployment.tenant,
@@ -126,7 +137,7 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
     elif command_type == "cluster.capi.pivot.target.preflight":
         payload["cluster_name"] = deployment.cluster_name
-        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+        payload["namespace"] = _deployment_capi_namespace(deployment)
     elif command_type == "cluster.capi.pivot.source.preflight":
         payload["cluster_name"] = deployment.cluster_name
     elif command_type == "cluster.capi.pivot.execute":
@@ -342,8 +353,11 @@ def handle_deployment_command_result(
         valid_source_cluster_identity = (
             isinstance(source_cluster_identity, dict)
             and source_cluster_identity.get("name") == deployment.cluster_name
-            and source_cluster_identity.get("namespace")
-            == deployment.spec.get("capi_namespace", "default")
+            and (
+                not deployment.spec.get("capi_namespace")
+                or source_cluster_identity.get("namespace")
+                == deployment.spec.get("capi_namespace")
+            )
             and isinstance(source_cluster_identity.get("namespace"), str)
             and bool(source_cluster_identity.get("namespace"))
             and isinstance(source_cluster_identity.get("uid"), str)
@@ -439,6 +453,15 @@ def handle_deployment_command_result(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
         _update_capi_pivot_provider_compatibility(deployment)
+        if deployment.target_node_id and not AgentCommand.objects.filter(
+            deployment=deployment,
+            command_type="cluster.capi.pivot.target.preflight",
+        ).exists():
+            queue_deployment_command(
+                deployment,
+                "cluster.capi.pivot.target.preflight",
+                node=deployment.target_node,
+            )
         _maybe_queue_capi_pivot(deployment)
     elif command.command_type == "cluster.capi.pivot.target.preflight":
         controllers = result.get("controllers")
@@ -558,7 +581,7 @@ def handle_deployment_command_result(
             and result.get("source_namespace_scope_verified") is True
             and result.get("target_management_plane_verified") is True
             and result.get("cluster_name") == deployment.cluster_name
-            and result.get("namespace") == deployment.spec.get("capi_namespace", "default")
+            and result.get("namespace") == _deployment_capi_namespace(deployment)
             and isinstance(source_identity.get("uid"), str)
             and bool(source_identity.get("uid"))
             and result.get("automatic_retry_allowed") is False
