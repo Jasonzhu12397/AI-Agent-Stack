@@ -2701,7 +2701,7 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
             return {"metadata": {"uid": "infra-template-uid"}}
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {"metadata": {"uid": "bootstrap-template-uid"}}
-        if path.endswith("/baremetalhosts"):
+        if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [{
                 "metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
                              "labels": {"pool": "workers"}},
