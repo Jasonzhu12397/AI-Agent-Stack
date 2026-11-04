@@ -2959,6 +2959,11 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                         "ai-agent-stack.io/network-profile-hash": profile_hash
                     },
                 },
+                "spec": {
+                    "template": {
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                    }
+                },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {
