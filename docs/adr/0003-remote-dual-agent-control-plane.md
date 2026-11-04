@@ -17,6 +17,14 @@ Both agents use outbound authenticated communication and durable, lease-protecte
 
 CAPI, Metal3 and Ironic remain authoritative infrastructure controllers. The control plane verifies external postconditions before marking delivery successful.
 
+## Deployment topology and network decision
+
+The central Control Plane Agent is hosted in Alibaba Cloud or Tencent Cloud, independently of the physical Kubernetes environments. EPH Agent and Target Cluster Agent are workloads on their respective physical servers/clusters and initiate outbound authenticated connections to the cloud service. No public inbound listener is required on the physical sites, and Kubernetes API, Ironic and BMC endpoints are not exposed publicly.
+
+The target cluster uses separate Control Plane and Data Plane network roles. The ordinary NIC carries Kubernetes/node management and cloud-agent control connectivity. Calico is the primary Pod network; Multus attaches secondary networks. OVS CNI and SR-IOV CNI are selectable secondary attachments. DPDK requires additional host/device/hugepage/NUMA configuration and is not implied by installing SR-IOV CNI.
+
+Workloads requiring high-performance traffic declare a Data Plane attachment and validated route policy. System and node-management traffic retain Control Plane reachability. Network topology, CNI versions, interface/PCI inventory, VLANs, MTUs, IPAM and routing are explicit versioned deployment inputs bound to plan approval.
+
 ## Consequences
 
 - The control plane can orchestrate the full bootstrap lifecycle without requiring inbound access to EPH or target nodes.
