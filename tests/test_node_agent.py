@@ -1916,7 +1916,12 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
         if path in {"/api/v1/nodes", "/api/v1/namespaces/kube-system/pods"}:
             return []
         if path == "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions":
-            return []
+            return [
+                {
+                    "metadata": {"name": "sriov-data", "namespace": "app-ns"},
+                    "spec": {"config": json.dumps({"type": "sriov"})},
+                }
+            ]
         if path == "/api/v1/namespaces/app-ns/pods":
             return [
                 {
@@ -1983,6 +1988,7 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
     namespace_result = result["workload_namespace_results"][0]
     assert namespace_result["inspection_status"] == "observed"
     assert namespace_result["pod_count"] == 2
+    assert result["missing_expected_network_attachment_definitions"] == []
     assert namespace_result["pods_missing_expected_attachments"] == ["api-1"]
     assert namespace_result["pods"][0]["attachments_valid"] is True
     assert namespace_result["pods"][0]["networks"][1]["interface"] == "net1"
