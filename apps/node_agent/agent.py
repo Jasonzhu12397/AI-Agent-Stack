@@ -1143,6 +1143,20 @@ def inspect_network_environment(
     expected_attachments = payload.get("expected_attachments", [])
     expected_default_network = payload.get("expected_default_network")
     require_data_plane_default = payload.get("require_data_plane_default", False)
+    expected_agent_default_interface = payload.get("expected_agent_default_interface")
+    expected_agent_default_gateway = payload.get("expected_agent_default_gateway")
+    if expected_agent_default_interface is not None and (
+        not isinstance(expected_agent_default_interface, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", expected_agent_default_interface)
+    ):
+        raise NodeAgentError("INVALID_EXPECTED_AGENT_DEFAULT_INTERFACE")
+    if expected_agent_default_gateway is not None:
+        try:
+            ipaddress.ip_address(expected_agent_default_gateway)
+        except (TypeError, ValueError) as exc:
+            raise NodeAgentError("INVALID_EXPECTED_AGENT_DEFAULT_GATEWAY") from exc
+        if expected_agent_default_interface is None:
+            raise NodeAgentError("AGENT_DEFAULT_INTERFACE_REQUIRED")
     if not isinstance(require_data_plane_default, bool):
         raise NodeAgentError("INVALID_DATA_PLANE_DEFAULT_REQUIREMENT")
     if expected_default_network is not None and (
@@ -1411,6 +1425,20 @@ def inspect_network_environment(
             for item in workload_results
         )
     )
+    agent_pod_network = _pod_network_namespace_snapshot()
+    agent_default_route_requested = expected_agent_default_interface is not None
+    agent_default_route_passed = (
+        any(
+            route.get("interface") == expected_agent_default_interface
+            and (
+                expected_agent_default_gateway is None
+                or route.get("gateway") == expected_agent_default_gateway
+            )
+            for route in agent_pod_network.get("default_routes", [])
+        )
+        if agent_default_route_requested
+        else None
+    )
     return {
         "inspection_status": "observed",
         "kubernetes_version": version.get("gitVersion"),
@@ -1427,6 +1455,13 @@ def inspect_network_environment(
                 if expected_attachments and workload_inspection_complete
                 else None
             ),
+        },
+        "agent_pod_default_route_validation": {
+            "requested": agent_default_route_requested,
+            "expected_interface": expected_agent_default_interface,
+            "expected_gateway": expected_agent_default_gateway,
+            "passed": agent_default_route_passed,
+            "scope": agent_pod_network.get("scope"),
         },
         "pod_default_network_validation": {
             "requested": require_data_plane_default,
@@ -1457,7 +1492,7 @@ def inspect_network_environment(
             if node_type == "target_cluster"
             else {"status": "not_applicable", "nodes": []}
         ),
-        "agent_pod_network": _pod_network_namespace_snapshot(),
+        "agent_pod_network": agent_pod_network,
         "limitations": [
             "Pod namespace interfaces are not host NIC inventory.",
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
