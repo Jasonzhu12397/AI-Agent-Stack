@@ -73,6 +73,14 @@ The Data Plane is used for workload traffic that is required by the deployment p
 
 The deployment profile's default is that Pod-originated traffic uses the Data Plane, including ordinary application Pods and Agent Pods. The primary Pod interface/default route must therefore be designed on the Data Plane; Multus adds further OVS/SR-IOV interfaces for workloads that need multiple isolated networks or dedicated high-performance queues. Node-originated management traffic (for example kubelet-to-API, host services and node-level CNI operations) uses the ordinary Control Plane NIC and its host routing table. Do not confuse node management traffic with Pod traffic. If a Pod must reach a Kubernetes API or cloud endpoint, provide a deliberate Data Plane route/firewall path or a narrowly scoped host-network/egress-gateway exception that is explicitly recorded; do not silently leak Pod traffic onto the Control Plane NIC.
 
+### Implemented network inspection and plan validation
+
+The node-agent runtime currently exposes read-only `cluster.network.inspect` to both EPH and Target Agent roles. It reports Kubernetes version, node allocatable extended resources and hugepages, Multus NetworkAttachmentDefinitions/plugin type names, likely CNI component Pods in `kube-system`, and the Agent Pod's own interfaces/default routes. Its RBAC is limited to nodes/namespaces, NetworkAttachmentDefinitions and Pod listing in `kube-system`; it does not grant workload-wide Pod listing or CNI mutation.
+
+Cluster plan accepts an optional versioned `network_profile` and validates the Control Plane interface/CIDR/gateway/MTU, Data Plane interface list/MTU, `pod_traffic_default=data_plane`, Calico primary + Multus meta-CNI composition, OVS/SR-IOV attachment declarations, SR-IOV extended resource names and DPDK hugepage/NUMA declarations. The canonical plan hash includes this profile.
+
+This is a safe first implementation of inventory and input validation, not network provisioning or full dataplane proof. The Agent Pod's route table is not the host route table. Kubernetes allocatable resources do not prove physical VF health or DPDK binding. NAD presence does not prove that a workload Pod received an interface. Actual host PCI/IOMMU/VFIO/NUMA checks, workload namespace attachment inspection, per-Pod route verification, packet reachability and CNI installation remain follow-on adapters and integration tests.
+
 ### CNI composition and validation order
 
 Calico is the primary CNI for the Kubernetes network unless the selected platform design explicitly says otherwise. Multus is the meta-plugin that invokes the primary CNI and requested secondary CNI attachments. OVS CNI and SR-IOV CNI are additional network implementations selected per attachment. The cluster must not install competing primary-CNI configurations that both try to own the default `eth0`.
