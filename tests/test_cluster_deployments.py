@@ -22,7 +22,6 @@ from core.cluster_deployment_services import (
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
-    queue_deployment_command,
 )
 
 
