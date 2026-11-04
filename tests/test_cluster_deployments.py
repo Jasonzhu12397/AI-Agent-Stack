@@ -1566,7 +1566,21 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
         "data_plane": {
             "interfaces": ["ens2f0"],
             "mtu": 9000,
-            "cni": {"primary": "calico", "meta": "multus", "attachments": []},
+            "hugepages": "1Gi",
+            "numa_policy": "single-numa-node",
+            "cpu_manager_policy": "static",
+            "cni": {
+                "primary": "calico",
+                "meta": "multus",
+                "attachments": [
+                    {
+                        "name": "sriov-data",
+                        "type": "sriov",
+                        "resource_name": "intel.com/sriov_netdevice",
+                        "dpdk": True,
+                    }
+                ],
+            },
         },
         "pod_traffic_default": "data_plane",
     }
@@ -1638,7 +1652,15 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
             {"name": f"bmh-{index}", "uid": f"bmh-uid-{index}", "ready": True}
             for index in range(1, 5)
         ],
-        "network_profile": {"valid": True, "profile_hash": profile_hash},
+        "network_profile": {
+            "valid": True,
+            "profile_hash": profile_hash,
+            "pod_traffic_default": "data_plane",
+            "primary_cni": "calico",
+            "meta_cni": "multus",
+            "dpdk_requested": True,
+            "attachment_count": 1,
+        },
         "network_template_profile_hash": profile_hash,
         "network_template_profile_verified": True,
         "provider_versions": {
