@@ -1000,7 +1000,10 @@ def inspect_network_environment() -> dict[str, Any]:
         "limitations": [
             "Pod namespace interfaces are not host NIC inventory.",
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
-            "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA and device binding validation.",
+            (
+                "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA "
+                "and device binding validation."
+            ),
             "Component presence is inferred from Pod names, not dataplane connectivity tests.",
         ],
         "side_effects": False,
