@@ -2210,6 +2210,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         ):
             raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
         network_profile = validate_network_profile(config.get("network_profile"))
+        if network_profile.get("dpdk_requested") is not True:
+            raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
         discovery = kubernetes_api_get("/apis")
         groups = {
             item.get("name"): item
@@ -2582,6 +2584,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         host_namespace = config.get("baremetal_host_namespace")
         host_selector = config.get("host_selector")
         network_profile = validate_network_profile(config.get("network_profile"))
+        if network_profile.get("dpdk_requested") is not True:
+            raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
         for value in (
             deployment_name,
             infrastructure_template_name,
