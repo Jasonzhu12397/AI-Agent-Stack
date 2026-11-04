@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from apps.node_agent.capi_pivot import CapiPivotError, run_capi_pivot_dry_run
+from node_agent.capi_pivot import CapiPivotError, run_capi_pivot_dry_run
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
