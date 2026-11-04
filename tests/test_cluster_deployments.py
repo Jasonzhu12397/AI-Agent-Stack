@@ -1312,6 +1312,17 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     assert deployment.plan_result["dual_agent"]["phase"] == "worker_preflight_pending"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    provision_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    )
+    assert provision_command.node_id == deployment.target_node_id
+    assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert provision_command.payload["expected_cluster_uid"] == "source-cluster-uid"
+    assert provision_command.payload["expected_worker_replicas"] == 4
+    assert deployment.plan_result["dual_agent"]["worker_provisioning_command_id"] == str(
+        provision_command.id
+    )
     worker_preflight = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.worker.preflight",
@@ -1637,6 +1648,8 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
             for index in range(1, 5)
         ],
         "network_profile": {"valid": True, "profile_hash": profile_hash},
+        "network_template_profile_hash": profile_hash,
+        "network_template_profile_verified": True,
         "provider_versions": {
             "cluster.x-k8s.io": "v1beta1",
             "bootstrap.cluster.x-k8s.io": "v1beta1",
