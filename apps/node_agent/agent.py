@@ -1019,6 +1019,19 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         for attachment in network_attachments
         for plugin in attachment["plugin_types"]
     })
+    available_networks = {
+        f"{item.get('namespace')}/{item.get('name')}"
+        for item in network_attachments
+        if item.get("namespace") and item.get("name")
+    }
+    available_network_names = {
+        item.get("name") for item in network_attachments if item.get("name")
+    }
+    missing_network_definitions = [
+        name for name in expected_attachments
+        if name not in available_networks
+        and name.split("/", 1)[-1] not in available_network_names
+    ]
     workload_results = []
     for namespace in workload_namespaces:
         try:
@@ -1099,6 +1112,7 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         "network_attachments": network_attachments[:500],
         "workload_namespace_results": workload_results,
         "observed_attachment_plugin_types": plugin_types,
+        "missing_expected_network_attachment_definitions": missing_network_definitions,
         "node_network_resources": node_network_resources[:500],
         "agent_pod_network": _pod_network_namespace_snapshot(),
         "limitations": [
