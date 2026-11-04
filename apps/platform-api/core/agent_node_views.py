@@ -318,6 +318,81 @@ class AgentNodeRevokeView(APIView):
         return Response(_node_data(node))
 
 
+class AgentNodeCredentialRotateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        node = get_object_or_404(
+            AgentNode.objects.filter(tenant__memberships__user=request.user),
+            pk=node_id,
+        )
+        is_admin = TenantMembership.objects.filter(
+            tenant=node.tenant,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        if not is_admin:
+            return Response(
+                {"detail": "Tenant owner or admin role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if node.status == AgentNode.Status.REVOKED:
+                return Response(
+                    {"detail": "A revoked agent node cannot rotate credentials."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if AgentCommand.objects.filter(
+                node=node,
+                status=AgentCommand.Status.RUNNING,
+            ).exists():
+                return Response(
+                    {
+                        "detail": (
+                            "Credential rotation is blocked while commands are running. "
+                            "Wait for them to finish or reconcile their execution state."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            raw_token = secrets.token_urlsafe(36)
+            node.credential_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            node.status = AgentNode.Status.OFFLINE
+            node.last_seen_at = None
+            node.last_seen_ip = None
+            node.save(
+                update_fields=[
+                    "credential_hash",
+                    "status",
+                    "last_seen_at",
+                    "last_seen_ip",
+                    "updated_at",
+                ]
+            )
+
+        record_audit_event(
+            request,
+            node.tenant,
+            "agent.node.credential_rotated",
+            "agent_node",
+            node.id,
+            project=node.project,
+            metadata={"node_type": node.node_type, "node_name": node.name},
+        )
+        data = _node_data(node)
+        data["enrollment_token"] = raw_token
+        data["token_warning"] = (
+            "The previous credential is invalid. Store this new token securely; "
+            "it is shown only once. The agent remains offline until restarted with it."
+        )
+        return Response(data)
+
+
 class AgentNodeCommandListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
