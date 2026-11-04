@@ -165,3 +165,8 @@ The handoff API now requires a fresh heartbeat from both the EPH Agent and the T
 The Supervisor compares the source and target discovery versions for the five required API groups. This comparison is explicitly only a **served API version compatibility signal**; it does not prove that CAPI, kubeadm bootstrap/control-plane, CAPM3 or Ironic controller releases, CRD schemas, conversion webhooks, feature gates, or provider configuration are compatible. A mismatch is recorded and blocks a compatible result. Even a matching result has `execution_allowed=false`.
 
 **Not implemented yet:** the actual `clusterctl move` / CAPI pivot executor, target kubeconfig/credential brokering, provider release/schema compatibility validation, target controller reconciliation verification after a move, remaining Control Plane/Worker provisioning, EPH hardware reimage/reclaim, and end-to-end lifecycle completion. Neither preflight performs Kubernetes writes. Do not treat successful preflight or Agent handoff as permission to shut down EPH or provision Workers.
+
+
+## Target adoption readiness invariant
+
+The Target Agent's post-pivot verification scopes Machine inventory by `spec.clusterName`; Machines from other clusters in the same namespace are excluded. Every matching Machine must have a Kubernetes/CAPI `Ready=True` condition, every Machine must have a unique non-empty name, and the inventory must contain at least one matching Machine. The control plane independently requires `ready_machine_count == machine_count` and an empty `not_ready_machine_names` list before recording Target Agent ownership. A partial Machine inventory can never authorize EPH reclamation. This is still an adoption verification gate, not a worker-reclaim implementation.
