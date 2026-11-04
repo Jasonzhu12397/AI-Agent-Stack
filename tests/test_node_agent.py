@@ -3103,3 +3103,35 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
     assert result["ready_worker_machine_count"] == 2
     assert result["side_effects"] is True
 
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+def test_machine_deployment_create_server_errors_are_ambiguous(
+    monkeypatch, tmp_path, status_code
+):
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca"
+    token_file.write_text("test-token", encoding="utf-8")
+    ca_file.write_text("test-ca", encoding="utf-8")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", str(ca_file))
+    monkeypatch.setattr(agent.ssl, "create_default_context", lambda cafile: object())
+
+    def fail_request(request, context, timeout):
+        raise agent.urllib.error.HTTPError(
+            request.full_url, status_code, "server error", {}, None
+        )
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fail_request)
+    with pytest.raises(agent.NodeAgentError, match="KUBERNETES_API_UNAVAILABLE"):
+        agent.kubernetes_api_create_machine_deployment(
+            "v1beta1",
+            "default",
+            {
+                "apiVersion": "cluster.x-k8s.io/v1beta1",
+                "kind": "MachineDeployment",
+                "metadata": {"namespace": "default"},
+            },
+            dry_run=False,
+        )
