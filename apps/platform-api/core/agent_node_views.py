@@ -450,7 +450,12 @@ class AgentNodeCommandListCreateView(APIView):
             return Response({"detail": "Command is not allowed for this agent type."}, status=400)
         if command_type == "cluster.capi.worker.provision":
             return Response(
-                {"detail": "Worker provisioning commands can only be queued by the deployment workflow."},
+                {
+                    "detail": (
+                        "Worker provisioning commands can only be queued "
+                        "by the deployment workflow."
+                    )
+                },
                 status=403,
             )
         payload = request.data.get("payload", {})
