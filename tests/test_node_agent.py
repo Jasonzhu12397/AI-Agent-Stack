@@ -135,6 +135,110 @@ def test_target_agent_postflight_detects_not_ready_nodes(monkeypatch):
     assert result["not_ready_nodes"] == ["worker-02"]
 
 
+def test_target_postflight_requires_capi_worker_machines_and_ready_nodes(monkeypatch):
+    node_items = [
+        {
+            "metadata": {"name": "control-plane-01"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        },
+        {
+            "metadata": {"name": "worker-01"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        },
+        {
+            "metadata": {"name": "worker-02"},
+            "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+        },
+    ]
+    machine_items = [
+        {
+            "metadata": {
+                "name": "edge-lab-control-plane",
+                "labels": {"cluster.x-k8s.io/control-plane": ""},
+            },
+            "spec": {"clusterName": "edge-lab"},
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "nodeRef": {"name": "control-plane-01"},
+            },
+        },
+        {
+            "metadata": {"name": "edge-lab-worker-01", "labels": {}},
+            "spec": {"clusterName": "edge-lab"},
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "nodeRef": {"name": "worker-01"},
+            },
+        },
+        {
+            "metadata": {"name": "edge-lab-worker-02", "labels": {}},
+            "spec": {"clusterName": "edge-lab"},
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "nodeRef": {"name": "worker-02"},
+            },
+        },
+        {
+            "metadata": {"name": "other-cluster-worker", "labels": {}},
+            "spec": {"clusterName": "other-cluster"},
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "nodeRef": {"name": "other-worker"},
+            },
+        },
+    ]
+
+    def fake_get(path):
+        if path == "/api/v1/nodes":
+            return {"items": node_items}
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        assert path == (
+            "/apis/cluster.x-k8s.io/v1beta1/namespaces/"
+            "metal3-system/machines"
+        )
+        return machine_items
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    command = {
+        "command_type": "cluster.postflight",
+        "payload": {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3-system",
+            "expected_worker_replicas": 2,
+        },
+    }
+
+    result = agent.execute_command(command, "target_cluster")
+
+    assert result["worker_machine_count"] == 2
+    assert result["ready_worker_machine_count"] == 1
+    assert result["not_ready_worker_machine_names"] == ["edge-lab-worker-02"]
+    assert result["worker_node_names"] == ["worker-01"]
+    assert result["capi_worker_inventory_complete"] is False
+
+    node_items[2]["status"]["conditions"][0]["status"] = "True"
+    result = agent.execute_command(command, "target_cluster")
+
+    assert result["worker_machine_count"] == 2
+    assert result["ready_worker_machine_count"] == 2
+    assert result["not_ready_worker_machine_names"] == []
+    assert result["worker_node_names"] == ["worker-01", "worker-02"]
+    assert result["capi_worker_inventory_complete"] is True
+    assert result["side_effects"] is False
+
+
 def test_kubernetes_resource_read_rejects_non_allowlisted_resources(monkeypatch):
     monkeypatch.setattr(
         agent,
