@@ -1516,3 +1516,65 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
     )
     assert blocked["source_management_plane_ready"] is False
     assert "requested_source_cluster_not_found" in blocked["blockers"]
+
+
+
+def test_long_running_command_renews_its_lease(monkeypatch):
+    renewals = []
+
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            renewals.append((command_id, lease_token))
+            return {"id": command_id}
+
+    def slow_command(command, node_type):
+        time.sleep(0.06)
+        return {"ready": True}
+
+    import time
+
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+    result = agent.execute_command_with_lease(
+        FakeClient(),
+        {"id": "command-1", "lease_token": "lease-1"},
+        "eph_node",
+        renew_interval=0.01,
+    )
+
+    assert result == {"ready": True}
+    assert renewals
+    assert all(item == ("command-1", "lease-1") for item in renewals)
+
+
+def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatch):
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            raise agent.NodeAgentError("CONTROL_PLANE_UNAVAILABLE")
+
+    def slow_command(command, node_type):
+        time.sleep(0.04)
+        return {"ready": True}
+
+    import time
+
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+    with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_LOST"):
+        agent.execute_command_with_lease(
+            FakeClient(),
+            {"id": "command-2", "lease_token": "lease-2"},
+            "target_cluster",
+            renew_interval=0.01,
+        )
+
+
+def test_command_lease_is_required_before_execution():
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            raise AssertionError("Lease renewal must not run")
+
+    with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_REQUIRED"):
+        agent.execute_command_with_lease(
+            FakeClient(),
+            {"id": "command-3"},
+            "eph_node",
+        )
