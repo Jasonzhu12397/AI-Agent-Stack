@@ -61,6 +61,7 @@ The supplied target Role/RoleBinding grants read access to pods, events and serv
 
 - The Deployment runs as UID/GID 10001, drops all Linux capabilities, disallows privilege escalation, uses a read-only root filesystem and the RuntimeDefault seccomp profile.
 - The only writable mount is a size-limited `emptyDir` for process/readiness probe timestamps.
+- Both Agent Deployments mount host `/sys` read-only at `/host/sys` for physical NIC, PCI PF/VF, SR-IOV VF count, NUMA and hugepage inventory. They do not use `hostNetwork`, `hostPID`, privileged mode or writable host mounts. The Kubernetes Pod Security Admission policy must explicitly permit this read-only `hostPath`; if site policy forbids hostPath, use a separately reviewed node hardware-inventory DaemonSet/extension rather than granting broad privilege.
 - Readiness requires a successful control-plane heartbeat/poll. Liveness checks that the process loop is still running.
 - Agents initiate outbound HTTPS; no inbound Service or SSH listener is exposed.
 - Create credentials with an external Secret Manager / External Secrets integration in production. Do not commit token values or plaintext Secret manifests.
