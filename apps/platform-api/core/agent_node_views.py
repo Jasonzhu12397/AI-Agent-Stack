@@ -904,6 +904,14 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
         "completed",
     }
 
+    PHASE_TRANSITIONS = {
+        "target_agent_bootstrap": {"target_agent_bootstrap", "capi_pivot_preflight"},
+        "capi_pivot_preflight": {"capi_pivot_preflight", "capi_pivot_verified"},
+        "capi_pivot_verified": {"capi_pivot_verified", "worker_provisioning"},
+        "worker_provisioning": {"worker_provisioning", "worker_pool_verified"},
+        "worker_pool_verified": {"worker_pool_verified"},
+    }
+
     FORBIDDEN_CHECKPOINT_KEYS = FORBIDDEN_PAYLOAD_KEYS | {
         "authorization",
         "credential",
@@ -1066,6 +1074,88 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
                 deployment=deployment,
             ).first()
+            if phase in {"eph_reclaim_pending", "completed"}:
+                return Response(
+                    {
+                        "detail": (
+                            "EPH reclaim is fail-closed until the hardware reset, "
+                            "sanitization and reclaim executor is implemented."
+                        ),
+                        "code": "EPH_RECLAIM_EXECUTOR_NOT_ENABLED",
+                    },
+                    status=409,
+                )
+            if checkpoint is None:
+                if phase != "target_agent_bootstrap":
+                    return Response(
+                        {"detail": "The first checkpoint must be target_agent_bootstrap."},
+                        status=409,
+                    )
+            else:
+                allowed_next_phases = self.PHASE_TRANSITIONS.get(checkpoint.phase, set())
+                if phase not in allowed_next_phases:
+                    return Response(
+                        {
+                            "detail": "Checkpoint phase transition is not allowed.",
+                            "current_phase": checkpoint.phase,
+                            "requested_phase": phase,
+                        },
+                        status=409,
+                    )
+            if phase == "capi_pivot_verified":
+                dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
+                source = (deployment.plan_result or {}).get(
+                    "capi_pivot_source_preflight",
+                    {},
+                )
+                source_identity = source.get("source_cluster_identity", {})
+                if (
+                    dual_agent.get("target_agent_owns_cluster") is not True
+                    or dual_agent.get("target_agent_cluster_uid") != source_identity.get("uid")
+                ):
+                    return Response(
+                        {
+                            "detail": (
+                                "CAPI pivot verification must be accepted by the "
+                                "control plane before this checkpoint can advance."
+                            ),
+                            "code": "TARGET_CAPI_ADOPTION_NOT_VERIFIED",
+                        },
+                        status=409,
+                    )
+            if phase == "worker_provisioning":
+                dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
+                if dual_agent.get("target_agent_owns_cluster") is not True:
+                    return Response(
+                        {
+                            "detail": "Worker provisioning requires verified Target Agent ownership.",
+                            "code": "TARGET_AGENT_OWNERSHIP_REQUIRED",
+                        },
+                        status=409,
+                    )
+            if phase == "worker_pool_verified":
+                worker_count = checkpoint_data.get("worker_count")
+                ready_worker_count = checkpoint_data.get("ready_worker_count")
+                not_ready_worker_names = checkpoint_data.get("not_ready_worker_names")
+                if (
+                    checkpoint is None
+                    or checkpoint.phase != "worker_provisioning"
+                    or not isinstance(worker_count, int)
+                    or isinstance(worker_count, bool)
+                    or worker_count < 1
+                    or not isinstance(ready_worker_count, int)
+                    or isinstance(ready_worker_count, bool)
+                    or ready_worker_count != worker_count
+                    or not isinstance(not_ready_worker_names, list)
+                    or not_ready_worker_names
+                ):
+                    return Response(
+                        {
+                            "detail": "Worker pool verification requires a complete ready inventory.",
+                            "code": "WORKER_POOL_NOT_FULLY_READY",
+                        },
+                        status=409,
+                    )
             if checkpoint is not None:
                 if checkpoint.agent_node_id != node.id or checkpoint.generation != generation:
                     return Response(
