@@ -1547,6 +1547,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.capi.pivot.target.verify",
             "cluster.capi.worker.preflight",
             "cluster.capi.worker.provision",
+            "cluster.metal3.observe",
             "k8s.resource.read",
         },
     }
