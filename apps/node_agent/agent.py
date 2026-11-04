@@ -3447,7 +3447,7 @@ def kubernetes_api_create_machine_deployment(
 ) -> dict[str, Any]:
     if (
         not isinstance(version, str)
-        or not re.fullmatch(r"v[0-9]+(alpha|beta)[0-9]+", version)
+        or not re.fullmatch(r"v[0-9]+(?:alpha|beta)?[0-9]*", version)
         or not isinstance(namespace, str)
         or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
         or not isinstance(manifest, dict)
