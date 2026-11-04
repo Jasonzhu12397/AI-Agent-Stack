@@ -2164,7 +2164,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 ),
                 {},
             )
-            is_ready = isinstance(name, str) and bool(name) and ready.get("status") == "True"
+            is_ready = (
+                isinstance(name, str)
+                and bool(name)
+                and ready.get("status") == "True"
+            )
             if isinstance(name, str) and name:
                 node_ready_by_name[name] = is_ready
             if not is_ready:
