@@ -2599,7 +2599,9 @@ def test_worker_provisioning_preflight_is_target_agent_only():
         )
 
 
-def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_network(monkeypatch):
+def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_network(
+    monkeypatch,
+):
     profile = valid_dual_network_profile()
     profile["data_plane"]["hugepages"] = "1Gi"
     profile["data_plane"]["numa_policy"] = "single-numa-node"
