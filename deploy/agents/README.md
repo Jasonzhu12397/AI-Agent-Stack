@@ -4,6 +4,14 @@ These manifests are templates. They intentionally do not grant Kubernetes write 
 
 The EPH Agent runs inside a temporary single-node Kubernetes cluster on a RAM-booted bare-metal host. That host is borrowed from the final target compute pool and must later be rebooted into the target worker OS/image and verified by the Target Agent as a Ready worker. The EPH OS, local etcd, Pod filesystem and local credentials are disposable; persist deployment state centrally. See [the EPH lifecycle specification](../../docs/eph-node-lifecycle.md).
 
+## Cloud and physical-site deployment topology
+
+Deploy the Studio API, orchestration/worker services, database and model-routing services in the selected cloud environment (Alibaba Cloud or Tencent Cloud). The EPH and Target Agent Pods are deployed on physical infrastructure, not in the cloud Control Plane. Both agents initiate outbound HTTPS/mTLS sessions to the configured cloud endpoint. Permit only the required outbound DNS, time synchronization, registry and Control Plane destinations; do not expose Kubernetes API, Ironic, BMC or an inbound Agent port to the public Internet.
+
+The target cluster has separate Control Plane and Data Plane networks. Keep node management, Kubernetes API and Agent-to-cloud connectivity on the ordinary Control Plane NIC. Configure Calico as the primary Pod network and Multus for secondary attachments. OVS CNI and SR-IOV CNI are selected per NetworkAttachmentDefinition. DPDK additionally requires host VFIO/IOMMU, hugepages, NUMA/CPU pinning and device-plugin resources. Do not configure multiple competing primary CNIs or redirect node-management traffic onto an isolated Data Plane.
+
+Workloads that require high-performance networking must declare their Data Plane attachment and route policy. Validate the actual Pod interfaces, IP addresses, MTU, routes and Data Plane reachability. Verify that loss of the Data Plane does not break Kubernetes API access or either Agent's cloud heartbeat. See [the dual-network architecture](../../docs/dual-agent-infrastructure-architecture.md#dual-network-kubernetes-and-pod-traffic-policy) before applying environment-specific CNI manifests.
+
 ## Build and publish the agent image
 
 Build the repository image and push it to a registry accessible by both management and target clusters. Replace `REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION` in both Deployment manifests with the exact immutable image tag or digest.
