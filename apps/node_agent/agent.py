@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import hashlib
 import ipaddress
 import json
@@ -1068,6 +1069,7 @@ def inspect_cluster_node_hardware_inventory(
         if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("uid")
     }
     reports = []
+    stale_node_names = []
     for configmap in configmaps:
         labels = configmap.get("metadata", {}).get("labels", {})
         if labels.get("app.kubernetes.io/name") != "network-inventory-agent":
@@ -1079,6 +1081,20 @@ def inspect_cluster_node_hardware_inventory(
         except json.JSONDecodeError:
             report = {}
         if not isinstance(report, dict):
+            continue
+        collected_at = report.get("collected_at")
+        try:
+            collected_time = datetime.datetime.fromisoformat(collected_at)
+            if collected_time.tzinfo is None:
+                raise ValueError("timezone_required")
+            report_age = (
+                datetime.datetime.now(datetime.timezone.utc) - collected_time
+            ).total_seconds()
+        except (TypeError, ValueError):
+            stale_node_names.append(report.get("node_name"))
+            continue
+        if report_age < -60 or report_age > 180:
+            stale_node_names.append(report.get("node_name"))
             continue
         hardware = report.get("hardware", {})
         if (
@@ -1112,6 +1128,7 @@ def inspect_cluster_node_hardware_inventory(
         "expected_node_count": len(expected_node_uids),
         "inventory_complete": bool(expected_node_uids) and expected_names.issubset(reported_names),
         "missing_node_names": sorted(expected_names - reported_names)[:1000],
+        "stale_node_names": sorted(set(name for name in stale_node_names if name))[:1000],
         "nodes": reports[:1000],
         "truncated": len(reports) > 1000,
     }
