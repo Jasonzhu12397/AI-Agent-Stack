@@ -908,6 +908,144 @@ def _pod_network_namespace_snapshot() -> dict[str, Any]:
     }
 
 
+
+def _read_sysfs_text(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return value[:256]
+
+
+def inspect_host_network_hardware() -> dict[str, Any]:
+    configured_root = os.environ.get("AGENT_HOST_SYSFS_PATH", "").strip()
+    if not configured_root:
+        return {
+            "status": "not_configured",
+            "scope": "host_sysfs",
+            "reason": "AGENT_HOST_SYSFS_PATH is not mounted",
+        }
+    root = Path(configured_root)
+    net_root = root / "class" / "net"
+    pci_root = root / "bus" / "pci" / "devices"
+    if not net_root.is_dir() or not pci_root.is_dir():
+        return {
+            "status": "unavailable",
+            "scope": "host_sysfs",
+            "reason": "required host sysfs paths are not readable",
+        }
+    interfaces = []
+    try:
+        net_entries = sorted(net_root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        net_entries = []
+    for interface in net_entries[:256]:
+        device = interface / "device"
+        pci_address = None
+        driver = None
+        try:
+            if device.exists():
+                pci_address = device.resolve().name
+                driver_link = device / "driver"
+                if driver_link.is_symlink():
+                    driver = os.path.basename(os.readlink(driver_link))
+        except OSError:
+            pass
+        interfaces.append({
+            "name": interface.name,
+            "mac_address": _read_sysfs_text(interface / "address"),
+            "mtu": _read_sysfs_text(interface / "mtu"),
+            "operstate": _read_sysfs_text(interface / "operstate"),
+            "pci_address": pci_address,
+            "driver": driver,
+            "numa_node": _read_sysfs_text(device / "numa_node"),
+            "sriov_total_vfs": _read_sysfs_text(device / "sriov_totalvfs"),
+            "sriov_enabled_vfs": _read_sysfs_text(device / "sriov_numvfs"),
+        })
+    pci_devices = []
+    try:
+        pci_entries = sorted(pci_root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        pci_entries = []
+    for device in pci_entries[:4096]:
+        net_directory = device / "net"
+        try:
+            network_interfaces = sorted(item.name for item in net_directory.iterdir())
+        except OSError:
+            network_interfaces = []
+        if not network_interfaces and not (device / "physfn").exists():
+            continue
+        driver = None
+        try:
+            driver_link = device / "driver"
+            if driver_link.is_symlink():
+                driver = os.path.basename(os.readlink(driver_link))
+        except OSError:
+            pass
+        pci_devices.append({
+            "pci_address": device.name,
+            "vendor": _read_sysfs_text(device / "vendor"),
+            "device": _read_sysfs_text(device / "device"),
+            "class": _read_sysfs_text(device / "class"),
+            "driver": driver,
+            "numa_node": _read_sysfs_text(device / "numa_node"),
+            "network_interfaces": network_interfaces[:32],
+            "is_virtual_function": (device / "physfn").exists(),
+            "virtual_function_count": sum(
+                1 for item in device.glob("virtfn*")
+            ),
+        })
+    hugepages = []
+    hugepage_root = root / "kernel" / "mm" / "hugepages"
+    try:
+        hugepage_sizes = sorted(hugepage_root.glob("hugepages-*"))
+    except OSError:
+        hugepage_sizes = []
+    for page_size in hugepage_sizes[:16]:
+        hugepages.append({
+            "page_size": page_size.name,
+            "total": _read_sysfs_text(page_size / "nr_hugepages"),
+            "free": _read_sysfs_text(page_size / "free_hugepages"),
+        })
+    numa_nodes = []
+    node_root = root / "devices" / "system" / "node"
+    try:
+        node_entries = sorted(node_root.glob("node[0-9]*"))
+    except OSError:
+        node_entries = []
+    for node in node_entries[:128]:
+        node_hugepages = []
+        try:
+            page_entries = sorted((node / "hugepages").glob("hugepages-*"))
+        except OSError:
+            page_entries = []
+        for page_size in page_entries[:16]:
+            node_hugepages.append({
+                "page_size": page_size.name,
+                "total": _read_sysfs_text(page_size / "nr_hugepages"),
+                "free": _read_sysfs_text(page_size / "free_hugepages"),
+            })
+        numa_nodes.append({
+            "node": node.name,
+            "cpulist": _read_sysfs_text(node / "cpulist"),
+            "hugepages": node_hugepages,
+        })
+    return {
+        "status": "observed",
+        "scope": "host_sysfs_read_only",
+        "cpu_online": _read_sysfs_text(root / "devices" / "system" / "cpu" / "online"),
+        "interfaces": interfaces,
+        "pci_network_devices": pci_devices,
+        "hugepages": hugepages,
+        "numa_nodes": numa_nodes,
+        "inventory_truncated": (
+            len(net_entries) > 256
+            or len(pci_entries) > 4096
+            or len(node_entries) > 128
+        ),
+    }
+
+
 def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
     workload_namespaces = payload.get("workload_namespaces", [])
@@ -1139,6 +1277,7 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
         "observed_attachment_plugin_types": plugin_types,
         "missing_expected_network_attachment_definitions": missing_network_definitions,
         "node_network_resources": node_network_resources[:500],
+        "host_network_hardware": inspect_host_network_hardware(),
         "agent_pod_network": _pod_network_namespace_snapshot(),
         "limitations": [
             "Pod namespace interfaces are not host NIC inventory.",
