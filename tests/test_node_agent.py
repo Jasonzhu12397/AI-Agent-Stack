@@ -1830,6 +1830,8 @@ def test_network_profile_accepts_calico_multus_ovs_and_sriov():
          "POD_TRAFFIC_MUST_DEFAULT_TO_DATA_PLANE"),
         (lambda profile: profile["control_plane"].update({"gateway": "10.10.11.1"}),
          "CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR"),
+        (lambda profile: profile["control_plane"].pop("mtu"), "INVALID_CONTROL_PLANE_MTU"),
+        (lambda profile: profile["data_plane"].pop("mtu"), "INVALID_DATA_PLANE_MTU"),
         (lambda profile: profile["data_plane"]["cni"].update({"primary": "flannel"}),
          "UNSUPPORTED_PRIMARY_CNI_COMPOSITION"),
         (lambda profile: profile["data_plane"]["cni"]["attachments"].append(
