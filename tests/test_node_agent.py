@@ -2637,11 +2637,23 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
         if path.endswith("/metal3machinetemplates/worker-template"):
-            return {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                    "metadata": {"name": "worker-template", "namespace": "default", "uid": "infra-template-uid"}}
+            return {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "metadata": {
+                    "name": "worker-template",
+                    "namespace": "default",
+                    "uid": "infra-template-uid",
+                },
+            }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
-            return {"apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
-                    "metadata": {"name": "worker-bootstrap", "namespace": "default", "uid": "bootstrap-template-uid"}}
+            return {
+                "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
+                "metadata": {
+                    "name": "worker-bootstrap",
+                    "namespace": "default",
+                    "uid": "bootstrap-template-uid",
+                },
+            }
         if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [
                 {"metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
@@ -2705,9 +2717,21 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
         if path.endswith("/metal3machinetemplates/worker-template"):
-            return {"metadata": {"name": "worker-template", "namespace": "default", "uid": "infra-template-uid"}}
+            return {
+                "metadata": {
+                    "name": "worker-template",
+                    "namespace": "default",
+                    "uid": "infra-template-uid",
+                },
+            }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
-            return {"metadata": {"name": "worker-bootstrap", "namespace": "default", "uid": "bootstrap-template-uid"}}
+            return {
+                "metadata": {
+                    "name": "worker-bootstrap",
+                    "namespace": "default",
+                    "uid": "bootstrap-template-uid",
+                },
+            }
         if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [{
                 "metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
