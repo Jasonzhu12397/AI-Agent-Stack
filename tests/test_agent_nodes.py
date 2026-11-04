@@ -582,3 +582,44 @@ def test_project_agent_command_history_is_scoped_and_paginated(node_workspace):
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-commands/?limit=201",
     )
     assert invalid_limit.status_code == 400
+
+
+
+@pytest.mark.django_db
+def test_capi_pivot_execution_requires_separate_admin_approval(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-pivot", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {
+            "command_type": "cluster.capi.pivot.execute",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "namespace": "metal3",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="capi-pivot-approval-001",
+    )
+
+    assert created.status_code == 202
+    assert created.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+
+    polled = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    assert polled.status_code == 200
+    assert polled.data["command"] is None
+    assert AgentCommand.objects.get(pk=created.data["id"]).status == (
+        AgentCommand.Status.WAITING_APPROVAL
+    )
