@@ -1190,6 +1190,43 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 for condition in item.get("status", {}).get("conditions", [])
             )
         ]
+        expected_controllers = {
+            "capi-system": "capi-controller-manager",
+            "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+            "capi-kubeadm-control-plane-system": "capi-kubeadm-control-plane-controller-manager",
+            "capm3-system": "capm3-controller-manager",
+        }
+        controller_states = []
+        for controller_namespace, deployment_name in expected_controllers.items():
+            deployment = kubernetes_api_get(
+                f"/apis/apps/v1/namespaces/{controller_namespace}"
+                f"/deployments/{deployment_name}"
+            )
+            desired = deployment.get("spec", {}).get("replicas", 1)
+            available = deployment.get("status", {}).get("availableReplicas", 0)
+            observed = deployment.get("status", {}).get("observedGeneration", 0)
+            generation = deployment.get("metadata", {}).get("generation", 1)
+            ready = (
+                isinstance(desired, int)
+                and not isinstance(desired, bool)
+                and desired > 0
+                and isinstance(available, int)
+                and not isinstance(available, bool)
+                and available >= desired
+                and isinstance(observed, int)
+                and isinstance(generation, int)
+                and observed >= generation
+            )
+            controller_states.append(
+                {
+                    "namespace": controller_namespace,
+                    "deployment": deployment_name,
+                    "ready": ready,
+                }
+            )
+        controllers_ready = all(item["ready"] for item in controller_states)
+        machine_inventory_ready = bool(machine_names) and bool(ready_machines)
+        adoption_verified = controllers_ready and machine_inventory_ready
         return {
             "cluster_name": cluster_name,
             "namespace": namespace,
@@ -1200,7 +1237,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "machine_names": machine_names[:200],
             "ready_machine_count": len(ready_machines),
             "ready_machine_names": ready_machines[:200],
-            "pivot_adoption_verified": True,
+            "machine_inventory_ready": machine_inventory_ready,
+            "controllers": controller_states,
+            "controllers_ready": controllers_ready,
+            "pivot_adoption_verified": adoption_verified,
             "side_effects": False,
         }
     if command_type == "cluster.capi.pivot.target.preflight":
