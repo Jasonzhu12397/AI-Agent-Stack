@@ -1431,7 +1431,9 @@ def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.SUCCEEDED
     assert deployment.error is None
-    assert deployment.plan_result["postflight"]["capi_worker_inventory_complete"] is True
+    assert (
+        deployment.plan_result["postflight"]["capi_worker_inventory_complete"] is True
+    )
 
 
 @pytest.mark.django_db
