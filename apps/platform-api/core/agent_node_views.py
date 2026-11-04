@@ -1128,7 +1128,9 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                 if dual_agent.get("target_agent_owns_cluster") is not True:
                     return Response(
                         {
-                            "detail": "Worker provisioning requires verified Target Agent ownership.",
+                            "detail": (
+                                "Worker provisioning requires verified Target Agent ownership."
+                            ),
                             "code": "TARGET_AGENT_OWNERSHIP_REQUIRED",
                         },
                         status=409,
@@ -1151,7 +1153,9 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                 ):
                     return Response(
                         {
-                            "detail": "Worker pool verification requires a complete ready inventory.",
+                            "detail": (
+                                "Worker pool verification requires a complete ready inventory."
+                            ),
                             "code": "WORKER_POOL_NOT_FULLY_READY",
                         },
                         status=409,
