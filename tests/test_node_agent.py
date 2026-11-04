@@ -2655,6 +2655,11 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                         )
                     },
                 },
+                "spec": {
+                    "template": {
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                    }
+                },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {
@@ -2753,6 +2758,11 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
                         )
                     },
                 },
+                "spec": {
+                    "template": {
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                    }
+                },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {
@@ -2841,6 +2851,11 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
                             agent.canonical_hash(profile)
                         )
                     },
+                },
+                "spec": {
+                    "template": {
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                    }
                 },
             }
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
