@@ -18,7 +18,12 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from core.cluster_deployment_services import _update_capi_pivot_provider_compatibility
+from core.cluster_deployment_services import (
+    _maybe_queue_capi_pivot,
+    _update_capi_pivot_provider_compatibility,
+    handle_deployment_command_result,
+    queue_deployment_command,
+)
 
 
 @pytest.fixture
@@ -1069,3 +1074,102 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
         }
     ]
     assert compatibility["execution_allowed"] is False
+
+
+
+@pytest.mark.django_db
+def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="dual-agent-pivot-flow",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_token = "dual-agent-target-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="dual-agent-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "preflight_validated": True,
+            "source_cluster_identity": {
+                "name": "edge-lab",
+                "namespace": "metal3",
+                "uid": "source-cluster-uid",
+            },
+        },
+        "capi_pivot_preflight": {"preflight_validated": True},
+        "capi_pivot_provider_compatibility": {
+            "checked": True,
+            "compatible": True,
+            "execution_allowed": False,
+        },
+    }
+    deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
+    deployment.save(update_fields=["target_node", "plan_result", "status", "updated_at"])
+
+    _maybe_queue_capi_pivot(deployment)
+    pivot_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+    )
+    assert pivot_command.node_id == eph_node.id
+    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+    pivot_result = {
+        "pivot_executed": True,
+        "dry_run_passed": True,
+        "source_namespace_scope_verified": True,
+        "target_management_plane_verified": True,
+        "cluster_name": "edge-lab",
+        "namespace": "metal3",
+        "automatic_retry_allowed": False,
+    }
+    handle_deployment_command_result(
+        pivot_command,
+        "succeeded",
+        pivot_result,
+        None,
+    )
+    target_verify = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+    )
+    assert target_verify.node_id == target_node.id
+    assert target_verify.status == AgentCommand.Status.QUEUED
+    assert target_verify.payload["expected_cluster_uid"] == "source-cluster-uid"
+
+    handle_deployment_command_result(
+        target_verify,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "source-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+            "pivot_adoption_verified": True,
+            "side_effects": False,
+        },
+        None,
+    )
+    deployment.refresh_from_db()
+    assert deployment.plan_result["dual_agent"]["phase"] == "target_agent_adopted"
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
