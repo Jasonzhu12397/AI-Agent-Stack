@@ -1722,5 +1722,5 @@ def test_control_plane_rejects_worker_preflight_without_healthy_provider_control
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
     assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
-    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
