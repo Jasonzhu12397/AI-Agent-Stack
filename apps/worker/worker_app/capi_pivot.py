@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
