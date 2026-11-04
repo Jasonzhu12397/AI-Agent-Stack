@@ -908,7 +908,37 @@ def _pod_network_namespace_snapshot() -> dict[str, Any]:
     }
 
 
-def inspect_network_environment() -> dict[str, Any]:
+def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = payload or {}
+    workload_namespaces = payload.get("workload_namespaces", [])
+    expected_attachments = payload.get("expected_attachments", [])
+    if (
+        not isinstance(workload_namespaces, list)
+        or len(workload_namespaces) > 32
+        or any(
+            not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            for namespace in workload_namespaces
+        )
+        or len(set(workload_namespaces)) != len(workload_namespaces)
+    ):
+        raise NodeAgentError("INVALID_WORKLOAD_NAMESPACES")
+    if (
+        not isinstance(expected_attachments, list)
+        or len(expected_attachments) > 32
+        or any(
+            not isinstance(name, str)
+            or not re.fullmatch(
+                r"(?:[a-z0-9](?:[-a-z0-9]*[a-z0-9])?/)?[a-z0-9](?:[-a-z0-9]*[a-z0-9])?",
+                name,
+            )
+            for name in expected_attachments
+        )
+        or len(set(expected_attachments)) != len(expected_attachments)
+    ):
+        raise NodeAgentError("INVALID_EXPECTED_NETWORK_ATTACHMENTS")
+    if expected_attachments and not workload_namespaces:
+        raise NodeAgentError("WORKLOAD_NAMESPACES_REQUIRED_FOR_ATTACHMENT_CHECK")
     version = kubernetes_api_get("/version")
     nodes = list_all_kubernetes_items("/api/v1/nodes", max_items=5000)
     pods = list_all_kubernetes_items("/api/v1/namespaces/kube-system/pods", max_items=5000)
@@ -989,6 +1019,67 @@ def inspect_network_environment() -> dict[str, Any]:
         for attachment in network_attachments
         for plugin in attachment["plugin_types"]
     })
+    workload_results = []
+    for namespace in workload_namespaces:
+        try:
+            workload_pods = list_all_kubernetes_items(
+                f"/api/v1/namespaces/{namespace}/pods",
+                max_items=10000,
+            )
+        except NodeAgentError as exc:
+            workload_results.append({
+                "namespace": namespace,
+                "inspection_status": "unavailable",
+                "error_code": str(exc),
+            })
+            continue
+        pod_results = []
+        for pod in workload_pods:
+            metadata = pod.get("metadata", {})
+            annotations = metadata.get("annotations", {})
+            raw_status = annotations.get("k8s.v1.cni.cncf.io/network-status", "[]")
+            try:
+                status_items = json.loads(raw_status) if isinstance(raw_status, str) else []
+            except json.JSONDecodeError:
+                status_items = []
+            if not isinstance(status_items, list):
+                status_items = []
+            networks = []
+            for network in status_items[:32]:
+                if not isinstance(network, dict):
+                    continue
+                networks.append({
+                    "name": network.get("name"),
+                    "interface": network.get("interface"),
+                    "ips": network.get("ips", [])[:16]
+                    if isinstance(network.get("ips", []), list) else [],
+                    "default": network.get("default") is True,
+                })
+            attached_names = {
+                item["name"] for item in networks if isinstance(item.get("name"), str)
+            }
+            missing = [
+                name for name in expected_attachments
+                if name not in attached_names
+                and name.split("/", 1)[-1] not in attached_names
+            ]
+            pod_results.append({
+                "name": metadata.get("name"),
+                "phase": pod.get("status", {}).get("phase"),
+                "node_name": pod.get("spec", {}).get("nodeName"),
+                "networks": networks,
+                "missing_expected_attachments": missing,
+                "attachments_valid": not missing,
+            })
+        workload_results.append({
+            "namespace": namespace,
+            "inspection_status": "observed",
+            "pod_count": len(pod_results),
+            "pods_missing_expected_attachments": [
+                item["name"] for item in pod_results if not item["attachments_valid"]
+            ][:500],
+            "pods": pod_results[:1000],
+        })
     return {
         "inspection_status": "observed",
         "kubernetes_version": version.get("gitVersion"),
@@ -996,6 +1087,7 @@ def inspect_network_environment() -> dict[str, Any]:
         "observed_components": observed_components,
         "network_attachment_definition_count": len(network_attachments),
         "network_attachments": network_attachments[:500],
+        "workload_namespace_results": workload_results,
         "observed_attachment_plugin_types": plugin_types,
         "node_network_resources": node_network_resources[:500],
         "agent_pod_network": _pod_network_namespace_snapshot(),
@@ -1064,7 +1156,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         version = kubernetes_api_get("/version")
         return {"api_reachable": True, "kubernetes_version": version.get("gitVersion")}
     if command_type == "cluster.network.inspect":
-        return inspect_network_environment()
+        return inspect_network_environment(payload)
     if command_type == "cluster.observe":
         version = kubernetes_api_get("/version")
         nodes = kubernetes_api_get("/api/v1/nodes")
