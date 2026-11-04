@@ -2875,12 +2875,32 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 )
                 created = True
             except NodeAgentError as exc:
-                if str(exc) != "KUBERNETES_API_HTTP_409":
+                error_code = str(exc)
+                if error_code == "KUBERNETES_API_HTTP_409":
+                    machine_deployment = kubernetes_api_get(md_path)
+                    if not matches_expected_machine_deployment(machine_deployment):
+                        raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_CONFLICT") from exc
+                    created = False
+                elif error_code == "KUBERNETES_API_UNAVAILABLE":
+                    # The POST may have reached the API server before the connection
+                    # timed out. Reconcile by identity; never repeat the create.
+                    try:
+                        machine_deployment = kubernetes_api_get(md_path)
+                    except NodeAgentError as reconcile_error:
+                        if str(reconcile_error) == "KUBERNETES_API_HTTP_404":
+                            raise NodeAgentError(
+                                "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
+                            ) from exc
+                        raise NodeAgentError(
+                            "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
+                        ) from reconcile_error
+                    if not matches_expected_machine_deployment(machine_deployment):
+                        raise NodeAgentError(
+                            "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
+                        ) from exc
+                    created = False
+                else:
                     raise
-                machine_deployment = kubernetes_api_get(md_path)
-                if not matches_expected_machine_deployment(machine_deployment):
-                    raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_CONFLICT") from exc
-                created = False
         machine_deployment_uid = machine_deployment.get("metadata", {}).get("uid")
         if not isinstance(machine_deployment_uid, str) or not machine_deployment_uid:
             raise NodeAgentError("MACHINE_DEPLOYMENT_UID_MISSING")
