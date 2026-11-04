@@ -1141,6 +1141,20 @@ def inspect_network_environment(
     payload = payload or {}
     workload_namespaces = payload.get("workload_namespaces", [])
     expected_attachments = payload.get("expected_attachments", [])
+    expected_default_network = payload.get("expected_default_network")
+    require_data_plane_default = payload.get("require_data_plane_default", False)
+    if not isinstance(require_data_plane_default, bool):
+        raise NodeAgentError("INVALID_DATA_PLANE_DEFAULT_REQUIREMENT")
+    if expected_default_network is not None and (
+        not isinstance(expected_default_network, str)
+        or not re.fullmatch(
+            r"(?:[a-z0-9](?:[-a-z0-9]*[a-z0-9])?/)?[a-z0-9](?:[-a-z0-9]*[a-z0-9])?",
+            expected_default_network,
+        )
+    ):
+        raise NodeAgentError("INVALID_EXPECTED_DEFAULT_NETWORK")
+    if require_data_plane_default and not expected_default_network:
+        raise NodeAgentError("EXPECTED_DEFAULT_NETWORK_REQUIRED")
     if (
         not isinstance(workload_namespaces, list)
         or len(workload_namespaces) > 32
@@ -1302,6 +1316,25 @@ def inspect_network_environment(
             attached_names = {
                 item["name"] for item in networks if isinstance(item.get("name"), str)
             }
+            default_networks = [
+                item for item in networks if item.get("default") is True
+            ]
+            if require_data_plane_default:
+                expected_name = expected_default_network
+                default_network_valid = (
+                    len(default_networks) == 1
+                    and isinstance(default_networks[0].get("name"), str)
+                    and (
+                        default_networks[0]["name"] == expected_name
+                        or (
+                            "/" not in expected_name
+                            and default_networks[0]["name"].rsplit("/", 1)[-1]
+                            == expected_name
+                        )
+                    )
+                )
+            else:
+                default_network_valid = None
             missing = []
             for expected in expected_attachments:
                 if "/" in expected:
@@ -1318,6 +1351,9 @@ def inspect_network_environment(
                 "phase": pod.get("status", {}).get("phase"),
                 "node_name": pod.get("spec", {}).get("nodeName"),
                 "networks": networks,
+                "default_networks": default_networks,
+                "expected_default_network": expected_default_network,
+                "default_network_valid": default_network_valid,
                 "missing_expected_attachments": missing,
                 "attachments_valid": not missing,
             })
@@ -1348,6 +1384,31 @@ def inspect_network_environment(
             if item.get("inspection_status") == "observed"
         )
     )
+    workload_default_network_complete = (
+        require_data_plane_default
+        and workload_inspection_complete
+        and all(
+            item.get("inspection_status") == "observed"
+            and item.get("pod_count", 0) > 0
+            and all(
+                pod.get("default_network_valid") is True
+                for pod in item.get("pods", [])
+            )
+            for item in workload_results
+        )
+    )
+    workload_default_network_passed = (
+        workload_default_network_complete
+        and all(
+            item.get("inspection_status") == "observed"
+            and not item.get("inspection_truncated")
+            and all(
+                pod.get("default_network_valid") is True
+                for pod in item.get("pods", [])
+            )
+            for item in workload_results
+        )
+    )
     return {
         "inspection_status": "observed",
         "kubernetes_version": version.get("gitVersion"),
@@ -1362,6 +1423,26 @@ def inspect_network_environment(
             "passed": (
                 workload_attachments_valid
                 if expected_attachments and workload_inspection_complete
+                else None
+            ),
+        },
+        "pod_default_network_validation": {
+            "requested": require_data_plane_default,
+            "expected_default_network": expected_default_network,
+            "complete": (
+                workload_inspection_complete
+                and all(
+                    item.get("inspection_status") == "observed"
+                    and not item.get("inspection_truncated")
+                    and item.get("pod_count", 0) > 0
+                    for item in workload_results
+                )
+                if require_data_plane_default
+                else False
+            ),
+            "passed": (
+                workload_default_network_passed
+                if require_data_plane_default
                 else None
             ),
         },
