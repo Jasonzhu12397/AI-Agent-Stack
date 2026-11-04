@@ -2413,6 +2413,26 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         infrastructure_metadata = infrastructure_template.get("metadata", {})
         bootstrap_metadata = bootstrap_template.get("metadata", {})
         template_annotations = infrastructure_metadata.get("annotations", {})
+        infrastructure_spec = infrastructure_template.get("spec", {})
+        infrastructure_template_spec = (
+            infrastructure_spec.get("template", {}).get("spec", {})
+            if isinstance(infrastructure_spec, dict)
+            else {}
+        )
+        template_host_selector = infrastructure_template_spec.get(
+            "hostSelector", {}
+        )
+        template_host_match_labels = (
+            template_host_selector.get("matchLabels", {})
+            if isinstance(template_host_selector, dict)
+            else {}
+        )
+        template_host_selector_verified = (
+            isinstance(template_host_match_labels, dict)
+            and template_host_match_labels == host_selector
+        )
+        if not template_host_selector_verified:
+            blockers.append("metal3_template_host_selector_mismatch")
         network_template_profile_hash = (
             template_annotations.get("ai-agent-stack.io/network-profile-hash")
             if isinstance(template_annotations, dict)
@@ -2475,6 +2495,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "network_profile": network_profile,
             "network_template_profile_hash": network_template_profile_hash,
             "network_template_profile_verified": network_template_profile_verified,
+            "template_host_selector": template_host_match_labels,
+            "template_host_selector_verified": template_host_selector_verified,
             "provider_versions": versions,
             "controllers": controller_states,
             "controllers_ready": all(item["ready"] for item in controller_states),
@@ -2597,12 +2619,19 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if isinstance(infra_annotations, dict)
             else None
         )
+        infra_template_spec = infra_template.get("spec", {}).get(
+            "template", {}
+        ).get("spec", {})
+        template_host_selector = infra_template_spec.get(
+            "hostSelector", {}
+        ).get("matchLabels", {})
         if (
             infra_template.get("metadata", {}).get("uid") != expected_infra_uid
             or infra_template.get("apiVersion") != expected_infra_api_version
             or bootstrap_template.get("metadata", {}).get("uid") != expected_bootstrap_uid
             or bootstrap_template.get("apiVersion") != expected_bootstrap_api_version
             or network_template_hash != network_profile.get("profile_hash")
+            or template_host_selector != host_selector
         ):
             raise NodeAgentError("WORKER_PROVISIONING_TEMPLATE_IDENTITY_OR_NETWORK_CHANGED")
         bmh_version = versions["metal3.io"]
