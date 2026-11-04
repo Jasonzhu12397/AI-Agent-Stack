@@ -2174,21 +2174,6 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             raise NodeAgentError("INVALID_WORKER_REPLICAS")
         if not isinstance(config, dict):
             raise NodeAgentError("WORKER_PROVISIONING_CONFIG_REQUIRED")
-        plan_payload = {
-            key: value
-            for key, value in payload.items()
-            if key != "provisioning_plan_hash"
-        }
-        computed_plan_hash = hashlib.sha256(
-            json.dumps(
-                plan_payload,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
-        ).hexdigest()
-        if computed_plan_hash != plan_hash:
-            raise NodeAgentError("WORKER_PROVISIONING_PLAN_HASH_MISMATCH")
         deployment_name = config.get("machine_deployment_name")
         infrastructure_template_name = config.get("infrastructure_template_name")
         bootstrap_template_name = config.get("bootstrap_template_name")
@@ -2576,6 +2561,21 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             or not re.fullmatch(r"[0-9a-f]{64}", plan_hash)
         ):
             raise NodeAgentError("INVALID_WORKER_PROVISIONING_APPROVAL_PAYLOAD")
+        plan_payload = {
+            key: value
+            for key, value in payload.items()
+            if key != "provisioning_plan_hash"
+        }
+        computed_plan_hash = hashlib.sha256(
+            json.dumps(
+                plan_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if computed_plan_hash != plan_hash:
+            raise NodeAgentError("WORKER_PROVISIONING_PLAN_HASH_MISMATCH")
         deployment_name = config.get("machine_deployment_name")
         infrastructure_template_name = config.get("infrastructure_template_name")
         bootstrap_template_name = config.get("bootstrap_template_name")
