@@ -19,7 +19,7 @@ def test_publish_inventory_creates_scoped_configmap(monkeypatch):
             return {"metadata": {"uid": "node-uid-01"}}
         if path.endswith("/" + network_inventory.configmap_name_for_node("worker-01")) and method == "GET":
             return None
-        if path == "/api/v1/namespaces/ai-agent-system/configmaps" and method == "POST":
+        if path == "/api/v1/namespaces/ai-agent-inventory/configmaps" and method == "POST":
             return {}
         raise AssertionError((path, method))
 
