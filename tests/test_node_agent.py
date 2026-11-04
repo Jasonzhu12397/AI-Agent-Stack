@@ -1601,6 +1601,26 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
                 }
             ]
         },
+        "/apis/apps/v1/namespaces/capi-system/deployments/capi-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        "/apis/apps/v1/namespaces/capi-kubeadm-bootstrap-system/deployments/capi-kubeadm-bootstrap-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        "/apis/apps/v1/namespaces/capi-kubeadm-control-plane-system/deployments/capi-kubeadm-control-plane-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        "/apis/apps/v1/namespaces/capm3-system/deployments/capm3-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
     }
     monkeypatch.setattr(
         agent,
@@ -1625,6 +1645,9 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
     assert result["cluster_uid"] == "source-uid"
     assert result["machine_count"] == 1
     assert result["ready_machine_count"] == 1
+    assert result["machine_inventory_ready"] is True
+    assert result["controllers_ready"] is True
+    assert len(result["controllers"]) == 4
     assert result["side_effects"] is False
 
 
