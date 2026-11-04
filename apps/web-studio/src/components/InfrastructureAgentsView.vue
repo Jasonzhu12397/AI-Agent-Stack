@@ -69,6 +69,7 @@ const availableCommands = computed(() => {
     "node.health",
     "host.preflight",
     "cluster.plan",
+    "cluster.network.inspect",
     "capi.cluster.observe",
     "metal3.host.inspect",
     "cluster.provider.discover",
