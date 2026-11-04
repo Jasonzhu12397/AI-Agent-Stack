@@ -2590,6 +2590,15 @@ def test_target_agent_does_not_accept_stale_hardware_inventory_reports(monkeypat
     assert result["stale_node_names"] == ["worker-old"]
 
 
+
+def test_worker_provisioning_preflight_is_target_agent_only():
+    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        agent.execute_command(
+            {"command_type": "cluster.capi.worker.preflight", "payload": {}},
+            "eph_node",
+        )
+
+
 def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_network(monkeypatch):
     profile = valid_dual_network_profile()
     profile["data_plane"]["hugepages"] = "1Gi"
@@ -2624,7 +2633,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {"apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
                     "metadata": {"name": "worker-bootstrap", "uid": "bootstrap-template-uid"}}
-        if path.endswith("/baremetalhosts"):
+        if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [
                 {"metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
                               "labels": {"pool": "workers"}},
