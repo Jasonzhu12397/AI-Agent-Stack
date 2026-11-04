@@ -195,7 +195,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: target-cluster-agent-network-inventory-readonly
-  namespace: ai-agent-system
+  namespace: ai-agent-inventory
 subjects:
   - kind: ServiceAccount
     name: target-cluster-agent
@@ -248,7 +248,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: network-inventory-agent-configmap-writer
-  namespace: ai-agent-system
+  namespace: ai-agent-inventory
 subjects:
   - kind: ServiceAccount
     name: network-inventory-agent
