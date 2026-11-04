@@ -2828,7 +2828,7 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
                     "uid": "bootstrap-template-uid",
                 },
             }
-        if path.endswith("/baremetalhosts"):
+        if "/baremetalhosts" in path:
             return {"items": [
                 {
                     "metadata": {
