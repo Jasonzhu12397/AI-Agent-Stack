@@ -148,6 +148,11 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_worker_replicas"] = deployment.spec.get("worker_replicas")
+        worker_config = deployment.spec.get("worker_provisioning")
+        if isinstance(worker_config, dict):
+            payload["machine_deployment_name"] = worker_config.get(
+                "machine_deployment_name"
+            )
     elif command_type == "cluster.capi.pivot.target.preflight":
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
@@ -971,6 +976,13 @@ def handle_deployment_command_result(
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("expected_worker_replicas") == expected_worker_replicas
+            and (
+                not isinstance(deployment.spec.get("worker_provisioning"), dict)
+                or result.get("machine_deployment_name")
+                == deployment.spec.get("worker_provisioning", {}).get(
+                    "machine_deployment_name"
+                )
+            )
             and result.get("side_effects") is False
             and result.get("ready") is True
             and isinstance(node_count, int)
