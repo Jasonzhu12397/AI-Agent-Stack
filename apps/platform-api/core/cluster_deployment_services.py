@@ -70,7 +70,7 @@ def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
     namespace = identity.get("namespace") if isinstance(identity, dict) else None
     if isinstance(namespace, str) and namespace:
         return namespace
-    configured = deployment.spec.get("capi_namespace", "default")
+    configured = _deployment_capi_namespace(deployment)
     return configured if isinstance(configured, str) and configured else "default"
 
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
@@ -142,12 +142,12 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
     elif command_type == "cluster.capi.pivot.execute":
         payload["cluster_name"] = deployment.cluster_name
-        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+        payload["namespace"] = _deployment_capi_namespace(deployment)
     elif command_type == "cluster.capi.pivot.target.verify":
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         identity = source.get("source_cluster_identity", {})
         payload["cluster_name"] = deployment.cluster_name
-        payload["namespace"] = deployment.spec.get("capi_namespace", "default")
+        payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_cluster_uid"] = identity.get("uid")
     else:
         payload["cluster_spec"] = deployment.spec
@@ -619,7 +619,7 @@ def handle_deployment_command_result(
             command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("cluster_name") == deployment.cluster_name
-            and result.get("namespace") == deployment.spec.get("capi_namespace", "default")
+            and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("cluster_identity_preserved") is True
             and result.get("cluster_uid") == expected_uid
             and result.get("source_cluster_uid") == expected_uid
