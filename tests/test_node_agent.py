@@ -1689,3 +1689,201 @@ def test_agent_factory_returns_distinct_role_runtimes():
 def test_agent_factory_rejects_unknown_role():
     with pytest.raises(agent.NodeAgentError, match="INVALID_AGENT_ROLE"):
         agent.create_agent(object(), "unknown")
+
+
+def valid_dual_network_profile():
+    return {
+        "version": "v1",
+        "pod_traffic_default": "data_plane",
+        "control_plane": {
+            "interface": "eno1",
+            "cidr": "10.10.10.10/24",
+            "gateway": "10.10.10.1",
+            "mtu": 1500,
+        },
+        "data_plane": {
+            "interfaces": ["ens2f0"],
+            "mtu": 9000,
+            "cni": {
+                "primary": "calico",
+                "meta": "multus",
+                "attachments": [
+                    {"name": "ovs-data", "type": "ovs"},
+                    {
+                        "name": "sriov-data",
+                        "type": "sriov",
+                        "resource_name": "intel.com/sriov_netdevice",
+                    },
+                ],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("node_type", ["eph_node", "target_cluster"])
+def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch, node_type):
+    calls = []
+
+    def fake_get(path):
+        calls.append(path)
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "k8s.cni.cncf.io",
+                        "preferredVersion": {"version": "v1"},
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        calls.append(path)
+        if path == "/api/v1/nodes":
+            return [
+                {
+                    "metadata": {
+                        "name": "worker-01",
+                        "labels": {"feature.node.kubernetes.io/network-sriov": "true"},
+                    },
+                    "status": {
+                        "allocatable": {
+                            "cpu": "32",
+                            "intel.com/sriov_netdevice": "8",
+                            "hugepages-2Mi": "1Gi",
+                        }
+                    },
+                }
+            ]
+        if path == "/api/v1/namespaces/kube-system/pods":
+            return [
+                {"metadata": {"name": "calico-node-abc", "namespace": "kube-system"}},
+                {"metadata": {"name": "kube-multus-ds-abc", "namespace": "kube-system"}},
+                {"metadata": {"name": "sriov-device-plugin-abc", "namespace": "kube-system"}},
+            ]
+        if path == "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions":
+            return [
+                {
+                    "metadata": {"name": "sriov-net", "namespace": "default"},
+                    "spec": {
+                        "config": json.dumps(
+                            {"type": "sriov", "resourceName": "intel.com/sriov_netdevice"}
+                        )
+                    },
+                },
+                {
+                    "metadata": {"name": "ovs-net", "namespace": "default"},
+                    "spec": {"config": json.dumps({"type": "ovs"})},
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(
+        agent,
+        "_pod_network_namespace_snapshot",
+        lambda: {
+            "scope": "agent_pod_network_namespace",
+            "interfaces": ["eth0"],
+            "default_routes": [{"interface": "eth0", "gateway": "10.20.0.1"}],
+        },
+    )
+
+    result = agent.execute_command(
+        {"command_type": "cluster.network.inspect", "payload": {}},
+        node_type,
+    )
+
+    assert result["inspection_status"] == "observed"
+    assert result["node_count"] == 1
+    assert result["observed_components"]["calico"] is True
+    assert result["observed_components"]["multus"] is True
+    assert result["observed_components"]["sriov_device_plugin"] is True
+    assert result["observed_attachment_plugin_types"] == ["ovs", "sriov"]
+    assert result["network_attachment_definition_count"] == 2
+    assert result["node_network_resources"][0]["allocatable_network_resources"][
+        "intel.com/sriov_netdevice"
+    ] == "8"
+    assert result["agent_pod_network"]["interfaces"] == ["eth0"]
+    assert "Pod namespace interfaces are not host NIC inventory." in result["limitations"]
+    assert "/api/v1/namespaces/kube-system/pods" in calls
+
+
+def test_network_profile_accepts_calico_multus_ovs_and_sriov():
+    result = agent.validate_network_profile(valid_dual_network_profile())
+
+    assert result["valid"] is True
+    assert result["pod_traffic_default"] == "data_plane"
+    assert result["primary_cni"] == "calico"
+    assert result["meta_cni"] == "multus"
+    assert result["attachment_count"] == 2
+    assert len(result["profile_hash"]) == 64
+
+
+@pytest.mark.parametrize(
+    "mutate,error",
+    [
+        (lambda profile: profile.update({"pod_traffic_default": "control_plane"}),
+         "POD_TRAFFIC_MUST_DEFAULT_TO_DATA_PLANE"),
+        (lambda profile: profile["control_plane"].update({"gateway": "10.10.11.1"}),
+         "CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR"),
+        (lambda profile: profile["data_plane"]["cni"].update({"primary": "flannel"}),
+         "UNSUPPORTED_PRIMARY_CNI_COMPOSITION"),
+        (lambda profile: profile["data_plane"]["cni"]["attachments"].append(
+            {"name": "sriov-no-resource", "type": "sriov"}
+        ), "SRIOV_RESOURCE_NAME_REQUIRED"),
+    ],
+)
+def test_network_profile_rejects_invalid_routing_or_cni_composition(mutate, error):
+    profile = valid_dual_network_profile()
+    mutate(profile)
+
+    with pytest.raises(agent.NodeAgentError, match=error):
+        agent.validate_network_profile(profile)
+
+
+def test_dpdk_network_profile_requires_hugepages_and_numa_policy():
+    profile = valid_dual_network_profile()
+    profile["data_plane"]["cni"]["attachments"].append(
+        {
+            "name": "dpdk-vf",
+            "type": "sriov",
+            "resource_name": "intel.com/sriov_dpdk",
+            "dpdk": True,
+        }
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="DPDK_HUGEPAGES_REQUIRED"):
+        agent.validate_network_profile(profile)
+
+    profile["data_plane"]["hugepages"] = {"2Mi": "1Gi"}
+    with pytest.raises(agent.NodeAgentError, match="DPDK_NUMA_POLICY_REQUIRED"):
+        agent.validate_network_profile(profile)
+
+    profile["data_plane"]["numa_policy"] = "single_numa"
+    result = agent.validate_network_profile(profile)
+    assert result["dpdk_requested"] is True
+
+
+def test_cluster_plan_includes_validated_network_profile_hash():
+    spec = {
+        "cluster_name": "edge-lab",
+        "kubernetes_version": "v1.32.2",
+        "control_plane_replicas": 3,
+        "worker_replicas": 2,
+        "network_profile": valid_dual_network_profile(),
+    }
+
+    result = agent.execute_command(
+        {"command_type": "cluster.plan", "payload": {"cluster_spec": spec}},
+        "eph_node",
+    )
+
+    assert result["network_profile"]["valid"] is True
+    assert result["network_profile"]["pod_traffic_default"] == "data_plane"
+    assert result["network_profile"]["profile_hash"] == agent.canonical_hash(
+        valid_dual_network_profile()
+    )
