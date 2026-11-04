@@ -1106,6 +1106,10 @@ def inspect_network_environment(payload: dict[str, Any] | None = None) -> dict[s
     workload_inspection_complete = (
         len(workload_results) == len(workload_namespaces)
         and all(item.get("inspection_status") == "observed" for item in workload_results)
+        and (
+            not expected_attachments
+            or all(item.get("pod_count", 0) > 0 for item in workload_results)
+        )
     )
     workload_attachments_valid = (
         not missing_network_definitions
