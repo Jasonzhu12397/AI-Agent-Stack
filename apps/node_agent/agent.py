@@ -1793,7 +1793,7 @@ def execute_command_with_lease(
             except NodeAgentError as exc:
                 renewal_errors.append(exc)
                 stop_event.set()
-            except Exception as exc:
+            except Exception:
                 renewal_errors.append(
                     NodeAgentError("COMMAND_LEASE_RENEWAL_FAILED")
                 )
