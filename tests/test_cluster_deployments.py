@@ -1309,7 +1309,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         None,
     )
     deployment.refresh_from_db()
-    assert deployment.plan_result["dual_agent"]["phase"] == "target_agent_adopted"
+    assert deployment.plan_result["dual_agent"]["phase"] == "worker_preflight_pending"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     worker_preflight = AgentCommand.objects.get(
