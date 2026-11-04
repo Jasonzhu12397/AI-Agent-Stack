@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -41,16 +42,70 @@ def _resolve_kubeconfig(
 
 def _safe_output(value: str, limit: int = 12000) -> str:
     value = re.sub(
-        r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+",
-        r"\1[REDACTED]",
+        r"(?i)(authorization\\s*:\\s*bearer\\s+)[^\\s]+",
+        r"\\1[REDACTED]",
         value,
     )
     value = re.sub(
-        r"(?i)(password|token|client-key-data|client-certificate-data)\s*[:=]\s*[^\s,]+",
-        r"\1=[REDACTED]",
+        r"(?i)(password|token|client-key-data|client-certificate-data)\\s*[:=]\\s*[^\\s,]+",
+        r"\\1=[REDACTED]",
         value,
     )
     return value[-limit:]
+
+
+def _verify_source_namespace_scope(
+    runner,
+    kubectl: str,
+    source_kubeconfig: Path,
+    namespace: str,
+    cluster_name: str,
+    process_env: dict[str, str],
+) -> dict[str, Any]:
+    command = [
+        kubectl,
+        "--kubeconfig",
+        str(source_kubeconfig),
+        "--namespace",
+        namespace,
+        "get",
+        "clusters.cluster.x-k8s.io",
+        "-o",
+        "json",
+    ]
+    try:
+        completed = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_TIMEOUT") from exc
+    except OSError as exc:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_FAILED") from exc
+    if completed.returncode != 0:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_FAILED")
+    try:
+        document = json.loads(completed.stdout or "")
+    except (TypeError, ValueError) as exc:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_INVALID") from exc
+    items = document.get("items") if isinstance(document, dict) else None
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_INVALID")
+    names = [
+        item.get("metadata", {}).get("name")
+        for item in items
+        if isinstance(item.get("metadata"), dict)
+    ]
+    if len(names) != len(items):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_INVALID")
+    if names != [cluster_name]:
+        raise CapiPivotError("CAPI_PIVOT_NAMESPACE_MUST_CONTAIN_ONLY_TARGET_CLUSTER")
+    return {"source_cluster_count": len(items), "source_cluster_name": cluster_name}
 
 
 def run_capi_pivot_dry_run(
@@ -88,10 +143,25 @@ def run_capi_pivot_dry_run(
     )
     if source_kubeconfig == target_kubeconfig:
         raise CapiPivotError("CAPI_PIVOT_KUBECONFIGS_MUST_DIFFER")
+    kubectl = lookup("kubectl")
+    if not kubectl:
+        raise CapiPivotError("KUBECTL_NOT_INSTALLED")
     clusterctl = lookup("clusterctl")
     if not clusterctl:
         raise CapiPivotError("CLUSTERCTL_NOT_INSTALLED")
 
+    process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+    }
+    source_scope = _verify_source_namespace_scope(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        namespace,
+        cluster_name,
+        process_env,
+    )
     command = [
         clusterctl,
         "move",
@@ -103,11 +173,7 @@ def run_capi_pivot_dry_run(
         "-v",
         "5",
     ]
-    process_env = {
-        "PATH": env.get("PATH", ""),
-        "HOME": env.get("HOME", "/tmp"),
-        "KUBECONFIG": str(source_kubeconfig),
-    }
+    process_env["KUBECONFIG"] = str(source_kubeconfig)
     try:
         completed = runner(
             command,
@@ -135,8 +201,10 @@ def run_capi_pivot_dry_run(
         "execution_mode": "clusterctl_move_dry_run",
         "source_kubeconfig_configured": True,
         "target_kubeconfig_configured": True,
+        "source_cluster_count": source_scope["source_cluster_count"],
         "namespace_scope": "all_capi_objects_in_namespace",
         "namespace_scope_warning": True,
+        "status_subresources_migrated": False,
         "side_effects": False,
         "exit_code": completed.returncode,
         "stdout_summary": stdout,
