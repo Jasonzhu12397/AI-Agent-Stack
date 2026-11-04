@@ -70,6 +70,9 @@ spec:
           volumeMounts:
             - name: agent-health
               mountPath: /tmp
+            - name: capi-pivot-kubeconfigs
+              mountPath: /var/run/secrets/ai-agent/capi-pivot
+              readOnly: true
           readinessProbe:
             exec:
               command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
