@@ -4,3 +4,10 @@ metadata:
   name: ai-agent-system
   labels:
     app.kubernetes.io/part-of: ai-agent-studio
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-agent-inventory
+  labels:
+    app.kubernetes.io/part-of: ai-agent-studio
