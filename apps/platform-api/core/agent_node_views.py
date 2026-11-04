@@ -33,6 +33,7 @@ EPH_COMMANDS = {
     "node.health",
     "host.preflight",
     "cluster.plan",
+    "cluster.network.inspect",
     "cluster.provision",
     "target-agent.bootstrap",
     "capi.cluster.observe",
@@ -46,6 +47,7 @@ EPH_COMMANDS = {
 TARGET_COMMANDS = {
     "node.health",
     "cluster.health",
+    "cluster.network.inspect",
     "cluster.observe",
     "cluster.diagnose",
     "cluster.postflight",
