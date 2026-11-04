@@ -1606,12 +1606,18 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
             "spec": {"replicas": 1},
             "status": {"availableReplicas": 1, "observedGeneration": 1},
         },
-        "/apis/apps/v1/namespaces/capi-kubeadm-bootstrap-system/deployments/capi-kubeadm-bootstrap-controller-manager": {
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-bootstrap-system/deployments/"
+            "capi-kubeadm-bootstrap-controller-manager"
+        ): {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
             "status": {"availableReplicas": 1, "observedGeneration": 1},
         },
-        "/apis/apps/v1/namespaces/capi-kubeadm-control-plane-system/deployments/capi-kubeadm-control-plane-controller-manager": {
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-control-plane-system/deployments/"
+            "capi-kubeadm-control-plane-controller-manager"
+        ): {
             "metadata": {"generation": 1},
             "spec": {"replicas": 1},
             "status": {"availableReplicas": 1, "observedGeneration": 1},
