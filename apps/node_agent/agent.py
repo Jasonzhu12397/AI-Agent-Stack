@@ -805,7 +805,7 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         or control_gateway not in control_network.network
     ):
         raise NodeAgentError("CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR")
-    control_mtu = control_plane.get("mtu", 1500)
+    control_mtu = control_plane.get("mtu")
     if (
         not isinstance(control_mtu, int)
         or isinstance(control_mtu, bool)
@@ -822,7 +822,7 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         raise NodeAgentError("INVALID_DATA_PLANE_INTERFACE")
     if len(set(interfaces)) != len(interfaces) or interface in interfaces:
         raise NodeAgentError("NETWORK_INTERFACE_CONFLICT")
-    data_mtu = data_plane.get("mtu", 9000)
+    data_mtu = data_plane.get("mtu")
     if not isinstance(data_mtu, int) or isinstance(data_mtu, bool) or not 576 <= data_mtu <= 9216:
         raise NodeAgentError("INVALID_DATA_PLANE_MTU")
     if profile.get("pod_traffic_default") != "data_plane":
@@ -862,6 +862,8 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
                 raise NodeAgentError("DPDK_HUGEPAGES_REQUIRED")
             if not isinstance(data_plane.get("numa_policy"), str) or not data_plane["numa_policy"]:
                 raise NodeAgentError("DPDK_NUMA_POLICY_REQUIRED")
+            if data_plane.get("cpu_manager_policy") != "static":
+                raise NodeAgentError("DPDK_CPU_MANAGER_STATIC_REQUIRED")
     return {
         "valid": True,
         "pod_traffic_default": "data_plane",
