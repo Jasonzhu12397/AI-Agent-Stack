@@ -42,6 +42,18 @@ The dry-run invokes `clusterctl move --dry-run` only. It reports that the namesp
 
 The EPH ServiceAccount is read-only for core node/namespace data, CAPI resources and Metal3 resources. It can discover API groups and run preflight/plan checks. It cannot create or modify Cluster, Machine, BareMetalHost or BMC resources. Do not treat this single-node Kubernetes cluster as a persistent management plane. Complete the bootstrap work, persist all required state centrally, revoke the EPH runtime identity, then hand off/reboot the physical host into the final target worker OS.
 
+## Per-node physical network inventory (target cluster)
+
+The Target Agent Deployment is pinned to a control-plane node so it can start before workers exist. Its own host sysfs mount therefore describes only that one physical server. To inventory every physical target node (especially Data Plane workers with SR-IOV VFs/DPDK), also apply `network-inventory-agent.yaml` as a DaemonSet:
+
+1. Apply `namespace.yaml` and `rbac.yaml`.
+2. Replace the DaemonSet image with the same immutable node-agent image used by the Target Agent.
+3. Apply `network-inventory-agent.yaml` to schedule one small, non-root publisher on every node, including tainted control-plane nodes.
+4. Each publisher reads host `/sys` read-only and writes a bounded hardware report to a node-specific ConfigMap in `ai-agent-system`. It has only `get` access to Nodes and `get/create/update` access to ConfigMaps in that namespace.
+5. The Target Agent reads those ConfigMaps, correlates each report with the live Node UID, ignores stale reports from replaced nodes, and returns the per-node NIC/PCI/VF/IOMMU/NUMA/hugepage inventory in `cluster.network.inspect`.
+
+The DaemonSet does not use host networking, host PID, privileged mode, or writable host mounts. Its Pods reach the Kubernetes API over their normal Pod network, which must be routed on the Data Plane as required by the site policy. A read-only hostPath admission exception for `/sys` is required; if prohibited, do not weaken the Agent security context—use a separately approved host inventory integration. Reports contain hardware inventory (including MAC addresses), not BMC credentials or Pod secrets.
+
 ## Target Cluster Agent (target cluster)
 
 The target agent must not be required to create the first target Control Plane. As soon as the first Control Plane API, etcd and core networking are Ready, install the Target Agent before provisioning Data Plane workers. The supplied Deployment selects a control-plane node and tolerates the standard control-plane NoSchedule taint, so it can schedule when no workers exist.
