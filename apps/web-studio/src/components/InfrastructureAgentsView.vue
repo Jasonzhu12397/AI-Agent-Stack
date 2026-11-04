@@ -586,6 +586,7 @@ onUnmounted(() => {
               <small>{{ formatTime(deployment.created_at) }} · EPH {{ deployment.eph_node_id.slice(0, 8) }}</small>
               <div v-if="deployment.plan_result" class="plan-result">
                 <span>Plan hash: {{ deployment.plan_hash || "not generated" }}</span>
+                <p v-if="deployment.plan_result.network_profile">Dual-network profile passed input validation. Runtime dataplane connectivity remains a separate check.</p>
                 <el-tag
                   :type="deployment.plan_result.adapter_enabled === true ? 'success' : 'warning'"
                   size="small"
