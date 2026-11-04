@@ -676,3 +676,80 @@ def test_network_inspection_command_can_be_queued_for_both_agent_roles(
     assert response.data["command_type"] == "cluster.network.inspect"
     assert response.data["status"] == AgentCommand.Status.QUEUED
     assert response.data["approved_at"] is None
+
+
+@pytest.mark.django_db
+def test_agent_credential_rotation_invalidates_old_token_and_requires_new_token(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "rotate-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    old_token = enrolled.data["enrollment_token"]
+
+    rotated = client.post(
+        f"/api/v1/agent-nodes/{node_id}/credentials/rotate/",
+        {},
+        format="json",
+    )
+
+    assert rotated.status_code == 200
+    new_token = rotated.data["enrollment_token"]
+    assert new_token != old_token
+    node = AgentNode.objects.get(pk=node_id)
+    assert node.status == AgentNode.Status.OFFLINE
+    assert node.credential_hash == hashlib.sha256(new_token.encode("utf-8")).hexdigest()
+    assert "credential_hash" not in rotated.data
+
+    runtime = APIClient()
+    old_heartbeat = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {old_token}",
+    )
+    new_heartbeat = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {new_token}",
+    )
+
+    assert old_heartbeat.status_code == 401
+    assert new_heartbeat.status_code == 200
+    assert new_heartbeat.data["status"] == AgentNode.Status.ONLINE
+
+
+@pytest.mark.django_db
+def test_agent_credential_rotation_is_blocked_while_command_is_running(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "busy-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    command = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "cluster.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="busy-agent-command",
+    )
+    assert command.status_code == 202
+    AgentCommand.objects.filter(pk=command.data["id"]).update(
+        status=AgentCommand.Status.RUNNING,
+    )
+    node = AgentNode.objects.get(pk=node_id)
+    original_hash = node.credential_hash
+
+    rotated = client.post(
+        f"/api/v1/agent-nodes/{node_id}/credentials/rotate/",
+        {},
+        format="json",
+    )
+
+    assert rotated.status_code == 409
+    node.refresh_from_db()
+    assert node.credential_hash == original_hash
