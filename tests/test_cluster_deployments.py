@@ -1102,6 +1102,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         last_seen_at=timezone.now(),
     )
     deployment.target_node = target_node
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "preflight_validated": True,
@@ -1119,7 +1120,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         },
     }
     deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
-    deployment.save(update_fields=["target_node", "plan_result", "status", "updated_at"])
+    deployment.save(update_fields=["target_node", "spec", "plan_result", "status", "updated_at"])
 
     _maybe_queue_capi_pivot(deployment)
     pivot_command = AgentCommand.objects.get(
