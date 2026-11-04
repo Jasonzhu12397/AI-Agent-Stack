@@ -2110,3 +2110,54 @@ def test_host_sysfs_inspection_is_explicitly_unavailable_without_mount(monkeypat
 
     assert result["status"] == "not_configured"
     assert result["scope"] == "host_sysfs"
+
+
+def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatch):
+    reports = [
+        {
+            "metadata": {
+                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+            },
+            "data": {
+                "inventory.json": json.dumps(
+                    {
+                        "schema_version": "v1",
+                        "node_name": "worker-01",
+                        "node_uid": "node-uid-01",
+                        "collected_at": "2026-11-04T00:00:00+00:00",
+                        "hardware": {
+                            "status": "observed",
+                            "interfaces": [{"name": "eno1"}],
+                            "pci_network_devices": [{"pci_address": "0000:03:00.0"}],
+                            "hugepages": [{"page_size": "hugepages-2Mi", "free": "512"}],
+                            "numa_nodes": [{"node": "node0"}],
+                        },
+                    }
+                )
+            },
+        },
+        {
+            "metadata": {
+                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+            },
+            "data": {"inventory.json": "{invalid-json"},
+        },
+        {
+            "metadata": {"labels": {"app.kubernetes.io/name": "unrelated-configmap"}},
+            "data": {},
+        },
+    ]
+
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: reports,
+    )
+
+    result = agent.inspect_cluster_node_hardware_inventory()
+
+    assert result["status"] == "observed"
+    assert result["node_count"] == 1
+    assert result["nodes"][0]["node_name"] == "worker-01"
+    assert result["nodes"][0]["interfaces"][0]["name"] == "eno1"
+    assert result["nodes"][0]["pci_network_devices"][0]["pci_address"] == "0000:03:00.0"
