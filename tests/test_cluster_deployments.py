@@ -1174,6 +1174,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
             "controllers_ready": True,
             "machine_count": 3,
             "ready_machine_count": 3,
+            "not_ready_machine_names": [],
             "side_effects": False,
         },
         None,
@@ -1182,3 +1183,78 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     assert deployment.plan_result["dual_agent"]["phase"] == "target_agent_adopted"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
+@pytest.mark.django_db
+def test_control_plane_rejects_partial_target_machine_readiness_claim(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="partial-target-readiness",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="partial-readiness-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"partial-readiness-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        },
+        "dual_agent": {
+            "phase": "target_agent_verification_pending",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"partial-target-readiness:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "source-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+            "pivot_adoption_verified": True,
+            "machine_inventory_ready": True,
+            "controllers_ready": True,
+            "machine_count": 3,
+            "ready_machine_count": 1,
+            "not_ready_machine_names": ["edge-lab-worker-1", "edge-lab-worker-2"],
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.error["code"] == "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"
