@@ -1625,6 +1625,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         }
     if command_type == "cluster.capi.pivot.source.preflight":
         cluster_name = payload.get("cluster_name")
+        machine_deployment_name = payload.get("machine_deployment_name")
         if (
             not isinstance(cluster_name, str)
             or len(cluster_name) > 63
@@ -2932,9 +2933,14 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             metadata = machine.get("metadata", {})
             spec = machine.get("spec", {})
             labels = metadata.get("labels", {})
+            labels = labels if isinstance(labels, dict) else {}
             if spec.get("clusterName") != cluster_name:
                 continue
             if "cluster.x-k8s.io/control-plane" in labels:
+                continue
+            if machine_deployment_name and labels.get(
+                "cluster.x-k8s.io/deployment-name"
+            ) != machine_deployment_name:
                 continue
             machine_name = metadata.get("name")
             if not isinstance(machine_name, str) or not machine_name:
@@ -2981,6 +2987,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 "cluster_name": cluster_name,
                 "namespace": namespace,
                 "expected_worker_replicas": expected_workers,
+                "machine_deployment_name": machine_deployment_name,
                 "worker_machine_count": len(worker_machines),
                 "ready_worker_machine_count": len(ready_worker_node_names),
                 "not_ready_worker_machine_names": not_ready_workers,
