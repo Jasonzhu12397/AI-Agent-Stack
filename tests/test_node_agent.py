@@ -2037,3 +2037,68 @@ def test_network_inspection_reports_namespace_rbac_denial_without_failing_global
     ]
     assert result["workload_attachment_validation"]["complete"] is False
     assert result["workload_attachment_validation"]["passed"] is None
+
+
+def test_host_sysfs_inspection_reports_nic_sriov_pci_numa_and_hugepages(
+    monkeypatch,
+    tmp_path,
+):
+    root = tmp_path / "sys"
+    interface = root / "class" / "net" / "eno1"
+    pci = root / "bus" / "pci" / "devices" / "0000:03:00.0"
+    driver = root / "bus" / "pci" / "drivers" / "ixgbe"
+    hugepages = root / "kernel" / "mm" / "hugepages" / "hugepages-2Mi"
+    numa = root / "devices" / "system" / "node" / "node0"
+    node_hugepages = numa / "hugepages" / "hugepages-2Mi"
+    for directory in [interface, pci / "net", driver, hugepages, node_hugepages]:
+        directory.mkdir(parents=True, exist_ok=True)
+    for path, value in [
+        (interface / "address", "00:11:22:33:44:55"),
+        (interface / "mtu", "9000"),
+        (interface / "operstate", "up"),
+        (pci / "vendor", "0x8086"),
+        (pci / "device", "0x1572"),
+        (pci / "class", "0x020000"),
+        (pci / "numa_node", "0"),
+        (pci / "sriov_totalvfs", "64"),
+        (pci / "sriov_numvfs", "8"),
+        (hugepages / "nr_hugepages", "512"),
+        (hugepages / "free_hugepages", "480"),
+        (node_hugepages / "nr_hugepages", "512"),
+        (node_hugepages / "free_hugepages", "480"),
+        (root / "devices" / "system" / "cpu" / "online", "0-31"),
+        (numa / "cpulist", "0-31"),
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="ascii")
+    (pci / "net" / "eno1").mkdir()
+    (pci / "driver").symlink_to(driver, target_is_directory=True)
+    (pci / "virtfn0").symlink_to(pci, target_is_directory=True)
+    (interface / "device").symlink_to(
+        "../../../bus/pci/devices/0000:03:00.0",
+        target_is_directory=True,
+    )
+    monkeypatch.setenv("AGENT_HOST_SYSFS_PATH", str(root))
+
+    result = agent.inspect_host_network_hardware()
+
+    assert result["status"] == "observed"
+    assert result["scope"] == "host_sysfs_read_only"
+    assert result["cpu_online"] == "0-31"
+    assert result["interfaces"][0]["name"] == "eno1"
+    assert result["interfaces"][0]["pci_address"] == "0000:03:00.0"
+    assert result["interfaces"][0]["sriov_total_vfs"] == "64"
+    assert result["pci_network_devices"][0]["driver"] == "ixgbe"
+    assert result["pci_network_devices"][0]["is_virtual_function"] is False
+    assert result["pci_network_devices"][0]["virtual_function_count"] == 1
+    assert result["hugepages"][0]["free"] == "480"
+    assert result["numa_nodes"][0]["cpulist"] == "0-31"
+
+
+def test_host_sysfs_inspection_is_explicitly_unavailable_without_mount(monkeypatch):
+    monkeypatch.delenv("AGENT_HOST_SYSFS_PATH", raising=False)
+
+    result = agent.inspect_host_network_hardware()
+
+    assert result["status"] == "not_configured"
+    assert result["scope"] == "host_sysfs"
