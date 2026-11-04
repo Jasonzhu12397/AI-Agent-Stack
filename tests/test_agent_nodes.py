@@ -753,3 +753,31 @@ def test_agent_credential_rotation_is_blocked_while_command_is_running(node_work
     assert rotated.status_code == 409
     node.refresh_from_db()
     assert node.credential_hash == original_hash
+
+@pytest.mark.django_db
+def test_worker_provisioning_command_cannot_be_created_outside_deployment_workflow(
+    node_workspace,
+):
+    user, tenant, project, client = node_workspace
+    node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-worker-provisioning",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        credential_hash=hashlib.sha256(b"target-token").hexdigest(),
+    )
+
+    response = client.post(
+        f"/api/v1/agent-nodes/{node.id}/commands/",
+        {
+            "command_type": "cluster.capi.worker.provision",
+            "payload": {"deployment_id": "unbound"},
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="unbound-worker-provisioning",
+    )
+
+    assert response.status_code == 403
+    assert not AgentCommand.objects.filter(node=node).exists()
+
