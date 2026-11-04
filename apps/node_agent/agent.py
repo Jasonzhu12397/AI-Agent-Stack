@@ -2786,13 +2786,20 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             ]
             if len(worker_machine_names) > expected_replicas:
                 raise NodeAgentError("UNEXPECTED_WORKER_MACHINE_COUNT")
+            worker_machine_uids = [
+                item.get("metadata", {}).get("uid")
+                for item in selected_machines
+            ]
             if (
                 any(not isinstance(name, str) or not name for name in worker_machine_names)
                 or len(set(worker_machine_names)) != len(worker_machine_names)
+                or any(not isinstance(uid, str) or not uid for uid in worker_machine_uids)
+                or len(set(worker_machine_uids)) != len(worker_machine_uids)
             ):
                 raise NodeAgentError("WORKER_MACHINE_IDENTITY_INVALID")
             ready_worker_machine_names = []
             not_ready_worker_machine_names = []
+            worker_node_ref_names = []
             for machine in selected_machines:
                 metadata = machine.get("metadata", {})
                 conditions = machine.get("status", {}).get("conditions", [])
@@ -2804,6 +2811,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     {},
                 )
                 node_name = machine.get("status", {}).get("nodeRef", {}).get("name")
+                if isinstance(node_name, str) and node_name:
+                    worker_node_ref_names.append(node_name)
                 is_ready = (
                     ready_condition.get("status") == "True"
                     and isinstance(node_name, str)
@@ -2813,6 +2822,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     ready_worker_machine_names.append(metadata.get("name"))
                 else:
                     not_ready_worker_machine_names.append(metadata.get("name"))
+            if len(set(worker_node_ref_names)) != len(worker_node_ref_names):
+                raise NodeAgentError("WORKER_NODE_REFERENCE_DUPLICATE")
             if (
                 len(selected_machines) == expected_replicas
                 and len(ready_worker_machine_names) == expected_replicas
