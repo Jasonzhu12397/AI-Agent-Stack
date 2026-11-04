@@ -41,6 +41,7 @@ EPH_COMMANDS = {
     "cluster.manifest.validate",
     "cluster.capi.pivot.source.preflight",
     "cluster.capi.pivot.dry-run",
+    "cluster.capi.pivot.execute",
 }
 TARGET_COMMANDS = {
     "node.health",
@@ -52,7 +53,11 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.target.preflight",
     "k8s.resource.read",
 }
-MUTATING_COMMANDS = {"cluster.provision", "target-agent.bootstrap"}
+MUTATING_COMMANDS = {
+    "cluster.provision",
+    "target-agent.bootstrap",
+    "cluster.capi.pivot.execute",
+}
 FORBIDDEN_PAYLOAD_KEYS = {
     "shell",
     "command",
@@ -619,9 +624,16 @@ class AgentRuntimePollView(APIView):
                     ],
                 )
                 return Response({"command": None})
-            if command.attempts >= command.max_attempts:
+            if command.attempts >= command.max_attempts or command.command_type == "cluster.capi.pivot.execute":
                 command.status = AgentCommand.Status.FAILED
-                command.error = {"code": "LEASE_EXPIRED", "retryable": False}
+                command.error = {
+                    "code": (
+                        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+                        if command.command_type == "cluster.capi.pivot.execute"
+                        else "LEASE_EXPIRED"
+                    ),
+                    "retryable": False,
+                }
                 command.finished_at = now
                 command.lease_token = None
                 command.lease_expires_at = None
