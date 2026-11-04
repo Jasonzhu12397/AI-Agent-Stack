@@ -2757,6 +2757,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             seen_bmh_names.add(host_name)
             seen_bmh_uids.add(host_uid)
             spec = host.get("spec", {})
+            spec = spec if isinstance(spec, dict) else {}
             status = host.get("status", {})
             status = status if isinstance(status, dict) else {}
             provisioning = status.get("provisioning", {})
@@ -2831,9 +2832,24 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         }
         def matches_expected_machine_deployment(item: dict[str, Any]) -> bool:
             metadata = item.get("metadata", {})
+            metadata = metadata if isinstance(metadata, dict) else {}
             annotations = metadata.get("annotations", {})
             spec = item.get("spec", {})
-            template_spec = spec.get("template", {}).get("spec", {})
+            spec = spec if isinstance(spec, dict) else {}
+            selector = spec.get("selector", {})
+            selector = selector if isinstance(selector, dict) else {}
+            template = spec.get("template", {})
+            template = template if isinstance(template, dict) else {}
+            template_metadata = template.get("metadata", {})
+            template_metadata = (
+                template_metadata if isinstance(template_metadata, dict) else {}
+            )
+            template_spec = template.get("spec", {})
+            template_spec = (
+                template_spec if isinstance(template_spec, dict) else {}
+            )
+            bootstrap = template_spec.get("bootstrap", {})
+            bootstrap = bootstrap if isinstance(bootstrap, dict) else {}
             return (
                 item.get("apiVersion") == manifest["apiVersion"]
                 and metadata.get("name") == deployment_name
@@ -2845,11 +2861,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 )
                 and spec.get("clusterName") == cluster_name
                 and spec.get("replicas") == expected_replicas
-                and spec.get("selector", {}).get("matchLabels") == labels
-                and spec.get("template", {}).get("metadata", {}).get("labels") == labels
+                and selector.get("matchLabels") == labels
+                and template_metadata.get("labels") == labels
                 and template_spec.get("clusterName") == cluster_name
                 and template_spec.get("version") == kubernetes_version
-                and template_spec.get("bootstrap", {}).get("configRef")
+                and bootstrap.get("configRef")
                 == manifest["spec"]["template"]["spec"]["bootstrap"]["configRef"]
                 and template_spec.get("infrastructureRef")
                 == manifest["spec"]["template"]["spec"]["infrastructureRef"]
