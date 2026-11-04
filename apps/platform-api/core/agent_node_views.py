@@ -40,6 +40,7 @@ EPH_COMMANDS = {
     "cluster.provider.discover",
     "cluster.manifest.validate",
     "cluster.capi.pivot.source.preflight",
+    "cluster.capi.pivot.dry-run",
 }
 TARGET_COMMANDS = {
     "node.health",
