@@ -702,6 +702,10 @@ def handle_deployment_command_result(
         valid_result = (
             command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == _deployment_capi_namespace(deployment)
+            and result.get("expected_worker_replicas") == expected_worker_replicas
+            and result.get("side_effects") is False
             and result.get("ready") is True
             and isinstance(node_count, int)
             and not isinstance(node_count, bool)
