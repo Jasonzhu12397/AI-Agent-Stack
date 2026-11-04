@@ -49,6 +49,12 @@ spec:
                 secretKeyRef:
                   name: eph-node-agent-credentials
                   key: token
+            - name: CAPI_PIVOT_SECRET_DIR
+              value: /var/run/secrets/ai-agent/capi-pivot
+            - name: CAPI_PIVOT_SOURCE_KUBECONFIG
+              value: /var/run/secrets/ai-agent/capi-pivot/source.kubeconfig
+            - name: CAPI_PIVOT_TARGET_KUBECONFIG
+              value: /var/run/secrets/ai-agent/capi-pivot/target.kubeconfig
           resources:
             requests:
               cpu: 50m
