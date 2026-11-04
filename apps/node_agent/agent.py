@@ -2174,6 +2174,21 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             raise NodeAgentError("INVALID_WORKER_REPLICAS")
         if not isinstance(config, dict):
             raise NodeAgentError("WORKER_PROVISIONING_CONFIG_REQUIRED")
+        plan_payload = {
+            key: value
+            for key, value in payload.items()
+            if key != "provisioning_plan_hash"
+        }
+        computed_plan_hash = hashlib.sha256(
+            json.dumps(
+                plan_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if computed_plan_hash != plan_hash:
+            raise NodeAgentError("WORKER_PROVISIONING_PLAN_HASH_MISMATCH")
         deployment_name = config.get("machine_deployment_name")
         infrastructure_template_name = config.get("infrastructure_template_name")
         bootstrap_template_name = config.get("bootstrap_template_name")
@@ -2531,10 +2546,15 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         plan_hash = payload.get("provisioning_plan_hash")
         if (
             not isinstance(deployment_id, str)
-            or not re.fullmatch(r"[0-9a-f-]{36}", deployment_id)
+            or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                deployment_id,
+            )
             or not isinstance(cluster_name, str)
+            or len(cluster_name) > 63
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
             or not isinstance(namespace, str)
+            or len(namespace) > 63
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
             or not isinstance(expected_replicas, int)
             or isinstance(expected_replicas, bool)
@@ -2574,7 +2594,23 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 or len(value) > 63
             ):
                 raise NodeAgentError("INVALID_WORKER_PROVISIONING_REFERENCE")
-        if not isinstance(host_selector, dict) or not host_selector:
+        if (
+            not isinstance(host_selector, dict)
+            or not host_selector
+            or len(host_selector) > 32
+            or any(
+                not isinstance(key, str)
+                or not re.fullmatch(
+                    r"[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?"
+                    r"(/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)?",
+                    key,
+                )
+                or not isinstance(value, str)
+                or not value
+                or len(value) > 128
+                for key, value in host_selector.items()
+            )
+        ):
             raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
         discovery = kubernetes_api_get("/apis")
         versions = {}
@@ -2604,6 +2640,42 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             != expected_bootstrap_api_version
         ):
             raise NodeAgentError("WORKER_PROVISIONING_API_VERSION_CHANGED")
+        expected_controllers = {
+            "capi-system": "capi-controller-manager",
+            "capi-kubeadm-bootstrap-system": (
+                "capi-kubeadm-bootstrap-controller-manager"
+            ),
+            "capi-kubeadm-control-plane-system": (
+                "capi-kubeadm-control-plane-controller-manager"
+            ),
+            "capm3-system": "capm3-controller-manager",
+        }
+        for controller_namespace, controller_name in expected_controllers.items():
+            controller = kubernetes_api_get(
+                f"/apis/apps/v1/namespaces/{controller_namespace}"
+                f"/deployments/{controller_name}"
+            )
+            controller_metadata = controller.get("metadata", {})
+            controller_spec = controller.get("spec", {})
+            controller_status = controller.get("status", {})
+            desired = controller_spec.get("replicas", 1)
+            available = controller_status.get("availableReplicas", 0)
+            generation = controller_metadata.get("generation", 1)
+            observed = controller_status.get("observedGeneration", 0)
+            if not (
+                isinstance(desired, int)
+                and not isinstance(desired, bool)
+                and desired > 0
+                and isinstance(available, int)
+                and not isinstance(available, bool)
+                and available >= desired
+                and isinstance(generation, int)
+                and not isinstance(generation, bool)
+                and isinstance(observed, int)
+                and not isinstance(observed, bool)
+                and observed >= generation
+            ):
+                raise NodeAgentError("CAPI_PROVIDER_CONTROLLER_NOT_READY")
         cluster_path = (
             f"/apis/cluster.x-k8s.io/{versions['cluster.x-k8s.io']}"
             f"/namespaces/{namespace}/clusters/{cluster_name}"
@@ -2662,6 +2734,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             max_items=10000,
         )
         available_hosts = []
+        seen_bmh_names = set()
+        seen_bmh_uids = set()
         for host in bmh_items:
             metadata = host.get("metadata", {})
             labels = metadata.get("labels", {})
@@ -2669,9 +2743,24 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 labels.get(key) != value for key, value in host_selector.items()
             ):
                 continue
+            host_name = metadata.get("name")
+            host_uid = metadata.get("uid")
+            if (
+                not isinstance(host_name, str)
+                or not host_name
+                or not isinstance(host_uid, str)
+                or not host_uid
+                or host_name in seen_bmh_names
+                or host_uid in seen_bmh_uids
+            ):
+                raise NodeAgentError("WORKER_PROVISIONING_BMH_IDENTITY_INVALID")
+            seen_bmh_names.add(host_name)
+            seen_bmh_uids.add(host_uid)
             spec = host.get("spec", {})
             status = host.get("status", {})
+            status = status if isinstance(status, dict) else {}
             provisioning = status.get("provisioning", {})
+            provisioning = provisioning if isinstance(provisioning, dict) else {}
             if (
                 spec.get("online") is True
                 and provisioning.get("state") == "available"
@@ -2898,9 +2987,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "side_effects": created,
             "worker_creation_performed": created,
             "execution_allowed": True,
-            "network_profile_hash": hashlib.sha256(
-                json.dumps(network_profile, sort_keys=True).encode("utf-8")
-            ).hexdigest(),
+            "network_profile_hash": network_profile.get("profile_hash"),
             "worker_readiness_verified": True,
             "worker_machine_count": len(worker_machine_names),
             "ready_worker_machine_count": len(ready_worker_machine_names),
