@@ -624,7 +624,10 @@ class AgentRuntimePollView(APIView):
                     ],
                 )
                 return Response({"command": None})
-            if command.attempts >= command.max_attempts or command.command_type == "cluster.capi.pivot.execute":
+            if (
+                command.attempts >= command.max_attempts
+                or command.command_type == "cluster.capi.pivot.execute"
+            ):
                 command.status = AgentCommand.Status.FAILED
                 command.error = {
                     "code": (
