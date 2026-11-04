@@ -37,6 +37,48 @@ The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run
 
 A Pivot timeout or expired running lease has an unknown outcome and is never automatically retried. Reconcile the source and target API inventories before creating another Pivot attempt.
 
+
+## Dual-network inspection
+
+Both Agent roles expose the read-only `cluster.network.inspect` command. It discovers Kubernetes node allocatable extended resources (including advertised SR-IOV resources and hugepages), Multus NetworkAttachmentDefinitions and plugin type names, and likely Calico/Multus/OVS/SR-IOV component Pods in `kube-system`. It also reports the Agent Pod's own network namespace interfaces and default routes.
+
+The command deliberately does not claim that a host PF/VF is healthy, that a VF is attached to a workload Pod, or that DPDK is ready. The Pod's `/sys/class/net` and `/proc/net/route` are the Agent container network namespace, not the physical host namespace. A NetworkAttachmentDefinition is configuration evidence, not proof of dataplane connectivity. Host PCI, IOMMU/VFIO binding, hugepages per NUMA node, CPU pinning and actual application Pod route validation require a dedicated host/network adapter and environment-level integration tests.
+
+A cluster plan may include a versioned `network_profile`:
+
+```json
+{
+  "version": "v1",
+  "pod_traffic_default": "data_plane",
+  "control_plane": {
+    "interface": "eno1",
+    "cidr": "10.10.10.10/24",
+    "gateway": "10.10.10.1",
+    "mtu": 1500
+  },
+  "data_plane": {
+    "interfaces": ["ens2f0"],
+    "mtu": 9000,
+    "cni": {
+      "primary": "calico",
+      "meta": "multus",
+      "attachments": [
+        {"name": "ovs-data", "type": "ovs"},
+        {
+          "name": "sriov-data",
+          "type": "sriov",
+          "resource_name": "intel.com/sriov_netdevice"
+        }
+      ]
+    }
+  }
+}
+```
+
+The plan validator checks the declared network roles, CIDRs/gateway, MTU bounds, Calico+Multus composition, unique attachment names, supported OVS/SR-IOV attachment types and SR-IOV extended resource names. DPDK declarations additionally require hugepages and an explicit NUMA policy. It hashes the complete profile into the cluster plan. This is input validation only; it does not install CNI components, create NetworkAttachmentDefinitions, alter routes, or bind devices.
+
+The RBAC template grants read-only access to node metadata, NetworkAttachmentDefinitions and Pods in `kube-system` only for component discovery. Extend workload namespace access only through separately reviewed namespace-scoped Roles and RoleBindings.
+
 ## Configuration
 
 Set these environment variables from a protected secret source:
