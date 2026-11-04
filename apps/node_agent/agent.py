@@ -1983,6 +1983,41 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     return True
 
 
+
+class EPHNodeAgent:
+    node_type = "eph_node"
+
+    def __init__(self, client: ControlPlaneClient):
+        self.client = client
+
+    def execute(self, command: dict[str, Any]) -> dict[str, Any]:
+        return execute_command(command, self.node_type)
+
+    def run_once(self) -> bool:
+        return run_once(self.client, self.node_type)
+
+
+class TargetClusterAgent:
+    node_type = "target_cluster"
+
+    def __init__(self, client: ControlPlaneClient):
+        self.client = client
+
+    def execute(self, command: dict[str, Any]) -> dict[str, Any]:
+        return execute_command(command, self.node_type)
+
+    def run_once(self) -> bool:
+        return run_once(self.client, self.node_type)
+
+
+def create_agent(client: ControlPlaneClient, node_type: str):
+    if node_type == EPHNodeAgent.node_type:
+        return EPHNodeAgent(client)
+    if node_type == TargetClusterAgent.node_type:
+        return TargetClusterAgent(client)
+    raise NodeAgentError("INVALID_AGENT_ROLE")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Agent Studio remote node agent")
     parser.add_argument("--once", action="store_true")
@@ -2007,9 +2042,10 @@ def main() -> None:
     if not base_url.startswith("https://") and os.environ.get("APP_ENV") == "production":
         raise SystemExit("Production node agents require HTTPS.")
     client = ControlPlaneClient(base_url, node_id, token)
+    runtime = create_agent(client, node_type)
     for _iteration in count():
         try:
-            processed = run_once(client, node_type)
+            processed = runtime.run_once()
             if args.once:
                 break
             if not processed:
