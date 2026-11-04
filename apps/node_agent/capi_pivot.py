@@ -180,7 +180,7 @@ def run_capi_pivot_dry_run(
             check=False,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=60,
             stdin=subprocess.DEVNULL,
             env=process_env,
         )
