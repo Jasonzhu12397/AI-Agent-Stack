@@ -2166,3 +2166,35 @@ def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatc
     assert result["nodes"][0]["node_name"] == "worker-01"
     assert result["nodes"][0]["interfaces"][0]["name"] == "eno1"
     assert result["nodes"][0]["pci_network_devices"][0]["pci_address"] == "0000:03:00.0"
+
+
+def test_target_agent_does_not_accept_stale_hardware_inventory_reports(monkeypatch):
+    report = {
+        "schema_version": "v1",
+        "node_name": "worker-old",
+        "node_uid": "node-uid-old",
+        "collected_at": "2020-01-01T00:00:00+00:00",
+        "hardware": {"status": "observed", "interfaces": []},
+    }
+    configmaps = [
+        {
+            "metadata": {
+                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+            },
+            "data": {"inventory.json": json.dumps(report)},
+        }
+    ]
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: configmaps,
+    )
+
+    result = agent.inspect_cluster_node_hardware_inventory(
+        [{"metadata": {"name": "worker-old", "uid": "node-uid-old"}}]
+    )
+
+    assert result["node_count"] == 0
+    assert result["inventory_complete"] is False
+    assert result["missing_node_names"] == ["worker-old"]
+    assert result["stale_node_names"] == ["worker-old"]
