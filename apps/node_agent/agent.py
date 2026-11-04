@@ -2196,7 +2196,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             or len(host_selector) > 32
             or any(
                 not isinstance(key, str)
-                or not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?(/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)?", key)
+                or not re.fullmatch(
+                    r"[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?"
+                    r"(/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)?",
+                    key,
+                )
                 or not isinstance(value, str)
                 or not value
                 or len(value) > 128
