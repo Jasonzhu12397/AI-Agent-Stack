@@ -2911,3 +2911,161 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
     assert result["execution_allowed"] is False
     assert result["worker_creation_performed"] is False
 
+def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
+    monkeypatch,
+):
+    profile = valid_dual_network_profile()
+    profile_hash = agent.canonical_hash(profile)
+    versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "bootstrap.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1beta1",
+        "metal3.io": "v1alpha1",
+    }
+    created_manifests = []
+    create_modes = []
+
+    def fake_get(path):
+        if path == "/apis":
+            return {
+                "groups": [
+                    {"name": group, "preferredVersion": {"version": version}}
+                    for group, version in versions.items()
+                ]
+            }
+        if path.endswith("/clusters/edge-lab"):
+            return {"metadata": {"uid": "cluster-uid-1"}}
+        if path.endswith("/metal3machinetemplates/worker-template"):
+            return {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "metadata": {
+                    "uid": "infra-template-uid",
+                    "annotations": {
+                        "ai-agent-stack.io/network-profile-hash": profile_hash
+                    },
+                },
+            }
+        if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
+            return {
+                "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
+                "metadata": {"uid": "bootstrap-template-uid"},
+            }
+        if path.endswith("/machinedeployments/edge-workers"):
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        if path == "/api/v1/nodes":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "worker-01"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    },
+                    {
+                        "metadata": {"name": "worker-02"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    },
+                ]
+            }
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        if "/baremetalhosts" in path:
+            return [
+                {
+                    "metadata": {
+                        "name": f"bmh-{index}",
+                        "uid": f"bmh-uid-{index}",
+                        "labels": {"pool": "workers"},
+                    },
+                    "spec": {"online": True},
+                    "status": {
+                        "operationalStatus": "OK",
+                        "provisioning": {"state": "available"},
+                    },
+                }
+                for index in range(1, 3)
+            ]
+        if path.endswith("/machines"):
+            return [
+                {
+                    "metadata": {
+                        "name": f"worker-machine-{index}",
+                        "uid": f"worker-machine-uid-{index}",
+                        "labels": {"cluster.x-k8s.io/deployment-name": "edge-workers"},
+                    },
+                    "spec": {"clusterName": "edge-lab"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "nodeRef": {"name": f"worker-{index:02d}"},
+                    },
+                }
+                for index in range(1, 3)
+            ]
+        raise AssertionError(path)
+
+    def fake_create(version, namespace, manifest, dry_run):
+        create_modes.append(dry_run)
+        created_manifests.append(manifest)
+        metadata = {"name": "edge-workers", "namespace": namespace}
+        if not dry_run:
+            metadata["uid"] = "machine-deployment-uid"
+        return {"kind": "MachineDeployment", "metadata": metadata}
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_create_machine_deployment",
+        fake_create,
+    )
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.worker.provision",
+            "payload": {
+                "deployment_id": "123e4567-e89b-12d3-a456-426614174000",
+                "cluster_name": "edge-lab",
+                "namespace": "default",
+                "expected_worker_replicas": 2,
+                "kubernetes_version": "v1.32.2",
+                "worker_provisioning": {
+                    "machine_deployment_name": "edge-workers",
+                    "infrastructure_template_name": "worker-template",
+                    "bootstrap_template_name": "worker-bootstrap",
+                    "baremetal_host_namespace": "metal3-system",
+                    "host_selector": {"pool": "workers"},
+                    "network_profile": profile,
+                },
+                "expected_cluster_uid": "cluster-uid-1",
+                "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                "expected_infrastructure_template_uid": "infra-template-uid",
+                "expected_bootstrap_template_uid": "bootstrap-template-uid",
+                "infrastructure_api_version": (
+                    "infrastructure.cluster.x-k8s.io/v1beta1"
+                ),
+                "bootstrap_api_version": "bootstrap.cluster.x-k8s.io/v1beta1",
+                "provisioning_plan_hash": "a" * 64,
+            },
+        },
+        "target_cluster",
+    )
+
+    assert create_modes == [True, False]
+    manifest = created_manifests[-1]
+    assert manifest["kind"] == "MachineDeployment"
+    assert manifest["spec"]["replicas"] == 2
+    assert manifest["spec"]["template"]["spec"]["bootstrap"]["configRef"] == {
+        "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
+        "kind": "KubeadmConfigTemplate",
+        "name": "worker-bootstrap",
+    }
+    assert manifest["spec"]["template"]["spec"]["infrastructureRef"] == {
+        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "kind": "Metal3MachineTemplate",
+        "name": "worker-template",
+    }
+    assert result["created"] is True
+    assert result["dry_run_passed"] is True
+    assert result["worker_readiness_verified"] is True
+    assert result["worker_machine_count"] == 2
+    assert result["ready_worker_machine_count"] == 2
+    assert result["side_effects"] is True
+
