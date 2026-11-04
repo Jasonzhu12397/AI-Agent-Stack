@@ -1664,3 +1664,22 @@ def test_eph_agent_cannot_run_target_adoption_verification():
             },
             "eph_node",
         )
+
+
+
+def test_agent_factory_returns_distinct_role_runtimes():
+    class FakeClient:
+        pass
+
+    eph_agent = agent.create_agent(FakeClient(), "eph_node")
+    target_agent = agent.create_agent(FakeClient(), "target_cluster")
+
+    assert isinstance(eph_agent, agent.EPHNodeAgent)
+    assert isinstance(target_agent, agent.TargetClusterAgent)
+    assert eph_agent.node_type == "eph_node"
+    assert target_agent.node_type == "target_cluster"
+
+
+def test_agent_factory_rejects_unknown_role():
+    with pytest.raises(agent.NodeAgentError, match="INVALID_AGENT_ROLE"):
+        agent.create_agent(object(), "unknown")
