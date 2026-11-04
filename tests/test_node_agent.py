@@ -1893,3 +1893,137 @@ def test_cluster_plan_includes_validated_network_profile_hash():
     assert result["network_profile"]["profile_hash"] == agent.canonical_hash(
         valid_dual_network_profile()
     )
+
+
+def test_network_inspection_verifies_expected_multus_attachments_on_workload_pods(
+    monkeypatch,
+):
+    def fake_get(path):
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "k8s.cni.cncf.io",
+                        "preferredVersion": {"version": "v1"},
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        if path in {"/api/v1/nodes", "/api/v1/namespaces/kube-system/pods"}:
+            return []
+        if path == "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions":
+            return []
+        if path == "/api/v1/namespaces/app-ns/pods":
+            return [
+                {
+                    "metadata": {
+                        "name": "api-0",
+                        "annotations": {
+                            "k8s.v1.cni.cncf.io/network-status": json.dumps(
+                                [
+                                    {
+                                        "name": "app-ns/calico",
+                                        "interface": "eth0",
+                                        "ips": ["10.244.1.10"],
+                                        "default": True,
+                                    },
+                                    {
+                                        "name": "app-ns/sriov-data",
+                                        "interface": "net1",
+                                        "ips": ["192.0.2.10"],
+                                    },
+                                ]
+                            )
+                        },
+                    },
+                    "spec": {"nodeName": "worker-01"},
+                    "status": {"phase": "Running"},
+                },
+                {
+                    "metadata": {
+                        "name": "api-1",
+                        "annotations": {
+                            "k8s.v1.cni.cncf.io/network-status": json.dumps(
+                                [
+                                    {
+                                        "name": "app-ns/calico",
+                                        "interface": "eth0",
+                                        "ips": ["10.244.1.11"],
+                                        "default": True,
+                                    }
+                                ]
+                            )
+                        },
+                    },
+                    "spec": {"nodeName": "worker-02"},
+                    "status": {"phase": "Running"},
+                },
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(agent, "_pod_network_namespace_snapshot", lambda: {})
+
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.network.inspect",
+            "payload": {
+                "workload_namespaces": ["app-ns"],
+                "expected_attachments": ["app-ns/sriov-data"],
+            },
+        },
+        "target_cluster",
+    )
+
+    namespace_result = result["workload_namespace_results"][0]
+    assert namespace_result["inspection_status"] == "observed"
+    assert namespace_result["pod_count"] == 2
+    assert namespace_result["pods_missing_expected_attachments"] == ["api-1"]
+    assert namespace_result["pods"][0]["attachments_valid"] is True
+    assert namespace_result["pods"][0]["networks"][1]["interface"] == "net1"
+    assert namespace_result["pods"][1]["attachments_valid"] is False
+
+
+def test_network_inspection_requires_namespace_scope_for_workload_checks():
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="WORKLOAD_NAMESPACES_REQUIRED_FOR_ATTACHMENT_CHECK",
+    ):
+        agent.inspect_network_environment({"expected_attachments": ["app-ns/sriov-data"]})
+
+
+def test_network_inspection_reports_namespace_rbac_denial_without_failing_global_inventory(
+    monkeypatch,
+):
+    def fake_get(path):
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {"groups": []}
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        if path in {"/api/v1/nodes", "/api/v1/namespaces/kube-system/pods"}:
+            return []
+        if path == "/api/v1/namespaces/restricted/pods":
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_403")
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(agent, "_pod_network_namespace_snapshot", lambda: {})
+
+    result = agent.inspect_network_environment({"workload_namespaces": ["restricted"]})
+
+    assert result["workload_namespace_results"] == [
+        {
+            "namespace": "restricted",
+            "inspection_status": "unavailable",
+            "error_code": "KUBERNETES_API_HTTP_403",
+        }
+    ]
