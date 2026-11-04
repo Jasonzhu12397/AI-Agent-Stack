@@ -335,10 +335,17 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
             deployment.plan_result = {
                 **(deployment.plan_result or {}),
                 "dual_agent": {
-                    "phase": "source_preflight_pending",
+                    **(deployment.plan_result or {}).get("dual_agent", {}),
+                    "phase": (deployment.plan_result or {})
+                    .get("dual_agent", {})
+                    .get("phase", "source_preflight_pending"),
                     "source_agent_id": str(deployment.eph_node_id),
                     "target_agent_id": str(target_node.id),
-                    "target_agent_owns_cluster": False,
+                    "target_agent_owns_cluster": (
+                        (deployment.plan_result or {})
+                        .get("dual_agent", {})
+                        .get("target_agent_owns_cluster", False)
+                    ),
                     "eph_reclaim_allowed": False,
                 },
             }
