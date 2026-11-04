@@ -1864,6 +1864,10 @@ def test_dpdk_network_profile_requires_hugepages_and_numa_policy():
         agent.validate_network_profile(profile)
 
     profile["data_plane"]["numa_policy"] = "single_numa"
+    with pytest.raises(agent.NodeAgentError, match="DPDK_CPU_MANAGER_STATIC_REQUIRED"):
+        agent.validate_network_profile(profile)
+
+    profile["data_plane"]["cpu_manager_policy"] = "static"
     result = agent.validate_network_profile(profile)
     assert result["dpdk_requested"] is True
 
