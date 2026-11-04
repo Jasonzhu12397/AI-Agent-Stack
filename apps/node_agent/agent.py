@@ -780,6 +780,226 @@ def build_capi_owner_graph(
     }
 
 
+
+def validate_network_profile(profile: Any) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        raise NodeAgentError("INVALID_NETWORK_PROFILE")
+    if profile.get("version") != "v1":
+        raise NodeAgentError("UNSUPPORTED_NETWORK_PROFILE_VERSION")
+    control_plane = profile.get("control_plane")
+    data_plane = profile.get("data_plane")
+    if not isinstance(control_plane, dict) or not isinstance(data_plane, dict):
+        raise NodeAgentError("NETWORK_PROFILE_SEGMENTS_REQUIRED")
+    interface = control_plane.get("interface")
+    cidr = control_plane.get("cidr")
+    gateway = control_plane.get("gateway")
+    if not isinstance(interface, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", interface):
+        raise NodeAgentError("INVALID_CONTROL_PLANE_INTERFACE")
+    try:
+        control_network = ipaddress.ip_interface(cidr)
+        control_gateway = ipaddress.ip_address(gateway)
+    except (TypeError, ValueError) as exc:
+        raise NodeAgentError("INVALID_CONTROL_PLANE_ADDRESSING") from exc
+    if control_network.version != control_gateway.version or control_gateway not in control_network.network:
+        raise NodeAgentError("CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR")
+    control_mtu = control_plane.get("mtu", 1500)
+    if not isinstance(control_mtu, int) or isinstance(control_mtu, bool) or not 576 <= control_mtu <= 9216:
+        raise NodeAgentError("INVALID_CONTROL_PLANE_MTU")
+    interfaces = data_plane.get("interfaces")
+    if not isinstance(interfaces, list) or not interfaces:
+        raise NodeAgentError("DATA_PLANE_INTERFACES_REQUIRED")
+    if any(
+        not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", item)
+        for item in interfaces
+    ):
+        raise NodeAgentError("INVALID_DATA_PLANE_INTERFACE")
+    if len(set(interfaces)) != len(interfaces) or interface in interfaces:
+        raise NodeAgentError("NETWORK_INTERFACE_CONFLICT")
+    data_mtu = data_plane.get("mtu", 9000)
+    if not isinstance(data_mtu, int) or isinstance(data_mtu, bool) or not 576 <= data_mtu <= 9216:
+        raise NodeAgentError("INVALID_DATA_PLANE_MTU")
+    if profile.get("pod_traffic_default") != "data_plane":
+        raise NodeAgentError("POD_TRAFFIC_MUST_DEFAULT_TO_DATA_PLANE")
+    cni = data_plane.get("cni")
+    if not isinstance(cni, dict) or cni.get("primary") != "calico" or cni.get("meta") != "multus":
+        raise NodeAgentError("UNSUPPORTED_PRIMARY_CNI_COMPOSITION")
+    attachments = cni.get("attachments", [])
+    if not isinstance(attachments, list) or len(attachments) > 32:
+        raise NodeAgentError("INVALID_NETWORK_ATTACHMENTS")
+    names = set()
+    dpdk_requested = False
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            raise NodeAgentError("INVALID_NETWORK_ATTACHMENT")
+        name = attachment.get("name")
+        kind = attachment.get("type")
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,62}", name)
+            or name in names
+        ):
+            raise NodeAgentError("INVALID_NETWORK_ATTACHMENT_NAME")
+        names.add(name)
+        if kind not in {"ovs", "sriov"}:
+            raise NodeAgentError("UNSUPPORTED_NETWORK_ATTACHMENT_TYPE")
+        if kind == "sriov" and (
+            not isinstance(attachment.get("resource_name"), str)
+            or not re.fullmatch(r"[A-Za-z0-9./_-]{1,128}", attachment["resource_name"])
+        ):
+            raise NodeAgentError("SRIOV_RESOURCE_NAME_REQUIRED")
+        if attachment.get("dpdk") is True:
+            dpdk_requested = True
+            if kind != "sriov":
+                raise NodeAgentError("DPDK_REQUIRES_SRIOV_ATTACHMENT")
+            if not data_plane.get("hugepages"):
+                raise NodeAgentError("DPDK_HUGEPAGES_REQUIRED")
+            if not isinstance(data_plane.get("numa_policy"), str) or not data_plane["numa_policy"]:
+                raise NodeAgentError("DPDK_NUMA_POLICY_REQUIRED")
+    return {
+        "valid": True,
+        "pod_traffic_default": "data_plane",
+        "primary_cni": "calico",
+        "meta_cni": "multus",
+        "attachment_count": len(attachments),
+        "dpdk_requested": dpdk_requested,
+        "profile_hash": canonical_hash(profile),
+    }
+
+
+def _pod_network_namespace_snapshot() -> dict[str, Any]:
+    interfaces = []
+    try:
+        interfaces = sorted(
+            item.name
+            for item in Path("/sys/class/net").iterdir()
+            if re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", item.name)
+        )
+    except OSError:
+        interfaces = []
+    default_routes = []
+    try:
+        with open("/proc/net/route", encoding="ascii") as route_file:
+            for line in route_file.readlines()[1:]:
+                fields = line.split()
+                if len(fields) < 8 or fields[1] != "00000000":
+                    continue
+                try:
+                    gateway = str(ipaddress.IPv4Address(
+                        int.from_bytes(bytes.fromhex(fields[2]), "little")
+                    ))
+                    default_routes.append({"interface": fields[0], "gateway": gateway})
+                except (ValueError, OSError):
+                    continue
+    except OSError:
+        pass
+    return {
+        "scope": "agent_pod_network_namespace",
+        "interfaces": interfaces[:64],
+        "default_routes": default_routes[:16],
+    }
+
+
+def inspect_network_environment() -> dict[str, Any]:
+    version = kubernetes_api_get("/version")
+    nodes = list_all_kubernetes_items("/api/v1/nodes", max_items=5000)
+    pods = list_all_kubernetes_items("/api/v1/pods", max_items=20000)
+    api_groups = kubernetes_api_get("/apis").get("groups", [])
+    group = next(
+        (item for item in api_groups if item.get("name") == "k8s.cni.cncf.io"),
+        None,
+    )
+    network_attachments = []
+    if isinstance(group, dict):
+        api_version = group.get("preferredVersion", {}).get("version")
+        if isinstance(api_version, str) and re.fullmatch(r"[A-Za-z0-9.]+", api_version):
+            documents = list_all_kubernetes_items(
+                f"/apis/k8s.cni.cncf.io/{api_version}/network-attachment-definitions",
+                max_items=5000,
+            )
+            for item in documents:
+                metadata = item.get("metadata", {})
+                config_text = item.get("spec", {}).get("config", "")
+                plugin_types = []
+                try:
+                    config = json.loads(config_text) if isinstance(config_text, str) else {}
+                except json.JSONDecodeError:
+                    config = {}
+                pending = [config] if isinstance(config, dict) else []
+                while pending:
+                    current = pending.pop()
+                    plugin_type = current.get("type")
+                    if isinstance(plugin_type, str) and plugin_type not in plugin_types:
+                        plugin_types.append(plugin_type)
+                    plugins = current.get("plugins", [])
+                    if isinstance(plugins, list):
+                        pending.extend(plugin for plugin in plugins if isinstance(plugin, dict))
+                network_attachments.append({
+                    "name": metadata.get("name"),
+                    "namespace": metadata.get("namespace"),
+                    "plugin_types": sorted(plugin_types)[:16],
+                })
+    kube_system_pods = [
+        item for item in pods
+        if item.get("metadata", {}).get("namespace") == "kube-system"
+    ]
+    component_patterns = {
+        "calico": ("calico-node", "calico-kube-controllers"),
+        "multus": ("multus",),
+        "ovs": ("ovs", "openvswitch"),
+        "sriov_device_plugin": ("sriov-device-plugin", "sriovdp"),
+    }
+    observed_components = {}
+    pod_names = [
+        item.get("metadata", {}).get("name", "")
+        for item in kube_system_pods
+    ]
+    for component, patterns in component_patterns.items():
+        observed_components[component] = any(
+            pattern in name.lower()
+            for name in pod_names
+            for pattern in patterns
+        )
+    node_network_resources = []
+    for node in nodes:
+        metadata = node.get("metadata", {})
+        allocatable = node.get("status", {}).get("allocatable", {})
+        extended = {
+            key: value for key, value in allocatable.items()
+            if "/" in key or "hugepages-" in key
+        }
+        node_network_resources.append({
+            "node": metadata.get("name"),
+            "labels": {
+                key: value for key, value in metadata.get("labels", {}).items()
+                if any(token in key.lower() for token in ("sriov", "dpdk", "network", "numa"))
+            },
+            "allocatable_network_resources": extended,
+        })
+    plugin_types = sorted({
+        plugin
+        for attachment in network_attachments
+        for plugin in attachment["plugin_types"]
+    })
+    return {
+        "inspection_status": "observed",
+        "kubernetes_version": version.get("gitVersion"),
+        "node_count": len(nodes),
+        "observed_components": observed_components,
+        "network_attachment_definition_count": len(network_attachments),
+        "network_attachments": network_attachments[:500],
+        "observed_attachment_plugin_types": plugin_types,
+        "node_network_resources": node_network_resources[:500],
+        "agent_pod_network": _pod_network_namespace_snapshot(),
+        "limitations": [
+            "Pod namespace interfaces are not host NIC inventory.",
+            "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
+            "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA and device binding validation.",
+            "Component presence is inferred from Kubernetes Pod names and is not a dataplane connectivity test.",
+        ],
+        "side_effects": False,
+    }
+
+
 def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     command_type = command.get("command_type")
     payload = command.get("payload", {})
@@ -793,6 +1013,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "host.preflight",
             "cluster.plan",
             "cluster.health",
+            "cluster.network.inspect",
             "cluster.observe",
             "cluster.diagnose",
             "cluster.postflight",
@@ -829,6 +1050,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     if command_type == "cluster.health":
         version = kubernetes_api_get("/version")
         return {"api_reachable": True, "kubernetes_version": version.get("gitVersion")}
+    if command_type == "cluster.network.inspect":
+        return inspect_network_environment()
     if command_type == "cluster.observe":
         version = kubernetes_api_get("/version")
         nodes = kubernetes_api_get("/api/v1/nodes")
@@ -1536,6 +1759,9 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         metal3 = spec.get("metal3", {})
         validate_network_inputs(network)
         validate_metal3_hosts(metal3.get("hosts", []) if isinstance(metal3, dict) else [])
+        network_profile_result = None
+        if "network_profile" in spec:
+            network_profile_result = validate_network_profile(spec["network_profile"])
         missing_requirements = []
         for key in [
             "cluster_api",
@@ -1593,6 +1819,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "control_plane_replicas": control_plane_replicas,
             "worker_replicas": worker_replicas,
             "plan_hash": canonical_hash(spec),
+            "network_profile": network_profile_result,
             "side_effects": False,
             "provisioning_ready": not missing_requirements,
             "missing_requirements": missing_requirements,
@@ -1623,6 +1850,7 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
     allowed_prefixes = (
         "/version",
         "/api/v1/nodes",
+        "/api/v1/pods",
         "/api/v1/namespaces",
         "/api/v1/namespaces/",
         "/apis",
