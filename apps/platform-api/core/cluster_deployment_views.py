@@ -338,11 +338,6 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 "cluster.capi.pivot.source.preflight",
                 node=deployment.eph_node,
             )
-            preflight_command = queue_deployment_command(
-                deployment,
-                "cluster.capi.pivot.target.preflight",
-                node=target_node,
-            )
         record_audit_event(
             request,
             deployment.tenant,
@@ -366,8 +361,8 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 ),
                 "source_preflight_command_id": str(source_preflight_command.id),
                 "source_preflight_command_status": source_preflight_command.status,
-                "preflight_command_id": str(preflight_command.id),
-                "preflight_command_status": preflight_command.status,
+                "preflight_command_id": None,
+                "preflight_command_status": "waiting_for_source_inventory",
                 "worker_provisioning_allowed": False,
             },
             status=202,
