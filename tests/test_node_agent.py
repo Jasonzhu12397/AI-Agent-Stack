@@ -2638,6 +2638,13 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                 "spec": {"replicas": 1},
                 "status": {"availableReplicas": 1, "observedGeneration": 1},
             }
+        if path.startswith("/apis/apps/v1/namespaces/") and "/deployments/" in path:
+            deployment_name = path.rsplit("/", 1)[-1]
+            return {
+                "metadata": {"name": deployment_name, "generation": 1},
+                "spec": {"replicas": 1},
+                "status": {"availableReplicas": 1, "observedGeneration": 1},
+            }
         if path.endswith("/clusters/edge-lab"):
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
@@ -3037,33 +3044,39 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         "kubernetes_api_create_machine_deployment",
         fake_create,
     )
+    payload = {
+        "deployment_id": "123e4567-e89b-12d3-a456-426614174000",
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+        "expected_worker_replicas": 2,
+        "kubernetes_version": "v1.32.2",
+        "worker_provisioning": {
+            "machine_deployment_name": "edge-workers",
+            "infrastructure_template_name": "worker-template",
+            "bootstrap_template_name": "worker-bootstrap",
+            "baremetal_host_namespace": "metal3-system",
+            "host_selector": {"pool": "workers"},
+            "network_profile": profile,
+        },
+        "expected_cluster_uid": "cluster-uid-1",
+        "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+        "expected_infrastructure_template_uid": "infra-template-uid",
+        "expected_bootstrap_template_uid": "bootstrap-template-uid",
+        "infrastructure_api_version": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "bootstrap_api_version": "bootstrap.cluster.x-k8s.io/v1beta1",
+    }
+    payload["provisioning_plan_hash"] = hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     result = agent.execute_command(
         {
             "command_type": "cluster.capi.worker.provision",
-            "payload": {
-                "deployment_id": "123e4567-e89b-12d3-a456-426614174000",
-                "cluster_name": "edge-lab",
-                "namespace": "default",
-                "expected_worker_replicas": 2,
-                "kubernetes_version": "v1.32.2",
-                "worker_provisioning": {
-                    "machine_deployment_name": "edge-workers",
-                    "infrastructure_template_name": "worker-template",
-                    "bootstrap_template_name": "worker-bootstrap",
-                    "baremetal_host_namespace": "metal3-system",
-                    "host_selector": {"pool": "workers"},
-                    "network_profile": profile,
-                },
-                "expected_cluster_uid": "cluster-uid-1",
-                "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
-                "expected_infrastructure_template_uid": "infra-template-uid",
-                "expected_bootstrap_template_uid": "bootstrap-template-uid",
-                "infrastructure_api_version": (
-                    "infrastructure.cluster.x-k8s.io/v1beta1"
-                ),
-                "bootstrap_api_version": "bootstrap.cluster.x-k8s.io/v1beta1",
-                "provisioning_plan_hash": "a" * 64,
-            },
+            "payload": payload,
         },
         "target_cluster",
     )
