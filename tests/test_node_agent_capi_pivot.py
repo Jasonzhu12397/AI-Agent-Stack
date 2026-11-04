@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -22,40 +23,127 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     }
 
 
-def test_dry_run_uses_fixed_clusterctl_arguments_and_source_environment(tmp_path):
-    env = _environment(tmp_path)
+def _cluster_list(*names: str) -> str:
+    return json.dumps(
+        {
+            "apiVersion": "cluster.x-k8s.io/v1beta1",
+            "kind": "ClusterList",
+            "items": [
+                {"metadata": {"name": name, "namespace": "metal3"}}
+                for name in names
+            ],
+        }
+    )
+
+
+def _runner_for(cluster_output: str = None, move_returncode: int = 0):
     calls = []
 
     def runner(command, **kwargs):
         calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0, "dry run complete", "")
+        if command[0].endswith("kubectl"):
+            return subprocess.CompletedProcess(
+                command, 0, cluster_output or _cluster_list("target-cluster"), ""
+            )
+        return subprocess.CompletedProcess(
+            command, move_returncode, "dry run complete", ""
+        )
 
-    result = run_capi_pivot_dry_run(
-        {"cluster_name": "target-cluster", "namespace": "metal3"},
+    return calls, runner
+
+
+def _execute(tmp_path, runner=None, lookup=None, payload=None):
+    env = _environment(tmp_path)
+    return run_capi_pivot_dry_run(
+        payload or {"cluster_name": "target-cluster", "namespace": "metal3"},
         environ=env,
-        executable_lookup=lambda name: "/usr/bin/clusterctl",
+        executable_lookup=lookup or (lambda name: f"/usr/bin/{name}"),
         process_runner=runner,
     )
 
-    command, kwargs = calls[0]
-    assert command == [
+
+def test_dry_run_checks_source_scope_before_clusterctl(tmp_path):
+    calls, runner = _runner_for()
+    result = _execute(tmp_path, runner=runner)
+
+    assert len(calls) == 2
+    kubectl_command, kubectl_kwargs = calls[0]
+    assert kubectl_command == [
+        "/usr/bin/kubectl",
+        "--kubeconfig",
+        str((tmp_path / "secrets" / "source.kubeconfig").resolve()),
+        "--namespace",
+        "metal3",
+        "get",
+        "clusters.cluster.x-k8s.io",
+        "-o",
+        "json",
+    ]
+    assert kubectl_kwargs["timeout"] == 30
+
+    move_command, move_kwargs = calls[1]
+    assert move_command == [
         "/usr/bin/clusterctl",
         "move",
         "--dry-run",
         "--to-kubeconfig",
-        str(Path(env["CAPI_PIVOT_TARGET_KUBECONFIG"]).resolve()),
+        str((tmp_path / "secrets" / "target.kubeconfig").resolve()),
         "--namespace",
         "metal3",
         "-v",
         "5",
     ]
-    assert kwargs["env"]["KUBECONFIG"] == str(
-        Path(env["CAPI_PIVOT_SOURCE_KUBECONFIG"]).resolve()
+    assert move_kwargs["env"]["KUBECONFIG"] == str(
+        (tmp_path / "secrets" / "source.kubeconfig").resolve()
     )
-    assert kwargs["timeout"] == 300
+    assert move_kwargs["timeout"] == 300
     assert result["dry_run_passed"] is True
     assert result["side_effects"] is False
+    assert result["source_cluster_count"] == 1
     assert result["namespace_scope_warning"] is True
+    assert result["status_subresources_migrated"] is False
+
+
+def test_dry_run_rejects_namespace_with_multiple_clusters(tmp_path):
+    calls, runner = _runner_for(_cluster_list("target-cluster", "other-cluster"))
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_NAMESPACE_MUST_CONTAIN_ONLY_TARGET_CLUSTER",
+    ):
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 1
+
+
+def test_dry_run_rejects_namespace_without_target_cluster(tmp_path):
+    calls, runner = _runner_for(_cluster_list("different-cluster"))
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_NAMESPACE_MUST_CONTAIN_ONLY_TARGET_CLUSTER",
+    ):
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 1
+
+
+def test_dry_run_rejects_invalid_source_cluster_list(tmp_path):
+    calls, runner = _runner_for('{"items": "not-a-list"}')
+
+    with pytest.raises(CapiPivotError, match="CAPI_PIVOT_SOURCE_SCOPE_INVALID"):
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 1
+
+
+def test_dry_run_rejects_source_scope_command_failure(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "forbidden")
+
+    with pytest.raises(CapiPivotError, match="CAPI_PIVOT_SOURCE_SCOPE_FAILED"):
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 1
 
 
 def test_dry_run_rejects_kubeconfig_outside_secret_mount(tmp_path):
@@ -68,84 +156,72 @@ def test_dry_run_rejects_kubeconfig_outside_secret_mount(tmp_path):
         run_capi_pivot_dry_run(
             {"cluster_name": "target-cluster"},
             environ=env,
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
+            executable_lookup=lambda name: f"/usr/bin/{name}",
             process_runner=lambda *args, **kwargs: None,
         )
 
 
 def test_dry_run_rejects_invalid_namespace(tmp_path):
-    env = _environment(tmp_path)
     with pytest.raises(CapiPivotError, match="INVALID_NAMESPACE"):
-        run_capi_pivot_dry_run(
-            {"cluster_name": "target-cluster", "namespace": "../default"},
-            environ=env,
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
-            process_runner=lambda *args, **kwargs: None,
+        _execute(
+            tmp_path,
+            payload={"cluster_name": "target-cluster", "namespace": "../default"},
         )
+
+
+def test_dry_run_requires_kubectl(tmp_path):
+    with pytest.raises(CapiPivotError, match="KUBECTL_NOT_INSTALLED"):
+        _execute(tmp_path, lookup=lambda name: None)
 
 
 def test_dry_run_requires_clusterctl(tmp_path):
+    def lookup(name):
+        return "/usr/bin/kubectl" if name == "kubectl" else None
+
     with pytest.raises(CapiPivotError, match="CLUSTERCTL_NOT_INSTALLED"):
-        run_capi_pivot_dry_run(
-            {"cluster_name": "target-cluster"},
-            environ=_environment(tmp_path),
-            executable_lookup=lambda name: None,
-            process_runner=lambda *args, **kwargs: None,
-        )
+        _execute(tmp_path, lookup=lookup)
 
 
-def test_dry_run_reports_nonzero_exit_without_exposing_process_output(tmp_path):
-    env = _environment(tmp_path)
-
-    def runner(command, **kwargs):
-        return subprocess.CompletedProcess(
-            command,
-            1,
-            "",
-            "authorization: Bearer very-secret-token",
-        )
+def test_dry_run_reports_clusterctl_failure_without_exposing_process_output(tmp_path):
+    calls, runner = _runner_for(move_returncode=1)
 
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_DRY_RUN_FAILED"):
-        run_capi_pivot_dry_run(
-            {"cluster_name": "target-cluster"},
-            environ=env,
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
-            process_runner=runner,
-        )
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 2
 
 
-def test_dry_run_converts_timeout_to_stable_error(tmp_path):
-    env = _environment(tmp_path)
+def test_dry_run_converts_clusterctl_timeout_to_stable_error(tmp_path):
+    calls = []
 
     def runner(command, **kwargs):
+        calls.append(command)
+        if command[0].endswith("kubectl"):
+            return subprocess.CompletedProcess(
+                command, 0, _cluster_list("target-cluster"), ""
+            )
         raise subprocess.TimeoutExpired(command, 300)
 
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_DRY_RUN_TIMEOUT"):
-        run_capi_pivot_dry_run(
-            {"cluster_name": "target-cluster"},
-            environ=env,
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
-            process_runner=runner,
-        )
+        _execute(tmp_path, runner=runner)
+    assert len(calls) == 2
 
 
 def test_dry_run_rejects_unexpected_payload_fields(tmp_path):
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_PAYLOAD_FIELD_NOT_ALLOWED"):
-        run_capi_pivot_dry_run(
-            {"cluster_name": "target-cluster", "shell": "not-allowed"},
-            environ=_environment(tmp_path),
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
-            process_runner=lambda *args, **kwargs: None,
+        _execute(
+            tmp_path,
+            payload={"cluster_name": "target-cluster", "shell": "not-allowed"},
         )
 
 
 def test_dry_run_rejects_same_source_and_target_kubeconfig(tmp_path):
     env = _environment(tmp_path)
     env["CAPI_PIVOT_TARGET_KUBECONFIG"] = env["CAPI_PIVOT_SOURCE_KUBECONFIG"]
+
     with pytest.raises(CapiPivotError, match="CAPI_PIVOT_KUBECONFIGS_MUST_DIFFER"):
         run_capi_pivot_dry_run(
             {"cluster_name": "target-cluster"},
             environ=env,
-            executable_lookup=lambda name: "/usr/bin/clusterctl",
+            executable_lookup=lambda name: f"/usr/bin/{name}",
             process_runner=lambda *args, **kwargs: None,
         )
