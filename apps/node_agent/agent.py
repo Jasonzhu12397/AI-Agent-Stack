@@ -1182,6 +1182,8 @@ def inspect_network_environment(
         raise NodeAgentError("INVALID_EXPECTED_NETWORK_ATTACHMENTS")
     if expected_attachments and not workload_namespaces:
         raise NodeAgentError("WORKLOAD_NAMESPACES_REQUIRED_FOR_ATTACHMENT_CHECK")
+    if require_data_plane_default and not workload_namespaces:
+        raise NodeAgentError("WORKLOAD_NAMESPACES_REQUIRED_FOR_DEFAULT_NETWORK_CHECK")
     version = kubernetes_api_get("/version")
     nodes = list_all_kubernetes_items("/api/v1/nodes", max_items=5000)
     pods = list_all_kubernetes_items("/api/v1/namespaces/kube-system/pods", max_items=5000)
