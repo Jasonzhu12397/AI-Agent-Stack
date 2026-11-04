@@ -62,6 +62,13 @@ def run_capi_pivot_dry_run(
     env = dict(os.environ if environ is None else environ)
     lookup = executable_lookup or shutil.which
     runner = process_runner or subprocess.run
+    if set(payload) - {"cluster_name", "namespace", "deployment_id"}:
+        raise CapiPivotError("CAPI_PIVOT_PAYLOAD_FIELD_NOT_ALLOWED")
+    deployment_id = payload.get("deployment_id")
+    if deployment_id is not None and (
+        not isinstance(deployment_id, str) or len(deployment_id) > 64
+    ):
+        raise CapiPivotError("INVALID_DEPLOYMENT_ID")
 
     cluster_name = _validate_identifier(payload.get("cluster_name"), "INVALID_CLUSTER_NAME")
     namespace = _validate_identifier(payload.get("namespace", "default"), "INVALID_NAMESPACE")
@@ -79,6 +86,8 @@ def run_capi_pivot_dry_run(
         "CAPI_PIVOT_TARGET_KUBECONFIG",
         secret_root,
     )
+    if source_kubeconfig == target_kubeconfig:
+        raise CapiPivotError("CAPI_PIVOT_KUBECONFIGS_MUST_DIFFER")
     clusterctl = lookup("clusterctl")
     if not clusterctl:
         raise CapiPivotError("CLUSTERCTL_NOT_INSTALLED")
