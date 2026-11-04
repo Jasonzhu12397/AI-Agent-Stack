@@ -84,9 +84,20 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         or not isinstance(target, dict)
         or target.get("preflight_validated") is not True
         or not isinstance(compatibility, dict)
-        or compatibility.get("compatible") is not True
         or deployment.target_node_id is None
     ):
+        return
+    if compatibility.get("compatible") is not True:
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **plan_result.get("dual_agent", {}),
+                "phase": "provider_compatibility_blocked",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["plan_result", "updated_at"])
         return
     existing = AgentCommand.objects.filter(
         deployment=deployment,
