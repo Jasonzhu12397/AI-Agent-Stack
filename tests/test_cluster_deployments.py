@@ -682,17 +682,8 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     )
 
     assert handoff.status_code == 202
-    command = AgentCommand.objects.get(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.target.preflight",
-    )
-    assert command.node_id == target_node.id
-    assert command.payload == {
-        "deployment_id": str(deployment.id),
-        "cluster_name": "edge-lab",
-        "namespace": "default",
-    }
-    assert handoff.data["preflight_command_id"] == str(command.id)
+    assert handoff.data["preflight_command_id"] is None
+    assert handoff.data["preflight_command_status"] == "waiting_for_source_inventory"
     assert handoff.data["worker_provisioning_allowed"] is False
 
     source_command = AgentCommand.objects.get(
@@ -818,6 +809,12 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         deployment.plan_result["capi_pivot_source_preflight"]["preflight_validated"]
         is True
     )
+    command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+    )
+    assert command.node_id == target_node.id
+    assert command.payload["namespace"] == "capi-system"
 
     agent_client = APIClient()
     polled = agent_client.post(
@@ -834,7 +831,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "target_management_plane_ready": True,
         "pivot_execution_allowed": True,
         "cluster_name": "edge-lab",
-        "namespace": "default",
+        "namespace": "capi-system",
         "provider_versions": {
             "cluster.x-k8s.io": "v1beta1",
             "bootstrap.cluster.x-k8s.io": "v1beta1",
