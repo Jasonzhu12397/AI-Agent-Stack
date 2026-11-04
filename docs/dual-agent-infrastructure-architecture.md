@@ -41,6 +41,53 @@ The original EPH hardware is the last worker to be reclaimed after the target cl
 
 See [EPH Node Ephemeral Bootstrap and Reclamation Lifecycle](eph-node-lifecycle.md) for lifecycle invariants, suggested states, durable data requirements and recovery behavior.
 
+## Cloud control plane and physical-node placement
+
+The central Control Plane Agent is deployed independently in Alibaba Cloud or Tencent Cloud. The cloud deployment hosts the Studio API, model routing/orchestration, durable workflow state, approvals, agent registry, audit and command dispatch. It is not deployed inside the EPH bootstrap cluster and does not require direct inbound access to the bare-metal management network.
+
+EPH Agent and Target Cluster Agent are deployed on the physical infrastructure:
+- EPH Agent runs as a Pod in the temporary, RAM-booted single-node Kubernetes cluster on the reserved EPH physical server.
+- Target Agent runs as a Pod on a target physical server after the target Kubernetes control plane and API are healthy.
+- Both agents establish outbound TLS connections to the cloud Control Plane. Production connectivity should use mTLS or short-lived workload identity, certificate rotation and revocation. Do not expose Kubernetes API, Ironic API, BMC interfaces or agent listeners to the public Internet.
+- The cloud-to-site path may use outbound Internet TLS, site-to-site VPN, private cloud connectivity or a controlled egress proxy. DNS, proxy, MTU, firewall and certificate trust must be validated from both physical environments.
+
+The cloud Control Plane is the durable source of truth. It stores workflow checkpoints, command leases, approvals, deployment state and audit history so that EPH RAM reboot or loss of the temporary Kubernetes API does not erase the workflow.
+
+## Dual-network Kubernetes and Pod traffic policy
+
+The target Kubernetes cluster has distinct Control Plane and Data Plane networks. Network roles must be explicit in the deployment profile; interface names, VLANs, CIDRs, gateways, MTUs, routes and SR-IOV resource names are environment inputs and must never be guessed.
+
+### Control Plane network
+
+The ordinary physical NIC/control network carries node and cluster management traffic, including Kubernetes API access, kubelet-to-API communication, node heartbeats, CNI control operations, DNS/control services as designed, and the outbound Agent-to-cloud control channel. The cloud Control Plane must remain reachable even when the Data Plane is degraded.
+
+Calico provides the cluster's ordinary Pod networking and policy/control integration according to the selected Calico mode. The selected mode (VXLAN, IP-in-IP, BGP or no-overlay/routed) must be declared and validated against the underlay. Do not assume Calico's default route or encapsulation behavior.
+
+### Data Plane network
+
+The Data Plane is used for workload traffic that is required by the deployment profile to use the high-performance network. Multus attaches additional interfaces to Pods through NetworkAttachmentDefinitions. OVS CNI and SR-IOV CNI are selectable attachments, not mutually exclusive cluster-wide replacements for the primary CNI:
+- OVS provides virtual switching, VLAN/VXLAN/bridge connectivity and policy/QoS integration where configured.
+- SR-IOV CNI attaches a VF allocated by the SR-IOV device plugin; resource requests/limits and VF pools must match the node hardware and resource inventory.
+- DPDK workloads require a compatible userspace driver binding, hugepages, CPU/NUMA alignment, VFIO/IOMMU and device-resource configuration. SR-IOV CNI alone does not make a Pod DPDK-ready.
+- Multus can attach more than one secondary network to a Pod. Each attachment must have a unique interface name and an explicit IPAM, MTU and routing policy.
+
+For workloads marked `data_plane_required`, the deployment profile must require the intended Data Plane attachment and validate its interface, address, MTU, routes and reachability before the workload is declared ready. The profile may select a Data Plane default route for those workloads. Control-plane/system Pods and node-level management traffic retain a working Control Plane path; do not globally redirect Kubernetes API, kubelet, CNI control traffic or the cloud Agent channel onto an isolated SR-IOV/DPDK network. Where a product requirement literally requires every application packet to use the Data Plane, enforce that at the workload/network-policy and routing layer while retaining the separate node management path.
+
+### CNI composition and validation order
+
+Calico is the primary CNI for the Kubernetes network unless the selected platform design explicitly says otherwise. Multus is the meta-plugin that invokes the primary CNI and requested secondary CNI attachments. OVS CNI and SR-IOV CNI are additional network implementations selected per attachment. The cluster must not install competing primary-CNI configurations that both try to own the default `eth0`.
+
+The network preflight and postflight contract must record and verify:
+1. Node NIC and PCI inventory, PF/VF relationships, IOMMU/VFIO support, NUMA topology and hugepage capacity where DPDK is requested.
+2. Control Plane interface/IP/gateway/MTU and stable Kubernetes API reachability.
+3. Data Plane interface/VLAN/MTU/IPAM/gateway and underlay reachability.
+4. Installed CNI/Multus/OVS/SR-IOV plugin versions and their Kubernetes compatibility.
+5. NetworkAttachmentDefinition references, resource requests, Pod annotations, interface names and assigned IPs.
+6. Pod route tables and policy routing, proving that Data Plane workloads use the intended Data Plane path and control traffic retains the Control Plane path.
+7. Failure isolation: loss of the Data Plane must not sever cloud Agent heartbeat or Kubernetes API management connectivity.
+
+The platform must treat the network configuration as a versioned, immutable deployment input and include its canonical hash in the plan and approval. Actual CNI installation or host networking changes remain disabled until versioned adapters and environment-specific schemas are implemented and tested.
+
 ## Agent communication
 
 - Both node agents initiate outbound HTTPS requests; no inbound SSH port or public agent listener is required.
