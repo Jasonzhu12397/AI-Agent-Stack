@@ -185,7 +185,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: target-cluster-agent-network-inventory-readonly
-  namespace: ai-agent-system
+  namespace: ai-agent-inventory
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -238,7 +238,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: network-inventory-agent-configmap-writer
-  namespace: ai-agent-system
+  namespace: ai-agent-inventory
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
