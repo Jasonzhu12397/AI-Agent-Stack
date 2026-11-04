@@ -851,6 +851,8 @@ def handle_deployment_command_result(
             and isinstance(network, dict)
             and network.get("valid") is True
             and network.get("profile_hash") == _spec_hash(config.get("network_profile", {}))
+            and result.get("network_template_profile_verified") is True
+            and result.get("network_template_profile_hash") == network.get("profile_hash")
             and isinstance(versions, dict)
             and set(versions) == {
                 "cluster.x-k8s.io",
