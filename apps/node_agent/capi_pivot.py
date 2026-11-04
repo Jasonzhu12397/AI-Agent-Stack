@@ -42,13 +42,13 @@ def _resolve_kubeconfig(
 
 def _safe_output(value: str, limit: int = 12000) -> str:
     value = re.sub(
-        r"(?i)(authorization\\s*:\\s*bearer\\s+)[^\\s]+",
-        r"\\1[REDACTED]",
+        r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+",
+        r"\1[REDACTED]",
         value,
     )
     value = re.sub(
-        r"(?i)(password|token|client-key-data|client-certificate-data)\\s*[:=]\\s*[^\\s,]+",
-        r"\\1=[REDACTED]",
+        r"(?i)(password|token|client-key-data|client-certificate-data)\s*[:=]\s*[^\s,]+",
+        r"\1=[REDACTED]",
         value,
     )
     return value[-limit:]
