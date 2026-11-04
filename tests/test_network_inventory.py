@@ -5,6 +5,7 @@ from node_agent import network_inventory
 
 def test_publish_inventory_creates_scoped_configmap(monkeypatch):
     calls = []
+    configmap_name = network_inventory.configmap_name_for_node("worker-01")
     report = {
         "schema_version": "v1",
         "node_name": "worker-01",
@@ -17,7 +18,7 @@ def test_publish_inventory_creates_scoped_configmap(monkeypatch):
         calls.append((path, method, payload))
         if path == "/api/v1/nodes/worker-01":
             return {"metadata": {"uid": "node-uid-01"}}
-        if path.endswith("/" + network_inventory.configmap_name_for_node("worker-01")) and method == "GET":
+        if path.endswith("/" + configmap_name) and method == "GET":
             return None
         if path == "/api/v1/namespaces/ai-agent-inventory/configmaps" and method == "POST":
             return {}
@@ -36,7 +37,7 @@ def test_publish_inventory_creates_scoped_configmap(monkeypatch):
         "published": True,
         "node_name": "worker-01",
         "node_uid": "node-uid-01",
-        "configmap_name": network_inventory.configmap_name_for_node("worker-01"),
+        "configmap_name": configmap_name,
         "interface_count": 1,
         "pci_network_device_count": 0,
     }
@@ -49,14 +50,15 @@ def test_publish_inventory_updates_existing_configmap_with_resource_version(
     monkeypatch,
 ):
     calls = []
+    configmap_name = network_inventory.configmap_name_for_node("worker-02")
 
     def fake_request(path, method, payload=None):
         calls.append((path, method, payload))
         if path == "/api/v1/nodes/worker-02":
             return {"metadata": {"uid": "node-uid-02"}}
-        if path.endswith("/" + network_inventory.configmap_name_for_node("worker-02")) and method == "GET":
+        if path.endswith("/" + configmap_name) and method == "GET":
             return {"metadata": {"resourceVersion": "42"}}
-        if path.endswith("/" + network_inventory.configmap_name_for_node("worker-02")) and method == "PUT":
+        if path.endswith("/" + configmap_name) and method == "PUT":
             assert payload["metadata"]["resourceVersion"] == "42"
             return {}
         raise AssertionError((path, method))
