@@ -1756,10 +1756,14 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
     )
     assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
 
-    user = cluster_delivery_workspace[0]
     approver = get_user_model().objects.create_user(
         username="worker-provisioning-approver",
         password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=deployment.tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
     )
     provision_command.status = AgentCommand.Status.SUCCEEDED
     provision_command.approved_by = approver
