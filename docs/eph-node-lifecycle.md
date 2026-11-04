@@ -178,3 +178,11 @@ Target Agent checkpoints are persisted with a monotonically increasing sequence 
 The Supervisor accepts `capi_pivot_verified` only after its own CAPI adoption verification has set `target_agent_owns_cluster=true` and confirmed that the target Cluster UID matches the source Cluster UID. Worker provisioning checkpoints are blocked until that ownership gate has passed. A worker-pool verification checkpoint must report a positive worker count, an equal ready-worker count, and an empty not-ready worker list.
 
 **EPH reclaim remains explicitly disabled.** Checkpoint submissions for `eph_reclaim_pending` and `completed` return HTTP 409 with `EPH_RECLAIM_EXECUTOR_NOT_ENABLED`. The checkpoint API is progress persistence, not authorization to shut down, wipe, reboot, or release a physical node. A future reclaim implementation must add a separate idempotent command flow and verify hardware-management acknowledgement, reset/reimage completion, storage sanitization, and Agent shutdown before the node can be returned to the compute pool.
+
+## CAPI Worker postflight
+
+After the control plane accepts Target Agent adoption and confirms the original Cluster UID, it automatically queues `cluster.postflight` on the Target Agent. The command carries the deployment's expected `worker_replicas`, cluster name, and CAPI namespace.
+
+The Target Agent checks both Kubernetes Nodes and CAPI Machines. It selects only Machines whose `spec.clusterName` matches the deployment, excludes control-plane Machines, requires a unique Machine identity, and verifies each worker Machine's Ready condition and `status.nodeRef` against a Ready Kubernetes Node. The Machine count and ready worker count must both equal the requested worker replica count. The control plane independently checks these counts, the empty not-ready list, unique worker Node names, and the explicit complete-inventory flag before marking the deployment successful.
+
+This is a read-only verification step. It does not create Machines, provision BareMetalHosts, reboot hardware, or authorize EPH reclamation. Worker creation and Ironic provisioning remain separate implementation work; the postflight gate will fail closed if the requested Worker inventory is incomplete.
