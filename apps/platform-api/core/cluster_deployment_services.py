@@ -824,6 +824,8 @@ def handle_deployment_command_result(
             and result.get("baremetal_host_namespace")
             == config.get("baremetal_host_namespace")
             and result.get("host_selector") == config.get("host_selector")
+            and result.get("template_host_selector_verified") is True
+            and result.get("template_host_selector") == config.get("host_selector")
             and result.get("blockers") == []
             and isinstance(result.get("available_baremetal_host_count"), int)
             and not isinstance(result.get("available_baremetal_host_count"), bool)
