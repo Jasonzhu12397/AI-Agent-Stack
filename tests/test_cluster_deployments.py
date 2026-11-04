@@ -1538,3 +1538,156 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     assert deployment.error["code"] == "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"
+
+
+def _worker_preflight_fixture(cluster_delivery_workspace, key):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, eph_node, key=key)
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name=f"{key}-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(f"{key}-token".encode()).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    network_profile = {
+        "version": "v1",
+        "control_plane": {
+            "interface": "eno1",
+            "cidr": "192.0.2.10/24",
+            "gateway": "192.0.2.1",
+            "mtu": 1500,
+        },
+        "data_plane": {
+            "interfaces": ["ens2f0"],
+            "mtu": 9000,
+            "cni": {"primary": "calico", "meta": "multus", "attachments": []},
+        },
+        "pod_traffic_default": "data_plane",
+    }
+    config = {
+        "machine_deployment_name": "edge-workers",
+        "infrastructure_template_name": "edge-worker-template",
+        "bootstrap_template_name": "edge-worker-bootstrap",
+        "baremetal_host_namespace": "metal3-system",
+        "host_selector": {"pool": "workers"},
+        "network_profile": network_profile,
+    }
+    deployment.target_node = target_node
+    deployment.spec = {**deployment.spec, "worker_provisioning": config}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        }
+    }
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.save(update_fields=["target_node", "spec", "plan_result", "status"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.worker.preflight",
+        payload={
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "expected_worker_replicas": 4,
+            "worker_provisioning": config,
+        },
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"{key}:{deployment.id}",
+    )
+    profile_hash = hashlib.sha256(
+        json.dumps(
+            network_profile,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    result = {
+        "ready": True,
+        "cluster_name": "edge-lab",
+        "cluster_uid": "source-cluster-uid",
+        "namespace": "default",
+        "expected_worker_replicas": 4,
+        "machine_deployment_name": "edge-workers",
+        "machine_deployment_exists": False,
+        "infrastructure_template": {
+            "name": "edge-worker-template",
+            "uid": "infra-template-uid",
+            "api_version": "infrastructure.cluster.x-k8s.io/v1beta1",
+        },
+        "bootstrap_template": {
+            "name": "edge-worker-bootstrap",
+            "uid": "bootstrap-template-uid",
+            "api_version": "bootstrap.cluster.x-k8s.io/v1beta1",
+        },
+        "baremetal_host_namespace": "metal3-system",
+        "host_selector": {"pool": "workers"},
+        "available_baremetal_host_count": 4,
+        "selected_baremetal_hosts": [
+            {"name": f"bmh-{index}", "uid": f"bmh-uid-{index}", "ready": True}
+            for index in range(1, 5)
+        ],
+        "network_profile": {"valid": True, "profile_hash": profile_hash},
+        "provider_versions": {
+            "cluster.x-k8s.io": "v1beta1",
+            "bootstrap.cluster.x-k8s.io": "v1beta1",
+            "infrastructure.cluster.x-k8s.io": "v1beta1",
+            "metal3.io": "v1alpha1",
+        },
+        "blockers": [],
+        "side_effects": False,
+        "worker_creation_performed": False,
+        "execution_allowed": False,
+    }
+    return deployment, command, result
+
+
+@pytest.mark.django_db
+def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_gate(
+    cluster_delivery_workspace,
+):
+    deployment, command, result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-preflight-approved-evidence",
+    )
+
+    handle_deployment_command_result(command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.WAITING_APPROVAL
+    assert deployment.error is None
+    assert deployment.plan_result["worker_provisioning_preflight"]["ready"] is True
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "worker_preflight_passed_waiting_provisioning_approval"
+    )
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
+@pytest.mark.django_db
+def test_control_plane_rejects_worker_preflight_with_duplicate_host_identity(
+    cluster_delivery_workspace,
+):
+    deployment, command, result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-preflight-duplicate-host",
+    )
+    result["selected_baremetal_hosts"][1]["uid"] = (
+        result["selected_baremetal_hosts"][0]["uid"]
+    )
+
+    handle_deployment_command_result(command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
+
