@@ -453,7 +453,7 @@ def handle_deployment_command_result(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
         )
         _update_capi_pivot_provider_compatibility(deployment)
-        if deployment.target_node_id and not AgentCommand.objects.filter(
+        if ready and deployment.target_node_id and not AgentCommand.objects.filter(
             deployment=deployment,
             command_type="cluster.capi.pivot.target.preflight",
         ).exists():
