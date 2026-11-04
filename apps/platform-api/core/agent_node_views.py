@@ -51,6 +51,7 @@ TARGET_COMMANDS = {
     "cluster.postflight",
     "cluster.control-plane.verify",
     "cluster.capi.pivot.target.preflight",
+    "cluster.capi.pivot.target.verify",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {
