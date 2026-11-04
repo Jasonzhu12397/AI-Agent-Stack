@@ -1287,6 +1287,145 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     assert deployment.plan_result["dual_agent"]["phase"] == "target_agent_adopted"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    )
+    assert postflight.node_id == target_node.id
+    assert postflight.payload["cluster_name"] == "edge-lab"
+    assert postflight.payload["namespace"] == "metal3"
+    assert postflight.payload["expected_worker_replicas"] == 4
+
+
+@pytest.mark.django_db
+def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="incomplete-capi-worker-postflight",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="postflight-worker-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"postflight-worker-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.POSTFLIGHT
+    deployment.save(update_fields=["target_node", "status", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.postflight",
+        payload={"expected_worker_replicas": 4},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"incomplete-capi-worker-postflight:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "node_count": 5,
+            "ready": True,
+            "not_ready_nodes": [],
+            "worker_machine_count": 4,
+            "ready_worker_machine_count": 3,
+            "not_ready_worker_machine_names": ["edge-lab-worker-04"],
+            "worker_node_names": ["worker-01", "worker-02", "worker-03"],
+            "capi_worker_inventory_complete": False,
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_CLUSTER_POSTFLIGHT_FAILED"
+    assert deployment.error["not_ready_worker_machine_names"] == [
+        "edge-lab-worker-04"
+    ]
+
+
+@pytest.mark.django_db
+def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="complete-capi-worker-postflight",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="complete-postflight-worker-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"complete-postflight-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.POSTFLIGHT
+    deployment.save(update_fields=["target_node", "status", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.postflight",
+        payload={"expected_worker_replicas": 4},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"complete-capi-worker-postflight:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "node_count": 5,
+            "ready": True,
+            "not_ready_nodes": [],
+            "worker_machine_count": 4,
+            "ready_worker_machine_count": 4,
+            "not_ready_worker_machine_names": [],
+            "worker_node_names": [
+                "worker-01",
+                "worker-02",
+                "worker-03",
+                "worker-04",
+            ],
+            "capi_worker_inventory_complete": True,
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.SUCCEEDED
+    assert deployment.error is None
+    assert deployment.plan_result["postflight"]["capi_worker_inventory_complete"] is True
 
 
 @pytest.mark.django_db
