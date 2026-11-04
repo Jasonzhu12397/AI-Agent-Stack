@@ -224,3 +224,36 @@ def test_dry_run_rejects_same_source_and_target_kubeconfig(tmp_path):
             executable_lookup=lambda name: f"/usr/bin/{name}",
             process_runner=lambda *args, **kwargs: None,
         )
+
+def test_eph_agent_dispatches_pivot_dry_run(monkeypatch):
+    from node_agent import agent
+
+    monkeypatch.setattr(
+        agent,
+        "run_capi_pivot_dry_run",
+        lambda payload: {"dry_run_passed": True, "cluster_name": payload["cluster_name"]},
+    )
+
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.dry-run",
+            "payload": {"cluster_name": "target-cluster"},
+        },
+        "eph_node",
+    )
+
+    assert result == {"dry_run_passed": True, "cluster_name": "target-cluster"}
+
+
+def test_target_agent_cannot_execute_source_pivot_dry_run():
+    from node_agent.agent import NodeAgentError, execute_command
+
+    with pytest.raises(NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        execute_command(
+            {
+                "command_type": "cluster.capi.pivot.dry-run",
+                "payload": {"cluster_name": "target-cluster"},
+            },
+            "target_cluster",
+        )
+
