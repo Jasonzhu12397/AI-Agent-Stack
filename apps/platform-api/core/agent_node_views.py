@@ -55,12 +55,14 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.target.preflight",
     "cluster.capi.pivot.target.verify",
     "cluster.capi.worker.preflight",
+    "cluster.capi.worker.provision",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {
     "cluster.provision",
     "target-agent.bootstrap",
     "cluster.capi.pivot.execute",
+    "cluster.capi.worker.provision",
 }
 FORBIDDEN_PAYLOAD_KEYS = {
     "shell",
