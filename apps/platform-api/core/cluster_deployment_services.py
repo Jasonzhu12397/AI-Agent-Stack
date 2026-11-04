@@ -689,7 +689,11 @@ def handle_deployment_command_result(
         deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
         expected_workers = deployment.spec.get("worker_replicas")
         worker_config = deployment.spec.get("worker_provisioning")
-        if isinstance(expected_workers, int) and not isinstance(expected_workers, bool) and expected_workers > 0:
+        if (
+            isinstance(expected_workers, int)
+            and not isinstance(expected_workers, bool)
+            and expected_workers > 0
+        ):
             if not isinstance(worker_config, dict):
                 deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
                 deployment.error = {"code": "WORKER_PROVISIONING_SPEC_REQUIRED"}
