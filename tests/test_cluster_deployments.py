@@ -1778,6 +1778,7 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         "provisioning_plan_hash": provision_command.payload[
             "provisioning_plan_hash"
         ],
+        "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
         "created": True,
         "idempotent_reconciliation": False,
         "dry_run_passed": True,
@@ -1842,6 +1843,7 @@ def test_worker_provisioning_result_without_independent_approval_is_rejected(
         "provisioning_plan_hash": provision_command.payload[
             "provisioning_plan_hash"
         ],
+        "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
         "created": True,
         "dry_run_passed": True,
         "side_effects": True,
