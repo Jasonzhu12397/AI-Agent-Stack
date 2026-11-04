@@ -2414,9 +2414,19 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         bootstrap_metadata = bootstrap_template.get("metadata", {})
         template_annotations = infrastructure_metadata.get("annotations", {})
         infrastructure_spec = infrastructure_template.get("spec", {})
-        infrastructure_template_spec = (
-            infrastructure_spec.get("template", {}).get("spec", {})
+        infrastructure_template_resource = (
+            infrastructure_spec.get("template", {})
             if isinstance(infrastructure_spec, dict)
+            else {}
+        )
+        infrastructure_template_spec = (
+            infrastructure_template_resource.get("spec", {})
+            if isinstance(infrastructure_template_resource, dict)
+            else {}
+        )
+        infrastructure_template_spec = (
+            infrastructure_template_spec
+            if isinstance(infrastructure_template_spec, dict)
             else {}
         )
         template_host_selector = infrastructure_template_spec.get(
@@ -2619,12 +2629,24 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if isinstance(infra_annotations, dict)
             else None
         )
-        infra_template_spec = infra_template.get("spec", {}).get(
-            "template", {}
-        ).get("spec", {})
-        template_host_selector = infra_template_spec.get(
-            "hostSelector", {}
-        ).get("matchLabels", {})
+        infra_spec = infra_template.get("spec", {})
+        infra_template_resource = (
+            infra_spec.get("template", {}) if isinstance(infra_spec, dict) else {}
+        )
+        infra_template_spec = (
+            infra_template_resource.get("spec", {})
+            if isinstance(infra_template_resource, dict)
+            else {}
+        )
+        infra_template_spec = (
+            infra_template_spec if isinstance(infra_template_spec, dict) else {}
+        )
+        template_host_selector = infra_template_spec.get("hostSelector", {})
+        template_host_selector = (
+            template_host_selector.get("matchLabels", {})
+            if isinstance(template_host_selector, dict)
+            else {}
+        )
         if (
             infra_template.get("metadata", {}).get("uid") != expected_infra_uid
             or infra_template.get("apiVersion") != expected_infra_api_version
