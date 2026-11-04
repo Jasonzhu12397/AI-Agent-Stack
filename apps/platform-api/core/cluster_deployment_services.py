@@ -70,7 +70,7 @@ def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
     namespace = identity.get("namespace") if isinstance(identity, dict) else None
     if isinstance(namespace, str) and namespace:
         return namespace
-    configured = _deployment_capi_namespace(deployment)
+    configured = deployment.spec.get("capi_namespace", "default")
     return configured if isinstance(configured, str) and configured else "default"
 
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
