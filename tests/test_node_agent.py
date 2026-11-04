@@ -2154,10 +2154,14 @@ def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatc
         lambda path, max_items=100000: reports,
     )
 
-    result = agent.inspect_cluster_node_hardware_inventory()
+    result = agent.inspect_cluster_node_hardware_inventory(
+        [{"metadata": {"name": "worker-01", "uid": "node-uid-01"}}]
+    )
 
     assert result["status"] == "observed"
     assert result["node_count"] == 1
+    assert result["inventory_complete"] is True
+    assert result["missing_node_names"] == []
     assert result["nodes"][0]["node_name"] == "worker-01"
     assert result["nodes"][0]["interfaces"][0]["name"] == "eno1"
     assert result["nodes"][0]["pci_network_devices"][0]["pci_address"] == "0000:03:00.0"
