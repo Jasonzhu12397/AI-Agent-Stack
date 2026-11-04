@@ -1544,6 +1544,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.control-plane.verify",
             "cluster.capi.pivot.target.preflight",
             "cluster.capi.pivot.target.verify",
+            "cluster.capi.worker.preflight",
             "k8s.resource.read",
         },
     }
@@ -2146,6 +2147,213 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster_name_conflicts": cluster_conflicts[:20],
             "blockers": blockers,
             "side_effects": False,
+        }
+    if command_type == "cluster.capi.worker.preflight":
+        cluster_name = payload.get("cluster_name")
+        namespace = payload.get("namespace", "default")
+        expected_replicas = payload.get("expected_worker_replicas")
+        config = payload.get("worker_provisioning")
+        if (
+            not isinstance(cluster_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+            or len(cluster_name) > 63
+        ):
+            raise NodeAgentError("INVALID_CLUSTER_NAME")
+        if (
+            not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or len(namespace) > 63
+        ):
+            raise NodeAgentError("INVALID_NAMESPACE")
+        if (
+            not isinstance(expected_replicas, int)
+            or isinstance(expected_replicas, bool)
+            or not 1 <= expected_replicas <= 1000
+        ):
+            raise NodeAgentError("INVALID_WORKER_REPLICAS")
+        if not isinstance(config, dict):
+            raise NodeAgentError("WORKER_PROVISIONING_CONFIG_REQUIRED")
+        deployment_name = config.get("machine_deployment_name")
+        infrastructure_template_name = config.get("infrastructure_template_name")
+        bootstrap_template_name = config.get("bootstrap_template_name")
+        host_namespace = config.get("baremetal_host_namespace")
+        host_selector = config.get("host_selector")
+        if any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", value)
+            or len(value) > 63
+            for value in (
+                deployment_name,
+                infrastructure_template_name,
+                bootstrap_template_name,
+                host_namespace,
+            )
+        ):
+            raise NodeAgentError("INVALID_WORKER_PROVISIONING_REFERENCE")
+        if (
+            not isinstance(host_selector, dict)
+            or not host_selector
+            or len(host_selector) > 32
+            or any(
+                not isinstance(key, str)
+                or not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?(/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)?", key)
+                or not isinstance(value, str)
+                or not value
+                or len(value) > 128
+                for key, value in host_selector.items()
+            )
+        ):
+            raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
+        network_profile = validate_network_profile(config.get("network_profile"))
+        discovery = kubernetes_api_get("/apis")
+        groups = {
+            item.get("name"): item
+            for item in discovery.get("groups", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        required = {
+            "cluster.x-k8s.io": {"machinedeployments"},
+            "bootstrap.cluster.x-k8s.io": {"kubeadmconfigtemplates"},
+            "infrastructure.cluster.x-k8s.io": {"metal3machinetemplates"},
+            "metal3.io": {"baremetalhosts"},
+        }
+        versions = {}
+        missing_resources = []
+        for group_name, expected in required.items():
+            group = groups.get(group_name)
+            version = group.get("preferredVersion", {}).get("version") if group else None
+            if not isinstance(version, str):
+                missing_resources.extend(
+                    f"{group_name}/{resource}" for resource in sorted(expected)
+                )
+                continue
+            versions[group_name] = version
+            api = kubernetes_api_get(f"/apis/{group_name}/{version}")
+            available = {
+                item.get("name")
+                for item in api.get("resources", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            missing_resources.extend(
+                f"{group_name}/{resource}"
+                for resource in sorted(expected - available)
+            )
+        if missing_resources:
+            return {
+                "ready": False,
+                "cluster_name": cluster_name,
+                "namespace": namespace,
+                "expected_worker_replicas": expected_replicas,
+                "missing_resources": missing_resources,
+                "blockers": ["required_worker_provisioning_apis_missing"],
+                "side_effects": False,
+                "worker_creation_performed": False,
+            }
+        cluster_version = versions["cluster.x-k8s.io"]
+        cluster_path = (
+            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/{namespace}/clusters/{cluster_name}"
+        )
+        cluster = kubernetes_api_get(cluster_path)
+        cluster_uid = cluster.get("metadata", {}).get("uid")
+        if not isinstance(cluster_uid, str) or not cluster_uid:
+            raise NodeAgentError("TARGET_CLUSTER_UID_MISSING")
+        md_path = (
+            f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/{namespace}/machinedeployments/{deployment_name}"
+        )
+        existing_md = None
+        try:
+            existing_md = kubernetes_api_get(md_path)
+        except NodeAgentError as exc:
+            if str(exc) != "KUBERNETES_API_HTTP_404":
+                raise
+        infra_version = versions["infrastructure.cluster.x-k8s.io"]
+        infra_path = (
+            f"/apis/infrastructure.cluster.x-k8s.io/{infra_version}/namespaces/{namespace}/metal3machinetemplates/{infrastructure_template_name}"
+        )
+        bootstrap_version = versions["bootstrap.cluster.x-k8s.io"]
+        bootstrap_path = (
+            f"/apis/bootstrap.cluster.x-k8s.io/{bootstrap_version}/namespaces/{namespace}/kubeadmconfigtemplates/{bootstrap_template_name}"
+        )
+        infrastructure_template = kubernetes_api_get(infra_path)
+        bootstrap_template = kubernetes_api_get(bootstrap_path)
+        bmh_version = versions["metal3.io"]
+        bmh_items = list_all_kubernetes_items(
+            f"/apis/metal3.io/{bmh_version}/namespaces/{host_namespace}/baremetalhosts",
+            max_items=10000,
+        )
+        selected_hosts = []
+        unavailable_hosts = []
+        for host in bmh_items:
+            metadata = host.get("metadata", {})
+            labels = metadata.get("labels", {})
+            if not isinstance(labels, dict) or any(
+                labels.get(key) != value for key, value in host_selector.items()
+            ):
+                continue
+            status = host.get("status", {})
+            provisioning = status.get("provisioning", {})
+            state = provisioning.get("state") if isinstance(provisioning, dict) else None
+            consumer = host.get("spec", {}).get("consumerRef")
+            host_ready = (
+                host.get("spec", {}).get("online") is True
+                and state == "available"
+                and not consumer
+                and not status.get("error")
+            )
+            entry = {
+                "name": metadata.get("name"),
+                "uid": metadata.get("uid"),
+                "provisioning_state": state,
+                "online": host.get("spec", {}).get("online") is True,
+                "has_consumer": bool(consumer),
+                "ready": host_ready,
+            }
+            if host_ready:
+                selected_hosts.append(entry)
+            else:
+                unavailable_hosts.append(entry)
+        blockers = []
+        if existing_md is not None:
+            blockers.append("machine_deployment_name_already_exists")
+        if len(selected_hosts) < expected_replicas:
+            blockers.append("insufficient_available_baremetal_hosts")
+        if (
+            not isinstance(infrastructure_template.get("metadata", {}).get("uid"), str)
+            or not infrastructure_template.get("metadata", {}).get("uid")
+            or not isinstance(bootstrap_template.get("metadata", {}).get("uid"), str)
+            or not bootstrap_template.get("metadata", {}).get("uid")
+        ):
+            blockers.append("worker_template_identity_missing")
+        ready = not blockers
+        return {
+            "ready": ready,
+            "cluster_name": cluster_name,
+            "cluster_uid": cluster_uid,
+            "namespace": namespace,
+            "expected_worker_replicas": expected_replicas,
+            "machine_deployment_name": deployment_name,
+            "machine_deployment_exists": existing_md is not None,
+            "infrastructure_template": {
+                "name": infrastructure_template_name,
+                "uid": infrastructure_template.get("metadata", {}).get("uid"),
+                "api_version": infrastructure_template.get("apiVersion"),
+            },
+            "bootstrap_template": {
+                "name": bootstrap_template_name,
+                "uid": bootstrap_template.get("metadata", {}).get("uid"),
+                "api_version": bootstrap_template.get("apiVersion"),
+            },
+            "baremetal_host_namespace": host_namespace,
+            "host_selector": host_selector,
+            "available_baremetal_host_count": len(selected_hosts),
+            "selected_baremetal_hosts": selected_hosts[:100],
+            "unavailable_matching_hosts": unavailable_hosts[:100],
+            "network_profile": network_profile,
+            "provider_versions": versions,
+            "blockers": blockers,
+            "side_effects": False,
+            "worker_creation_performed": False,
+            "execution_allowed": False,
         }
     if command_type == "cluster.postflight":
         nodes = kubernetes_api_get("/api/v1/nodes")
