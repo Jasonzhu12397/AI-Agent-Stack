@@ -162,6 +162,11 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_cluster_uid"] = identity.get("uid")
+    elif command_type == "cluster.capi.worker.preflight":
+        payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = _deployment_capi_namespace(deployment)
+        payload["expected_worker_replicas"] = deployment.spec.get("worker_replicas")
+        payload["worker_provisioning"] = deployment.spec.get("worker_provisioning")
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
@@ -682,11 +687,122 @@ def handle_deployment_command_result(
             },
         }
         deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
-        queue_deployment_command(
-            deployment,
-            "cluster.postflight",
-            node=deployment.target_node,
+        expected_workers = deployment.spec.get("worker_replicas")
+        worker_config = deployment.spec.get("worker_provisioning")
+        if isinstance(expected_workers, int) and not isinstance(expected_workers, bool) and expected_workers > 0:
+            if not isinstance(worker_config, dict):
+                deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+                deployment.error = {"code": "WORKER_PROVISIONING_SPEC_REQUIRED"}
+                deployment.plan_result = {
+                    **(deployment.plan_result or {}),
+                    "dual_agent": {
+                        **((deployment.plan_result or {}).get("dual_agent", {})),
+                        "phase": "worker_provisioning_spec_required",
+                        "target_agent_owns_cluster": True,
+                        "eph_reclaim_allowed": False,
+                    },
+                }
+                deployment.save(update_fields=["status", "error", "plan_result", "updated_at"])
+                return
+            deployment.status = ClusterDeployment.Status.PROVISIONING
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "phase": "worker_preflight_pending",
+                    "target_agent_owns_cluster": True,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(update_fields=["status", "plan_result", "updated_at"])
+            queue_deployment_command(
+                deployment,
+                "cluster.capi.worker.preflight",
+                node=deployment.target_node,
+            )
+        else:
+            queue_deployment_command(
+                deployment,
+                "cluster.postflight",
+                node=deployment.target_node,
+            )
+    elif command.command_type == "cluster.capi.worker.preflight":
+        config = deployment.spec.get("worker_provisioning")
+        expected_workers = deployment.spec.get("worker_replicas")
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        source_identity = source.get("source_cluster_identity", {})
+        expected_uid = source_identity.get("uid")
+        infrastructure = result.get("infrastructure_template")
+        bootstrap = result.get("bootstrap_template")
+        hosts = result.get("selected_baremetal_hosts")
+        network = result.get("network_profile")
+        versions = result.get("provider_versions")
+        valid_result = (
+            command.node.node_type == "target_cluster"
+            and command.node_id == deployment.target_node_id
+            and isinstance(config, dict)
+            and command.payload.get("worker_provisioning") == config
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == _deployment_capi_namespace(deployment)
+            and result.get("expected_worker_replicas") == expected_workers
+            and isinstance(expected_workers, int)
+            and not isinstance(expected_workers, bool)
+            and expected_workers > 0
+            and result.get("cluster_uid") == expected_uid
+            and result.get("ready") is True
+            and result.get("machine_deployment_exists") is False
+            and result.get("execution_allowed") is False
+            and result.get("worker_creation_performed") is False
+            and result.get("side_effects") is False
+            and isinstance(result.get("available_baremetal_host_count"), int)
+            and not isinstance(result.get("available_baremetal_host_count"), bool)
+            and result.get("available_baremetal_host_count") >= expected_workers
+            and isinstance(hosts, list)
+            and len(hosts) >= expected_workers
+            and all(
+                isinstance(host, dict)
+                and isinstance(host.get("name"), str)
+                and host.get("name")
+                and isinstance(host.get("uid"), str)
+                and host.get("uid")
+                and host.get("ready") is True
+                for host in hosts[:expected_workers]
+            )
+            and len({host.get("name") for host in hosts if isinstance(host, dict)}) == len(hosts)
+            and isinstance(infrastructure, dict)
+            and infrastructure.get("name") == config.get("infrastructure_template_name")
+            and isinstance(infrastructure.get("uid"), str)
+            and infrastructure.get("uid")
+            and isinstance(bootstrap, dict)
+            and bootstrap.get("name") == config.get("bootstrap_template_name")
+            and isinstance(bootstrap.get("uid"), str)
+            and bootstrap.get("uid")
+            and isinstance(network, dict)
+            and network.get("valid") is True
+            and network.get("profile_hash") == _spec_hash(config.get("network_profile", {}))
+            and isinstance(versions, dict)
+            and all(isinstance(value, str) and value for value in versions.values())
         )
+        if not valid_result:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"}
+            deployment.finished_at = timezone.now()
+            deployment.save(update_fields=["status", "error", "finished_at", "updated_at"])
+            return
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "worker_provisioning_preflight": result,
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "phase": "worker_preflight_passed_waiting_provisioning_approval",
+                "target_agent_owns_cluster": True,
+                "worker_preflight_validated": True,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+        deployment.error = None
+        deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
