@@ -349,7 +349,7 @@ class ClusterDeploymentTargetAgentHandoffView(APIView):
                 "cluster_name": deployment.cluster_name,
                 "target_node_id": str(target_node.id),
                 "source_preflight_command_id": str(source_preflight_command.id),
-                "target_preflight_command_id": str(preflight_command.id),
+                "target_preflight_scheduled": False,
             },
         )
         return Response(
