@@ -3,33 +3,93 @@ import pytest
 from apps.node_agent.metal3_observer import observe_cluster_metal3
 
 
-VERSIONS = {"cluster.x-k8s.io": "v1beta1", "infrastructure.cluster.x-k8s.io": "v1beta1", "metal3.io": "v1alpha1"}
+VERSIONS = {
+    "cluster.x-k8s.io": "v1beta1",
+    "infrastructure.cluster.x-k8s.io": "v1beta1",
+    "metal3.io": "v1alpha1",
+}
 
 
 def documents():
-    machine = {"metadata": {"name": "worker-0", "uid": "machine-uid"}, "spec": {"clusterName": "edge-lab", "infrastructureRef": {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-0", "namespace": "default"}}}
-    mm = {"metadata": {"name": "worker-0", "namespace": "default", "uid": "mm-uid"}, "status": {"ready": True}}
-    host = {"metadata": {"name": "bmh-0", "namespace": "metal3-system", "uid": "bmh-uid"}, "spec": {"online": True, "consumerRef": {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-0", "namespace": "default", "uid": "mm-uid"}}, "status": {"operationalStatus": "OK", "provisioning": {"state": "provisioned"}}}
-    return machine, mm, host
+    machine = {
+        "metadata": {"name": "worker-0", "uid": "machine-uid"},
+        "spec": {
+            "clusterName": "edge-lab",
+            "infrastructureRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "name": "worker-0",
+                "namespace": "default",
+            },
+        },
+    }
+    metal3_machine = {
+        "metadata": {
+            "name": "worker-0",
+            "namespace": "default",
+            "uid": "mm-uid",
+        },
+        "status": {"ready": True},
+    }
+    host = {
+        "metadata": {
+            "name": "bmh-0",
+            "namespace": "metal3-system",
+            "uid": "bmh-uid",
+        },
+        "spec": {
+            "online": True,
+            "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "name": "worker-0",
+                "namespace": "default",
+                "uid": "mm-uid",
+            },
+        },
+        "status": {
+            "operationalStatus": "OK",
+            "provisioning": {"state": "provisioned"},
+        },
+    }
+    return machine, metal3_machine, host
 
 
-def run_observer(machine=None, mm=None, hosts=None):
+def run_observer(machine=None, metal3_machine=None, hosts=None):
     default_machine, default_mm, default_host = documents()
     machine = default_machine if machine is None else machine
-    mm = default_mm if mm is None else mm
+    metal3_machine = default_mm if metal3_machine is None else metal3_machine
     hosts = [default_host] if hosts is None else hosts
-    docs = {"/apis": {"groups": [{"name": k, "preferredVersion": {"version": v}} for k, v in VERSIONS.items()]}, "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3machines/worker-0": mm}
+    groups = [
+        {"name": name, "preferredVersion": {"version": version}}
+        for name, version in VERSIONS.items()
+    ]
+    documents_by_path = {
+        "/apis": {"groups": groups},
+        (
+            "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/"
+            "default/metal3machines/worker-0"
+        ): metal3_machine,
+    }
+
     def get_item(path):
-        if path not in docs:
+        if path not in documents_by_path:
             raise AssertionError(path)
-        return docs[path]
+        return documents_by_path[path]
+
     def list_items(path):
         if path.endswith("/machines"):
             return machine if isinstance(machine, list) else [machine]
         if path.endswith("/baremetalhosts"):
             return hosts
         raise AssertionError(path)
-    return observe_cluster_metal3({"cluster_name": "edge-lab", "namespace": "default", "baremetal_host_namespace": "metal3-system"}, get_item, list_items)
+
+    payload = {
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+        "baremetal_host_namespace": "metal3-system",
+    }
+    return observe_cluster_metal3(payload, get_item, list_items)
 
 
 def test_full_machine_metal3machine_bmh_chain_resolves():
@@ -53,7 +113,9 @@ def test_cross_namespace_infrastructure_reference_fails_closed():
     machine["spec"]["infrastructureRef"]["namespace"] = "other"
     result = run_observer(machine=machine)
     assert result["ready"] is False
-    assert "machine_infrastructure_ref_invalid_or_cross_namespace" in result["blockers"]
+    assert "machine_infrastructure_ref_invalid_or_cross_namespace" in (
+        result["blockers"]
+    )
 
 
 def test_missing_consumer_reference_fails_closed():
@@ -67,14 +129,32 @@ def test_missing_consumer_reference_fails_closed():
 def test_ambiguous_consumer_reference_fails_closed():
     _, _, host = documents()
     duplicate = dict(host)
-    duplicate["metadata"] = dict(host["metadata"], name="bmh-1", uid="bmh-uid-1")
+    duplicate["metadata"] = dict(
+        host["metadata"],
+        name="bmh-1",
+        uid="bmh-uid-1",
+    )
     result = run_observer(hosts=[host, duplicate])
     assert result["ready"] is False
     assert "baremetal_host_consumer_ambiguous" in result["blockers"]
 
 
-@pytest.mark.parametrize(("state", "online", "operational", "expected"), [("provisioned", True, "OK", True), ("available", True, "OK", False), ("provisioning", True, "OK", False), ("provisioned", False, "OK", False), ("provisioned", True, "error", False)])
-def test_bmh_must_be_provisioned_and_healthy(state, online, operational, expected):
+@pytest.mark.parametrize(
+    ("state", "online", "operational", "expected"),
+    [
+        ("provisioned", True, "OK", True),
+        ("available", True, "OK", False),
+        ("provisioning", True, "OK", False),
+        ("provisioned", False, "OK", False),
+        ("provisioned", True, "error", False),
+    ],
+)
+def test_bmh_must_be_provisioned_and_healthy(
+    state,
+    online,
+    operational,
+    expected,
+):
     _, _, host = documents()
     host["spec"]["online"] = online
     host["status"]["provisioning"]["state"] = state
@@ -83,4 +163,5 @@ def test_bmh_must_be_provisioned_and_healthy(state, online, operational, expecte
 
 
 def test_missing_ironic_adapter_is_never_reported_as_healthy():
-    assert run_observer()["ironic"]["status"] == "not_configured"
+    result = run_observer()
+    assert result["ironic"]["status"] == "not_configured"
