@@ -1151,9 +1151,11 @@ def inspect_network_environment(
     ):
         raise NodeAgentError("INVALID_EXPECTED_AGENT_DEFAULT_INTERFACE")
     if expected_agent_default_gateway is not None:
+        if not isinstance(expected_agent_default_gateway, str):
+            raise NodeAgentError("INVALID_EXPECTED_AGENT_DEFAULT_GATEWAY")
         try:
             ipaddress.ip_address(expected_agent_default_gateway)
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             raise NodeAgentError("INVALID_EXPECTED_AGENT_DEFAULT_GATEWAY") from exc
         if expected_agent_default_interface is None:
             raise NodeAgentError("AGENT_DEFAULT_INTERFACE_REQUIRED")
