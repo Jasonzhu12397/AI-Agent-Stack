@@ -23,7 +23,7 @@ The central Control Plane Agent is hosted in Alibaba Cloud or Tencent Cloud, ind
 
 The target cluster uses separate Control Plane and Data Plane network roles. The ordinary NIC carries Kubernetes/node management and cloud-agent control connectivity. Calico is the primary Pod network; Multus attaches secondary networks. OVS CNI and SR-IOV CNI are selectable secondary attachments. DPDK requires additional host/device/hugepage/NUMA configuration and is not implied by installing SR-IOV CNI.
 
-Workloads requiring high-performance traffic declare a Data Plane attachment and validated route policy. System and node-management traffic retain Control Plane reachability. Network topology, CNI versions, interface/PCI inventory, VLANs, MTUs, IPAM and routing are explicit versioned deployment inputs bound to plan approval.
+Pod-originated traffic, including Agent Pods, defaults to the Data Plane; the primary Pod network/default route must follow that design. The ordinary NIC carries node-originated management traffic such as kubelet/API and host-level operations. Multus attaches additional OVS/SR-IOV networks, and DPDK requires separate host/device/hugepage/NUMA configuration. Any Pod egress exception must be explicit and audited. Network topology, CNI versions, interface/PCI inventory, VLANs, MTUs, IPAM and routing are versioned deployment inputs bound to plan approval.
 
 ## Consequences
 
