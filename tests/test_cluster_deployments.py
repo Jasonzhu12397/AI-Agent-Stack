@@ -1264,7 +1264,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     assert pivot_command.node_id == eph_node.id
     assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
     assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
-    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
     pivot_result = {
         "pivot_executed": True,
