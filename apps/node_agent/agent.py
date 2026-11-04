@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .capi_pivot import CapiPivotError, run_capi_pivot, run_capi_pivot_dry_run
+from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
 
 
 class NodeAgentError(Exception):
@@ -3235,6 +3236,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
     if command_type == "metal3.host.inspect":
         namespace = payload.get("namespace", os.environ.get("AGENT_NAMESPACE", "default"))
         return inspect_api_group("metal3.io", ["baremetalhosts"], namespace)
+    if command_type == "cluster.metal3.observe":
+        try:
+            return observe_cluster_metal3(payload, kubernetes_api_get, list_all_kubernetes_items)
+        except Metal3ObservationError as exc:
+            raise NodeAgentError(str(exc)) from exc
     if command_type == "host.preflight":
         disk = shutil.disk_usage("/")
         return {
