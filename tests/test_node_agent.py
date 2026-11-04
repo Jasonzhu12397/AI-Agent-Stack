@@ -2004,6 +2004,124 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
     assert result["workload_attachment_validation"]["passed"] is False
 
 
+
+@pytest.mark.parametrize(
+    ("network_status", "expected_pass"),
+    [
+        (
+            [
+                {
+                    "name": "app-ns/sriov-data",
+                    "interface": "eth0",
+                    "ips": ["192.0.2.20"],
+                    "default": True,
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "name": "app-ns/calico",
+                    "interface": "eth0",
+                    "ips": ["10.244.1.20"],
+                    "default": True,
+                },
+                {
+                    "name": "app-ns/sriov-data",
+                    "interface": "net1",
+                    "ips": ["192.0.2.20"],
+                },
+            ],
+            False,
+        ),
+        (
+            [
+                {
+                    "name": "app-ns/sriov-data",
+                    "interface": "eth0",
+                    "ips": ["192.0.2.20"],
+                    "default": True,
+                },
+                {
+                    "name": "app-ns/ovs-extra",
+                    "interface": "net1",
+                    "ips": ["198.51.100.20"],
+                    "default": True,
+                },
+            ],
+            False,
+        ),
+    ],
+)
+def test_network_inspection_validates_pod_data_plane_default_network(
+    monkeypatch,
+    network_status,
+    expected_pass,
+):
+    def fake_get(path):
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {"groups": []}
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        if path in {
+            "/api/v1/nodes",
+            "/api/v1/namespaces/kube-system/pods",
+        }:
+            return []
+        if path == "/api/v1/namespaces/app-ns/pods":
+            return [
+                {
+                    "metadata": {
+                        "name": "app-0",
+                        "annotations": {
+                            "k8s.v1.cni.cncf.io/network-status": json.dumps(
+                                network_status
+                            )
+                        },
+                    },
+                    "spec": {"nodeName": "worker-01"},
+                    "status": {"phase": "Running"},
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    monkeypatch.setattr(agent, "_pod_network_namespace_snapshot", lambda: {})
+
+    result = agent.inspect_network_environment(
+        {
+            "workload_namespaces": ["app-ns"],
+            "require_data_plane_default": True,
+            "expected_default_network": "app-ns/sriov-data",
+        }
+    )
+
+    pod = result["workload_namespace_results"][0]["pods"][0]
+    validation = result["pod_default_network_validation"]
+    assert pod["default_network_valid"] is expected_pass
+    assert validation["requested"] is True
+    assert validation["complete"] is True
+    assert validation["passed"] is expected_pass
+
+
+def test_network_inspection_requires_namespace_scope_for_default_network_check():
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="WORKLOAD_NAMESPACES_REQUIRED_FOR_DEFAULT_NETWORK_CHECK",
+    ):
+        agent.inspect_network_environment(
+            {
+                "require_data_plane_default": True,
+                "expected_default_network": "data-plane",
+            }
+        )
+
+
 def test_network_inspection_requires_namespace_scope_for_workload_checks():
     with pytest.raises(
         agent.NodeAgentError,
