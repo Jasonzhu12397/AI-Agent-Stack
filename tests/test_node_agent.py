@@ -2610,7 +2610,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
     groups = {
         "cluster.x-k8s.io": ("v1beta1", ["clusters", "machinedeployments"]),
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
-        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machinetemplates"]),
+        "infrastructure.cluster.x-k8s.io": ("v1beta1", ["metal3machines", "metal3machinetemplates"]),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
     calls = []
@@ -2625,6 +2625,13 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
         for name, (version, resources) in groups.items():
             if path == f"/apis/{name}/{version}":
                 return {"resources": [{"name": item} for item in resources]}
+        if path.startswith("/apis/apps/v1/namespaces/") and "/deployments/" in path:
+            deployment_name = path.rsplit("/", 1)[-1]
+            return {
+                "metadata": {"name": deployment_name, "generation": 1},
+                "spec": {"replicas": 1},
+                "status": {"availableReplicas": 1, "observedGeneration": 1},
+            }
         if path.endswith("/clusters/edge-lab"):
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
