@@ -1575,3 +1575,69 @@ def test_command_lease_is_required_before_execution():
             {"id": "command-3"},
             "eph_node",
         )
+
+
+
+def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypatch):
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": "cluster.x-k8s.io",
+                    "preferredVersion": {"version": "v1beta1"},
+                }
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
+            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
+            "items": [
+                {
+                    "metadata": {"name": "edge-lab-control-plane-0"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: responses[path],
+    )
+
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.target.verify",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "namespace": "metal3",
+                "expected_cluster_uid": "source-uid",
+            },
+        },
+        "target_cluster",
+    )
+
+    assert result["pivot_adoption_verified"] is True
+    assert result["cluster_identity_preserved"] is True
+    assert result["cluster_uid"] == "source-uid"
+    assert result["machine_count"] == 1
+    assert result["ready_machine_count"] == 1
+    assert result["side_effects"] is False
+
+
+def test_eph_agent_cannot_run_target_adoption_verification():
+    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.target.verify",
+                "payload": {
+                    "cluster_name": "edge-lab",
+                    "namespace": "metal3",
+                    "expected_cluster_uid": "source-uid",
+                },
+            },
+            "eph_node",
+        )
