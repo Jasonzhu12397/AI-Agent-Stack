@@ -758,6 +758,26 @@ def handle_deployment_command_result(
             and result.get("execution_allowed") is False
             and result.get("worker_creation_performed") is False
             and result.get("side_effects") is False
+            and result.get("controllers_ready") is True
+            and isinstance(result.get("controllers"), list)
+            and len(result.get("controllers")) == 4
+            and all(
+                isinstance(controller, dict)
+                and controller.get("ready") is True
+                and isinstance(controller.get("namespace"), str)
+                and isinstance(controller.get("deployment"), str)
+                for controller in result.get("controllers", [])
+            )
+            and {
+                (controller.get("namespace"), controller.get("deployment"))
+                for controller in result.get("controllers", [])
+                if isinstance(controller, dict)
+            } == {
+                ("capi-system", "capi-controller-manager"),
+                ("capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"),
+                ("capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"),
+                ("capm3-system", "capm3-controller-manager"),
+            }
             and result.get("baremetal_host_namespace")
             == config.get("baremetal_host_namespace")
             and result.get("host_selector") == config.get("host_selector")
