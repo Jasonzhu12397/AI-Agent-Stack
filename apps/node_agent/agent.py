@@ -1054,7 +1054,7 @@ def inspect_cluster_node_hardware_inventory(
 ) -> dict[str, Any]:
     try:
         configmaps = list_all_kubernetes_items(
-            "/api/v1/namespaces/ai-agent-system/configmaps",
+            "/api/v1/namespaces/ai-agent-inventory/configmaps",
             max_items=5000,
         )
     except NodeAgentError as exc:
