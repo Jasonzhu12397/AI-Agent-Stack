@@ -1899,6 +1899,9 @@ def valid_dual_network_profile():
         "data_plane": {
             "interfaces": ["ens2f0"],
             "mtu": 9000,
+            "hugepages": "1Gi",
+            "numa_policy": "single-numa-node",
+            "cpu_manager_policy": "static",
             "cni": {
                 "primary": "calico",
                 "meta": "multus",
@@ -1908,6 +1911,7 @@ def valid_dual_network_profile():
                         "name": "sriov-data",
                         "type": "sriov",
                         "resource_name": "intel.com/sriov_netdevice",
+                        "dpdk": True,
                     },
                 ],
             },
