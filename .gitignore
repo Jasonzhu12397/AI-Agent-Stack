@@ -11,3 +11,5 @@ build/
 *.egg-info/
 node_modules/
 .DS_Store
+
+.env.cloud
