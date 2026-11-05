@@ -1,5 +1,4 @@
 import pytest
-
 from node_agent import agent
 from node_agent.provider_compatibility import (
     ProviderCompatibilityError,
@@ -8,7 +7,13 @@ from node_agent.provider_compatibility import (
 )
 
 
-def payload(capm3="1.14.0", bmo="0.14.0", ironic="37.0.0", irso="0.12.0", capi_api_version="v1beta2"):
+def payload(
+    capm3="1.14.0",
+    bmo="0.14.0",
+    ironic="37.0.0",
+    irso="0.12.0",
+    capi_api_version="v1beta2",
+):
     return {
         "provider_versions": {
             "capm3": capm3,
@@ -61,7 +66,10 @@ def test_irso_ironic_incompatible_pair_blocks_compatibility():
 
     assert result["compatibility_status"] == "unsupported"
     assert result["irso_ironic_compatible"] is False
-    assert any(item.startswith("irso_ironic_version_pair_not_supported:") for item in result["blockers"])
+    assert any(
+        item.startswith("irso_ironic_version_pair_not_supported:")
+        for item in result["blockers"]
+    )
 
 
 def test_capm3_capi_api_mismatch_blocks_compatibility():
@@ -78,7 +86,13 @@ def test_capm3_capi_api_mismatch_blocks_compatibility():
 
 def test_tested_but_not_currently_supported_releases_are_labeled_tested():
     result = evaluate_provider_compatibility(
-        payload(capm3="1.12.0", bmo="0.12.0", ironic="35.0.0", irso="0.11.0", capi_api_version="v1beta1")
+        payload(
+            capm3="1.12.0",
+            bmo="0.12.0",
+            ironic="35.0.0",
+            irso="0.11.0",
+            capi_api_version="v1beta1",
+        )
     )
 
     assert result["compatibility_status"] == "tested"
