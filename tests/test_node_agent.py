@@ -524,7 +524,7 @@ def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3clusters", "metal3machines", "metal3machinetemplates"],
+            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datatemplates"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -1045,7 +1045,7 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
             "metal3machines",
-            "metal3machinetemplates",
+            "metal3machinetemplates", "metal3datatemplates",
         ],
         "metal3.io": ["baremetalhosts"],
     }
@@ -1120,7 +1120,7 @@ def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
             "metal3machines",
-            "metal3machinetemplates",
+            "metal3machinetemplates", "metal3datatemplates",
         ],
         "metal3.io": ["baremetalhosts"],
     }
@@ -1351,7 +1351,7 @@ def test_target_capi_pivot_preflight_checks_apis_controllers_and_cluster_conflic
         "infrastructure.cluster.x-k8s.io": [
             "metal3clusters",
             "metal3machines",
-            "metal3machinetemplates",
+            "metal3machinetemplates", "metal3datatemplates",
         ],
         "metal3.io": ["baremetalhosts"],
     }
@@ -1482,7 +1482,7 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3clusters", "metal3machines", "metal3machinetemplates"],
+            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datatemplates"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -2650,7 +2650,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3machines", "metal3machinetemplates"],
+            ["metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datatemplates"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -2765,7 +2765,7 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3machines", "metal3machinetemplates"],
+            ["metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datatemplates"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -2860,7 +2860,7 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
         "bootstrap.cluster.x-k8s.io": ("v1beta1", ["kubeadmconfigtemplates"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3machines", "metal3machinetemplates"],
+            ["metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datatemplates"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
