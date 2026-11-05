@@ -750,6 +750,67 @@ def run_capi_pivot_postflight(
     if not isinstance(cluster_uid, str) or not cluster_uid:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_CLUSTER_IDENTITY_INVALID")
 
+    required_controllers = {
+        "capi-system": "capi-controller-manager",
+        "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+        "capi-kubeadm-control-plane-system": "capi-kubeadm-control-plane-controller-manager",
+        "capm3-system": "capm3-controller-manager",
+    }
+    controller_evidence = []
+    for controller_namespace, deployment_name in required_controllers.items():
+        deployment = _kubectl_json(
+            runner,
+            kubectl,
+            target_kubeconfig,
+            [
+                "get",
+                "deployment",
+                deployment_name,
+                "--namespace",
+                controller_namespace,
+                "-o",
+                "json",
+            ],
+            process_env,
+            "CAPI_PIVOT_POSTFLIGHT_CONTROLLERS_UNAVAILABLE",
+        )
+        metadata = deployment.get("metadata", {})
+        spec = deployment.get("spec", {})
+        status = deployment.get("status", {})
+        desired = spec.get("replicas", 1) if isinstance(spec, dict) else None
+        available = status.get("availableReplicas", 0) if isinstance(status, dict) else None
+        observed = status.get("observedGeneration", 0) if isinstance(status, dict) else None
+        generation = metadata.get("generation", 1) if isinstance(metadata, dict) else None
+        if (
+            not isinstance(desired, int)
+            or isinstance(desired, bool)
+            or desired < 1
+            or not isinstance(available, int)
+            or isinstance(available, bool)
+            or available < desired
+            or not isinstance(observed, int)
+            or isinstance(observed, bool)
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or observed < generation
+        ):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_CONTROLLER_NOT_READY:"
+                + controller_namespace
+                + "/"
+                + deployment_name
+            )
+        controller_evidence.append(
+            {
+                "namespace": controller_namespace,
+                "deployment": deployment_name,
+                "desired_replicas": desired,
+                "available_replicas": available,
+                "observed_generation": observed,
+                "generation": generation,
+            }
+        )
+
     machine_list = _kubectl_json(
         runner,
         kubectl,
@@ -790,15 +851,34 @@ def run_capi_pivot_postflight(
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
 
     cluster_machines = []
+    machine_by_name = {}
+    machine_uids = set()
     for machine in machines:
-        metadata = machine.get("metadata", {}) if isinstance(machine, dict) else {}
+        if not isinstance(machine, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
+        metadata = machine.get("metadata", {})
         labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
-        if labels.get("cluster.x-k8s.io/cluster-name") == cluster_name:
-            cluster_machines.append(machine)
+        if labels.get("cluster.x-k8s.io/cluster-name") != cluster_name:
+            continue
+        name = metadata.get("name")
+        uid = metadata.get("uid")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(uid, str)
+            or not uid
+            or name in machine_by_name
+            or uid in machine_uids
+        ):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_IDENTITY_INVALID")
+        machine_by_name[name] = machine
+        machine_uids.add(uid)
+        cluster_machines.append(machine)
     if not cluster_machines:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_NO_CLUSTER_MACHINES")
 
     m3m_by_name = {}
+    m3m_uids = set()
     for m3m in m3ms:
         if not isinstance(m3m, dict):
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
@@ -806,11 +886,50 @@ def run_capi_pivot_postflight(
         labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
         if labels.get("cluster.x-k8s.io/cluster-name") == cluster_name:
             name = metadata.get("name")
-            if not isinstance(name, str) or not name:
+            uid = metadata.get("uid")
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(uid, str)
+                or not uid
+                or name in m3m_by_name
+                or uid in m3m_uids
+            ):
                 raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_IDENTITY_INVALID")
             m3m_by_name[name] = m3m
+            m3m_uids.add(uid)
     if not m3m_by_name:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_NO_METAL3MACHINES")
+
+    if len(m3m_by_name) != len(machine_by_name):
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_INFRASTRUCTURE_COUNT_MISMATCH")
+    machine_infrastructure = {}
+    for machine_name, machine in machine_by_name.items():
+        infrastructure_ref = machine.get("spec", {}).get("infrastructureRef")
+        if (
+            not isinstance(infrastructure_ref, dict)
+            or infrastructure_ref.get("kind") != "Metal3Machine"
+            or not isinstance(infrastructure_ref.get("name"), str)
+            or not infrastructure_ref.get("name")
+            or not str(infrastructure_ref.get("apiVersion", "")).startswith(
+                "infrastructure.cluster.x-k8s.io/"
+            )
+        ):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_MACHINE_INFRASTRUCTURE_REFERENCE_INVALID:"
+                + machine_name
+            )
+        m3m_name = infrastructure_ref["name"]
+        if m3m_name not in m3m_by_name:
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_NOT_FOUND:"
+                + machine_name
+                + ":"
+                + m3m_name
+            )
+        machine_infrastructure[m3m_name] = machine_name
+    if set(machine_infrastructure) != set(m3m_by_name):
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_ORPHAN_METAL3MACHINE")
 
     bmh_by_name = {}
     for host in hosts:
@@ -837,6 +956,18 @@ def run_capi_pivot_postflight(
         if host is None:
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_FOUND:" + m3m_name + ":" + host_name
+            )
+        m3m_uid = m3m.get("metadata", {}).get("uid")
+        consumer_ref = host.get("spec", {}).get("consumerRef")
+        if (
+            not isinstance(consumer_ref, dict)
+            or consumer_ref.get("kind") != "Metal3Machine"
+            or consumer_ref.get("name") != m3m_name
+            or consumer_ref.get("uid") != m3m_uid
+        ):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_CONSUMER_REFERENCE_MISMATCH:"
+                + host_name
             )
         host_meta = host.get("metadata", {})
         host_annotations = host_meta.get("annotations", {}) if isinstance(host_meta, dict) else {}
@@ -879,6 +1010,11 @@ def run_capi_pivot_postflight(
         "metal3machine_count": len(m3m_by_name),
         "verified_bmh_count": len(verified),
         "verified_bmhs": verified[:200],
+        "verified_machine_count": len(machine_by_name),
+        "machine_infrastructure_references_verified": True,
+        "bmh_consumer_references_verified": True,
+        "controllers_ready": True,
+        "controllers": controller_evidence,
         "bmh_status_annotations_consumed": True,
         "side_effects": False,
     }
