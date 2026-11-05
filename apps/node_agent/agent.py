@@ -882,6 +882,42 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
     }
 
 
+def validate_metal3_data_template(profile: dict[str, Any], data_template: Any, expected_api_version: str, expected_namespace: str) -> dict[str, Any]:
+    if not isinstance(data_template, dict):
+        raise NodeAgentError("METAL3_DATA_TEMPLATE_MISSING")
+    metadata = data_template.get("metadata", {})
+    annotations = metadata.get("annotations", {})
+    if (
+        data_template.get("kind") != "Metal3DataTemplate"
+        or data_template.get("apiVersion") != expected_api_version
+        or metadata.get("namespace") != expected_namespace
+        or not isinstance(metadata.get("uid"), str)
+        or not metadata.get("uid")
+        or not isinstance(annotations, dict)
+        or annotations.get("ai-agent-stack.io/network-profile-hash") != canonical_hash(profile)
+    ):
+        raise NodeAgentError("METAL3_DATA_TEMPLATE_IDENTITY_OR_PROFILE_MISMATCH")
+    spec = data_template.get("spec", {})
+    template = spec.get("template", {}) if isinstance(spec, dict) else {}
+    network_data = template.get("networkData", {}) if isinstance(template, dict) else {}
+    links = network_data.get("links", {}) if isinstance(network_data, dict) else {}
+    ethernets = links.get("ethernets", []) if isinstance(links, dict) else []
+    if not isinstance(ethernets, list):
+        raise NodeAgentError("METAL3_DATA_TEMPLATE_NETWORK_LINKS_INVALID")
+    required = [(profile["control_plane"]["interface"], profile["control_plane"]["mtu"])]
+    required.extend((name, profile["data_plane"]["mtu"]) for name in profile["data_plane"]["interfaces"])
+    verified = []
+    for interface_name, expected_mtu in required:
+        matches = [item for item in ethernets if isinstance(item, dict) and item.get("id") == interface_name]
+        if len(matches) != 1:
+            raise NodeAgentError("METAL3_DATA_TEMPLATE_INTERFACE_MISSING_OR_DUPLICATE")
+        item = matches[0]
+        mac_address = item.get("macAddress", {})
+        if not isinstance(mac_address, dict) or mac_address.get("fromHostInterface") != interface_name or item.get("mtu") != expected_mtu or item.get("type") != "phy":
+            raise NodeAgentError("METAL3_DATA_TEMPLATE_INTERFACE_CONFIGURATION_MISMATCH")
+        verified.append(interface_name)
+    return {"verified": True, "uid": metadata["uid"], "name": metadata.get("name"), "namespace": expected_namespace, "interface_names": verified, "profile_hash": canonical_hash(profile)}
+
 def _pod_network_namespace_snapshot() -> dict[str, Any]:
     interfaces = []
     try:
@@ -2270,7 +2306,11 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         required = {
             "cluster.x-k8s.io": {"machines", "machinedeployments"},
             "bootstrap.cluster.x-k8s.io": {"kubeadmconfigtemplates"},
-            "infrastructure.cluster.x-k8s.io": {"metal3machines", "metal3machinetemplates"},
+            "infrastructure.cluster.x-k8s.io": {
+                "metal3machines",
+                "metal3machinetemplates",
+                "metal3datatemplates",
+            },
             "metal3.io": {"baremetalhosts"},
         }
         versions = {}
@@ -2382,6 +2422,27 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         infrastructure_template = kubernetes_api_get(infra_path)
         bootstrap_template = kubernetes_api_get(bootstrap_path)
+        infrastructure_template_spec = infrastructure_template.get("spec", {}).get("template", {}).get("spec", {})
+        data_template_ref = infrastructure_template_spec.get("dataTemplate", {})
+        data_template_name = data_template_ref.get("name") if isinstance(data_template_ref, dict) else None
+        data_template_namespace = data_template_ref.get("namespace", namespace) if isinstance(data_template_ref, dict) else None
+        if (
+            not isinstance(data_template_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", data_template_name)
+            or data_template_namespace != namespace
+        ):
+            raise NodeAgentError("METAL3_DATA_TEMPLATE_REFERENCE_INVALID")
+        data_template_path = (
+            f"/apis/infrastructure.cluster.x-k8s.io/{infra_version}/namespaces/"
+            f"{namespace}/metal3datatemplates/{data_template_name}"
+        )
+        data_template = kubernetes_api_get(data_template_path)
+        data_template_result = validate_metal3_data_template(
+            network_profile,
+            data_template,
+            "infrastructure.cluster.x-k8s.io/" + infra_version,
+            namespace,
+        )
         bmh_version = versions["metal3.io"]
         bmh_items = list_all_kubernetes_items(
             f"/apis/metal3.io/{bmh_version}/namespaces/{host_namespace}/baremetalhosts",
@@ -2556,6 +2617,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "network_profile": network_profile,
             "network_template_profile_hash": network_template_profile_hash,
             "network_template_profile_verified": network_template_profile_verified,
+            "metal3_data_template": data_template_result,
             "template_host_selector": template_host_match_labels,
             "template_host_selector_verified": template_host_selector_verified,
             "provider_versions": versions,
@@ -2748,6 +2810,22 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         )
         infra_template = kubernetes_api_get(infra_path)
         bootstrap_template = kubernetes_api_get(bootstrap_path)
+        infra_template_spec = infra_template.get("spec", {}).get("template", {}).get("spec", {})
+        data_template_ref = infra_template_spec.get("dataTemplate", {})
+        data_template_name = data_template_ref.get("name") if isinstance(data_template_ref, dict) else None
+        data_template_namespace = data_template_ref.get("namespace", namespace) if isinstance(data_template_ref, dict) else None
+        if (
+            not isinstance(data_template_name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", data_template_name)
+            or data_template_namespace != namespace
+        ):
+            raise NodeAgentError("METAL3_DATA_TEMPLATE_REFERENCE_INVALID")
+        data_template = kubernetes_api_get(
+            f"/apis/infrastructure.cluster.x-k8s.io/"
+            f"{versions['infrastructure.cluster.x-k8s.io']}/namespaces/"
+            f"{namespace}/metal3datatemplates/{data_template_name}"
+        )
+        validate_metal3_data_template(network_profile, data_template, expected_infra_api_version, namespace)
         infra_annotations = infra_template.get("metadata", {}).get("annotations", {})
         network_template_hash = (
             infra_annotations.get("ai-agent-stack.io/network-profile-hash")
