@@ -60,6 +60,18 @@ spec:
                 secretKeyRef:
                   name: target-cluster-agent-credentials
                   key: token
+            - name: IRONIC_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ironic-api-credentials
+                  key: api-url
+                  optional: true
+            - name: IRONIC_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ironic-api-credentials
+                  key: token
+                  optional: true
           resources:
             requests:
               cpu: 50m
