@@ -10,12 +10,12 @@ The command is available to the EPH agent only. It does not install providers, c
 
 Snapshot date: 2026-11-05.
 
-| Component | Supported releases | Tested but not currently supported in the upstream support table |
-|---|---|---|
-| CAPM3 | 1.14, 1.13 | 1.12 |
-| BMO | 0.14, 0.13 | 0.12 |
-| Ironic image | 39.0, 38.0, 37.0 | 35.0, 33.0 (33.0 appears in the 1.12 periodic CI matrix but is EOL) |
-| Ironic Standalone Operator | 0.12, 0.11 | 0.10, 0.9 (older tested/EOL release line) |
+| Component | Supported releases | Tested release lines | EOL release lines |
+|---|---|---|---|
+| CAPM3 | 1.14, 1.13 | 1.12 | — |
+| BMO | 0.14, 0.13 | 0.12 | — |
+| Ironic image | 39.0, 38.0, 37.0 | 35.0 | 33.0 |
+| Ironic Standalone Operator | 0.12, 0.11 | 0.10 | 0.9 |
 
 IrSO-to-Ironic release compatibility is checked independently:
 - IrSO 0.12: Ironic 39.0, 38.0, 37.0.
@@ -51,8 +51,8 @@ The agent obtains Kubernetes `/version` and `/apis` itself. The caller cannot ov
 
 Output distinguishes:
 - `supported`: every component release is listed as supported and the IrSO/Ironic and known CAPI API constraints match.
-- `tested`: no hard incompatibility was found, but at least one component is in a tested/EOL release line.
-- `unsupported`: a component release is unknown/unsupported, the IrSO/Ironic pair is invalid, or the live CAPI API version conflicts with the CAPM3 mapping.
+- `tested`: no hard incompatibility was found, but at least one component is in a tested (not current supported) release line.
+- `unsupported`: a component release is unknown, EOL, or unsupported; the IrSO/Ironic pair is invalid; or the live CAPI API version conflicts with the CAPM3 mapping.
 
 `upstream_ci_profile_tested` is separate from the overall status. A supported combination that is not explicitly listed in the periodic CI matrix is not represented as CI-tested.
 
