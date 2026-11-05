@@ -708,13 +708,16 @@ def run_capi_pivot_postflight(
     process_runner=None,
 ) -> dict[str, Any]:
     env = dict(os.environ if environ is None else environ)
-    if set(payload) - {"cluster_name", "namespace"}:
+    if set(payload) - {"cluster_name", "namespace", "baremetal_host_namespace"}:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_PAYLOAD_FIELD_NOT_ALLOWED")
     cluster_name = _validate_identifier(
         payload.get("cluster_name"), "INVALID_CLUSTER_NAME"
     )
     namespace = _validate_identifier(
         payload.get("namespace", "default"), "INVALID_NAMESPACE"
+    )
+    host_namespace = _validate_identifier(
+        payload.get("baremetal_host_namespace", namespace), "INVALID_BAREMETAL_HOST_NAMESPACE"
     )
     secret_root = Path(
         env.get("CAPI_PIVOT_SECRET_DIR", "/var/run/secrets/ai-agent/capi-pivot")
@@ -774,7 +777,7 @@ def run_capi_pivot_postflight(
         kubectl,
         target_kubeconfig,
         [
-            "--namespace", namespace, "get", "baremetalhosts.metal3.io",
+            "--namespace", host_namespace, "get", "baremetalhosts.metal3.io",
             "-o", "json",
         ],
         process_env,
@@ -869,6 +872,7 @@ def run_capi_pivot_postflight(
         "cluster_name": cluster_name,
         "cluster_uid": cluster_uid,
         "namespace": namespace,
+        "baremetal_host_namespace": host_namespace,
         "postflight_passed": True,
         "execution_mode": "read_only_target_cluster_verification",
         "cluster_machine_count": len(cluster_machines),
