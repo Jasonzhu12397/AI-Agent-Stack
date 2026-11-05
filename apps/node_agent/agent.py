@@ -815,6 +815,12 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         or control_gateway not in control_network.network
     ):
         raise NodeAgentError("CONTROL_PLANE_GATEWAY_OUTSIDE_CIDR")
+    control_host_interface = control_plane.get("host_interface", interface)
+    if (
+        not isinstance(control_host_interface, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", control_host_interface)
+    ):
+        raise NodeAgentError("INVALID_CONTROL_PLANE_HOST_INTERFACE")
     control_mtu = control_plane.get("mtu")
     if (
         not isinstance(control_mtu, int)
@@ -832,6 +838,20 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         raise NodeAgentError("INVALID_DATA_PLANE_INTERFACE")
     if len(set(interfaces)) != len(interfaces) or interface in interfaces:
         raise NodeAgentError("NETWORK_INTERFACE_CONFLICT")
+    configured_host_interfaces = data_plane.get("host_interfaces", {})
+    if not isinstance(configured_host_interfaces, dict) or any(
+        key not in interfaces
+        or not isinstance(value, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", value)
+        for key, value in configured_host_interfaces.items()
+    ):
+        raise NodeAgentError("INVALID_DATA_PLANE_HOST_INTERFACE_MAPPING")
+    data_host_interfaces = {
+        name: configured_host_interfaces.get(name, name) for name in interfaces
+    }
+    all_host_interfaces = [control_host_interface, *data_host_interfaces.values()]
+    if len(set(all_host_interfaces)) != len(all_host_interfaces):
+        raise NodeAgentError("NETWORK_HOST_INTERFACE_CONFLICT")
     data_mtu = data_plane.get("mtu")
     if not isinstance(data_mtu, int) or isinstance(data_mtu, bool) or not 576 <= data_mtu <= 9216:
         raise NodeAgentError("INVALID_DATA_PLANE_MTU")
@@ -883,10 +903,12 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         "dpdk_requested": dpdk_requested,
         "control_plane": {
             "interface": interface,
+            "host_interface": control_host_interface,
             "mtu": control_mtu,
         },
         "data_plane": {
             "interfaces": list(interfaces),
+            "host_interfaces": data_host_interfaces,
             "mtu": data_mtu,
         },
         "profile_hash": canonical_hash(profile),
@@ -927,14 +949,22 @@ def validate_metal3_data_template(
     if not isinstance(ethernets, list):
         raise NodeAgentError("METAL3_DATA_TEMPLATE_NETWORK_LINKS_INVALID")
     required = [
-        (profile["control_plane"]["interface"], profile["control_plane"]["mtu"])
+        (
+            profile["control_plane"]["interface"],
+            profile["control_plane"]["host_interface"],
+            profile["control_plane"]["mtu"],
+        )
     ]
     required.extend(
-        (name, profile["data_plane"]["mtu"])
+        (
+            name,
+            profile["data_plane"]["host_interfaces"][name],
+            profile["data_plane"]["mtu"],
+        )
         for name in profile["data_plane"]["interfaces"]
     )
     verified = []
-    for interface_name, expected_mtu in required:
+    for interface_name, host_interface_name, expected_mtu in required:
         matches = [
             item
             for item in ethernets
@@ -946,7 +976,7 @@ def validate_metal3_data_template(
         mac_address = item.get("macAddress", {})
         if (
             not isinstance(mac_address, dict)
-            or mac_address.get("fromHostInterface") != interface_name
+            or mac_address.get("fromHostInterface") != host_interface_name
             or item.get("mtu") != expected_mtu
             or item.get("type") != "phy"
         ):
