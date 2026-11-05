@@ -82,6 +82,14 @@ The plan validator checks the declared network roles, CIDRs/gateway, explicitly 
 The RBAC template grants read-only access to node metadata, NetworkAttachmentDefinitions and Pods in `kube-system` only for component discovery. Extend workload namespace access only through separately reviewed namespace-scoped Roles and RoleBindings.
 For workload attachment checks, dispatch `cluster.network.inspect` with `workload_namespaces` and `expected_attachments` (for example `{"workload_namespaces":["app-ns"],"expected_attachments":["app-ns/sriov-data"]}`). The Agent reads only Pods in the explicitly named namespaces and returns each Pod's Multus network-status interface/IP summary plus missing expected attachments. A namespace without an explicit read-only Pod Role/RoleBinding is reported as unavailable (for example HTTP 403); it is not silently treated as passing. The supplied RBAC grants Pod listing in `default` and `kube-system` only, so add narrowly scoped Role/RoleBinding pairs for each approved application namespace.
 
+## Optional read-only Ironic API verification
+
+The `cluster.metal3.observe` command can perform a direct Ironic node read when both `IRONIC_API_URL` and `IRONIC_API_TOKEN` are configured. The URL must be an HTTPS origin without a path, query, or fragment. The token is sent only in the `X-Auth-Token` request header and is never returned in command output. Optional settings are `IRONIC_API_CA_FILE`, `IRONIC_API_MICROVERSION`, and `IRONIC_API_TIMEOUT_SECONDS`. The adapter performs only `GET /v1/nodes/{uuid}`; it has no Ironic write or power-control operations.
+
+The node UUID is read from the Metal3 BareMetalHost `status.provisioning.ID` field. The observer verifies the returned UUID, requires Ironic `provision_state=active`, `maintenance=false`, no pending target provision state, and no recorded last error. Missing UUIDs, API failures, mismatched identity, maintenance, and transitional states fail closed. BMHs marked `externally provisioned` are not represented as Ironic-verified nodes.
+
+Store the token in a Kubernetes Secret and expose it to the Agent using `secretKeyRef`; do not place credentials in a command payload, ConfigMap, source control, or logs. Direct Ironic verification remains `not_configured` when the URL and token are absent.
+
 ## Read-only CAPI to Metal3 lifecycle observation
 
 The Target Agent exposes `cluster.metal3.observe`. It follows each Machine belonging to the requested Cluster through `spec.infrastructureRef` to the namespaced Metal3Machine, then resolves the BareMetalHost through the BMH `spec.consumerRef` including the Metal3Machine UID. Missing, cross-namespace, ambiguous, or stale ownership links fail closed. A BMH is considered provisioned only when it is online, its provisioning state is `provisioned` or `externally provisioned`, its operational status is absent or `OK`, and it has no reported error.
