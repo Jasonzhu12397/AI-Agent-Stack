@@ -713,3 +713,50 @@ def test_workflow_publish_rejects_knowledge_base_from_another_project(workflow_w
 
     assert response.status_code == 400
     assert workflow.versions.count() == 0
+
+
+def test_workflow_validator_accepts_tool_node_with_project_tool_reference():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "tool_step",
+                "type": "tool",
+                "config": {
+                    "tool_id": "00000000-0000-0000-0000-000000000001",
+                    "arguments": {"query": "hello"},
+                },
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "tool_step"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "tool_step"},
+            {"source": "tool_step", "target": "end"},
+        ],
+    }
+    graph = validate_workflow_definition(definition)
+    assert graph["order"] == ["start", "tool_step", "end"]
+
+
+@pytest.mark.parametrize(
+    "tool_config, message",
+    [
+        ({}, "requires tool_id"),
+        ({"tool_id": "not-a-uuid"}, "must be a UUID"),
+        ({"tool_id": "00000000-0000-0000-0000-000000000001", "arguments": []}, "arguments must be an object"),
+    ],
+)
+def test_workflow_validator_rejects_malformed_tool_node(tool_config, message):
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {"id": "tool_step", "type": "tool", "config": tool_config},
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "tool_step"},
+            {"source": "tool_step", "target": "end"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match=message):
+        validate_workflow_definition(definition)
