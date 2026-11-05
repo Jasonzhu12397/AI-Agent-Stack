@@ -12,11 +12,15 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 - **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
 - **Node agents:** the Python runner supports EPH preflight, typed Metal3/CAPI cluster-plan validation, dynamic CAPI/Metal3 API discovery and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
-- **Deployment:** Docker Compose locally; Kubernetes and Helm for production.
+- **Deployment:** Docker Compose for local development; a production cloud Control Plane Compose profile uses managed PostgreSQL, Redis and Qdrant; separate Kubernetes manifests and deployment helpers install EPH, Target and network-inventory Agents. Provider-specific infrastructure and production Helm packaging remain in progress.
 
 The FastAPI and React implementation has been replaced. The Vue UI follows the layout and interaction patterns in [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), ported from its React implementation rather than embedding React into this Vue application. The navigation includes Dashboard, Model Manager, Agent Studio, Workflow DAG, Integration Hub, Knowledge Bases, Metal3 Fleet, Governance, Audit & Activity, Organization and Docs & Matrix. The previous verified workflow milestone passed full CI in [run 41421574449](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421574449), commit `56d29c006031fa9363e79c88f2c365aa1649ebf2`; this branch's dual-agent work is awaiting its own PR CI.
 
 The P1-1 identity slice adds Tenant, TenantMembership, Project and ProjectMembership models. Tenant and project lists are membership-filtered; only tenant owners/admins can create projects, and the creator receives project-admin membership. Cross-tenant, tenant_id spoofing, role denial, revocation and pagination isolation are tested. Login UI/OIDC, membership invitations/administration and project role-specific update/delete permissions remain unimplemented.
+
+## Production cloud deployment
+
+See [Cloud Control Plane deployment](deploy/cloud-control-plane/README.md) for the production Compose profile and [dual-cluster Agent deployment](deploy/agents/README.md) for EPH and Target Agents.
 
 ## Quick start
 
