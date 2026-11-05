@@ -18,9 +18,9 @@ fail() {
 [[ "$IMAGE_REPOSITORY" =~ ^[A-Za-z0-9._:-]+(/[A-Za-z0-9._-]+)+$ ]] || fail "IMAGE_REPOSITORY_INVALID"
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || fail "IMAGE_TAG_INVALID"
 [ "$IMAGE_TAG" != "latest" ] || fail "MUTABLE_LATEST_TAG_NOT_ALLOWED"
-[[ "$CLUSTERCTL_VERSION" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || fail "CLUSTERCTL_VERSION_INVALID"
+[[ "$CLUSTERCTL_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "CLUSTERCTL_VERSION_INVALID"
 [[ "$CLUSTERCTL_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || fail "CLUSTERCTL_SHA256_INVALID"
-[[ "$KUBECTL_VERSION" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || fail "KUBECTL_VERSION_INVALID"
+[[ "$KUBECTL_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "KUBECTL_VERSION_INVALID"
 [[ "$KUBECTL_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_INVALID"
 [[ "$PLATFORMS" =~ ^linux/(amd64|arm64)(,linux/(amd64|arm64))*$ ]] || fail "PLATFORMS_INVALID"
 
