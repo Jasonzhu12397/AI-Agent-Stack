@@ -97,6 +97,8 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-heading h3 { margin: 0; font-size: 16px; }
 .workflow-heading .eyebrow { margin-bottom: 7px; }
 .workflow-selector { margin: 18px 0 12px; }
+.workflow-node-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 12px; }
+.workflow-node-toolbar .task-note { margin: 0 4px 0 0; }
 .workflow-editor-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 12px; }
 .workflow-editor-form, .workflow-runner { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 14px; background: #0c1422; border: 1px solid #28364d; border-radius: 10px; }
 .workflow-editor-form h4, .workflow-runner h4 { margin: 0; font-size: 13px; }
