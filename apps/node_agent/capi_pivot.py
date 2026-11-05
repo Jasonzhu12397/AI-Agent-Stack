@@ -370,6 +370,220 @@ def _verify_target_management_plane(
     }
 
 
+
+def _kubectl_optional_json(
+    runner,
+    kubectl,
+    kubeconfig,
+    args,
+    process_env,
+    error_code,
+):
+    command = [kubectl, "--kubeconfig", str(kubeconfig), *args]
+    try:
+        completed = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CapiPivotError(error_code) from exc
+    if completed.returncode != 0:
+        if "notfound" in (completed.stderr or "").lower():
+            return None
+        raise CapiPivotError(error_code)
+    try:
+        document = json.loads(completed.stdout or "")
+    except (TypeError, ValueError) as exc:
+        raise CapiPivotError(error_code) from exc
+    if not isinstance(document, dict):
+        raise CapiPivotError(error_code)
+    return document
+
+
+def _verify_source_metal3_handoff(
+    runner,
+    kubectl,
+    source_kubeconfig,
+    target_kubeconfig,
+    namespace,
+    cluster_name,
+    source_env,
+    target_env,
+):
+    host_list = _kubectl_json(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "baremetalhosts.metal3.io",
+            "-o",
+            "json",
+        ],
+        source_env,
+        "CAPI_PIVOT_SOURCE_BMH_INVENTORY_FAILED",
+    )
+    hosts = host_list.get("items")
+    if not isinstance(hosts, list):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+
+    stable_states = {
+        "available",
+        "provisioned",
+        "externally provisioned",
+        "deprovisioned",
+        "ready",
+    }
+    selected_hosts = []
+    blockers = []
+    for host in hosts:
+        if not isinstance(host, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+        metadata = host.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        spec = host.get("spec", {})
+        consumer = spec.get("consumerRef")
+        associated = (
+            isinstance(consumer, dict)
+            and consumer.get("kind") == "Metal3Machine"
+        ) or (
+            isinstance(labels, dict)
+            and labels.get("cluster.x-k8s.io/cluster-name") == cluster_name
+        )
+        if not associated:
+            continue
+        name = metadata.get("name")
+        if not isinstance(name, str) or not name:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
+        if not isinstance(annotations, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ANNOTATIONS_INVALID")
+        if "clusterctl.cluster.x-k8s.io/block-move" in annotations:
+            blockers.append("bmh_block_move_annotation_present:" + name)
+        status = host.get("status", {})
+        provisioning = status.get("provisioning", {}) if isinstance(status, dict) else {}
+        state = provisioning.get("state") if isinstance(provisioning, dict) else None
+        operational_status = status.get("operationalStatus") if isinstance(status, dict) else None
+        if state not in stable_states:
+            blockers.append("bmh_not_in_stable_provisioning_state:" + name)
+        if operational_status not in ("OK", "detached"):
+            blockers.append("bmh_operational_status_not_healthy:" + name)
+        if status.get("errorMessage") or status.get("errorType"):
+            blockers.append("bmh_status_contains_error:" + name)
+        selected_hosts.append(
+            {
+                "name": name,
+                "namespace": metadata.get("namespace"),
+                "provisioning_state": state,
+                "operational_status": operational_status,
+            }
+        )
+
+    if blockers:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_NOT_SAFE:" + ",".join(blockers[:20]))
+
+    source_ironic = _kubectl_optional_json(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "deployment",
+            "metal3-ironic",
+            "-o",
+            "json",
+        ],
+        source_env,
+        "CAPI_PIVOT_SOURCE_IRONIC_STATE_UNVERIFIED",
+    )
+    if source_ironic is None:
+        if source_env.get("CAPI_PIVOT_SOURCE_EXTERNAL_IRONIC_HANDOFF_CONFIRMED") != "true":
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_EXTERNAL_IRONIC_HANDOFF_NOT_CONFIRMED")
+        source_ironic_state = "external_handoff_attested"
+    else:
+        replicas = source_ironic.get("spec", {}).get("replicas", 1)
+        available = source_ironic.get("status", {}).get("availableReplicas", 0)
+        if (
+            not isinstance(replicas, int)
+            or isinstance(replicas, bool)
+            or replicas != 0
+            or not isinstance(available, int)
+            or isinstance(available, bool)
+            or available != 0
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED")
+        source_ironic_state = "deployment_scaled_to_zero"
+
+    target_ironic = _kubectl_optional_json(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "deployment",
+            "metal3-ironic",
+            "-o",
+            "json",
+        ],
+        target_env,
+        "CAPI_PIVOT_TARGET_IRONIC_STATE_UNVERIFIED",
+    )
+    if target_ironic is None:
+        if target_env.get("CAPI_PIVOT_TARGET_EXTERNAL_IRONIC_READY_CONFIRMED") != "true":
+            raise CapiPivotError("CAPI_PIVOT_TARGET_EXTERNAL_IRONIC_NOT_CONFIRMED")
+        target_ironic_state = "external_endpoint_readiness_attested"
+    else:
+        spec = target_ironic.get("spec", {})
+        status = target_ironic.get("status", {})
+        pod_spec = spec.get("template", {}).get("spec", {})
+        containers = pod_spec.get("containers", []) if isinstance(pod_spec, dict) else []
+        container_names = {
+            item.get("name")
+            for item in containers
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        desired = spec.get("replicas", 1)
+        available = status.get("availableReplicas", 0)
+        observed = status.get("observedGeneration", 0)
+        generation = target_ironic.get("metadata", {}).get("generation", 1)
+        if (
+            not isinstance(desired, int)
+            or isinstance(desired, bool)
+            or desired < 1
+            or not isinstance(available, int)
+            or isinstance(available, bool)
+            or available < desired
+            or not isinstance(observed, int)
+            or not isinstance(generation, int)
+            or observed < generation
+        ):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_IRONIC_NOT_READY")
+        if "ironic-endpoint-keepalived" not in container_names:
+            raise CapiPivotError("CAPI_PIVOT_TARGET_IRONIC_KEEPALIVED_MISSING")
+        target_ironic_state = "deployment_ready_with_keepalived"
+
+    return {
+        "associated_bmh_count": len(selected_hosts),
+        "associated_bmhs": selected_hosts[:200],
+        "all_associated_bmhs_stable": True,
+        "source_ironic_handoff": source_ironic_state,
+        "target_ironic_handoff": target_ironic_state,
+        "provisioning_endpoint_handoff_verified": True,
+    }
+
 def run_capi_pivot(
     payload: dict[str, Any],
     environ: dict[str, str] | None = None,
@@ -414,6 +628,25 @@ def run_capi_pivot(
         namespace,
         cluster_name,
         target_process_env,
+    )
+    source_kubeconfig = _resolve_kubeconfig(
+        env,
+        "CAPI_PIVOT_SOURCE_KUBECONFIG",
+        secret_root,
+    )
+    source_process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+    }
+    metal3_handoff = _verify_source_metal3_handoff(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        target_kubeconfig,
+        namespace,
+        cluster_name,
+        env,
+        env,
     )
     command = [
         clusterctl,
@@ -461,6 +694,7 @@ def run_capi_pivot(
         "target_provider_versions": target_preflight["provider_versions"],
         "target_controllers_ready": target_preflight["controllers_ready"],
         "target_cluster_name_available": target_preflight["target_cluster_name_available"],
+        "metal3_handoff": metal3_handoff,
         "side_effects": True,
         "automatic_retry_allowed": False,
         "exit_code": completed.returncode,
