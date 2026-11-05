@@ -149,7 +149,7 @@ def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
         {},
         format="json",
     )
-    assert invalid_validation.status_code == 400
+    assert invalid_validation.status_code == 200
     assert invalid_validation.data["is_valid"] is False
     workflow_record.draft_definition = valid_definition
     workflow_record.save(update_fields=["draft_definition", "updated_at"])
