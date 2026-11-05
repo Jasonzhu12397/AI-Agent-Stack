@@ -821,7 +821,11 @@ def run_capi_pivot_postflight(
     verified = []
     for m3m_name, m3m in sorted(m3m_by_name.items()):
         annotations = m3m.get("metadata", {}).get("annotations", {})
-        host_name = annotations.get("metal3.io/BareMetalHost") if isinstance(annotations, dict) else None
+        host_name = (
+            annotations.get("metal3.io/BareMetalHost")
+            if isinstance(annotations, dict)
+            else None
+        )
         if not isinstance(host_name, str) or not host_name:
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_BMH_REFERENCE_MISSING:" + m3m_name
