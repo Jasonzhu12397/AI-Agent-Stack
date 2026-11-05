@@ -24,7 +24,7 @@ require_secret_keys() {
     local secret="$2"
     shift 2
     local keys
-    keys="$(kubectl --context "$context" --namespace ai-agent-system get secret "$secret" -o go-template='{{range $key, $value := .data}}{{printf "%s\\n" $key}}{{end}}')" || fail "REQUIRED_SECRET_NOT_FOUND:$context:$secret"
+    keys="$(kubectl --context "$context" --namespace ai-agent-system get secret "$secret" -o go-template='{{range $key, $value := .data}}{{printf "%s\n" $key}}{{end}}')" || fail "REQUIRED_SECRET_NOT_FOUND:$context:$secret"
     for key in "$@"; do
         printf '%s\n' "$keys" | grep -Fxq "$key" || fail "REQUIRED_SECRET_KEY_MISSING:$context:$secret:$key"
     done
