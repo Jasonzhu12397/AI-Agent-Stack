@@ -58,7 +58,7 @@ def documents():
     return machine, metal3_machine, host
 
 
-def run_observer(machine=None, metal3_machine=None, hosts=None):
+def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=None):
     default_machine, default_mm, default_host = documents()
     machine = default_machine if machine is None else machine
     metal3_machine = default_mm if metal3_machine is None else metal3_machine
@@ -92,7 +92,12 @@ def run_observer(machine=None, metal3_machine=None, hosts=None):
         "namespace": "default",
         "baremetal_host_namespace": "metal3-system",
     }
-    return observe_cluster_metal3(payload, get_item, list_items)
+    return observe_cluster_metal3(
+        payload,
+        get_item,
+        list_items,
+        ironic_lookup=ironic_lookup,
+    )
 
 
 def test_full_machine_metal3machine_bmh_chain_resolves():
@@ -187,6 +192,57 @@ def test_bmh_missing_uid_fails_closed():
         match="BAREMETAL_HOST_IDENTITY_INVALID",
     ):
         run_observer(hosts=[host])
+
+
+def test_ironic_active_node_is_verified_when_adapter_is_configured():
+    _, _, host = documents()
+    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
+    node = {
+        "uuid": "12345678-1234-1234-1234-123456789abc",
+        "provision_state": "active",
+        "maintenance": False,
+        "target_provision_state": None,
+        "has_last_error": False,
+    }
+    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
+    assert result["ready"] is True
+    assert result["ironic"]["status"] == "verified"
+    assert result["ironic"]["verified_node_count"] == 1
+
+
+def test_ironic_maintenance_node_fails_closed():
+    _, _, host = documents()
+    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
+    node = {
+        "uuid": "12345678-1234-1234-1234-123456789abc",
+        "provision_state": "active",
+        "maintenance": True,
+        "target_provision_state": None,
+        "has_last_error": False,
+    }
+    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
+    assert result["ready"] is False
+    assert result["ironic"]["status"] == "unhealthy"
+    assert "ironic_node_not_active_or_unhealthy" in result["blockers"]
+
+
+def test_ironic_enabled_requires_bmh_provisioning_uuid():
+    _, _, host = documents()
+    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: {})
+    assert result["ready"] is False
+    assert "ironic_node_uuid_missing_or_invalid" in result["blockers"]
+
+
+def test_ironic_api_errors_fail_closed_without_leaking_details():
+    _, _, host = documents()
+
+    def fail_lookup(node_uuid):
+        raise RuntimeError("sensitive upstream detail")
+
+    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
+    result = run_observer(hosts=[host], ironic_lookup=fail_lookup)
+    assert result["ready"] is False
+    assert "ironic_api_unavailable_or_node_unreadable" in result["blockers"]
 
 
 def test_missing_ironic_adapter_is_never_reported_as_healthy():
