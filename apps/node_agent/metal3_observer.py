@@ -171,7 +171,7 @@ def observe_cluster_metal3(
                 consumer.get("kind") == "Metal3Machine"
                 and consumer.get("apiVersion") == expected_api_version
                 and consumer.get("name") == metal3_machine_name
-                and consumer.get("namespace", host_namespace) == namespace
+                and consumer.get("namespace", namespace) == namespace
                 and consumer.get("uid") == mm_uid
             )
             if consumer_matches:
@@ -200,6 +200,15 @@ def observe_cluster_metal3(
         host_metadata = host.get("metadata", {})
         host_spec = host.get("spec", {})
         host_status = host.get("status", {})
+        host_name = host_metadata.get("name")
+        host_uid = host_metadata.get("uid")
+        if (
+            not _valid_name(host_name)
+            or not isinstance(host_uid, str)
+            or not host_uid
+            or host_metadata.get("namespace") != host_namespace
+        ):
+            raise Metal3ObservationError("BAREMETAL_HOST_IDENTITY_INVALID")
         provisioning = host_status.get("provisioning", {})
         provisioning_state = (
             provisioning.get("state") if isinstance(provisioning, dict) else None
@@ -225,8 +234,8 @@ def observe_cluster_metal3(
                 "machine_uid": machine_uid,
                 "metal3_machine": metal3_machine_name,
                 "metal3_machine_uid": mm_uid,
-                "baremetal_host": host_metadata.get("name"),
-                "baremetal_host_uid": host_metadata.get("uid"),
+                "baremetal_host": host_name,
+                "baremetal_host_uid": host_uid,
                 "baremetal_host_namespace": host_metadata.get("namespace"),
                 "baremetal_host_online": host_spec.get("online") is True,
                 "baremetal_host_provisioning_state": provisioning_state,
