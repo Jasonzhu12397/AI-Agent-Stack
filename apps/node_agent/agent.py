@@ -1080,9 +1080,18 @@ def verify_baremetal_host_network_macs(
         hardware_data = {}
     if hardware_data:
         hardware_metadata = hardware_data.get("metadata", {})
+        hardware_metadata = (
+            hardware_metadata if isinstance(hardware_metadata, dict) else {}
+        )
         hardware_spec = hardware_data.get("spec", {})
+        hardware_spec = hardware_spec if isinstance(hardware_spec, dict) else {}
         hardware_details = hardware_spec.get("hardware", {})
+        hardware_details = (
+            hardware_details if isinstance(hardware_details, dict) else {}
+        )
         hardware_owner_references = hardware_metadata.get("ownerReferences", [])
+        if not isinstance(hardware_owner_references, list):
+            hardware_owner_references = []
         if (
             hardware_data.get("kind") not in {None, "HardwareData"}
             or hardware_data.get("apiVersion") != f"metal3.io/{metal3_api_version}"
@@ -1096,7 +1105,7 @@ def verify_baremetal_host_network_macs(
                 and owner.get("uid") == host_uid
                 for owner in hardware_owner_references
             )
-            or not isinstance(hardware_details, dict)
+            or not hardware_details
         ):
             raise NodeAgentError("WORKER_HARDWARE_DATA_OWNERSHIP_MISMATCH")
         nics = hardware_details.get("nics")
