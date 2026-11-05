@@ -62,7 +62,7 @@ def documents():
     return machine, metal3_machine, host
 
 
-def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=None):
+def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=None, nodes=None):
     default_machine, default_mm, default_host = documents()
     machine = default_machine if machine is None else machine
     metal3_machine = default_mm if metal3_machine is None else metal3_machine
@@ -71,11 +71,12 @@ def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=No
         {"name": name, "preferredVersion": {"version": version}}
         for name, version in VERSIONS.items()
     ]
-    node = {
+    default_node = {
         "metadata": {"name": "node-0", "uid": "node-uid"},
         "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
         "status": {"conditions": [{"type": "Ready", "status": "True"}]},
     }
+    node_items = [default_node] if nodes is None else nodes
     documents_by_path = {
         "/apis": {"groups": groups},
         (
@@ -95,7 +96,7 @@ def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=No
         if path.endswith("/baremetalhosts"):
             return hosts
         if path == "/api/v1/nodes":
-            return [node]
+            return node_items
         raise AssertionError(path)
 
     payload = {
@@ -288,9 +289,14 @@ def test_machine_metal3machine_and_node_provider_ids_must_match():
 
 
 def test_workload_node_provider_id_must_match_infrastructure_provider_id():
-    result = run_observer()
-    original = result["machines"][0]["node_provider_id"]
-    assert original == "metal3://metal3-system/bmh-0/worker-0"
+    node = {
+        "metadata": {"name": "node-0", "uid": "node-uid"},
+        "spec": {"providerID": "metal3://wrong/bmh-0/worker-0"},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    result = run_observer(nodes=[node])
+    assert result["ready"] is False
+    assert "workload_node_provider_id_mismatch" in result["blockers"]
 
 
 def test_metal3_machine_must_be_ready():
@@ -312,3 +318,20 @@ def test_capi_machine_must_be_running_and_reference_ready_node():
 def test_workload_node_must_be_ready():
     result = run_observer()
     assert result["machines"][0]["node_ready"] is True
+
+
+def test_missing_workload_node_fails_closed():
+    result = run_observer(nodes=[])
+    assert result["ready"] is False
+    assert "workload_node_reference_not_found" in result["blockers"]
+
+
+def test_workload_node_not_ready_fails_closed():
+    node = {
+        "metadata": {"name": "node-0", "uid": "node-uid"},
+        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
+        "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+    }
+    result = run_observer(nodes=[node])
+    assert result["ready"] is False
+    assert "workload_node_not_ready" in result["blockers"]
