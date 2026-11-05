@@ -14,7 +14,7 @@ Snapshot date: 2026-11-05.
 |---|---|---|---|
 | CAPM3 | 1.14, 1.13 | 1.12 | — |
 | BMO | 0.14, 0.13 | 0.12 | — |
-| Ironic image | 39.0, 38.0, 37.0 | 35.0 | 33.0 |
+| Ironic image | 39.0, 38.0, 37.0, 35.0 | — | 33.0 |
 | Ironic Standalone Operator | 0.12, 0.11 | 0.10 | 0.9 |
 
 IrSO-to-Ironic release compatibility is checked independently:
