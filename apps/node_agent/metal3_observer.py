@@ -73,6 +73,22 @@ def observe_cluster_metal3(
     )
     machines = list_items(machine_path)
     hosts = list_items(host_path)
+    nodes = list_items("/api/v1/nodes")
+    nodes_by_name = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise Metal3ObservationError("WORKLOAD_NODE_INVENTORY_INVALID")
+        node_metadata = node.get("metadata", {})
+        node_name = node_metadata.get("name") if isinstance(node_metadata, dict) else None
+        node_uid = node_metadata.get("uid") if isinstance(node_metadata, dict) else None
+        if (
+            not _valid_name(node_name)
+            or not isinstance(node_uid, str)
+            or not node_uid
+            or node_name in nodes_by_name
+        ):
+            raise Metal3ObservationError("WORKLOAD_NODE_IDENTITY_INVALID")
+        nodes_by_name[node_name] = node
     selected = [
         item
         for item in machines
@@ -165,6 +181,52 @@ def observe_cluster_metal3(
         ):
             raise Metal3ObservationError("METAL3_MACHINE_IDENTITY_MISMATCH")
 
+        machine_spec = machine.get("spec", {})
+        machine_status = machine.get("status", {})
+        metal3_spec = metal3_machine.get("spec", {})
+        metal3_status = metal3_machine.get("status", {})
+        machine_phase = machine_status.get("phase")
+        node_ref = machine_status.get("nodeRef", {})
+        node_name = node_ref.get("name") if isinstance(node_ref, dict) else None
+        machine_provider_id = machine_spec.get("providerID")
+        metal3_provider_id = metal3_spec.get("providerID")
+        machine_blockers = []
+        if machine_phase != "Running":
+            machine_blockers.append("capi_machine_not_running")
+        if metal3_status.get("ready") is not True:
+            machine_blockers.append("metal3_machine_not_ready")
+        if (
+            not isinstance(machine_provider_id, str)
+            or not machine_provider_id
+            or not isinstance(metal3_provider_id, str)
+            or not metal3_provider_id
+            or machine_provider_id != metal3_provider_id
+        ):
+            machine_blockers.append("capi_metal3_provider_id_mismatch")
+        workload_node = nodes_by_name.get(node_name) if _valid_name(node_name) else None
+        if workload_node is None:
+            machine_blockers.append("workload_node_reference_not_found")
+            node_provider_id = None
+            node_ready = False
+        else:
+            node_spec = workload_node.get("spec", {})
+            node_status = workload_node.get("status", {})
+            node_provider_id = node_spec.get("providerID")
+            node_conditions = node_status.get("conditions", [])
+            ready_condition = next(
+                (
+                    item for item in node_conditions
+                    if isinstance(item, dict) and item.get("type") == "Ready"
+                ),
+                {},
+            )
+            node_ready = ready_condition.get("status") == "True"
+            if node_provider_id != machine_provider_id:
+                machine_blockers.append("workload_node_provider_id_mismatch")
+            if not node_ready:
+                machine_blockers.append("workload_node_not_ready")
+        blockers.extend(machine_blockers)
+
         matching_hosts = []
         for host in hosts:
             consumer = host.get("spec", {}).get("consumerRef")
@@ -223,7 +285,7 @@ def observe_cluster_metal3(
         host_ready = (
             host_spec.get("online") is True
             and provisioning_state in ("provisioned", "externally provisioned")
-            and operational_status in (None, "OK")
+            and operational_status == "OK"
             and not has_error
         )
         blocker = (
@@ -285,9 +347,26 @@ def observe_cluster_metal3(
                 "baremetal_host_provisioning_state": provisioning_state,
                 "baremetal_host_operational_status": operational_status,
                 "baremetal_host_has_error": has_error,
+                "machine_phase": machine_phase,
+                "metal3_machine_ready": metal3_status.get("ready") is True,
+                "node_name": node_name,
+                "node_uid": (
+                    workload_node.get("metadata", {}).get("uid")
+                    if isinstance(workload_node, dict)
+                    else None
+                ),
+                "machine_provider_id": machine_provider_id,
+                "metal3_machine_provider_id": metal3_provider_id,
+                "node_provider_id": node_provider_id,
+                "node_ready": node_ready,
+                "machine_blockers": machine_blockers,
                 "ironic_node": ironic_node,
                 "ironic_blocker": ironic_blocker,
-                "status": "linked" if host_ready and not ironic_blocker else "linked_unhealthy",
+                "status": (
+                    "linked"
+                    if host_ready and not ironic_blocker and not machine_blockers
+                    else "linked_unhealthy"
+                ),
                 "blocker": blocker,
             }
         )
