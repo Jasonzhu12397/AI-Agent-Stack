@@ -2516,6 +2516,7 @@ def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatc
     reports = [
         {
             "metadata": {
+                "name": agent.network_inventory_configmap_name("worker-01"),
                 "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
             },
             "data": {
@@ -2578,6 +2579,7 @@ def test_target_agent_does_not_accept_stale_hardware_inventory_reports(monkeypat
     configmaps = [
         {
             "metadata": {
+                "name": agent.network_inventory_configmap_name("worker-old"),
                 "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
             },
             "data": {"inventory.json": json.dumps(report)},
