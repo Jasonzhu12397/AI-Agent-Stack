@@ -4,6 +4,7 @@ import re
 import uuid
 from collections import deque
 
+from django.db.models import F
 from django.utils import timezone
 
 from core.model_gateway import ModelGateway, ModelGatewayError
