@@ -21,11 +21,15 @@ fail() {
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || fail "IMAGE_TAG_INVALID"
 [ "$IMAGE_TAG" != "latest" ] || fail "MUTABLE_LATEST_TAG_NOT_ALLOWED"
 [[ "$CLUSTERCTL_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "CLUSTERCTL_VERSION_INVALID"
-[[ "$CLUSTERCTL_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "CLUSTERCTL_SHA256_AMD64_INVALID"
-[[ "$CLUSTERCTL_SHA256_ARM64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "CLUSTERCTL_SHA256_ARM64_INVALID"
+if [[ "$PLATFORMS" == *linux/amd64* ]]; then
+    [[ "$CLUSTERCTL_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "CLUSTERCTL_SHA256_AMD64_INVALID"
+    [[ "$KUBECTL_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_AMD64_INVALID"
+fi
+if [[ "$PLATFORMS" == *linux/arm64* ]]; then
+    [[ "$CLUSTERCTL_SHA256_ARM64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "CLUSTERCTL_SHA256_ARM64_INVALID"
+    [[ "$KUBECTL_SHA256_ARM64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_ARM64_INVALID"
+fi
 [[ "$KUBECTL_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "KUBECTL_VERSION_INVALID"
-[[ "$KUBECTL_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_AMD64_INVALID"
-[[ "$KUBECTL_SHA256_ARM64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_ARM64_INVALID"
 [[ "$PLATFORMS" =~ ^linux/(amd64|arm64)(,linux/(amd64|arm64))*$ ]] || fail "PLATFORMS_INVALID"
 
 docker buildx version >/dev/null
@@ -36,10 +40,10 @@ docker buildx build \
     --platform "$PLATFORMS" \
     --file "$ROOT_DIR/Dockerfile.node-agent" \
     --build-arg "CLUSTERCTL_VERSION=$CLUSTERCTL_VERSION" \
-    --build-arg "CLUSTERCTL_SHA256_AMD64=$CLUSTERCTL_SHA256_AMD64" \\
+    --build-arg "CLUSTERCTL_SHA256_AMD64=$CLUSTERCTL_SHA256_AMD64" \
     --build-arg "CLUSTERCTL_SHA256_ARM64=$CLUSTERCTL_SHA256_ARM64" \
     --build-arg "KUBECTL_VERSION=$KUBECTL_VERSION" \
-    --build-arg "KUBECTL_SHA256_AMD64=$KUBECTL_SHA256_AMD64" \\
+    --build-arg "KUBECTL_SHA256_AMD64=$KUBECTL_SHA256_AMD64" \
     --build-arg "KUBECTL_SHA256_ARM64=$KUBECTL_SHA256_ARM64" \
     --tag "$IMAGE_REPOSITORY:$IMAGE_TAG" \
     --push \
