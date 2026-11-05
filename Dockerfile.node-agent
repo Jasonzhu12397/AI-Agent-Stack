@@ -6,18 +6,18 @@ ARG KUBECTL_VERSION
 ARG KUBECTL_SHA256_AMD64
 ARG KUBECTL_SHA256_ARM64
 ARG TARGETARCH
-RUN test -n "$CLUSTERCTL_VERSION" && test -n "$CLUSTERCTL_SHA256" && \
-    test -n "$KUBECTL_VERSION" && test -n "$KUBECTL_SHA256" && \
+RUN test -n "$CLUSTERCTL_VERSION" && test -n "$KUBECTL_VERSION" && \
     case "$TARGETARCH" in \
-      amd64) ASSET_ARCH=amd64 ;; \
-      arm64) ASSET_ARCH=arm64 ;; \
+      amd64) ASSET_ARCH=amd64; CLUSTERCTL_CHECKSUM="$CLUSTERCTL_SHA256_AMD64"; KUBECTL_CHECKSUM="$KUBECTL_SHA256_AMD64" ;; \
+      arm64) ASSET_ARCH=arm64; CLUSTERCTL_CHECKSUM="$CLUSTERCTL_SHA256_ARM64"; KUBECTL_CHECKSUM="$KUBECTL_SHA256_ARM64" ;; \
       *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
+    test -n "$CLUSTERCTL_CHECKSUM" && test -n "$KUBECTL_CHECKSUM" && \
     wget -q -O /tmp/clusterctl "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-${ASSET_ARCH}" && \
-    echo "${CLUSTERCTL_SHA256}  /tmp/clusterctl" | sha256sum -c - && \
+    echo "${CLUSTERCTL_CHECKSUM}  /tmp/clusterctl" | sha256sum -c - && \
     install -m 0755 /tmp/clusterctl /usr/local/bin/clusterctl && \
     wget -q -O /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ASSET_ARCH}/kubectl" && \
-    echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c - && \
+    echo "${KUBECTL_CHECKSUM}  /tmp/kubectl" | sha256sum -c - && \
     install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
 
 FROM python:3.12-slim
