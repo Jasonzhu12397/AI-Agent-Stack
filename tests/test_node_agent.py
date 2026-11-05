@@ -10,6 +10,8 @@ import pytest
 
 from node_agent import agent
 
+TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
+
 
 def test_node_health_is_available_for_both_agent_roles():
     for node_type in ["eph_node", "target_cluster"]:
@@ -1958,7 +1960,7 @@ def valid_metal3_data_template(profile):
         for name in data_interfaces
     )
     return {
-        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "apiVersion": TEST_INFRA_API_VERSION,
         "kind": "Metal3DataTemplate",
         "metadata": {
             "name": "worker-network-template",
@@ -1979,7 +1981,7 @@ def test_metal3_data_template_verifies_control_and_data_plane_nics():
     result = agent.validate_metal3_data_template(
         agent.validate_network_profile(profile),
         valid_metal3_data_template(profile),
-        "infrastructure.cluster.x-k8s.io/v1beta1",
+        TEST_INFRA_API_VERSION,
         "default",
     )
     assert result["verified"] is True
@@ -1994,7 +1996,7 @@ def test_metal3_data_template_supports_host_interface_mapping():
     result = agent.validate_metal3_data_template(
         normalized_profile,
         valid_metal3_data_template(profile),
-        "infrastructure.cluster.x-k8s.io/v1beta1",
+        TEST_INFRA_API_VERSION,
         "default",
     )
     assert result["verified"] is True
@@ -2030,7 +2032,7 @@ def test_metal3_data_template_rejects_missing_or_mismatched_network_config(mutat
         agent.validate_metal3_data_template(
             agent.validate_network_profile(profile),
             data_template,
-            "infrastructure.cluster.x-k8s.io/v1beta1",
+            TEST_INFRA_API_VERSION,
             "default",
         )
 
@@ -2829,7 +2831,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
             return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "apiVersion": TEST_INFRA_API_VERSION,
                 "metadata": {
                     "name": "worker-template",
                     "namespace": "default",
@@ -3040,7 +3042,7 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
             return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "apiVersion": TEST_INFRA_API_VERSION,
                 "metadata": {
                     "name": "worker-template",
                     "namespace": "default",
@@ -3145,7 +3147,7 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware(monkey
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:01"},
@@ -3154,7 +3156,7 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware(monkey
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
     )
 
     assert result["ready"] is True
@@ -3178,7 +3180,7 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch(monkeypatch):
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:01"},
@@ -3188,7 +3190,7 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch(monkeypatch):
 
     with pytest.raises(agent.NodeAgentError, match="WORKER_RENDERED_NETWORK_MAC_MISMATCH"):
         agent.verify_baremetal_host_network_macs(
-            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
         )
 
 
@@ -3202,13 +3204,13 @@ def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory(monkeyp
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
         "status": {"hardware": {"nics": []}},
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
     )
 
     assert result["ready"] is False
@@ -3225,7 +3227,7 @@ def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer(monkeypat
     host = {
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
     }
 
@@ -3235,7 +3237,7 @@ def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer(monkeypat
     ):
         agent.verify_baremetal_host_network_macs(
             profile, {"links": []}, [host, dict(host)], "worker-infra-1",
-            "default", "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+            "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
         )
 
 
@@ -3254,7 +3256,7 @@ def test_verify_baremetal_host_network_macs_reads_owned_hardware_data(monkeypatc
             "uid": "bmh-uid-01",
         },
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:99"},
@@ -3288,7 +3290,7 @@ def test_verify_baremetal_host_network_macs_reads_owned_hardware_data(monkeypatc
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     result = agent.verify_baremetal_host_network_macs(
         profile, network_data, [host], "worker-infra-1", "default",
-        "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+        "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
     )
 
     assert result["ready"] is True
@@ -3306,7 +3308,7 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
             "uid": "bmh-uid-01",
         },
         "spec": {"consumerRef": {
-            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
         "status": {},
     }
@@ -3334,7 +3336,7 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
     ):
         agent.verify_baremetal_host_network_macs(
             profile, {"links": []}, [host], "worker-infra-1", "default",
-            "metal3-system", "v1alpha1", "infrastructure.cluster.x-k8s.io/v1beta1"
+            "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
         )
 
 
@@ -3378,7 +3380,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
             machine_name = path.rsplit("/", 1)[-1]
             index = int(machine_name.rsplit("-", 1)[-1])
             return {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "apiVersion": TEST_INFRA_API_VERSION,
                 "kind": "Metal3Machine",
                 "metadata": {
                     "name": machine_name,
@@ -3416,7 +3418,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
             rendered_name = path.rsplit("/", 1)[-1]
             index = int(rendered_name.rsplit("-", 1)[-1])
             return {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "apiVersion": TEST_INFRA_API_VERSION,
                 "kind": "Metal3Data",
                 "metadata": {
                     "name": rendered_name,
@@ -3507,7 +3509,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
             return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "apiVersion": TEST_INFRA_API_VERSION,
                 "metadata": {
                     "uid": "infra-template-uid",
                     "annotations": {
@@ -3569,7 +3571,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                 }
                 if baremetal_host_list_calls > 1:
                     host["spec"]["consumerRef"] = {
-                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                        "apiVersion": TEST_INFRA_API_VERSION,
                         "kind": "Metal3Machine",
                         "name": f"worker-infra-{index}",
                         "namespace": "default",
@@ -3591,7 +3593,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     "spec": {
                         "clusterName": "edge-lab",
                         "infrastructureRef": {
-                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                            "apiVersion": TEST_INFRA_API_VERSION,
                             "kind": "Metal3Machine",
                             "name": f"worker-infra-{index}",
                         },
@@ -3638,7 +3640,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
         "expected_infrastructure_template_uid": "infra-template-uid",
         "expected_bootstrap_template_uid": "bootstrap-template-uid",
-        "infrastructure_api_version": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "infrastructure_api_version": TEST_INFRA_API_VERSION,
         "bootstrap_api_version": "bootstrap.cluster.x-k8s.io/v1beta1",
     }
     payload["provisioning_plan_hash"] = hashlib.sha256(
@@ -3667,7 +3669,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         "name": "worker-bootstrap",
     }
     assert manifest["spec"]["template"]["spec"]["infrastructureRef"] == {
-        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "apiVersion": TEST_INFRA_API_VERSION,
         "kind": "Metal3MachineTemplate",
         "name": "worker-template",
     }
