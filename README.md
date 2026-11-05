@@ -114,6 +114,7 @@ The cluster plan workflow is created through `POST /api/v1/tenants/{tenant_id}/p
 
 The EPH runner currently supports:
 - `node.health`, `host.preflight`, `cluster.plan` (validates cluster identity, odd control-plane quorum, provider-version references, network/image inputs, BMH references and credential references; dry-run only);
+- `cluster.provider.compatibility` (compares declared CAPM3/BMO/Ironic/IrSO image versions with the Metal3 community support and periodic CI matrices, and cross-checks live Kubernetes/CAPI API versions; read-only and never authorizes provisioning);
 - `cluster.health`, `cluster.observe`, `cluster.diagnose`, `cluster.postflight`, `k8s.resource.read` (read-only in-cluster Kubernetes API with output summaries and redaction);
 - `capi.cluster.observe` (discovers installed CAPI API version and reads Cluster/Machine/MachineDeployment summaries);
 - `metal3.host.inspect` (discovers Metal3 API version and reads BareMetalHost summaries without returning BMC credential fields).
