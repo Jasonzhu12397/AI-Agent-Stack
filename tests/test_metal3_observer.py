@@ -246,3 +246,21 @@ def test_ironic_api_errors_fail_closed_without_leaking_details():
 def test_missing_ironic_adapter_is_never_reported_as_healthy():
     result = run_observer()
     assert result["ironic"]["status"] == "not_configured"
+
+
+def test_malformed_ironic_adapter_identity_fails_closed():
+    _, _, host = documents()
+    host["status"]["provisioning"]["ID"] = (
+        "12345678-1234-1234-1234-123456789abc"
+    )
+    node = {
+        "uuid": None,
+        "provision_state": "active",
+        "maintenance": False,
+        "target_provision_state": None,
+        "has_last_error": False,
+    }
+    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
+    assert result["ready"] is False
+    assert result["ironic"]["status"] == "unhealthy"
+    assert "ironic_node_not_active_or_unhealthy" in result["blockers"]
