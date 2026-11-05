@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import base64
 import datetime
 import hashlib
 import io
@@ -1920,6 +1921,7 @@ def valid_dual_network_profile():
     }
 
 def valid_metal3_data_template(profile):
+    normalized_profile = agent.validate_network_profile(profile)
     control_interface = profile["control_plane"]["interface"]
     data_interfaces = profile["data_plane"]["interfaces"]
     ethernets = [
@@ -1947,13 +1949,11 @@ def valid_metal3_data_template(profile):
             "namespace": "default",
             "uid": "network-template-uid",
             "annotations": {
-                "ai-agent-stack.io/network-profile-hash": agent.canonical_hash(profile)
+                "ai-agent-stack.io/network-profile-hash": normalized_profile["profile_hash"]
             },
         },
         "spec": {
-            "template": {
-                "networkData": {"links": {"ethernets": ethernets}}
-            }
+            "networkData": {"links": {"ethernets": ethernets}}
         },
     }
 
@@ -1961,7 +1961,7 @@ def valid_metal3_data_template(profile):
 def test_metal3_data_template_verifies_control_and_data_plane_nics():
     profile = valid_dual_network_profile()
     result = agent.validate_metal3_data_template(
-        profile,
+        agent.validate_network_profile(profile),
         valid_metal3_data_template(profile),
         "infrastructure.cluster.x-k8s.io/v1beta1",
         "default",
@@ -1971,11 +1971,11 @@ def test_metal3_data_template_verifies_control_and_data_plane_nics():
 
 
 def remove_data_plane_link(data_template):
-    data_template["spec"]["template"]["networkData"]["links"]["ethernets"].pop()
+    data_template["spec"]["networkData"]["links"]["ethernets"].pop()
 
 
 def change_control_plane_mtu(data_template):
-    data_template["spec"]["template"]["networkData"]["links"]["ethernets"][0]["mtu"] = 9000
+    data_template["spec"]["networkData"]["links"]["ethernets"][0]["mtu"] = 9000
 
 
 def change_network_profile_hash(data_template):
@@ -1996,7 +1996,7 @@ def test_metal3_data_template_rejects_missing_or_mismatched_network_config(mutat
     mutate(data_template)
     with pytest.raises(agent.NodeAgentError, match=error):
         agent.validate_metal3_data_template(
-            profile,
+            agent.validate_network_profile(profile),
             data_template,
             "infrastructure.cluster.x-k8s.io/v1beta1",
             "default",
