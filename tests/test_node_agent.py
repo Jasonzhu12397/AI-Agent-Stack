@@ -3249,3 +3249,56 @@ def test_machine_deployment_create_uses_strict_api_validation(
 
     assert result["kind"] == "MachineDeployment"
 
+
+
+@pytest.mark.parametrize(
+    "configmap_name,interfaces",
+    [
+        ("unrelated-configmap", [{"name": "eno1"}]),
+        (None, "not-a-list"),
+    ],
+)
+def test_target_agent_rejects_misbound_or_malformed_network_inventory(
+    monkeypatch,
+    configmap_name,
+    interfaces,
+):
+    report = {
+        "schema_version": "v1",
+        "node_name": "worker-01",
+        "node_uid": "node-uid-01",
+        "collected_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "hardware": {
+            "status": "observed",
+            "interfaces": interfaces,
+            "pci_network_devices": [],
+            "hugepages": [],
+            "numa_nodes": [],
+        },
+    }
+    metadata = {
+        "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+    }
+    if configmap_name is not None:
+        metadata["name"] = configmap_name
+    else:
+        metadata["name"] = agent.network_inventory_configmap_name("worker-01")
+    configmaps = [
+        {
+            "metadata": metadata,
+            "data": {"inventory.json": json.dumps(report)},
+        }
+    ]
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: configmaps,
+    )
+
+    result = agent.inspect_cluster_node_hardware_inventory(
+        [{"metadata": {"name": "worker-01", "uid": "node-uid-01"}}]
+    )
+
+    assert result["node_count"] == 0
+    assert result["inventory_complete"] is False
+    assert result["missing_node_names"] == ["worker-01"]
