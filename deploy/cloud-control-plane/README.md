@@ -25,6 +25,7 @@ Do not commit .env.cloud. Use a secret manager to provision the file on the VM. 
 
 ~~~bash
 bash deploy/cloud-control-plane/deploy.sh
+docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml exec api python apps/platform-api/manage.py createsuperuser
 docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml logs -f api worker web
 ~~~
 
