@@ -69,7 +69,7 @@ def evaluate_provider_compatibility(payload: dict[str, Any]) -> dict[str, Any]:
     }
     kubernetes_version = payload.get("kubernetes_version")
     if kubernetes_version is not None:
-        _release_minor(kubernetes_version, "kubernetes")
+        _release_minor(kubernetes_version, "kubernetes", allow_build_suffix=True)
     capi_api_version = payload.get("capi_api_version")
     if capi_api_version is not None and capi_api_version not in {"v1beta1", "v1beta2"}:
         raise ProviderCompatibilityError("INVALID_CAPI_API_VERSION")
