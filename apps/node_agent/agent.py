@@ -3909,8 +3909,34 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.capi.pivot.postflight":
         try:
-            return run_capi_pivot_postflight(payload)
-        except CapiPivotError as exc:
+            result = run_capi_pivot_postflight(payload)
+            ironic_lookup = get_ironic_node if ironic_api_configured() else None
+            metal3_result = observe_cluster_metal3(
+                payload,
+                kubernetes_api_get,
+                list_all_kubernetes_items,
+                ironic_lookup=ironic_lookup,
+            )
+            if not metal3_result.get("ready"):
+                blockers = metal3_result.get("blockers", [])
+                raise NodeAgentError(
+                    "CAPI_PIVOT_POSTFLIGHT_METAL3_OBSERVATION_FAILED:"
+                    + ",".join(blockers[:20])
+                )
+            result["metal3_observation"] = metal3_result
+            result["ironic_verification"] = metal3_result.get("ironic", {}).get(
+                "status", "unknown"
+            )
+            result["complete_hardware_verification"] = (
+                result["ironic_verification"] == "verified"
+            )
+            result["verification_scope"] = (
+                "capi_metal3_ironic"
+                if result["complete_hardware_verification"]
+                else "capi_metal3_without_direct_ironic_api"
+            )
+            return result
+        except (CapiPivotError, IronicObservationError, Metal3ObservationError) as exc:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.provider.discover":
         return discover_provider_apis()
