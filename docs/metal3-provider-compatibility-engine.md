@@ -2,9 +2,9 @@
 
 ## Purpose
 
-The node agent exposes `cluster.provider.compatibility` as a read-only compatibility gate. It evaluates an explicitly supplied set of deployed component image versions against the Metal3 community version-support page and periodic integration-test matrix. It also reads the live Kubernetes server version and preferred CAPI API version from the connected cluster.
+The node agent exposes `cluster.provider.compatibility` as a read-only compatibility gate. It discovers deployed component image tags from live Kubernetes Deployments and evaluates them against the Metal3 community version-support page and periodic integration-test matrix. It also reads the live Kubernetes server version and preferred CAPI API version from the connected cluster.
 
-The command is available to the EPH agent only. It does not install providers, change CRDs, create Kubernetes resources, contact BMC endpoints, or authorize provisioning.
+The command is available to both EPH and Target agents. It does not install providers, change CRDs, create Kubernetes resources, contact BMC endpoints, or authorize provisioning.
 
 ## Community evidence snapshot
 
@@ -37,17 +37,10 @@ Command type: `cluster.provider.compatibility`
 Example payload:
 
 ```json
-{
-  "provider_versions": {
-    "capm3": "1.14.0",
-    "bmo": "0.14.0",
-    "ironic": "37.0.0",
-    "irso": "0.12.0"
-  }
-}
+{}
 ```
 
-The agent obtains Kubernetes `/version` and `/apis` itself. The caller cannot override the live Kubernetes or CAPI API versions. Component versions must come from the deployed image tags or immutable deployment inventory collected by the control plane; do not copy versions from a desired plan and describe them as observed runtime versions.
+The command is available to both EPH and Target agents. It reads Kubernetes `/version`, `/apis`, and the cluster-wide Deployment inventory itself. It extracts CAPM3, BMO, Ironic and IrSO tags from the live Deployment Pod templates; caller-supplied component versions are rejected. Missing images, digest-only references without a resolvable version tag, or multiple versions of one component produce an `unknown` result and block the compatibility gate. The caller cannot override the live Kubernetes or CAPI API versions.
 
 Output distinguishes:
 - `supported`: every component release is listed as supported and the IrSO/Ironic and known CAPI API constraints match.
