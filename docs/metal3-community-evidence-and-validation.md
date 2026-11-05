@@ -113,3 +113,16 @@ The target Agent exposes `cluster.capi.pivot.postflight` as a read-only verifica
 
 
 The Target Agent postflight now also invokes the existing read-only Metal3 observer. It verifies the CAPI Machine `spec.infrastructureRef` -> Metal3Machine -> BMH `spec.consumerRef` chain, checks the BMH is online, provisioned and healthy, and—when an authenticated HTTPS Ironic API adapter is configured—checks the corresponding Ironic node UUID, active provision state, maintenance flag and pending target state. If Ironic is not configured, the result explicitly reports `capi_metal3_without_direct_ironic_api` and `complete_hardware_verification=false`; this must not be presented as full hardware verification. The postflight command fails when the CAPI/Metal3/BMH association is unresolved. The Ironic client uses TLS certificate validation, token authentication, bounded response size/timeouts and refuses redirects.
+
+## Post-pivot adoption integrity gate
+
+The Target Agent postflight now verifies the complete identity chain rather than relying only on matching names:
+
+1. All four CAPI, Kubeadm bootstrap, Kubeadm control-plane and CAPM3 controller Deployments must have every desired replica available and an observed generation at least equal to the Deployment generation.
+2. Every Machine labeled for the requested Cluster must have a unique name and UID and an infrastructureRef that resolves to exactly one Metal3Machine in the same Cluster inventory.
+3. The Machine and Metal3Machine inventory counts must match; duplicate identities, missing references and orphan Metal3Machines block postflight.
+4. Every referenced Metal3Machine must resolve to one BareMetalHost through the CAPM3 metal3.io/BareMetalHost annotation.
+5. The BareMetalHost spec.consumerRef must identify that exact Metal3Machine by kind, name and UID. A stale consumer reference is a hard failure.
+6. Existing checks still require the CAPM3 BMH status annotation to be consumed, a stable provisioning state, operationalStatus=OK, and no reported BMH error.
+
+The command remains read-only. It reports controller and identity-chain evidence; it does not prove webhook endpoint readiness, Ironic/IPA reachability, BMC protocol access, successful power control, or physical provisioning. Those are separate gates and still require the LIBVIRT_IRONIC test tier before production mutations are enabled.
