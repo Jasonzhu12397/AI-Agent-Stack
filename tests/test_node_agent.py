@@ -1490,7 +1490,13 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datas"],
+            [
+                "metal3clusters",
+                "metal3machines",
+                "metal3machinetemplates",
+                "metal3datatemplates",
+                "metal3datas",
+            ],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
