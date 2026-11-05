@@ -586,7 +586,9 @@ def _postflight_runner(annotation_present=False, include_bmh=True):
             if include_bmh:
                 annotations = {}
                 if annotation_present:
-                    annotations["baremetalhost.metal3.io/status"] = '{"provisioning":{"state":"provisioned"}}'
+                    annotations["baremetalhost.metal3.io/status"] = (
+                        '{"provisioning":{"state":"provisioned"}}'
+                    )
                 hosts = [{
                     "metadata": {
                         "name": "worker-01",
