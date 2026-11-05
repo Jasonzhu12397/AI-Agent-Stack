@@ -6,6 +6,10 @@ class ToolCallValidationError(ValueError):
     pass
 
 
+def _reject_json_constant(value):
+    raise ValueError("Invalid JSON constant: " + value)
+
+
 def _validate_value(value, schema, path="$", depth=0, budget=None):
     if budget is None:
         budget = [4096]
@@ -51,7 +55,9 @@ def _validate_value(value, schema, path="$", depth=0, budget=None):
         missing = [key for key in required if key not in value]
         unknown = sorted(set(value) - set(properties))
         if missing or unknown:
-            raise ToolCallValidationError("Tool arguments contain missing or unknown fields at " + path + ".")
+            raise ToolCallValidationError(
+                "Tool arguments contain missing or unknown fields at " + path + "."
+            )
         for key, item in value.items():
             _validate_value(item, properties[key], path + "." + key, depth + 1, budget)
 
@@ -170,7 +176,7 @@ def parse_openai_tool_calls(message, offered_tools):
         if not isinstance(raw_arguments, str) or len(raw_arguments) > 65536:
             raise ToolCallValidationError("Tool arguments must be a bounded JSON string.")
         try:
-            arguments = json.loads(raw_arguments, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+            arguments = json.loads(raw_arguments, parse_constant=_reject_json_constant)
         except (TypeError, ValueError) as exc:
             raise ToolCallValidationError("Tool arguments are not valid JSON.") from exc
         if not isinstance(arguments, dict):
