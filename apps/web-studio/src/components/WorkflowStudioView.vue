@@ -60,7 +60,7 @@ function nodeType(node: Record<string, unknown>): string {
 function nodeDetail(node: Record<string, unknown>): string {
   if (!node.config || typeof node.config !== "object" || Array.isArray(node.config)) return "";
   const config = node.config as Record<string, unknown>;
-  return String(config.tool_id ?? config.model_config_id ?? "");
+  return String(config.tool_id ?? config.model_config_id ?? config.arguments_from ?? "");
 }
 
 function edgeLabel(edge: Record<string, unknown>): string {
@@ -362,8 +362,8 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes: start, llm, knowledge_search, condition and end. Knowledge search retrieves only from the pinned project knowledge bases.
-            The server validates graph connectivity, cycles, model scope and credential fields before publishing.
+            Supported execution nodes: start, llm, knowledge_search, tool, condition and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
+            The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
           </p>
           <div class="workflow-actions">
             <el-button :loading="saving" @click="saveDraft">Save draft</el-button>
