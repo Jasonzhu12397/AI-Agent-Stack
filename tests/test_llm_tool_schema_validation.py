@@ -156,7 +156,7 @@ def test_rejects_non_object_schema_values():
     schema = {
         "type": "object",
         "additionalProperties": False,
-        "properties": {"settings": {"type": "object", "properties": {}}},
+        "properties": {"settings": {"type": "object", "properties": []}},
     }
 
     with pytest.raises(ToolCallValidationError, match="closed and valid"):
