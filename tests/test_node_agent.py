@@ -3129,7 +3129,12 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
     assert result["execution_allowed"] is False
     assert result["worker_creation_performed"] is False
 
-def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware():
+def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404")),
+    )
     profile = agent.validate_network_profile(valid_dual_network_profile())
     network_data = {
         "links": [
@@ -3157,7 +3162,12 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware():
     assert result["verified_interface_names"] == ["eno1", "ens2f0"]
 
 
-def test_verify_baremetal_host_network_macs_fails_on_mismatch():
+def test_verify_baremetal_host_network_macs_fails_on_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404")),
+    )
     profile = agent.validate_network_profile(valid_dual_network_profile())
     network_data = {
         "links": [
@@ -3182,7 +3192,12 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch():
         )
 
 
-def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory():
+def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404")),
+    )
     profile = agent.validate_network_profile(valid_dual_network_profile())
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
@@ -3200,7 +3215,12 @@ def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory():
     assert result["reason"] == "baremetal_host_hardware_inventory_pending"
 
 
-def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer():
+def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: (_ for _ in ()).throw(agent.NodeAgentError("KUBERNETES_API_HTTP_404")),
+    )
     profile = agent.validate_network_profile(valid_dual_network_profile())
     host = {
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
@@ -3415,6 +3435,30 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     },
                 },
                 "status": {"ready": True, "error": False},
+            }
+        if path.startswith(
+            "/apis/metal3.io/v1alpha1/namespaces/metal3-system/hardwaredata/"
+        ):
+            host_name = path.rsplit("/", 1)[-1]
+            index = int(host_name.rsplit("-", 1)[-1])
+            return {
+                "apiVersion": "metal3.io/v1alpha1",
+                "kind": "HardwareData",
+                "metadata": {
+                    "name": host_name,
+                    "namespace": "metal3-system",
+                    "uid": f"hardware-data-uid-{index}",
+                    "ownerReferences": [{
+                        "apiVersion": "metal3.io/v1alpha1",
+                        "kind": "BareMetalHost",
+                        "name": host_name,
+                        "uid": f"bmh-uid-{index}",
+                    }],
+                },
+                "spec": {"hardware": {"nics": [
+                    {"name": "eno1", "mac": "02:00:00:00:00:01"},
+                    {"name": "ens2f0", "mac": "02:00:00:00:00:02"},
+                ]}},
             }
         if path.startswith("/api/v1/namespaces/default/secrets/"):
             secret_name = path.rsplit("/", 1)[-1]
