@@ -88,7 +88,15 @@ The `cluster.metal3.observe` command can perform a direct Ironic node read when 
 
 The node UUID is read from the Metal3 BareMetalHost `status.provisioning.ID` field. The observer verifies the returned UUID, requires Ironic `provision_state=active`, `maintenance=false`, no pending target provision state, and no recorded last error. Missing UUIDs, API failures, mismatched identity, maintenance, and transitional states fail closed. BMHs marked `externally provisioned` are not represented as Ironic-verified nodes.
 
-Store the token in a Kubernetes Secret and expose it to the Agent using `secretKeyRef`; do not place credentials in a command payload, ConfigMap, source control, or logs. Direct Ironic verification remains `not_configured` when the URL and token are absent.
+Store the endpoint and token in the `ai-agent-system/ironic-api-credentials` Secret. The deployment templates expose its `api-url` and `token` keys as optional environment variables, so the Agent remains functional when the Secret is absent. For example, create the Secret in each cluster where an Agent needs direct Ironic access:
+
+```sh
+kubectl -n ai-agent-system create secret generic ironic-api-credentials \
+  --from-literal=api-url='https://ironic-api.example.net' \
+  --from-literal=token='<short-lived-or-scoped-token>'
+```
+
+For a private CA, mount its certificate read-only and set `IRONIC_API_CA_FILE` to that mounted path. Do not disable TLS verification. Do not place credentials in a command payload, ConfigMap, source control, or logs. Direct Ironic verification remains `not_configured` when the URL and token are absent.
 
 ## Read-only CAPI to Metal3 lifecycle observation
 
