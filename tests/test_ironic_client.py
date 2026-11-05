@@ -2,8 +2,7 @@ import json
 import urllib.error
 
 import pytest
-
-from apps.node_agent.ironic_client import (
+from node_agent.ironic_client import (
     IronicObservationError,
     get_ironic_node,
     ironic_api_configured,
