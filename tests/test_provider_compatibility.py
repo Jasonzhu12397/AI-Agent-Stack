@@ -20,6 +20,18 @@ def payload(capm3="1.14.0", bmo="0.14.0", ironic="37.0.0", irso="0.12.0", capi_a
     }
 
 
+def test_kubernetes_vendor_build_suffix_is_accepted():
+    result = evaluate_provider_compatibility(
+        {
+            **payload(),
+            "kubernetes_version": "v1.32.2-gke.123",
+        }
+    )
+
+    assert result["compatibility_status"] == "supported"
+    assert result["kubernetes_version"] == "v1.32.2-gke.123"
+
+
 def test_upstream_ci_profile_is_recognized_without_claiming_local_provisioning():
     result = evaluate_provider_compatibility(payload())
 
