@@ -30,6 +30,7 @@ from .ironic_client import (
 from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
 from .provider_compatibility import (
     ProviderCompatibilityError,
+    discover_provider_images,
     evaluate_provider_compatibility,
 )
 
@@ -2055,6 +2056,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         },
         "target_cluster": {
             "node.health",
+            "cluster.provider.compatibility",
             "cluster.health",
             "cluster.network.inspect",
             "cluster.observe",
@@ -2079,7 +2081,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "agent_status": "ready",
         }
     if command_type == "cluster.provider.compatibility":
-        if set(payload) != {"provider_versions"}:
+        if payload:
             raise NodeAgentError("PROVIDER_COMPATIBILITY_PAYLOAD_INVALID")
         kubernetes_version = kubernetes_api_get("/version").get("gitVersion")
         discovery = kubernetes_api_get("/apis")
@@ -2095,14 +2097,33 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if isinstance(capi_group, dict)
             else None
         )
+        deployments = list_all_kubernetes_items(
+            "/apis/apps/v1/deployments",
+            max_items=5000,
+        )
         try:
-            return evaluate_provider_compatibility(
+            image_inventory = discover_provider_images(deployments)
+            if not image_inventory["complete"]:
+                return {
+                    "compatibility_status": "unknown",
+                    "kubernetes_version": kubernetes_version,
+                    "capi_api_version": capi_api_version,
+                    "component_images": image_inventory["images"],
+                    "blockers": image_inventory["blockers"],
+                    "mutation_authorized": False,
+                    "provisioning_ready": False,
+                    "side_effects": False,
+                }
+            result = evaluate_provider_compatibility(
                 {
-                    "provider_versions": payload["provider_versions"],
+                    "provider_versions": image_inventory["provider_versions"],
                     "kubernetes_version": kubernetes_version,
                     "capi_api_version": capi_api_version,
                 }
             )
+            result["component_images"] = image_inventory["images"]
+            result["component_versions_source"] = image_inventory["source"]
+            return result
         except ProviderCompatibilityError as exc:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.health":
