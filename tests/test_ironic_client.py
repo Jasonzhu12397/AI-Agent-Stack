@@ -60,7 +60,7 @@ def test_get_ironic_node_uses_tls_token_and_read_only_get(monkeypatch):
         return FakeResponse(json.dumps(response).encode("utf-8"))
 
     monkeypatch.setattr(
-        "apps.node_agent.ironic_client.urllib.request.urlopen",
+        "node_agent.ironic_client.urllib.request.urlopen",
         fake_urlopen,
     )
     result = get_ironic_node(NODE_UUID, environ=configured_environment())
@@ -94,7 +94,7 @@ def test_get_ironic_node_rejects_identity_mismatch(monkeypatch):
         "maintenance": False,
     }
     monkeypatch.setattr(
-        "apps.node_agent.ironic_client.urllib.request.urlopen",
+        "node_agent.ironic_client.urllib.request.urlopen",
         lambda *args, **kwargs: FakeResponse(json.dumps(response).encode("utf-8")),
     )
     with pytest.raises(
@@ -115,7 +115,7 @@ def test_get_ironic_node_maps_http_errors_to_safe_codes(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "apps.node_agent.ironic_client.urllib.request.urlopen",
+        "node_agent.ironic_client.urllib.request.urlopen",
         fail,
     )
     with pytest.raises(IronicObservationError, match="IRONIC_API_HTTP_503"):
@@ -124,7 +124,7 @@ def test_get_ironic_node_maps_http_errors_to_safe_codes(monkeypatch):
 
 def test_get_ironic_node_rejects_invalid_json(monkeypatch):
     monkeypatch.setattr(
-        "apps.node_agent.ironic_client.urllib.request.urlopen",
+        "node_agent.ironic_client.urllib.request.urlopen",
         lambda *args, **kwargs: FakeResponse(b"not-json"),
     )
     with pytest.raises(
