@@ -1068,41 +1068,45 @@ def verify_baremetal_host_network_macs(
         or metadata.get("namespace") != baremetal_host_namespace
     ):
         raise NodeAgentError("WORKER_BAREMETAL_HOST_IDENTITY_INVALID")
-    hardware = host.get("status", {}).get("hardware", {})
-    nics = hardware.get("nics") if isinstance(hardware, dict) else None
-    if not isinstance(nics, list) or not nics:
-        hardware_data_path = (
-            f"/apis/metal3.io/{metal3_api_version}/namespaces/"
-            f"{baremetal_host_namespace}/hardwaredata/{host_name}"
-        )
-        try:
-            hardware_data = kubernetes_api_get(hardware_data_path)
-        except NodeAgentError as exc:
-            if str(exc) != "KUBERNETES_API_HTTP_404":
-                raise
-            hardware_data = {}
+    hardware_data_path = (
+        f"/apis/metal3.io/{metal3_api_version}/namespaces/"
+        f"{baremetal_host_namespace}/hardwaredata/{host_name}"
+    )
+    try:
+        hardware_data = kubernetes_api_get(hardware_data_path)
+    except NodeAgentError as exc:
+        if str(exc) != "KUBERNETES_API_HTTP_404":
+            raise
+        hardware_data = {}
+    if hardware_data:
         hardware_metadata = hardware_data.get("metadata", {})
         hardware_spec = hardware_data.get("spec", {})
         hardware_details = hardware_spec.get("hardware", {})
         hardware_owner_references = hardware_metadata.get("ownerReferences", [])
-        if hardware_data:
-            if (
-                hardware_data.get("kind") not in {None, "HardwareData"}
-                or hardware_data.get("apiVersion") != f"metal3.io/{metal3_api_version}"
-                or hardware_metadata.get("name") != host_name
-                or hardware_metadata.get("namespace") != baremetal_host_namespace
-                or not isinstance(hardware_metadata.get("uid"), str)
-                or not any(
-                    isinstance(owner, dict)
-                    and owner.get("kind") == "BareMetalHost"
-                    and owner.get("name") == host_name
-                    and owner.get("uid") == host_uid
-                    for owner in hardware_owner_references
-                )
-                or not isinstance(hardware_details, dict)
-            ):
-                raise NodeAgentError("WORKER_HARDWARE_DATA_OWNERSHIP_MISMATCH")
-            nics = hardware_details.get("nics")
+        if (
+            hardware_data.get("kind") not in {None, "HardwareData"}
+            or hardware_data.get("apiVersion") != f"metal3.io/{metal3_api_version}"
+            or hardware_metadata.get("name") != host_name
+            or hardware_metadata.get("namespace") != baremetal_host_namespace
+            or not isinstance(hardware_metadata.get("uid"), str)
+            or not any(
+                isinstance(owner, dict)
+                and owner.get("kind") == "BareMetalHost"
+                and owner.get("name") == host_name
+                and owner.get("uid") == host_uid
+                for owner in hardware_owner_references
+            )
+            or not isinstance(hardware_details, dict)
+        ):
+            raise NodeAgentError("WORKER_HARDWARE_DATA_OWNERSHIP_MISMATCH")
+        nics = hardware_details.get("nics")
+    else:
+        legacy_hardware = host.get("status", {}).get("hardware", {})
+        nics = (
+            legacy_hardware.get("nics")
+            if isinstance(legacy_hardware, dict)
+            else None
+        )
     if not isinstance(nics, list) or not nics:
         return {
             "ready": False,
