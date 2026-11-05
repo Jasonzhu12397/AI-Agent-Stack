@@ -11,9 +11,11 @@ def test_pivot_agent_image_installs_checksum_pinned_cluster_tools():
 
     for argument in (
         "CLUSTERCTL_VERSION",
-        "CLUSTERCTL_SHA256",
+        "CLUSTERCTL_SHA256_AMD64",
+        "CLUSTERCTL_SHA256_ARM64",
         "KUBECTL_VERSION",
-        "KUBECTL_SHA256",
+        "KUBECTL_SHA256_AMD64",
+        "KUBECTL_SHA256_ARM64",
     ):
         assert f"ARG {argument}" in dockerfile
         assert 'test -n "$' + argument + '"' in dockerfile
