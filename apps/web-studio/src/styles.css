@@ -268,3 +268,15 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .operations-view .el-input__wrapper, .operations-view .el-select__wrapper { background: #0b1321; box-shadow: 0 0 0 1px #34435c inset; }
 .operations-view .el-input__inner { color: #e8edf7; }
 @media (max-width: 760px) { .operations-metrics { grid-template-columns: 1fr; } .member-invite-form { grid-template-columns: 1fr; } .operations-heading { align-items: flex-start; flex-direction: column; } .operations-row { align-items: flex-start; flex-direction: column; } }
+
+
+.workflow-pipeline { margin: 16px 0; padding: 16px; border: 1px solid #28364d; border-radius: 12px; background: #0c1422; }
+.workflow-pipeline-row { display: flex; align-items: center; gap: 10px; overflow-x: auto; padding: 18px 2px; }
+.workflow-node-card { display: grid; gap: 7px; flex: 0 0 170px; min-height: 112px; padding: 12px; border: 1px solid #34435c; border-radius: 10px; background: #111a2a; }
+.workflow-node-card strong { color: #e8edf7; font-size: 12px; }
+.workflow-node-card code { color: #8190a8; font-size: 10px; }
+.workflow-node-card small { color: #9eabc1; font-size: 10px; overflow-wrap: anywhere; }
+.workflow-node-arrow { color: #8daeff; font-size: 20px; flex: 0 0 auto; }
+.workflow-edge-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.workflow-edge-list span { padding: 5px 8px; border: 1px solid #28364d; border-radius: 6px; color: #9eabc1; background: #080d18; font: 10px "DM Mono", monospace; }
+.workflow-validation-result { margin-top: 14px; padding: 12px; border: 1px solid #34435c; border-radius: 9px; background: #080d18; }
