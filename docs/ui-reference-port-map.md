@@ -10,7 +10,7 @@ The design reference is [Jasonzhu12397/AI-Stack-Agent-GUI](https://github.com/Ja
 | `DashboardView.tsx` | Workspace Overview | Preserve dark dashboard/card hierarchy; bind only to real API values and never show mock success metrics |
 | `AgentStudioView.tsx` | Existing `AgentStudioView.vue` | Keep Vue component and Django Agent endpoints; port useful layout and configuration affordances |
 | `WorkflowStudioView.tsx` | Existing `WorkflowStudioView.vue` | Keep platform-owned JSON DAG contract and server publish validation; future graph canvas must use the same contract |
-| `IntegrationHubView.tsx` | `IntegrationHubView.vue` | Port catalog/detail/review/install/connection-reference patterns onto Django PluginDefinition/Installation/Connection APIs; no mock connector execution is shown |
+| `IntegrationHubView.tsx` | `IntegrationHubView.vue` | Port catalog/detail/review/install/connection-reference patterns onto Django PluginDefinition/Installation/Connection APIs; add executable read-only starter manifests for Open-Meteo, Google Maps Places, GitHub and Microsoft Graph |
 | `GovernanceView.tsx` | Infrastructure command approval and future Approval Center | Backend remains authoritative; approval must bind a canonical hash and require a different approver |
 | `OrgMembersView.tsx` | Tenant/project membership pages | Use Django membership endpoints and server-derived roles, not reference demo principals |
 | `AuditView.tsx` | Planned Vue Audit Trail | Bind to persistent redacted AuditEvent records; do not use browser-side demo audit data |
@@ -45,3 +45,10 @@ The port keeps the reference's dark slate background, indigo active navigation, 
 ## Workflow RAG node
 
 The Workflow Studio JSON definition editor accepts the `knowledge_search` node type. Configure `knowledge_base_ids` with 1–8 Knowledge Base UUIDs from the same project, `query_template` (supports `{{input}}`) and `limit` (1–10). Connect its output to a downstream LLM node using `input_from` or `source_node`. The server validates every Knowledge Base and embedding model at publish and run time. Retrieved content is treated as untrusted reference data.
+
+
+## GUI connector starter templates
+
+The Vue Integration Hub provides starter manifests for Open-Meteo weather, Google Maps Places, GitHub repository search and Microsoft Graph profile lookup. Loading a template only populates an editable draft; a tenant administrator must register and approve it, install it into a project, grant its declared permission, and configure the provider hostname in `PLUGIN_HTTP_ALLOWED_HOSTS`. Authenticated templates require a server-side credential resolver. Google Maps Places uses a resolver-provided `X-Goog-Api-Key` header; static manifest headers cannot set authorization or API-key headers. All supplied operations are read-only, including the Places text-search POST.
+
+Connector health checks can declare bounded non-sensitive `arguments` for read-only query or POST-body requests. Static operation headers are validated, bounded, and cannot override authentication or hop-by-hop headers.
