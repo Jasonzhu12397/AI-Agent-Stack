@@ -21,7 +21,12 @@ from typing import Any
 
 import yaml
 
-from .capi_pivot import (\n    CapiPivotError,\n    run_capi_pivot,\n    run_capi_pivot_dry_run,\n    run_capi_pivot_postflight,\n)
+from .capi_pivot import (
+    CapiPivotError,
+    run_capi_pivot,
+    run_capi_pivot_dry_run,
+    run_capi_pivot_postflight,
+)
 from .ironic_client import (
     IronicObservationError,
     get_ironic_node,
@@ -2064,7 +2069,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "cluster.postflight",
             "cluster.control-plane.verify",
             "cluster.capi.pivot.target.preflight",
-            "cluster.capi.pivot.target.verify",\n            "cluster.capi.pivot.postflight",
+            "cluster.capi.pivot.target.verify",
+            "cluster.capi.pivot.postflight",
             "cluster.capi.worker.preflight",
             "cluster.capi.worker.provision",
             "cluster.metal3.observe",
@@ -3901,7 +3907,12 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             return run_capi_pivot(payload)
         except CapiPivotError as exc:
             raise NodeAgentError(str(exc)) from exc
-    if command_type == "cluster.capi.pivot.postflight":\n        try:\n            return run_capi_pivot_postflight(payload)\n        except CapiPivotError as exc:\n            raise NodeAgentError(str(exc)) from exc\n    if command_type == "cluster.provider.discover":
+    if command_type == "cluster.capi.pivot.postflight":
+        try:
+            return run_capi_pivot_postflight(payload)
+        except CapiPivotError as exc:
+            raise NodeAgentError(str(exc)) from exc
+    if command_type == "cluster.provider.discover":
         return discover_provider_apis()
     if command_type == "cluster.manifest.validate":
         return validate_provider_manifests(payload.get("manifests"))
@@ -4353,7 +4364,8 @@ class ControlPlaneClient:
                 "cluster.diagnose",
                 "cluster.postflight",
                 "cluster.control-plane.verify",
-                "cluster.capi.pivot.target.preflight",\n                "cluster.capi.pivot.postflight",
+                "cluster.capi.pivot.target.preflight",
+                "cluster.capi.pivot.postflight",
                 "k8s.resource.read",
             ]
         )
