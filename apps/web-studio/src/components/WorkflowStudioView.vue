@@ -67,6 +67,48 @@ function edgeLabel(edge: Record<string, unknown>): string {
   return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
 }
 
+type InsertableNodeType = "llm" | "knowledge_search" | "tool";
+
+function addWorkflowNode(type: InsertableNodeType): void {
+  const definition = parseDefinition();
+  if (!definition) return;
+  const nodes = Array.isArray(definition.nodes)
+    ? [...definition.nodes as Record<string, unknown>[]]
+    : [];
+  const edges = Array.isArray(definition.edges)
+    ? [...definition.edges as Record<string, unknown>[]]
+    : [];
+  const endNodes = nodes.filter((node) => node.type === "end");
+  if (endNodes.length !== 1) {
+    error.value = "Add a processing node only when the draft has exactly one end node.";
+    return;
+  }
+  const endNode = endNodes[0];
+  const incoming = edges.filter((edge) => edge.target === endNode.id);
+  if (incoming.length !== 1) {
+    error.value = "The end node must have exactly one incoming edge before inserting a node.";
+    return;
+  }
+  const previousEdge = incoming[0];
+  const nodeId = type + "_" + crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+  const config: Record<string, unknown> = type === "llm"
+    ? { model_config_id: "", prompt_template: "{{input}}" }
+    : type === "knowledge_search"
+      ? { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 }
+      : { tool_id: "", arguments: {} };
+  const node = { id: nodeId, type, config };
+  const edgeIndex = edges.indexOf(previousEdge);
+  edges.splice(edgeIndex, 1, { source: previousEdge.source, target: nodeId });
+  edges.push({ source: nodeId, target: endNode.id });
+  nodes.splice(nodes.indexOf(endNode), 0, node);
+  definition.nodes = nodes;
+  definition.edges = edges;
+  definitionText.value = JSON.stringify(definition, null, 2);
+  validationResult.value = null;
+  notice.value = type.toUpperCase() + " node inserted. Configure its IDs and settings in the definition before validation.";
+  error.value = "";
+}
+
 async function validateDraft(): Promise<void> {
   if (!selectedWorkflowId.value) return;
   validating.value = true;
@@ -319,6 +361,12 @@ onUnmounted(() => {
             <p class="task-note">Live visual preview of the editable draft. Server validation remains authoritative.</p>
           </div>
           <el-tag type="info" effect="plain">{{ previewGraph.nodes.length }} nodes · {{ previewGraph.edges.length }} edges</el-tag>
+        </div>
+        <div class="workflow-node-toolbar">
+          <span class="task-note">Insert node before the single end node:</span>
+          <el-button size="small" @click="addWorkflowNode('llm')">＋ LLM</el-button>
+          <el-button size="small" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
+          <el-button size="small" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-pipeline-row">
