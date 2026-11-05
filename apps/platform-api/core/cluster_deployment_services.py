@@ -179,7 +179,10 @@ def queue_deployment_command(
         payload["baremetal_host_namespace"] = (
             host_namespace
             if isinstance(host_namespace, str) and host_namespace
-            else deployment.spec.get("baremetal_host_namespace", _deployment_capi_namespace(deployment))
+            else deployment.spec.get(
+                "baremetal_host_namespace",
+                _deployment_capi_namespace(deployment),
+            )
         )
     elif command_type == "cluster.capi.worker.preflight":
         payload["cluster_name"] = deployment.cluster_name
