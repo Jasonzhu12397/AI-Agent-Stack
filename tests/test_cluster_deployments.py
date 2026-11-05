@@ -1309,6 +1309,46 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         None,
     )
     deployment.refresh_from_db()
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "pivot_metal3_ironic_postflight_pending"
+    )
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    pivot_postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.postflight",
+    )
+    assert pivot_postflight.node_id == target_node.id
+    assert pivot_postflight.payload["baremetal_host_namespace"] == "metal3"
+    assert pivot_postflight.status == AgentCommand.Status.QUEUED
+
+    handle_deployment_command_result(
+        pivot_postflight,
+        "succeeded",
+        {
+            "postflight_passed": True,
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "source-cluster-uid",
+            "side_effects": False,
+            "complete_hardware_verification": True,
+            "verification_scope": "capi_metal3_ironic",
+            "ironic_verification": "verified",
+            "metal3_observation": {
+                "ready": True,
+                "machine_count": 3,
+                "resolved_machine_count": 3,
+                "ironic": {
+                    "status": "verified",
+                    "applicable_node_count": 3,
+                    "verified_node_count": 3,
+                },
+            },
+        },
+        None,
+    )
+    deployment.refresh_from_db()
     assert deployment.plan_result["dual_agent"]["phase"] == "worker_preflight_pending"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
