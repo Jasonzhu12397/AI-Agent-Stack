@@ -137,8 +137,11 @@ rules:
     resources: ["kubeadmconfigtemplates"]
     verbs: ["get"]
   - apiGroups: ["infrastructure.cluster.x-k8s.io"]
-    resources: ["metal3machinetemplates", "metal3machines"]
+    resources: ["metal3machinetemplates", "metal3machines", "metal3datatemplates", "metal3datas"]
     verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
