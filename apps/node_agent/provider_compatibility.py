@@ -10,14 +10,23 @@ UPSTREAM_SNAPSHOT_DATE = "2026-11-05"
 UPSTREAM_SOURCES = {
     "version_support": "https://book.metal3.io/version_support",
     "dev_env_test_matrix": "https://github.com/metal3-io/metal3-dev-env",
-    "capm3_pivot_tests": "https://github.com/metal3-io/cluster-api-provider-metal3/blob/main/test/e2e/pivoting.go",
+    "capm3_pivot_tests": (
+        "https://github.com/metal3-io/cluster-api-provider-metal3/"
+        "blob/main/test/e2e/pivoting.go"
+    ),
     "bmo_e2e_tests": "https://github.com/metal3-io/baremetal-operator/blob/main/test/e2e/README.md",
 }
 
 COMPONENT_RELEASE_STATUS = {
     "capm3": {"1.14": "supported", "1.13": "supported", "1.12": "tested"},
     "bmo": {"0.14": "supported", "0.13": "supported", "0.12": "tested"},
-    "ironic": {"39.0": "supported", "38.0": "supported", "37.0": "supported", "35.0": "supported", "33.0": "eol"},
+    "ironic": {
+        "39.0": "supported",
+        "38.0": "supported",
+        "37.0": "supported",
+        "35.0": "supported",
+        "33.0": "eol",
+    },
     "irso": {"0.12": "supported", "0.11": "supported", "0.10": "tested", "0.9": "eol"},
 }
 
@@ -162,7 +171,10 @@ def evaluate_provider_compatibility(payload: dict[str, Any]) -> dict[str, Any]:
                 "Kubernetes version compatibility is not inferred from provider release numbers.",
                 "An upstream periodic CI profile is not proof of this project's deployment.",
                 "The CI matrix does not enumerate every supported IrSO and Ironic pairing.",
-                "Live CRD schemas, controller image digests, Ironic health, IPA assets, BMC reachability and provisioning network checks remain separate gates.",
+                (
+                    "Live CRD schemas, controller image digests, Ironic health, IPA assets, "
+                    "BMC reachability and provisioning network checks remain separate gates."
+                ),
             ],
         },
     }
