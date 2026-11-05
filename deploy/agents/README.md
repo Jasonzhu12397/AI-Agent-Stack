@@ -98,3 +98,45 @@ The deployment sequence after Pivot is now enforced by the Supervisor:
 3. Target Agent runs `cluster.capi.pivot.postflight` to verify the Metal3Machine/BMH consumer chain, consumed BMO status annotation, stable BMH state and direct Ironic node health.
 4. Only a complete postflight result can queue Worker provisioning preflight.
 5. EPH reclaim remains disabled; it requires a separate lifecycle/reclaim executor and physical Data Plane validation.
+
+## Deploy both Agent roles to separate clusters
+
+The deployment helper applies the EPH resources to the temporary EPH cluster and the Target Agent plus per-node network inventory DaemonSet to the target cluster. It requires two different, already configured kubeconfig contexts and a digest-pinned image built from Dockerfile.node-agent.
+
+First, build and push the node-agent image using verified Cluster API and Kubernetes release checksums as described above. Use the resulting registry digest, not a mutable tag. Then create the namespaces and the required Secrets. Supply secret values through files managed by your secret manager; do not put tokens or kubeconfig contents in Git or shell command arguments.
+
+~~~bash
+kubectl --context "$EPH_CONTEXT" apply -f deploy/agents/namespace.yaml
+kubectl --context "$TARGET_CONTEXT" apply -f deploy/agents/namespace.yaml
+
+kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret generic eph-node-agent-credentials \
+  --from-file=control-url=/secure/path/eph-control-url \
+  --from-file=node-id=/secure/path/eph-node-id \
+  --from-file=token=/secure/path/eph-agent-token
+
+kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret generic capi-pivot-kubeconfigs \
+  --from-file=source.kubeconfig=/secure/path/source.kubeconfig \
+  --from-file=target.kubeconfig=/secure/path/target.kubeconfig
+
+kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system create secret generic target-cluster-agent-credentials \
+  --from-file=control-url=/secure/path/target-control-url \
+  --from-file=node-id=/secure/path/target-node-id \
+  --from-file=token=/secure/path/target-agent-token
+
+kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system create secret generic ironic-api-credentials \
+  --from-file=api-url=/secure/path/ironic-api-url \
+  --from-file=token=/secure/path/ironic-readonly-token
+~~~
+
+For secret rotation, use the kubectl create secret generic --dry-run=client -o yaml | kubectl apply -f - pattern with the same --from-file inputs. Verify the Ironic token is read-only and that the API endpoint is reachable from the Target Agent Pod over the intended network.
+
+Run the deployment helper after setting the two context names and immutable image digest:
+
+~~~bash
+EPH_CONTEXT=<eph-context> \
+TARGET_CONTEXT=<target-context> \
+AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \
+bash deploy/agents/deploy.sh
+~~~
+
+The script verifies both API servers, checks required Secret keys without printing their values, server-side dry-runs all Agent workloads, applies them, and waits for both Deployments and the inventory DaemonSet to roll out. A successful rollout proves only that the Agent Pods started and became Ready. It does not prove CAPI pivot, Ironic provisioning, SR-IOV/DPDK traffic, or EPH reclaim; those require their respective runtime postflight and hardware tests. The script intentionally does not create the Cloud Control Plane services or apply site-specific Calico, Multus, OVS, SR-IOV CNI, device-plugin or DPDK configuration.
