@@ -26,9 +26,11 @@ docker login <registry>
 IMAGE_REPOSITORY=<registry>/ai-agent-node-agent \
 IMAGE_TAG=<immutable-build-tag> \
 CLUSTERCTL_VERSION=<verified-release-tag> \
-CLUSTERCTL_SHA256=<verified-clusterctl-linux-sha256> \
+CLUSTERCTL_SHA256_AMD64=<verified-clusterctl-amd64-sha256> \\
+CLUSTERCTL_SHA256_ARM64=<verified-clusterctl-arm64-sha256> \
 KUBECTL_VERSION=<verified-kubernetes-release-tag> \
-KUBECTL_SHA256=<verified-kubectl-linux-sha256> \
+KUBECTL_SHA256_AMD64=<verified-kubectl-amd64-sha256> \\
+KUBECTL_SHA256_ARM64=<verified-kubectl-arm64-sha256> \
 PLATFORMS=linux/amd64 \
 bash deploy/agents/build-node-agent.sh
 ~~~
