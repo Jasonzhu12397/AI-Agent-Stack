@@ -256,8 +256,10 @@ def observe_cluster_metal3(
                 except Exception:
                     ironic_blocker = "ironic_api_unavailable_or_node_unreadable"
                 if ironic_node is not None:
+                    returned_uuid = ironic_node.get("uuid")
                     ironic_healthy = (
-                        ironic_node.get("uuid", "").lower() == ironic_uuid.lower()
+                        isinstance(returned_uuid, str)
+                        and returned_uuid.lower() == ironic_uuid.lower()
                         and ironic_node.get("provision_state") == "active"
                         and ironic_node.get("maintenance") is False
                         and ironic_node.get("target_provision_state") in (None, "")
