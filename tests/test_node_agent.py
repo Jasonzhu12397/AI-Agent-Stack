@@ -1944,6 +1944,39 @@ def valid_metal3_data_template(profile):
     }
 
 
+def test_metal3_data_template_verifies_control_and_data_plane_nics():
+    profile = valid_dual_network_profile()
+    result = agent.validate_metal3_data_template(
+        profile,
+        valid_metal3_data_template(profile),
+        "infrastructure.cluster.x-k8s.io/v1beta1",
+        "default",
+    )
+    assert result["verified"] is True
+    assert result["interface_names"] == ["eno1", "ens2f0"]
+
+
+@pytest.mark.parametrize(
+    "mutate,error",
+    [
+        (lambda item: item["spec"]["template"]["networkData"]["links"]["ethernets"].pop(), "METAL3_DATA_TEMPLATE_INTERFACE_MISSING_OR_DUPLICATE"),
+        (lambda item: item["spec"]["template"]["networkData"]["links"]["ethernets"][0].update({"mtu": 9000}), "METAL3_DATA_TEMPLATE_INTERFACE_CONFIGURATION_MISMATCH"),
+        (lambda item: item["metadata"]["annotations"].update({"ai-agent-stack.io/network-profile-hash": "0" * 64}), "METAL3_DATA_TEMPLATE_IDENTITY_OR_PROFILE_MISMATCH"),
+    ],
+)
+def test_metal3_data_template_rejects_missing_or_mismatched_network_config(mutate, error):
+    profile = valid_dual_network_profile()
+    data_template = valid_metal3_data_template(profile)
+    mutate(data_template)
+    with pytest.raises(agent.NodeAgentError, match=error):
+        agent.validate_metal3_data_template(
+            profile,
+            data_template,
+            "infrastructure.cluster.x-k8s.io/v1beta1",
+            "default",
+        )
+
+
 @pytest.mark.parametrize("node_type", ["eph_node", "target_cluster"])
 def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch, node_type):
     calls = []
