@@ -7,6 +7,7 @@ from node_agent.capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
     run_capi_pivot_dry_run,
+    run_capi_pivot_postflight,
 )
 
 
@@ -555,3 +556,98 @@ def test_pivot_execution_rejects_target_ironic_without_keepalived(tmp_path):
         item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
         for item in calls
     )
+
+
+def _postflight_runner(annotation_present=False, include_bmh=True):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        resource = command[command.index("get") + 1]
+        if resource == "clusters.cluster.x-k8s.io":
+            document = {"metadata": {"name": "target-cluster", "uid": "cluster-uid"}}
+        elif resource == "machines.cluster.x-k8s.io":
+            document = {"items": [{
+                "metadata": {
+                    "name": "worker-01",
+                    "labels": {"cluster.x-k8s.io/cluster-name": "target-cluster"},
+                }
+            }]}
+        elif resource == "metal3machines.infrastructure.cluster.x-k8s.io":
+            document = {"items": [{
+                "metadata": {
+                    "name": "worker-01",
+                    "labels": {"cluster.x-k8s.io/cluster-name": "target-cluster"},
+                    "annotations": {"metal3.io/BareMetalHost": "worker-01"},
+                }
+            }]}
+        elif resource == "baremetalhosts.metal3.io":
+            hosts = []
+            if include_bmh:
+                annotations = {}
+                if annotation_present:
+                    annotations["baremetalhost.metal3.io/status"] = '{"provisioning":{"state":"provisioned"}}'
+                hosts = [{
+                    "metadata": {
+                        "name": "worker-01",
+                        "namespace": "metal3",
+                        "annotations": annotations,
+                    },
+                    "status": {
+                        "provisioning": {"state": "provisioned"},
+                        "operationalStatus": "OK",
+                    },
+                }]
+            document = {"items": hosts}
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(command, 0, json.dumps(document), "")
+
+    return calls, runner
+
+
+def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
+    calls, runner = _postflight_runner()
+    result = run_capi_pivot_postflight(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert result["postflight_passed"] is True
+    assert result["side_effects"] is False
+    assert result["verified_bmh_count"] == 1
+    assert result["bmh_status_annotations_consumed"] is True
+    assert result["verified_bmhs"][0]["baremetalhost"] == "worker-01"
+    assert len(calls) == 4
+
+
+def test_pivot_postflight_rejects_unconsumed_bmh_status_annotation(tmp_path):
+    _, runner = _postflight_runner(annotation_present=True)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_RECONSTRUCTION_PENDING",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
+def test_pivot_postflight_rejects_missing_bmh_reference(tmp_path):
+    _, runner = _postflight_runner(include_bmh=False)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_BMH_NOT_FOUND",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
