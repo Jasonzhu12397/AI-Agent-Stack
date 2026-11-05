@@ -7,7 +7,12 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
-if APP_ENV == "production" and (DEBUG or SECRET_KEY == "local-only-change-before-production"):
+if APP_ENV == "production" and (
+    DEBUG
+    or SECRET_KEY == "local-only-change-before-production"
+    or SECRET_KEY.startswith("replace-")
+    or len(SECRET_KEY) < 32
+):
     raise RuntimeError("Production requires DEBUG=false and a non-default SECRET_KEY")
 
 ALLOWED_HOSTS = [
