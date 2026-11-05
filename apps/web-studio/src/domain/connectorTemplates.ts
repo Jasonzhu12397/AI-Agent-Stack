@@ -1,0 +1,310 @@
+export type ConnectorTemplate = {
+  id: string;
+  label: string;
+  summary: string;
+  host: string;
+  auth: "none" | "credential_ref";
+  credentialHint: string;
+  payload: Record<string, unknown>;
+};
+
+const objectSchema = (
+  properties: Record<string, unknown>,
+  required: string[] = [],
+): Record<string, unknown> => ({
+  type: "object",
+  properties,
+  required,
+  additionalProperties: false,
+});
+
+const readOnlyTool = (
+  name: string,
+  description: string,
+  inputSchema: Record<string, unknown>,
+  outputSchema: Record<string, unknown>,
+  permissions: string[],
+) => ({
+  name,
+  description,
+  input_schema: inputSchema,
+  output_schema: outputSchema,
+  required_permissions: permissions,
+  risk_level: "low",
+  timeout_seconds: 20,
+  retry_policy: { max_attempts: 2, backoff_seconds: 2 },
+  idempotency_mode: "read_only",
+});
+
+export const connectorTemplates: ConnectorTemplate[] = [
+  {
+    id: "open-meteo",
+    label: "Open-Meteo Weather",
+    summary: "Current weather through the public Open-Meteo forecast API. No API key is required.",
+    host: "api.open-meteo.com",
+    auth: "none",
+    credentialHint: "No credential required",
+    payload: {
+      plugin_key: "open-meteo-weather",
+      name: "Open-Meteo Weather",
+      description: "Read current weather conditions for a latitude and longitude.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "Open-Meteo",
+      license: "CC BY 4.0",
+      source_url: "https://open-meteo.com/",
+      manifest: {
+        http: {
+          base_url: "https://api.open-meteo.com",
+          auth_required: false,
+          health_check: {
+            method: "GET",
+            path: "/v1/forecast",
+            path_params: {},
+            query_params: {
+              latitude: "latitude",
+              longitude: "longitude",
+              current: "current",
+            },
+            arguments: {
+              latitude: 37.7749,
+              longitude: -122.4194,
+              current: "temperature_2m",
+            },
+          },
+          operations: {
+            "read-current-weather": {
+              method: "GET",
+              path: "/v1/forecast",
+              path_params: {},
+              query_params: {
+                latitude: "latitude",
+                longitude: "longitude",
+                current: "current",
+              },
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "read-current-weather",
+          "Read current weather for a geographic coordinate.",
+          objectSchema(
+            {
+              latitude: { type: "number", minimum: -90, maximum: 90 },
+              longitude: { type: "number", minimum: -180, maximum: 180 },
+              current: {
+                type: "string",
+                enum: ["temperature_2m", "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m"],
+              },
+            },
+            ["latitude", "longitude", "current"],
+          ),
+          objectSchema({
+            latitude: { type: "number" },
+            longitude: { type: "number" },
+            current: { type: "object", properties: {}, additionalProperties: true },
+          }),
+          ["weather:current:read"],
+        ),
+      ],
+    },
+  },
+  {
+    id: "google-maps-places",
+    label: "Google Maps Places",
+    summary: "Read-only Places text search using the Places API (New). Requires a server-side Google API key reference.",
+    host: "places.googleapis.com",
+    auth: "credential_ref",
+    credentialHint: "Credential resolver must return a header credential named X-Goog-Api-Key.",
+    payload: {
+      plugin_key: "google-maps-places",
+      name: "Google Maps Places",
+      description: "Search Google Places using read-only Places API text search.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "Google",
+      license: "Proprietary API",
+      source_url: "https://developers.google.com/maps/documentation/places/web-service",
+      manifest: {
+        http: {
+          base_url: "https://places.googleapis.com/v1",
+          auth_required: true,
+          health_check: {
+            method: "POST",
+            path: "/places:searchText",
+            path_params: {},
+            query_params: {},
+            body_param: "request",
+            read_only: true,
+            headers: {
+              "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress",
+            },
+            arguments: {
+              request: { textQuery: "coffee in San Francisco", maxResultCount: 1 },
+            },
+          },
+          operations: {
+            "search-places": {
+              method: "POST",
+              path: "/places:searchText",
+              path_params: {},
+              query_params: {},
+              body_param: "request",
+              read_only: true,
+              headers: {
+                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress",
+              },
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "search-places",
+          "Search Google Maps for places matching a text query.",
+          objectSchema(
+            {
+              request: objectSchema(
+                {
+                  textQuery: { type: "string", minLength: 2, maxLength: 300 },
+                  maxResultCount: { type: "integer", minimum: 1, maximum: 20 },
+                },
+                ["textQuery"],
+              ),
+            },
+            ["request"],
+          ),
+          objectSchema({
+            places: {
+              type: "array",
+              items: objectSchema({
+                id: { type: "string" },
+                displayName: objectSchema({ text: { type: "string" } }),
+                formattedAddress: { type: "string" },
+              }),
+            },
+          }),
+          ["maps:places:read"],
+        ),
+      ],
+    },
+  },
+  {
+    id: "github-readonly",
+    label: "GitHub Read-only",
+    summary: "Search repositories through the GitHub REST API. Uses a server-side fine-grained token reference.",
+    host: "api.github.com",
+    auth: "credential_ref",
+    credentialHint: "Credential resolver must return a bearer token with repository read access.",
+    payload: {
+      plugin_key: "github-readonly",
+      name: "GitHub Read-only",
+      description: "Search GitHub repositories visible to the configured token.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "GitHub",
+      license: "GitHub API Terms",
+      source_url: "https://docs.github.com/en/rest",
+      manifest: {
+        http: {
+          base_url: "https://api.github.com",
+          auth_required: true,
+          health_check: {
+            method: "GET",
+            path: "/rate_limit",
+            path_params: {},
+            query_params: {},
+          },
+          operations: {
+            "search-repositories": {
+              method: "GET",
+              path: "/search/repositories",
+              path_params: {},
+              query_params: { q: "query", per_page: "per_page" },
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "search-repositories",
+          "Search repositories by GitHub search query.",
+          objectSchema(
+            {
+              query: { type: "string", minLength: 2, maxLength: 256 },
+              per_page: { type: "integer", minimum: 1, maximum: 100 },
+            },
+            ["query"],
+          ),
+          objectSchema({
+            total_count: { type: "integer" },
+            incomplete_results: { type: "boolean" },
+            items: { type: "array", items: objectSchema({}) },
+          }),
+          ["github:repo:read"],
+        ),
+      ],
+    },
+  },
+  {
+    id: "microsoft-graph-readonly",
+    label: "Microsoft Graph Read-only",
+    summary: "Read the signed-in Microsoft 365 user's profile. Requires a server-side OAuth access-token reference.",
+    host: "graph.microsoft.com",
+    auth: "credential_ref",
+    credentialHint: "Credential resolver must return a bearer token with the User.Read scope.",
+    payload: {
+      plugin_key: "microsoft-graph-readonly",
+      name: "Microsoft Graph Read-only",
+      description: "Read the signed-in Microsoft 365 user profile.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "Microsoft",
+      license: "Microsoft API Terms",
+      source_url: "https://learn.microsoft.com/graph/",
+      manifest: {
+        http: {
+          base_url: "https://graph.microsoft.com/v1.0",
+          auth_required: true,
+          health_check: {
+            method: "GET",
+            path: "/me",
+            path_params: {},
+            query_params: {},
+          },
+          operations: {
+            "get-my-profile": {
+              method: "GET",
+              path: "/me",
+              path_params: {},
+              query_params: {},
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "get-my-profile",
+          "Read the authenticated Microsoft 365 user's basic profile.",
+          objectSchema({}),
+          objectSchema({
+            displayName: { type: "string" },
+            userPrincipalName: { type: "string" },
+            id: { type: "string" },
+          }),
+          ["microsoft-graph:user:read"],
+        ),
+      ],
+    },
+  },
+];
+
+export function buildConnectorTemplatePayload(templateId: string): Record<string, unknown> {
+  const template = connectorTemplates.find((item) => item.id === templateId);
+  if (!template) {
+    throw new Error("Unknown connector template.");
+  }
+  return JSON.parse(JSON.stringify(template.payload)) as Record<string, unknown>;
+}
