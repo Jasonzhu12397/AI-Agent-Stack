@@ -265,6 +265,10 @@ async function runWorkflow(): Promise<void> {
   }
 }
 
+watch(definitionText, () => {
+  validationResult.value = null;
+});
+
 watch(
   () => [props.tenantId, props.projectId],
   () => void loadWorkflows(),
