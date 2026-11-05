@@ -17,14 +17,15 @@ UPSTREAM_SOURCES = {
 COMPONENT_RELEASE_STATUS = {
     "capm3": {"1.14": "supported", "1.13": "supported", "1.12": "tested"},
     "bmo": {"0.14": "supported", "0.13": "supported", "0.12": "tested"},
-    "ironic": {"39.0": "supported", "38.0": "supported", "37.0": "supported", "35.0": "tested"},
-    "irso": {"0.12": "supported", "0.11": "supported", "0.10": "tested"},
+    "ironic": {"39.0": "supported", "38.0": "supported", "37.0": "supported", "35.0": "tested", "33.0": "tested"},
+    "irso": {"0.12": "supported", "0.11": "supported", "0.10": "tested", "0.9": "tested"},
 }
 
 IRSO_IRONIC_COMPATIBILITY = {
     "0.12": {"39.0", "38.0", "37.0"},
     "0.11": {"38.0", "37.0", "35.0"},
     "0.10": {"37.0", "35.0", "34.0"},
+    "0.9": {"35.0", "34.0", "33.0"},
 }
 
 CAPM3_API_VERSIONS = {
