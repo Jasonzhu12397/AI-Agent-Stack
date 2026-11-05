@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from .capi_pivot import CapiPivotError, run_capi_pivot, run_capi_pivot_dry_run
-from .ironic_client import get_ironic_node, ironic_api_configured
+from .ironic_client import (
+    IronicObservationError,
+    get_ironic_node,
+    ironic_api_configured,
+)
 from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
 
 
@@ -3247,7 +3251,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 list_all_kubernetes_items,
                 ironic_lookup=ironic_lookup,
             )
-        except Metal3ObservationError as exc:
+        except (IronicObservationError, Metal3ObservationError) as exc:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "host.preflight":
         disk = shutil.disk_usage("/")
