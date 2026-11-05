@@ -1171,6 +1171,7 @@ def inspect_rendered_worker_network_data(
     profile: dict[str, Any],
     baremetal_host_namespace: str,
     baremetal_host_api_version: str,
+    baremetal_host_inventory: list[dict[str, Any]],
 ) -> dict[str, Any]:
     machine_metadata = machine.get("metadata", {})
     machine_name = machine_metadata.get("name")
@@ -1315,15 +1316,10 @@ def inspect_rendered_worker_network_data(
     except (ValueError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_INVALID") from exc
     verification = validate_rendered_network_data(profile, parsed_network_data)
-    baremetal_hosts = list_all_kubernetes_items(
-        f"/apis/metal3.io/{baremetal_host_api_version}"
-        f"/namespaces/{baremetal_host_namespace}/baremetalhosts",
-        max_items=10000,
-    )
     hardware_verification = verify_baremetal_host_network_macs(
         profile,
         parsed_network_data,
-        baremetal_hosts,
+        baremetal_host_inventory,
         metal3_machine_name,
         namespace,
         baremetal_host_namespace,
@@ -3579,6 +3575,13 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             worker_node_ref_names = []
             verified_worker_network_data = []
             pending_worker_network_data = []
+            worker_baremetal_hosts = []
+            if selected_machines:
+                worker_baremetal_hosts = list_all_kubernetes_items(
+                    f"/apis/metal3.io/{versions['metal3.io']}/namespaces/"
+                    f"{host_namespace}/baremetalhosts",
+                    max_items=10000,
+                )
             for machine in selected_machines:
                 metadata = machine.get("metadata", {})
                 conditions = machine.get("status", {}).get("conditions", [])
@@ -3600,6 +3603,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     network_profile,
                     host_namespace,
                     versions["metal3.io"],
+                    worker_baremetal_hosts,
                 )
                 if network_data_result.get("ready") is True:
                     verified_worker_network_data.append(network_data_result)
