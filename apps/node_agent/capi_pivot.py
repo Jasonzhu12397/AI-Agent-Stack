@@ -470,7 +470,9 @@ def _verify_source_metal3_handoff(
         if "clusterctl.cluster.x-k8s.io/block-move" in annotations:
             blockers.append("bmh_block_move_annotation_present:" + name)
         status = host.get("status", {})
-        provisioning = status.get("provisioning", {}) if isinstance(status, dict) else {}
+        if not isinstance(status, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_STATUS_INVALID")
+        provisioning = status.get("provisioning", {})
         state = provisioning.get("state") if isinstance(provisioning, dict) else None
         operational_status = status.get("operationalStatus") if isinstance(status, dict) else None
         if state not in stable_states:
@@ -634,10 +636,6 @@ def run_capi_pivot(
         "CAPI_PIVOT_SOURCE_KUBECONFIG",
         secret_root,
     )
-    source_process_env = {
-        "PATH": env.get("PATH", ""),
-        "HOME": env.get("HOME", "/tmp"),
-    }
     metal3_handoff = _verify_source_metal3_handoff(
         runner,
         kubectl,
