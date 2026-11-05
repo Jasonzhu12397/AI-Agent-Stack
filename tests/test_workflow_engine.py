@@ -908,3 +908,26 @@ def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
     assert result == {"ok": True}
     assert audit.call_count == 1
     assert PluginInstallation.objects.get(pk=installation.id).status == PluginInstallation.Status.INSTALLED
+
+
+def test_workflow_tool_arguments_must_reference_an_earlier_node():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "tool_step",
+                "type": "tool",
+                "config": {
+                    "tool_id": "00000000-0000-0000-0000-000000000001",
+                    "arguments_from": "later",
+                },
+            },
+            {"id": "later", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "tool_step"},
+            {"source": "tool_step", "target": "later"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="earlier node"):
+        validate_workflow_definition(definition)
