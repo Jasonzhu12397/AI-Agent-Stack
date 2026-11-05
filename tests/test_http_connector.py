@@ -424,3 +424,83 @@ def test_http_connector_rejects_non_json_response_formats(
                     context(),
                     tool(),
                 )
+
+
+
+def test_http_connector_adds_safe_static_headers(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "POST",
+                    "path": "/v1/places:searchText",
+                    "path_params": {},
+                    "query_params": {},
+                    "body_param": "request",
+                    "read_only": True,
+                    "headers": {
+                        "X-Goog-FieldMask": "places.id,places.displayName"
+                    },
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search",
+        timeout_seconds=5,
+        idempotency_mode="read_only",
+    )
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(FakeResponse(), captured),
+        ):
+            result = execute_http_operation(
+                {"request": {"textQuery": "coffee"}},
+                context(manifest=manifest),
+                selected_tool,
+            )
+
+    assert result == {"items": ["ok"]}
+    assert captured["headers"]["X-Goog-FieldMask"] == "places.id,places.displayName"
+    assert captured["json"] == {"textQuery": "coffee"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Authorization": "Bearer attacker-controlled"},
+        {"X-Goog-Api-Key": "plaintext-secret"},
+        {"X-Test": "bad\\nheader"},
+    ],
+)
+def test_http_connector_rejects_unsafe_static_headers(headers):
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/items",
+                    "path_params": {},
+                    "query_params": {},
+                    "headers": headers,
+                }
+            },
+        }
+    }
+    with pytest.raises(ToolExecutionError, match="unsafe static header"):
+        from core.http_connector import _operation_config
+
+        _operation_config(
+            context(manifest=manifest),
+            SimpleNamespace(name="search"),
+        )
