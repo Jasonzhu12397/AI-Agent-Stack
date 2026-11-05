@@ -62,6 +62,7 @@ from core.workflow_views import (
     WorkflowDetailView,
     WorkflowListCreateView,
     WorkflowPublishView,
+    WorkflowValidateView,
     WorkflowRunDetailView,
     WorkflowRunListCreateView,
 )
@@ -242,6 +243,11 @@ urlpatterns = [
         "api/v1/workflows/<uuid:workflow_id>/",
         WorkflowDetailView.as_view(),
         name="workflow-detail",
+    ),
+    path(
+        "api/v1/workflows/<uuid:workflow_id>/validate/",
+        WorkflowValidateView.as_view(),
+        name="workflow-validate",
     ),
     path(
         "api/v1/workflows/<uuid:workflow_id>/publish/",
