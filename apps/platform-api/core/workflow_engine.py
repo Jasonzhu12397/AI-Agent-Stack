@@ -9,11 +9,18 @@ from django.utils import timezone
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.rag_runtime import RagRuntimeError, retrieve_context
 from core.models import (
+    AuditEvent,
     KnowledgeBase,
     ModelConfig,
+    PluginConnection,
+    PluginInstallation,
+    PluginTool,
     WorkflowRun,
     WorkflowStepRun,
 )
+from core.audit import record_audit_event
+from core.http_connector import register_http_tool
+from core.tool_router import ToolExecutionError, ToolRouter
 
 
 FORBIDDEN_CREDENTIAL_KEYS = {
@@ -60,6 +67,7 @@ def validate_workflow_definition(definition):
             "llm",
             "condition",
             "knowledge_search",
+            "tool",
             "end",
         }:
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
@@ -93,6 +101,20 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(f"LLM node {node_id} requires prompt_template.")
             if len(config["prompt_template"]) > 12000:
                 raise WorkflowValidationError(f"LLM node {node_id} prompt is too long.")
+        if node_type == "tool":
+            tool_id = config.get("tool_id")
+            if not isinstance(tool_id, str):
+                raise WorkflowValidationError(f"Tool node {node_id} requires tool_id.")
+            try:
+                uuid.UUID(tool_id)
+            except ValueError as exc:
+                raise WorkflowValidationError(
+                    f"Tool node {node_id} tool_id must be a UUID."
+                ) from exc
+            if "arguments" in config and not isinstance(config["arguments"], dict):
+                raise WorkflowValidationError(
+                    f"Tool node {node_id} arguments must be an object."
+                )
         if node_type == "knowledge_search":
             knowledge_ids = config.get("knowledge_base_ids")
             if not isinstance(knowledge_ids, list) or not 1 <= len(knowledge_ids) <= 8:
@@ -128,7 +150,7 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Condition node {node_id} input_key must be a non-empty string."
                 )
-        if node_type in {"llm", "condition", "knowledge_search", "end"}:
+        if node_type in {"llm", "condition", "knowledge_search", "tool", "end"}:
             source_node = config.get("input_from") or config.get("source_node")
             if source_node and (
                 not isinstance(source_node, str)
@@ -269,6 +291,36 @@ def validate_model_references(graph, tenant, project):
                     "Workflow knowledge search models must support embeddings."
                 )
             continue
+        if node["type"] == "tool":
+            tool = PluginTool.objects.select_related("plugin").filter(
+                pk=config["tool_id"],
+                enabled=True,
+                plugin__enabled=True,
+                plugin__review_status="approved",
+                plugin__installations__tenant=tenant,
+                plugin__installations__project=project,
+                plugin__installations__status=PluginInstallation.Status.INSTALLED,
+                plugin__installations__plugin_version=F("plugin__version"),
+            ).first()
+            if tool is None:
+                raise WorkflowValidationError(
+                    "A workflow tool node references a tool that is not installed and approved in this project."
+                )
+            if tool.risk_level in {
+                PluginTool.RiskLevel.HIGH,
+                PluginTool.RiskLevel.CRITICAL,
+            }:
+                raise WorkflowValidationError(
+                    "High-risk workflow tools require a human approval node and cannot execute directly."
+                )
+            if tool.idempotency_mode not in {
+                PluginTool.IdempotencyMode.READ_ONLY,
+                PluginTool.IdempotencyMode.IDEMPOTENT,
+            }:
+                raise WorkflowValidationError(
+                    "Workflow tools must be read-only or idempotent because workflow retries may replay a step."
+                )
+            continue
         if node["type"] != "llm":
             continue
         model = ModelConfig.objects.select_related("provider").filter(
@@ -315,7 +367,7 @@ def _step_input(node, state):
     return None
 
 
-def _execute_node(node, state, input_data, tenant, project):
+def _execute_node(node, state, input_data, tenant, project, task):
     node_type = node["type"]
     config = node["config"]
     if node_type == "start":
@@ -331,6 +383,83 @@ def _execute_node(node, state, input_data, tenant, project):
     if node_type == "end":
         source_node = config.get("input_from") or config.get("source_node")
         return state.get(source_node) if source_node else dict(state)
+    if node_type == "tool":
+        tool = PluginTool.objects.select_related("plugin").get(
+            pk=config["tool_id"],
+            enabled=True,
+            plugin__enabled=True,
+            plugin__review_status="approved",
+        )
+        installation = PluginInstallation.objects.get(
+            tenant=tenant,
+            project=project,
+            plugin=tool.plugin,
+            status=PluginInstallation.Status.INSTALLED,
+            plugin_version=tool.plugin.version,
+        )
+        connections = list(
+            PluginConnection.objects.filter(
+                installation=installation,
+                status=PluginConnection.Status.HEALTHY,
+            ).order_by("created_at")[:2]
+        )
+        if len(connections) > 1:
+            raise WorkflowValidationError(
+                "Multiple healthy connector connections require an explicit connection binding."
+            )
+        router = ToolRouter()
+        register_http_tool(router, tool)
+        connection = connections[0] if connections else None
+        arguments = dict(config.get("arguments", {}))
+        if config.get("arguments_from"):
+            source = state.get(config["arguments_from"])
+            if not isinstance(source, dict):
+                raise WorkflowValidationError(
+                    "Tool arguments_from must reference a node that returned an object."
+                )
+            arguments = source
+        try:
+            result = router.execute(
+                installation=installation,
+                tool=tool,
+                arguments=arguments,
+                granted_permissions=installation.granted_permissions,
+                connection=connection,
+                approved=False,
+            )
+        except ToolExecutionError as exc:
+            record_audit_event(
+                None,
+                tenant,
+                "workflow.tool.executed",
+                "plugin_tool",
+                tool.id,
+                project=project,
+                outcome=AuditEvent.Outcome.FAILURE,
+                metadata={
+                    "workflow_run_id": str(task.id),
+                    "plugin_key": tool.plugin.plugin_key,
+                    "tool_name": tool.name,
+                },
+                actor=task.created_by,
+            )
+            raise WorkflowValidationError(str(exc)) from exc
+        record_audit_event(
+            None,
+            tenant,
+            "workflow.tool.executed",
+            "plugin_tool",
+            tool.id,
+            project=project,
+            outcome=AuditEvent.Outcome.SUCCESS,
+            metadata={
+                "workflow_task_id": str(task.id),
+                "plugin_key": tool.plugin.plugin_key,
+                "tool_name": tool.name,
+            },
+            actor=task.created_by,
+        )
+        return result
     if node_type == "knowledge_search":
         source_value = _step_input(node, state)
         if isinstance(source_value, (dict, list)):
@@ -489,6 +618,7 @@ def execute_workflow_run(task, worker_id, renew_lease):
                 workflow_run.input_data,
                 workflow.tenant,
                 workflow.project,
+                workflow_run.task,
             )
         except Exception as exc:
             step.status = WorkflowStepRun.Status.FAILED
