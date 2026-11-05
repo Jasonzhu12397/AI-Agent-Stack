@@ -144,6 +144,28 @@ def _operation_config(context, tool):
     path_params = operation.get("path_params", {})
     query_params = operation.get("query_params", {})
     body_param = operation.get("body_param")
+    configured_headers = operation.get("headers", {})
+    if not isinstance(configured_headers, dict):
+        raise ToolExecutionError("Connector operation headers are invalid.")
+    static_headers = {}
+    forbidden_headers = {
+        "authorization", "proxy-authorization", "cookie", "set-cookie",
+        "host", "content-length", "transfer-encoding", "connection",
+        "upgrade", "te", "trailer", "expect", "x-goog-api-key", "x-api-key",
+    }
+    for name, value in configured_headers.items():
+        if (
+            not isinstance(name, str)
+            or not HEADER_NAME.fullmatch(name)
+            or name.lower() in forbidden_headers
+            or not isinstance(value, str)
+            or not value
+            or len(value) > 2048
+            or "\\n" in value
+            or "\\r" in value
+        ):
+            raise ToolExecutionError("Connector operation contains an unsafe static header.")
+        static_headers[name] = value
     if (
         not isinstance(path_params, dict)
         or not isinstance(query_params, dict)
@@ -170,11 +192,11 @@ def _operation_config(context, tool):
         mapped_args.add(body_param)
     if len(mapped_args) != len(path_params) + len(query_params) + (1 if body_param else 0):
         raise ToolExecutionError("Connector HTTP argument mapping contains duplicates.")
-    return parsed_base, method.upper(), path, path_params, query_params, body_param
+    return parsed_base, method.upper(), path, path_params, query_params, body_param, static_headers
 
 
 def execute_http_operation(arguments, context: ToolContext, tool):
-    base, method, path, path_params, query_params, body_param = _operation_config(
+    base, method, path, path_params, query_params, body_param, static_headers = _operation_config(
         context,
         tool,
     )
@@ -227,6 +249,7 @@ def execute_http_operation(arguments, context: ToolContext, tool):
     url = str(base).rstrip("/") + rendered_path
     headers = {"Accept": "application/json"}
     headers.update(_resolve_auth_headers(context))
+    headers.update(static_headers)
     timeout_seconds = min(max(int(tool.timeout_seconds), 1), 300)
     timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10))
     try:
