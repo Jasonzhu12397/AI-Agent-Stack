@@ -167,6 +167,20 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_cluster_uid"] = identity.get("uid")
+    elif command_type == "cluster.capi.pivot.postflight":
+        payload["cluster_name"] = deployment.cluster_name
+        payload["namespace"] = _deployment_capi_namespace(deployment)
+        worker_config = deployment.spec.get("worker_provisioning")
+        host_namespace = (
+            worker_config.get("baremetal_host_namespace")
+            if isinstance(worker_config, dict)
+            else None
+        )
+        payload["baremetal_host_namespace"] = (
+            host_namespace
+            if isinstance(host_namespace, str) and host_namespace
+            else deployment.spec.get("baremetal_host_namespace", _deployment_capi_namespace(deployment))
+        )
     elif command_type == "cluster.capi.worker.preflight":
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
@@ -727,44 +741,125 @@ def handle_deployment_command_result(
             },
         }
         deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
+        deployment.status = ClusterDeployment.Status.PROVISIONING
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "phase": "pivot_metal3_ironic_postflight_pending",
+                "target_agent_owns_cluster": True,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["status", "plan_result", "updated_at"])
+        queue_deployment_command(
+            deployment,
+            "cluster.capi.pivot.postflight",
+            node=deployment.target_node,
+        )
+    elif command.command_type == "cluster.capi.pivot.postflight":
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        source_identity = source.get("source_cluster_identity", {})
+        observation = result.get("metal3_observation")
+        ironic = observation.get("ironic") if isinstance(observation, dict) else None
+        machine_count = observation.get("machine_count") if isinstance(observation, dict) else None
+        resolved_count = (
+            observation.get("resolved_machine_count")
+            if isinstance(observation, dict)
+            else None
+        )
+        ironic_applicable = (
+            ironic.get("applicable_node_count") if isinstance(ironic, dict) else None
+        )
+        ironic_verified = (
+            ironic.get("verified_node_count") if isinstance(ironic, dict) else None
+        )
+        valid_postflight = (
+            command.node.node_type == "target_cluster"
+            and command.node_id == deployment.target_node_id
+            and result.get("postflight_passed") is True
+            and result.get("cluster_name") == deployment.cluster_name
+            and result.get("namespace") == _deployment_capi_namespace(deployment)
+            and result.get("cluster_uid") == source_identity.get("uid")
+            and result.get("side_effects") is False
+            and result.get("complete_hardware_verification") is True
+            and result.get("verification_scope") == "capi_metal3_ironic"
+            and result.get("ironic_verification") == "verified"
+            and isinstance(observation, dict)
+            and observation.get("ready") is True
+            and isinstance(machine_count, int)
+            and not isinstance(machine_count, bool)
+            and machine_count > 0
+            and isinstance(resolved_count, int)
+            and not isinstance(resolved_count, bool)
+            and resolved_count == machine_count
+            and isinstance(ironic, dict)
+            and ironic.get("status") == "verified"
+            and isinstance(ironic_applicable, int)
+            and not isinstance(ironic_applicable, bool)
+            and ironic_applicable > 0
+            and isinstance(ironic_verified, int)
+            and not isinstance(ironic_verified, bool)
+            and ironic_verified == ironic_applicable
+        )
+        if not valid_postflight:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"}
+            deployment.finished_at = timezone.now()
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "capi_pivot_postflight": result,
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "phase": "pivot_postflight_failed",
+                    "target_agent_owns_cluster": True,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "finished_at",
+                    "plan_result",
+                    "started_at",
+                    "updated_at",
+                ],
+            )
+            return
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "capi_pivot_postflight": result,
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "phase": "pivot_postflight_verified",
+                "target_agent_owns_cluster": True,
+                "eph_reclaim_allowed": False,
+            },
+        }
         expected_workers = deployment.spec.get("worker_replicas")
         worker_config = deployment.spec.get("worker_provisioning")
         if (
             isinstance(expected_workers, int)
             and not isinstance(expected_workers, bool)
             and expected_workers > 0
+            and isinstance(worker_config, dict)
         ):
-            if not isinstance(worker_config, dict):
-                deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
-                deployment.error = {"code": "WORKER_PROVISIONING_SPEC_REQUIRED"}
-                deployment.plan_result = {
-                    **(deployment.plan_result or {}),
-                    "dual_agent": {
-                        **((deployment.plan_result or {}).get("dual_agent", {})),
-                        "phase": "worker_provisioning_spec_required",
-                        "target_agent_owns_cluster": True,
-                        "eph_reclaim_allowed": False,
-                    },
-                }
-                deployment.save(update_fields=["status", "error", "plan_result", "updated_at"])
-                return
             deployment.status = ClusterDeployment.Status.PROVISIONING
-            deployment.plan_result = {
-                **(deployment.plan_result or {}),
-                "dual_agent": {
-                    **((deployment.plan_result or {}).get("dual_agent", {})),
-                    "phase": "worker_preflight_pending",
-                    "target_agent_owns_cluster": True,
-                    "eph_reclaim_allowed": False,
-                },
-            }
+            deployment.plan_result["dual_agent"]["phase"] = "worker_preflight_pending"
             deployment.save(update_fields=["status", "plan_result", "updated_at"])
             queue_deployment_command(
                 deployment,
                 "cluster.capi.worker.preflight",
                 node=deployment.target_node,
             )
+        elif isinstance(expected_workers, int) and expected_workers > 0:
+            deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+            deployment.error = {"code": "WORKER_PROVISIONING_SPEC_REQUIRED"}
+            deployment.plan_result["dual_agent"]["phase"] = "worker_provisioning_spec_required"
+            deployment.save(update_fields=["status", "error", "plan_result", "updated_at"])
         else:
+            deployment.save(update_fields=["plan_result", "started_at", "updated_at"])
             queue_deployment_command(
                 deployment,
                 "cluster.postflight",
