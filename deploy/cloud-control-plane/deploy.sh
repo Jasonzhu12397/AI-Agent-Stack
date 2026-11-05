@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env.cloud"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.cloud.yml"
+WEB_PORT="${WEB_PORT:-$(sed -n 's/^WEB_PORT=//p' "$ENV_FILE" | tail -n 1)}"
 WEB_PORT="${WEB_PORT:-8080}"
 
 fail() {
