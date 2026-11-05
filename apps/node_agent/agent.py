@@ -1072,21 +1072,66 @@ def inspect_cluster_node_hardware_inventory(
     expected_node_uids = {
         item.get("metadata", {}).get("name"): item.get("metadata", {}).get("uid")
         for item in (cluster_nodes or [])
-        if item.get("metadata", {}).get("name") and item.get("metadata", {}).get("uid")
+        if isinstance(item, dict)
+        and isinstance(item.get("metadata"), dict)
+        and isinstance(item["metadata"].get("name"), str)
+        and item["metadata"].get("name")
+        and isinstance(item["metadata"].get("uid"), str)
+        and item["metadata"].get("uid")
     }
     reports = []
     stale_node_names = []
     for configmap in configmaps:
-        labels = configmap.get("metadata", {}).get("labels", {})
-        if labels.get("app.kubernetes.io/name") != "network-inventory-agent":
+        if not isinstance(configmap, dict):
+            continue
+        metadata = configmap.get("metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        labels = metadata.get("labels", {})
+        if (
+            not isinstance(labels, dict)
+            or labels.get("app.kubernetes.io/name") != "network-inventory-agent"
+        ):
             continue
         data = configmap.get("data", {})
         raw_report = data.get("inventory.json") if isinstance(data, dict) else None
         try:
             report = json.loads(raw_report) if isinstance(raw_report, str) else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             report = {}
         if not isinstance(report, dict):
+            continue
+        node_name = report.get("node_name")
+        node_uid = report.get("node_uid")
+        hardware = report.get("hardware")
+        if (
+            report.get("schema_version") != "v1"
+            or not isinstance(node_name, str)
+            or not re.fullmatch(
+                r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?",
+                node_name,
+            )
+            or not isinstance(node_uid, str)
+            or not node_uid
+            or metadata.get("name") != network_inventory_configmap_name(node_name)
+            or not isinstance(hardware, dict)
+            or hardware.get("status") != "observed"
+        ):
+            continue
+        interface_items = hardware.get("interfaces", [])
+        pci_items = hardware.get("pci_network_devices", [])
+        hugepage_items = hardware.get("hugepages", [])
+        numa_items = hardware.get("numa_nodes", [])
+        if (
+            not isinstance(interface_items, list)
+            or not isinstance(pci_items, list)
+            or not isinstance(hugepage_items, list)
+            or not isinstance(numa_items, list)
+            or any(not isinstance(item, dict) for item in interface_items[:256])
+            or any(not isinstance(item, dict) for item in pci_items[:4096])
+            or any(not isinstance(item, dict) for item in hugepage_items[:16])
+            or any(not isinstance(item, dict) for item in numa_items[:128])
+        ):
             continue
         collected_at = report.get("collected_at")
         try:
@@ -1097,33 +1142,26 @@ def inspect_cluster_node_hardware_inventory(
                 datetime.datetime.now(datetime.UTC) - collected_time
             ).total_seconds()
         except (TypeError, ValueError):
-            stale_node_names.append(report.get("node_name"))
+            stale_node_names.append(node_name)
             continue
         if report_age < -60 or report_age > 180:
-            stale_node_names.append(report.get("node_name"))
+            stale_node_names.append(node_name)
             continue
-        hardware = report.get("hardware", {})
         if (
-            report.get("schema_version") != "v1"
-            or not isinstance(report.get("node_name"), str)
-            or not isinstance(report.get("node_uid"), str)
-            or not isinstance(hardware, dict)
-            or hardware.get("status") != "observed"
-            or (
-                cluster_nodes is not None
-                and expected_node_uids.get(report.get("node_name")) != report.get("node_uid")
-            )
+            cluster_nodes is not None
+            and expected_node_uids.get(node_name) != node_uid
         ):
             continue
         reports.append({
-            "node_name": report["node_name"],
-            "node_uid": report["node_uid"],
-            "collected_at": report.get("collected_at"),
+            "node_name": node_name,
+            "node_uid": node_uid,
+            "collected_at": collected_at,
             "cpu_online": hardware.get("cpu_online"),
-            "interfaces": hardware.get("interfaces", [])[:256],
-            "pci_network_devices": hardware.get("pci_network_devices", [])[:4096],
-            "hugepages": hardware.get("hugepages", [])[:16],
-            "numa_nodes": hardware.get("numa_nodes", [])[:128],
+            "interfaces": interface_items[:256],
+            "pci_network_devices": pci_items[:4096],
+            "hugepages": hugepage_items[:16],
+            "numa_nodes": numa_items[:128],
+            "inventory_truncated": hardware.get("inventory_truncated") is True,
         })
     reports.sort(key=lambda item: item["node_name"])
     reported_names = {item["node_name"] for item in reports}
@@ -1134,11 +1172,15 @@ def inspect_cluster_node_hardware_inventory(
         "expected_node_count": len(expected_node_uids),
         "inventory_complete": bool(expected_node_uids) and expected_names.issubset(reported_names),
         "missing_node_names": sorted(expected_names - reported_names)[:1000],
-        "stale_node_names": sorted(set(name for name in stale_node_names if name))[:1000],
+        "stale_node_names": sorted(set(stale_node_names))[:1000],
         "nodes": reports[:1000],
         "truncated": len(reports) > 1000,
     }
 
+
+def network_inventory_configmap_name(node_name: str) -> str:
+    digest = hashlib.sha256(node_name.encode("utf-8")).hexdigest()[:20]
+    return "network-inventory-" + digest
 
 def inspect_network_environment(
     payload: dict[str, Any] | None = None,
