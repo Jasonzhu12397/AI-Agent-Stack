@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: inventory
-          image: REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION
+          image: REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION
           imagePullPolicy: IfNotPresent
           command:
             - python
