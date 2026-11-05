@@ -333,6 +333,14 @@ export type WorkflowRun = {
   finished_at: string | null;
 };
 
+export type WorkflowValidationResult = {
+  is_valid: boolean;
+  errors: string[];
+  execution_layers: string[][];
+  node_count: number;
+  edge_count: number;
+};
+
 export type WorkflowVersion = {
   id: string;
   workflow_id: string;
@@ -374,6 +382,13 @@ export function updateWorkflow(
   return request<WorkflowDraft>("/api/v1/workflows/" + workflowId + "/", {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function validateWorkflow(workflowId: string): Promise<WorkflowValidationResult> {
+  return request<WorkflowValidationResult>("/api/v1/workflows/" + workflowId + "/validate/", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
