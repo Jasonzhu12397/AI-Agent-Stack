@@ -525,7 +525,7 @@ def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates"],
+            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datas"],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -1047,6 +1047,7 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
             "metal3clusters",
             "metal3machines",
             "metal3machinetemplates", "metal3datatemplates",
+            "metal3datas",
         ],
         "metal3.io": ["baremetalhosts"],
     }
