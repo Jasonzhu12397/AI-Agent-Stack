@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from .capi_pivot import CapiPivotError, run_capi_pivot, run_capi_pivot_dry_run
-from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
 from .ironic_client import get_ironic_node, ironic_api_configured
+from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
 
 
 class NodeAgentError(Exception):
