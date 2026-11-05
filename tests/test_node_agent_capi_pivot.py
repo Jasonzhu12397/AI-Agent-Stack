@@ -55,7 +55,7 @@ def _runner_for(cluster_output: str = None, move_returncode: int = 0):
     return calls, runner
 
 
-def _pivot_runner_for(target_controller_ready=True, pivot_returncode=0):
+def _pivot_runner_for(\n    target_controller_ready=True,\n    pivot_returncode=0,\n    bmh_items=None,\n    source_ironic_replicas=0,\n    target_keepalived=True,\n):
     calls = []
     groups = [
         "cluster.x-k8s.io",
@@ -99,8 +99,42 @@ def _pivot_runner_for(target_controller_ready=True, pivot_returncode=0):
             else:
                 kubeconfig = ""
             if kubeconfig.endswith("source.kubeconfig"):
+                if "baremetalhosts.metal3.io" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps({"items": bmh_items or []}),
+                        "",
+                    )
+                if "metal3-ironic" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps({
+                            "spec": {"replicas": source_ironic_replicas},
+                            "status": {"availableReplicas": source_ironic_replicas},
+                        }),
+                        "",
+                    )
                 return subprocess.CompletedProcess(
                     command, 0, _cluster_list("target-cluster"), ""
+                )
+            if "metal3-ironic" in command:
+                containers = [{"name": "ironic"}]
+                if target_keepalived:
+                    containers.append({"name": "ironic-endpoint-keepalived"})
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({
+                        "metadata": {"generation": 1},
+                        "spec": {
+                            "replicas": 1,
+                            "template": {"spec": {"containers": containers}},
+                        },
+                        "status": {"availableReplicas": 1, "observedGeneration": 1},
+                    }),
+                    "",
                 )
             if "get" in command and "--raw" in command:
                 raw_path = command[command.index("--raw") + 1]
@@ -380,6 +414,12 @@ def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
     assert result["automatic_retry_allowed"] is False
     assert result["target_management_plane_verified"] is True
     assert result["target_controllers_ready"] is True
+    assert result["metal3_handoff"]["all_associated_bmhs_stable"] is True
+    assert result["metal3_handoff"]["source_ironic_handoff"] == "deployment_scaled_to_zero"
+    assert (
+        result["metal3_handoff"]["target_ironic_handoff"]
+        == "deployment_ready_with_keepalived"
+    )
 
 
 def test_pivot_execution_does_not_mutate_when_dry_run_fails(tmp_path):
@@ -435,3 +475,77 @@ def test_pivot_execution_stops_when_target_controller_is_not_ready(tmp_path):
         )
 
     assert len([item for item in calls if item[0][0].endswith("clusterctl")]) == 1
+
+
+def test_pivot_execution_rejects_bmh_in_transient_provisioning_state(tmp_path):
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": {},
+            "labels": {},
+        },
+        "spec": {"consumerRef": {"kind": "Metal3Machine", "name": "worker-01"}},
+        "status": {
+            "operationalStatus": "OK",
+            "provisioning": {"state": "provisioning"},
+        },
+    }
+    calls, runner = _pivot_runner_for(bmh_items=[bmh])
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_SOURCE_BMH_NOT_SAFE",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
+def test_pivot_execution_rejects_source_ironic_still_running(tmp_path):
+    calls, runner = _pivot_runner_for(source_ironic_replicas=1)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
+def test_pivot_execution_rejects_target_ironic_without_keepalived(tmp_path):
+    calls, runner = _pivot_runner_for(target_keepalived=False)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_TARGET_IRONIC_KEEPALIVED_MISSING",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
