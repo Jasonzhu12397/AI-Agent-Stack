@@ -16,12 +16,17 @@ def documents():
         "metadata": {"name": "worker-0", "uid": "machine-uid"},
         "spec": {
             "clusterName": "edge-lab",
+            "providerID": "metal3://metal3-system/bmh-0/worker-0",
             "infrastructureRef": {
                 "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                 "kind": "Metal3Machine",
                 "name": "worker-0",
                 "namespace": "default",
             },
+        },
+        "status": {
+            "phase": "Running",
+            "nodeRef": {"name": "node-0"},
         },
     }
     metal3_machine = {
@@ -30,6 +35,7 @@ def documents():
             "namespace": "default",
             "uid": "mm-uid",
         },
+        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
         "status": {"ready": True},
     }
     host = {
@@ -65,6 +71,11 @@ def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=No
         {"name": name, "preferredVersion": {"version": version}}
         for name, version in VERSIONS.items()
     ]
+    node = {
+        "metadata": {"name": "node-0", "uid": "node-uid"},
+        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
     documents_by_path = {
         "/apis": {"groups": groups},
         (
@@ -83,6 +94,8 @@ def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=No
             return machine if isinstance(machine, list) else [machine]
         if path.endswith("/baremetalhosts"):
             return hosts
+        if path == "/api/v1/nodes":
+            return [node]
         raise AssertionError(path)
 
     payload = {
@@ -264,3 +277,38 @@ def test_malformed_ironic_adapter_identity_fails_closed():
     assert result["ready"] is False
     assert result["ironic"]["status"] == "unhealthy"
     assert "ironic_node_not_active_or_unhealthy" in result["blockers"]
+
+
+def test_machine_metal3machine_and_node_provider_ids_must_match():
+    machine, metal3_machine, _ = documents()
+    machine["spec"]["providerID"] = "metal3://other/worker-0/worker-0"
+    result = run_observer(machine=machine, metal3_machine=metal3_machine)
+    assert result["ready"] is False
+    assert "capi_metal3_provider_id_mismatch" in result["blockers"]
+
+
+def test_workload_node_provider_id_must_match_infrastructure_provider_id():
+    result = run_observer()
+    original = result["machines"][0]["node_provider_id"]
+    assert original == "metal3://metal3-system/bmh-0/worker-0"
+
+
+def test_metal3_machine_must_be_ready():
+    _, metal3_machine, _ = documents()
+    metal3_machine["status"]["ready"] = False
+    result = run_observer(metal3_machine=metal3_machine)
+    assert result["ready"] is False
+    assert "metal3_machine_not_ready" in result["blockers"]
+
+
+def test_capi_machine_must_be_running_and_reference_ready_node():
+    machine, _, _ = documents()
+    machine["status"]["phase"] = "Provisioning"
+    result = run_observer(machine=machine)
+    assert result["ready"] is False
+    assert "capi_machine_not_running" in result["blockers"]
+
+
+def test_workload_node_must_be_ready():
+    result = run_observer()
+    assert result["machines"][0]["node_ready"] is True
