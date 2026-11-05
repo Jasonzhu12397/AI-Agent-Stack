@@ -13,6 +13,7 @@ fail() {
 }
 
 [ -f "$ENV_FILE" ] || fail "CLOUD_ENV_FILE_NOT_FOUND"
+chmod 600 "$ENV_FILE"
 command -v docker >/dev/null 2>&1 || fail "DOCKER_NOT_INSTALLED"
 docker compose version >/dev/null 2>&1 || fail "DOCKER_COMPOSE_V2_REQUIRED"
 command -v python3 >/dev/null 2>&1 || fail "PYTHON3_NOT_INSTALLED"
@@ -52,9 +53,14 @@ if secret.startswith("replace-") or secret == "local-only-change-before-producti
 for key in ("DATABASE_URL", "REDIS_URL", "QDRANT_URL"):
     if "example.net" in values[key] or "replace-me" in values[key]:
         raise SystemExit("CLOUD_ENDPOINT_PLACEHOLDER:" + key)
+if "example.com" in values["ALLOWED_HOSTS"]:
+    raise SystemExit("ALLOWED_HOSTS_PLACEHOLDER")
 for key in ("CSRF_TRUSTED_ORIGINS", "CORS_ALLOWED_ORIGINS"):
-    if not all(origin.startswith("https://") for origin in values[key].split(",")):
+    origins = [origin.strip() for origin in values[key].split(",")]
+    if not all(origin.startswith("https://") for origin in origins):
         raise SystemExit("HTTPS_ORIGINS_REQUIRED:" + key)
+    if any("example.com" in origin for origin in origins):
+        raise SystemExit("HTTPS_ORIGIN_PLACEHOLDER:" + key)
 PY
 
 cd "$ROOT_DIR"
