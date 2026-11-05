@@ -90,7 +90,7 @@ function addWorkflowNode(type: InsertableNodeType): void {
     return;
   }
   const previousEdge = incoming[0];
-  const nodeId = type + "_" + crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+  const nodeId = type + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const config: Record<string, unknown> = type === "llm"
     ? { model_config_id: "", prompt_template: "{{input}}" }
     : type === "knowledge_search"
@@ -98,7 +98,7 @@ function addWorkflowNode(type: InsertableNodeType): void {
       : { tool_id: "", arguments: {} };
   const node = { id: nodeId, type, config };
   const edgeIndex = edges.indexOf(previousEdge);
-  edges.splice(edgeIndex, 1, { source: previousEdge.source, target: nodeId });
+  edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
   edges.push({ source: nodeId, target: endNode.id });
   nodes.splice(nodes.indexOf(endNode), 0, node);
   definition.nodes = nodes;
