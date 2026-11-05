@@ -28,6 +28,10 @@ from .ironic_client import (
     ironic_api_configured,
 )
 from .metal3_observer import Metal3ObservationError, observe_cluster_metal3
+from .provider_compatibility import (
+    ProviderCompatibilityError,
+    evaluate_provider_compatibility,
+)
 
 
 class NodeAgentError(Exception):
@@ -2043,6 +2047,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "capi.cluster.observe",
             "metal3.host.inspect",
             "cluster.provider.discover",
+            "cluster.provider.compatibility",
             "cluster.manifest.validate",
             "cluster.capi.pivot.source.preflight",
             "cluster.capi.pivot.dry-run",
@@ -2073,6 +2078,33 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "platform": platform.platform(),
             "agent_status": "ready",
         }
+    if command_type == "cluster.provider.compatibility":
+        if set(payload) != {"provider_versions"}:
+            raise NodeAgentError("PROVIDER_COMPATIBILITY_PAYLOAD_INVALID")
+        kubernetes_version = kubernetes_api_get("/version").get("gitVersion")
+        discovery = kubernetes_api_get("/apis")
+        capi_group = next(
+            (
+                item for item in discovery.get("groups", [])
+                if isinstance(item, dict) and item.get("name") == "cluster.x-k8s.io"
+            ),
+            None,
+        )
+        capi_api_version = (
+            capi_group.get("preferredVersion", {}).get("version")
+            if isinstance(capi_group, dict)
+            else None
+        )
+        try:
+            return evaluate_provider_compatibility(
+                {
+                    "provider_versions": payload["provider_versions"],
+                    "kubernetes_version": kubernetes_version,
+                    "capi_api_version": capi_api_version,
+                }
+            )
+        except ProviderCompatibilityError as exc:
+            raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.health":
         version = kubernetes_api_get("/version")
         return {"api_reachable": True, "kubernetes_version": version.get("gitVersion")}
