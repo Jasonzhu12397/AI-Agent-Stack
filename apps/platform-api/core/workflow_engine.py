@@ -152,7 +152,11 @@ def validate_workflow_definition(definition):
                     f"Condition node {node_id} input_key must be a non-empty string."
                 )
         if node_type in {"llm", "condition", "knowledge_search", "tool", "end"}:
-            source_node = config.get("input_from") or config.get("source_node")
+            source_node = (
+                config.get("input_from")
+                or config.get("source_node")
+                or config.get("arguments_from")
+            )
             if source_node and (
                 not isinstance(source_node, str)
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", source_node)
@@ -203,6 +207,7 @@ def validate_workflow_definition(definition):
         source_node = (
             node["config"].get("input_from")
             or node["config"].get("source_node")
+            or node["config"].get("arguments_from")
         )
         if source_node and source_node not in node_map:
             raise WorkflowValidationError(
@@ -438,7 +443,7 @@ def _execute_node(node, state, input_data, tenant, project, task):
                 project=project,
                 outcome=AuditEvent.Outcome.FAILURE,
                 metadata={
-                    "workflow_run_id": str(task.id),
+                    "workflow_task_id": str(task.id),
                     "plugin_key": tool.plugin.plugin_key,
                     "tool_name": tool.name,
                 },
