@@ -1,6 +1,5 @@
 import pytest
-
-from apps.node_agent.metal3_observer import (
+from node_agent.metal3_observer import (
     Metal3ObservationError,
     observe_cluster_metal3,
 )
