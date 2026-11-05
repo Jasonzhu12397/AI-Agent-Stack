@@ -1040,6 +1040,7 @@ def verify_baremetal_host_network_macs(
     machine_namespace: str,
     baremetal_host_namespace: str,
     metal3_api_version: str,
+    infrastructure_api_version: str,
 ) -> dict[str, Any]:
     matches = []
     for host in baremetal_hosts:
@@ -1047,6 +1048,7 @@ def verify_baremetal_host_network_macs(
         consumer = spec.get("consumerRef", {})
         if (
             isinstance(consumer, dict)
+            and consumer.get("apiVersion") == infrastructure_api_version
             and consumer.get("kind") == "Metal3Machine"
             and consumer.get("name") == metal3_machine_name
             and consumer.get("namespace", machine_namespace) == machine_namespace
@@ -1326,6 +1328,7 @@ def inspect_rendered_worker_network_data(
         namespace,
         baremetal_host_namespace,
         baremetal_host_api_version,
+        infra_api_version,
     )
     if hardware_verification.get("ready") is not True:
         return {
