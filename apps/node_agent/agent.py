@@ -1032,12 +1032,96 @@ def validate_rendered_network_data(profile: dict[str, Any], network_data: Any) -
     }
 
 
+def verify_baremetal_host_network_macs(
+    profile: dict[str, Any],
+    network_data: dict[str, Any],
+    baremetal_hosts: list[dict[str, Any]],
+    metal3_machine_name: str,
+    machine_namespace: str,
+    baremetal_host_namespace: str,
+) -> dict[str, Any]:
+    matches = []
+    for host in baremetal_hosts:
+        spec = host.get("spec", {})
+        consumer = spec.get("consumerRef", {})
+        if (
+            isinstance(consumer, dict)
+            and consumer.get("kind") == "Metal3Machine"
+            and consumer.get("name") == metal3_machine_name
+            and consumer.get("namespace", machine_namespace) == machine_namespace
+        ):
+            matches.append(host)
+    if not matches:
+        return {"ready": False, "reason": "baremetal_host_consumer_reference_pending"}
+    if len(matches) != 1:
+        raise NodeAgentError("WORKER_BAREMETAL_HOST_CONSUMER_REFERENCE_AMBIGUOUS")
+    host = matches[0]
+    metadata = host.get("metadata", {})
+    host_name = metadata.get("name")
+    host_uid = metadata.get("uid")
+    if (
+        not isinstance(host_name, str)
+        or not host_name
+        or not isinstance(host_uid, str)
+        or not host_uid
+        or metadata.get("namespace") != baremetal_host_namespace
+    ):
+        raise NodeAgentError("WORKER_BAREMETAL_HOST_IDENTITY_INVALID")
+    hardware = host.get("status", {}).get("hardware", {})
+    nics = hardware.get("nics") if isinstance(hardware, dict) else None
+    if not isinstance(nics, list) or not nics:
+        return {
+            "ready": False,
+            "reason": "baremetal_host_hardware_inventory_pending",
+            "baremetal_host_name": host_name,
+        }
+    required = {
+        profile["control_plane"]["interface"]: profile["control_plane"]["host_interface"]
+    }
+    required.update(profile["data_plane"]["host_interfaces"])
+    links = network_data.get("links", [])
+    verified = []
+    for link_name, host_interface in required.items():
+        link = next(
+            (item for item in links if isinstance(item, dict) and item.get("id") == link_name),
+            None,
+        )
+        if not isinstance(link, dict):
+            raise NodeAgentError("WORKER_RENDERED_NETWORK_INTERFACE_MISSING")
+        rendered_mac = link.get("ethernet_mac_address")
+        nic_matches = [
+            nic for nic in nics
+            if isinstance(nic, dict) and nic.get("name") == host_interface
+        ]
+        if not nic_matches:
+            raise NodeAgentError("WORKER_BAREMETAL_HOST_INTERFACE_MAPPING_MISMATCH")
+        nic_macs = {
+            nic.get("mac", "").lower()
+            for nic in nic_matches
+            if isinstance(nic.get("mac"), str)
+            and re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", nic.get("mac"))
+        }
+        if len(nic_macs) != 1:
+            raise NodeAgentError("WORKER_BAREMETAL_HOST_INTERFACE_MAC_INVALID_OR_AMBIGUOUS")
+        if not isinstance(rendered_mac, str) or rendered_mac.lower() not in nic_macs:
+            raise NodeAgentError("WORKER_RENDERED_NETWORK_MAC_MISMATCH")
+        verified.append(link_name)
+    return {
+        "ready": True,
+        "baremetal_host_name": host_name,
+        "baremetal_host_uid": host_uid,
+        "verified_interface_names": verified,
+    }
+
+
 def inspect_rendered_worker_network_data(
     machine: dict[str, Any],
     namespace: str,
     data_template_name: str,
     infra_api_version: str,
     profile: dict[str, Any],
+    baremetal_host_namespace: str,
+    baremetal_host_api_version: str,
 ) -> dict[str, Any]:
     machine_metadata = machine.get("metadata", {})
     machine_name = machine_metadata.get("name")
@@ -1182,6 +1266,25 @@ def inspect_rendered_worker_network_data(
     except (ValueError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_INVALID") from exc
     verification = validate_rendered_network_data(profile, parsed_network_data)
+    baremetal_hosts = list_all_kubernetes_items(
+        f"/apis/metal3.io/{baremetal_host_api_version}"
+        f"/namespaces/{baremetal_host_namespace}/baremetalhosts",
+        max_items=10000,
+    )
+    hardware_verification = verify_baremetal_host_network_macs(
+        profile,
+        parsed_network_data,
+        baremetal_hosts,
+        metal3_machine_name,
+        namespace,
+        baremetal_host_namespace,
+    )
+    if hardware_verification.get("ready") is not True:
+        return {
+            "ready": False,
+            "machine_name": machine_name,
+            "reason": hardware_verification.get("reason"),
+        }
     return {
         "ready": True,
         "machine_name": machine_name,
@@ -1191,6 +1294,9 @@ def inspect_rendered_worker_network_data(
         "rendered_data_uid": rendered_metadata["uid"],
         "network_data_secret_name": secret_metadata["name"],
         "network_data_secret_uid": secret_metadata["uid"],
+        "baremetal_host_name": hardware_verification["baremetal_host_name"],
+        "baremetal_host_uid": hardware_verification["baremetal_host_uid"],
+        "hardware_verified_interface_names": hardware_verification["verified_interface_names"],
         "interface_names": verification["interface_names"],
         "profile_hash": verification["profile_hash"],
     }
@@ -3441,6 +3547,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                     data_template_name,
                     expected_infra_api_version,
                     network_profile,
+                    host_namespace,
+                    versions["metal3.io"],
                 )
                 if network_data_result.get("ready") is True:
                     verified_worker_network_data.append(network_data_result)
