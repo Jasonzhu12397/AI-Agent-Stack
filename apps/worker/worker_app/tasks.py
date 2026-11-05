@@ -267,6 +267,32 @@ def _record_connector_tool_event(task, tool, connection, outcome):
 
 
 MAX_AGENT_TOOL_CALLS = 32
+MAX_AGENT_TOOL_RESULT_BYTES = 32768
+
+
+def _serialize_agent_tool_result(result):
+    try:
+        serialized = json.dumps(
+            result,
+            ensure_ascii=False,
+            allow_nan=False,
+            default=str,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return json.dumps(
+            {"ok": False, "error": "Tool returned a result that could not be serialized."}
+        )
+    if len(serialized.encode("utf-8")) > MAX_AGENT_TOOL_RESULT_BYTES:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "Tool result exceeded the 32 KiB context limit and was omitted.",
+            }
+        )
+    return serialized
+
+
 
 
 def _load_agent_tools(task, config):
@@ -525,7 +551,7 @@ def execute_agent_run(task):
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                    "content": _serialize_agent_tool_result(result),
                 }
             )
     raise PermanentTaskError("Agent reached max_iterations before producing a final answer")
