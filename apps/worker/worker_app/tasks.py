@@ -358,6 +358,15 @@ def _execute_agent_tool(task, tool, arguments):
     )
     return result
 
+def _renew_agent_lease(task):
+    worker_id = getattr(task, "lease_owner", None)
+    lease_token = getattr(task, "lease_token", None)
+    if not worker_id or not lease_token:
+        raise PermanentTaskError("Agent task lease identity is missing")
+    if not renew_lease(task.id, lease_token, worker_id):
+        raise PermanentTaskError("Agent task lease was lost or cancellation was requested")
+
+
 def execute_agent_run(task):
     try:
         agent_run = AgentRun.objects.select_related(
@@ -458,6 +467,7 @@ def execute_agent_run(task):
     ):
         raise PermanentTaskError("Published agent max_iterations is invalid")
     for _ in range(max_iterations):
+        _renew_agent_lease(task)
         try:
             response = gateway.complete(
                 model_config,
@@ -471,6 +481,7 @@ def execute_agent_run(task):
             if exc.retryable:
                 raise RuntimeError(exc.code) from exc
             raise PermanentTaskError(exc.code) from exc
+        _renew_agent_lease(task)
         input_tokens += response.input_tokens
         output_tokens += response.output_tokens
         latency_ms += response.latency_ms
@@ -505,6 +516,7 @@ def execute_agent_run(task):
         )
         for call in calls:
             tool = tools_by_name[call["name"]]
+            _renew_agent_lease(task)
             try:
                 result = _execute_agent_tool(task, tool, call["arguments"])
             except ToolExecutionError as exc:
