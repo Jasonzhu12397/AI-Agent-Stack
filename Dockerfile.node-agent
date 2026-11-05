@@ -21,7 +21,7 @@ RUN test -n "$CLUSTERCTL_VERSION" && test -n "$KUBECTL_VERSION" && \
     install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
 
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HOME=/tmp
 WORKDIR /workspace
 COPY pyproject.toml README.md ./
 COPY apps ./apps
