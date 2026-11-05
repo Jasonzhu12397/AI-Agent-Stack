@@ -558,7 +558,12 @@ def test_pivot_execution_rejects_target_ironic_without_keepalived(tmp_path):
     )
 
 
-def _postflight_runner(annotation_present=False, include_bmh=True):
+def _postflight_runner(
+    annotation_present=False,
+    include_bmh=True,
+    controller_ready=True,
+    consumer_ref_valid=True,
+):
     calls = []
 
     def runner(command, **kwargs):
@@ -566,17 +571,37 @@ def _postflight_runner(annotation_present=False, include_bmh=True):
         resource = command[command.index("get") + 1]
         if resource == "clusters.cluster.x-k8s.io":
             document = {"metadata": {"name": "target-cluster", "uid": "cluster-uid"}}
+        elif resource == "deployment":
+            name = command[command.index("deployment") + 1]
+            ready = controller_ready or name != "capm3-controller-manager"
+            document = {
+                "metadata": {"generation": 1},
+                "spec": {"replicas": 1},
+                "status": {
+                    "availableReplicas": 1 if ready else 0,
+                    "observedGeneration": 1,
+                },
+            }
         elif resource == "machines.cluster.x-k8s.io":
             document = {"items": [{
                 "metadata": {
                     "name": "worker-01",
+                    "uid": "machine-uid",
                     "labels": {"cluster.x-k8s.io/cluster-name": "target-cluster"},
-                }
+                },
+                "spec": {
+                    "infrastructureRef": {
+                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                        "kind": "Metal3Machine",
+                        "name": "worker-01",
+                    }
+                },
             }]}
         elif resource == "metal3machines.infrastructure.cluster.x-k8s.io":
             document = {"items": [{
                 "metadata": {
                     "name": "worker-01",
+                    "uid": "metal3machine-uid",
                     "labels": {"cluster.x-k8s.io/cluster-name": "target-cluster"},
                     "annotations": {"metal3.io/BareMetalHost": "worker-01"},
                 }
@@ -594,6 +619,17 @@ def _postflight_runner(annotation_present=False, include_bmh=True):
                         "name": "worker-01",
                         "namespace": "metal3",
                         "annotations": annotations,
+                    },
+                    "spec": {
+                        "consumerRef": {
+                            "kind": "Metal3Machine",
+                            "name": "worker-01",
+                            "uid": (
+                                "metal3machine-uid"
+                                if consumer_ref_valid
+                                else "stale-metal3machine-uid"
+                            ),
+                        }
                     },
                     "status": {
                         "provisioning": {"state": "provisioned"},
@@ -626,7 +662,7 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
     assert result["verified_bmh_count"] == 1
     assert result["bmh_status_annotations_consumed"] is True
     assert result["verified_bmhs"][0]["baremetalhost"] == "worker-01"
-    assert len(calls) == 4
+    assert len(calls) == 8
     bmh_command = next(
         command for command in calls if "baremetalhosts.metal3.io" in command
     )
@@ -654,6 +690,35 @@ def test_pivot_postflight_rejects_missing_bmh_reference(tmp_path):
     with pytest.raises(
         CapiPivotError,
         match="CAPI_PIVOT_POSTFLIGHT_BMH_NOT_FOUND",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+def test_pivot_postflight_rejects_unready_provider_controller(tmp_path):
+    _, runner = _postflight_runner(controller_ready=False)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_CONTROLLER_NOT_READY",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
+def test_pivot_postflight_rejects_stale_bmh_consumer_identity(tmp_path):
+    _, runner = _postflight_runner(consumer_ref_valid=False)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_BMH_CONSUMER_REFERENCE_MISMATCH",
     ):
         run_capi_pivot_postflight(
             {"cluster_name": "target-cluster", "namespace": "metal3"},
