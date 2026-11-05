@@ -46,7 +46,7 @@ def _release_minor(value: Any, component: str, allow_build_suffix: bool = False)
         raise ProviderCompatibilityError("INVALID_" + component.upper() + "_VERSION")
     suffix = r"(?:[-+][0-9A-Za-z.-]+)?" if allow_build_suffix else ""
     match = re.fullmatch(
-        r"v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:\\.[0-9]+)?" + suffix,
+        r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.[0-9]+)?" + suffix,
         value,
     )
     if match is None:
