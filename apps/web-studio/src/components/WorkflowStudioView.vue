@@ -57,6 +57,12 @@ function nodeType(node: Record<string, unknown>): string {
   return String(node.type ?? "unknown").toUpperCase();
 }
 
+function nodeDetail(node: Record<string, unknown>): string {
+  if (!node.config || typeof node.config !== "object" || Array.isArray(node.config)) return "";
+  const config = node.config as Record<string, unknown>;
+  return String(config.tool_id ?? config.model_config_id ?? "");
+}
+
 function edgeLabel(edge: Record<string, unknown>): string {
   return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
 }
@@ -318,7 +324,7 @@ onUnmounted(() => {
               <strong>{{ nodeLabel(node) }}</strong>
               <code>{{ String(node.id ?? "no-id") }}</code>
               <small v-if="node.config && typeof node.config === 'object'">
-                {{ String((node.config as Record<string, unknown>).tool_id ?? (node.config as Record<string, unknown>).model_config_id ?? "") }}
+                {{ nodeDetail(node) }}
               </small>
             </article>
             <span v-if="index < previewGraph.nodes.length - 1" class="workflow-node-arrow">→</span>
