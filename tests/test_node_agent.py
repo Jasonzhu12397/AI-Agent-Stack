@@ -3916,3 +3916,70 @@ def test_target_agent_rejects_misbound_or_malformed_network_inventory(
     assert result["node_count"] == 0
     assert result["inventory_complete"] is False
     assert result["missing_node_names"] == ["worker-01"]
+
+
+def test_capi_pivot_postflight_combines_capi_metal3_and_ironic_evidence(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "run_capi_pivot_postflight",
+        lambda payload: {
+            "postflight_passed": True,
+            "side_effects": False,
+        },
+    )
+    monkeypatch.setattr(agent, "ironic_api_configured", lambda: False)
+    monkeypatch.setattr(
+        agent,
+        "observe_cluster_metal3",
+        lambda *args, **kwargs: {
+            "ready": True,
+            "machine_count": 1,
+            "resolved_machine_count": 1,
+            "ironic": {"status": "not_configured"},
+            "side_effects": False,
+        },
+    )
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.capi.pivot.postflight",
+            "payload": {"cluster_name": "edge-lab", "namespace": "default"},
+        },
+        "target_cluster",
+    )
+
+    assert result["postflight_passed"] is True
+    assert result["verification_scope"] == "capi_metal3_without_direct_ironic_api"
+    assert result["complete_hardware_verification"] is False
+    assert result["ironic_verification"] == "not_configured"
+    assert result["side_effects"] is False
+
+
+def test_capi_pivot_postflight_fails_when_metal3_chain_is_not_resolved(monkeypatch):
+    monkeypatch.setattr(
+        agent,
+        "run_capi_pivot_postflight",
+        lambda payload: {"postflight_passed": True, "side_effects": False},
+    )
+    monkeypatch.setattr(agent, "ironic_api_configured", lambda: False)
+    monkeypatch.setattr(
+        agent,
+        "observe_cluster_metal3",
+        lambda *args, **kwargs: {
+            "ready": False,
+            "blockers": ["baremetal_host_consumer_not_found"],
+            "ironic": {"status": "not_configured"},
+            "side_effects": False,
+        },
+    )
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="CAPI_PIVOT_POSTFLIGHT_METAL3_OBSERVATION_FAILED",
+    ):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.postflight",
+                "payload": {"cluster_name": "edge-lab", "namespace": "default"},
+            },
+            "target_cluster",
+        )
