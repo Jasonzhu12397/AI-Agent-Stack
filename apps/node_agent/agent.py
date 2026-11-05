@@ -1,4 +1,5 @@
 import argparse
+import base64
 import datetime
 import hashlib
 import ipaddress
@@ -17,6 +18,8 @@ import urllib.request
 from itertools import count
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .capi_pivot import CapiPivotError, run_capi_pivot, run_capi_pivot_dry_run
 from .ironic_client import (
@@ -878,6 +881,14 @@ def validate_network_profile(profile: Any) -> dict[str, Any]:
         "meta_cni": "multus",
         "attachment_count": len(attachments),
         "dpdk_requested": dpdk_requested,
+        "control_plane": {
+            "interface": interface,
+            "mtu": control_mtu,
+        },
+        "data_plane": {
+            "interfaces": list(interfaces),
+            "mtu": data_mtu,
+        },
         "profile_hash": canonical_hash(profile),
     }
 
@@ -891,7 +902,11 @@ def validate_metal3_data_template(
     if not isinstance(data_template, dict):
         raise NodeAgentError("METAL3_DATA_TEMPLATE_MISSING")
     metadata = data_template.get("metadata", {})
+    metadata = metadata if isinstance(metadata, dict) else {}
     annotations = metadata.get("annotations", {})
+    expected_profile_hash = profile.get("profile_hash")
+    spec = data_template.get("spec", {})
+    spec = spec if isinstance(spec, dict) else {}
     if (
         data_template.get("kind") != "Metal3DataTemplate"
         or data_template.get("apiVersion") != expected_api_version
@@ -899,17 +914,16 @@ def validate_metal3_data_template(
         or not isinstance(metadata.get("uid"), str)
         or not metadata.get("uid")
         or not isinstance(annotations, dict)
+        or not isinstance(expected_profile_hash, str)
         or annotations.get("ai-agent-stack.io/network-profile-hash")
-        != canonical_hash(profile)
+        != expected_profile_hash
     ):
         raise NodeAgentError("METAL3_DATA_TEMPLATE_IDENTITY_OR_PROFILE_MISMATCH")
-    spec = data_template.get("spec", {})
-    template = spec.get("template", {}) if isinstance(spec, dict) else {}
-    network_data = (
-        template.get("networkData", {}) if isinstance(template, dict) else {}
-    )
-    links = network_data.get("links", {}) if isinstance(network_data, dict) else {}
-    ethernets = links.get("ethernets", []) if isinstance(links, dict) else []
+    network_data = spec.get("networkData", {})
+    network_data = network_data if isinstance(network_data, dict) else {}
+    links = network_data.get("links", {})
+    links = links if isinstance(links, dict) else {}
+    ethernets = links.get("ethernets", [])
     if not isinstance(ethernets, list):
         raise NodeAgentError("METAL3_DATA_TEMPLATE_NETWORK_LINKS_INVALID")
     required = [
@@ -946,7 +960,188 @@ def validate_metal3_data_template(
         "name": metadata.get("name"),
         "namespace": expected_namespace,
         "interface_names": verified,
-        "profile_hash": canonical_hash(profile),
+        "profile_hash": expected_profile_hash,
+    }
+
+
+def validate_rendered_network_data(profile: dict[str, Any], network_data: Any) -> dict[str, Any]:
+    if not isinstance(network_data, dict):
+        raise NodeAgentError("METAL3_RENDERED_NETWORK_DATA_INVALID")
+    links = network_data.get("links")
+    if not isinstance(links, list):
+        raise NodeAgentError("METAL3_RENDERED_NETWORK_LINKS_INVALID")
+    required = [
+        (profile["control_plane"]["interface"], profile["control_plane"]["mtu"])
+    ]
+    required.extend(
+        (name, profile["data_plane"]["mtu"])
+        for name in profile["data_plane"]["interfaces"]
+    )
+    verified = []
+    for interface_name, expected_mtu in required:
+        matches = [
+            item for item in links
+            if isinstance(item, dict) and item.get("id") == interface_name
+        ]
+        if len(matches) != 1:
+            raise NodeAgentError("METAL3_RENDERED_NETWORK_INTERFACE_MISSING_OR_DUPLICATE")
+        item = matches[0]
+        mac_address = item.get("ethernet_mac_address")
+        if (
+            item.get("type") != "phy"
+            or item.get("mtu") != expected_mtu
+            or not isinstance(mac_address, str)
+            or not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac_address)
+        ):
+            raise NodeAgentError("METAL3_RENDERED_NETWORK_INTERFACE_CONFIGURATION_MISMATCH")
+        verified.append(interface_name)
+    return {
+        "verified": True,
+        "interface_names": verified,
+        "profile_hash": profile["profile_hash"],
+    }
+
+
+def inspect_rendered_worker_network_data(
+    machine: dict[str, Any],
+    namespace: str,
+    data_template_name: str,
+    infra_api_version: str,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    machine_metadata = machine.get("metadata", {})
+    machine_name = machine_metadata.get("name")
+    machine_uid = machine_metadata.get("uid")
+    infrastructure_ref = machine.get("spec", {}).get("infrastructureRef", {})
+    if not isinstance(infrastructure_ref, dict) or not infrastructure_ref:
+        return {"ready": False, "machine_name": machine_name, "reason": "infrastructure_reference_pending"}
+    if (
+        infrastructure_ref.get("kind") != "Metal3Machine"
+        or infrastructure_ref.get("apiVersion") != infra_api_version
+        or not isinstance(infrastructure_ref.get("name"), str)
+        or not infrastructure_ref.get("name")
+    ):
+        raise NodeAgentError("WORKER_METAL3_MACHINE_REFERENCE_INVALID")
+    metal3_machine_name = infrastructure_ref["name"]
+    metal3_machine_path = (
+        f"/apis/infrastructure.cluster.x-k8s.io/{infra_api_version.split('/', 1)[1]}"
+        f"/namespaces/{namespace}/metal3machines/{metal3_machine_name}"
+    )
+    try:
+        metal3_machine = kubernetes_api_get(metal3_machine_path)
+    except NodeAgentError as exc:
+        if str(exc) == "KUBERNETES_API_HTTP_404":
+            return {"ready": False, "machine_name": machine_name, "reason": "metal3_machine_pending"}
+        raise
+    metal3_metadata = metal3_machine.get("metadata", {})
+    owner_references = metal3_metadata.get("ownerReferences", [])
+    if (
+        metal3_machine.get("kind") not in {None, "Metal3Machine"}
+        or metal3_metadata.get("name") != metal3_machine_name
+        or metal3_metadata.get("namespace") != namespace
+        or not isinstance(metal3_metadata.get("uid"), str)
+        or not metal3_metadata.get("uid")
+        or not isinstance(machine_uid, str)
+        or not any(
+            isinstance(owner, dict)
+            and owner.get("kind") == "Machine"
+            and owner.get("name") == machine_name
+            and owner.get("uid") == machine_uid
+            for owner in owner_references
+        )
+    ):
+        raise NodeAgentError("WORKER_METAL3_MACHINE_OWNERSHIP_MISMATCH")
+    machine_spec = metal3_machine.get("spec", {})
+    template_ref = machine_spec.get("dataTemplate", {})
+    if (
+        not isinstance(template_ref, dict)
+        or template_ref.get("name") != data_template_name
+        or template_ref.get("namespace", namespace) != namespace
+    ):
+        raise NodeAgentError("WORKER_METAL3_DATA_TEMPLATE_REFERENCE_MISMATCH")
+    status = metal3_machine.get("status", {})
+    rendered_ref = status.get("renderedData", {})
+    network_secret_ref = status.get("networkData", {})
+    if not isinstance(rendered_ref, dict) or not rendered_ref.get("name"):
+        return {"ready": False, "machine_name": machine_name, "reason": "rendered_data_pending"}
+    rendered_namespace = rendered_ref.get("namespace", namespace)
+    if rendered_namespace != namespace:
+        raise NodeAgentError("WORKER_METAL3_RENDERED_DATA_NAMESPACE_MISMATCH")
+    if not isinstance(network_secret_ref, dict) or not network_secret_ref.get("name"):
+        return {"ready": False, "machine_name": machine_name, "reason": "network_data_secret_pending"}
+    secret_namespace = network_secret_ref.get("namespace", namespace)
+    if secret_namespace != namespace:
+        raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_NAMESPACE_MISMATCH")
+    api_version = infra_api_version.split("/", 1)[1]
+    rendered_path = (
+        f"/apis/infrastructure.cluster.x-k8s.io/{api_version}/namespaces/"
+        f"{namespace}/metal3datas/{rendered_ref['name']}"
+    )
+    try:
+        rendered_data = kubernetes_api_get(rendered_path)
+    except NodeAgentError as exc:
+        if str(exc) == "KUBERNETES_API_HTTP_404":
+            return {"ready": False, "machine_name": machine_name, "reason": "rendered_data_pending"}
+        raise
+    rendered_metadata = rendered_data.get("metadata", {})
+    rendered_spec = rendered_data.get("spec", {})
+    rendered_status = rendered_data.get("status", {})
+    rendered_secret_ref = rendered_spec.get("networkData", {})
+    if (
+        rendered_data.get("kind") not in {None, "Metal3Data"}
+        or rendered_metadata.get("name") != rendered_ref.get("name")
+        or rendered_metadata.get("namespace") != namespace
+        or not isinstance(rendered_metadata.get("uid"), str)
+        or not rendered_metadata.get("uid")
+        or rendered_spec.get("template", {}).get("name") != data_template_name
+        or rendered_spec.get("template", {}).get("namespace", namespace) != namespace
+        or not isinstance(rendered_secret_ref, dict)
+        or rendered_secret_ref.get("name") != network_secret_ref.get("name")
+        or rendered_secret_ref.get("namespace", namespace) != namespace
+    ):
+        raise NodeAgentError("WORKER_METAL3_RENDERED_DATA_IDENTITY_MISMATCH")
+    if rendered_status.get("error") is True or rendered_status.get("errorMessage"):
+        raise NodeAgentError("WORKER_METAL3_RENDERED_DATA_ERROR")
+    if rendered_status.get("ready") is not True:
+        return {"ready": False, "machine_name": machine_name, "reason": "rendered_data_not_ready"}
+    secret_path = (
+        f"/api/v1/namespaces/{namespace}/secrets/{network_secret_ref['name']}"
+    )
+    try:
+        secret = kubernetes_api_get(secret_path)
+    except NodeAgentError as exc:
+        if str(exc) == "KUBERNETES_API_HTTP_404":
+            return {"ready": False, "machine_name": machine_name, "reason": "network_data_secret_pending"}
+        raise
+    secret_metadata = secret.get("metadata", {})
+    secret_data = secret.get("data", {})
+    encoded_network_data = secret_data.get("networkData") if isinstance(secret_data, dict) else None
+    if (
+        secret_metadata.get("name") != network_secret_ref.get("name")
+        or secret_metadata.get("namespace") != namespace
+        or not isinstance(secret_metadata.get("uid"), str)
+        or not secret_metadata.get("uid")
+        or not isinstance(encoded_network_data, str)
+        or not encoded_network_data
+    ):
+        raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_INVALID")
+    try:
+        decoded_network_data = base64.b64decode(encoded_network_data, validate=True)
+        parsed_network_data = yaml.safe_load(decoded_network_data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_INVALID") from exc
+    verification = validate_rendered_network_data(profile, parsed_network_data)
+    return {
+        "ready": True,
+        "machine_name": machine_name,
+        "metal3_machine_name": metal3_machine_name,
+        "metal3_machine_uid": metal3_metadata["uid"],
+        "rendered_data_name": rendered_metadata["name"],
+        "rendered_data_uid": rendered_metadata["uid"],
+        "network_data_secret_name": secret_metadata["name"],
+        "network_data_secret_uid": secret_metadata["uid"],
+        "interface_names": verification["interface_names"],
+        "profile_hash": verification["profile_hash"],
     }
 
 def _pod_network_namespace_snapshot() -> dict[str, Any]:
