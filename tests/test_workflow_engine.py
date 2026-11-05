@@ -751,7 +751,13 @@ def test_workflow_validator_accepts_tool_node_with_project_tool_reference():
     [
         ({}, "requires tool_id"),
         ({"tool_id": "not-a-uuid"}, "must be a UUID"),
-        ({"tool_id": "00000000-0000-0000-0000-000000000001", "arguments": []}, "arguments must be an object"),
+        (
+            {
+                "tool_id": "00000000-0000-0000-0000-000000000001",
+                "arguments": [],
+            },
+            "arguments must be an object",
+        ),
     ],
 )
 def test_workflow_validator_rejects_malformed_tool_node(tool_config, message):
@@ -907,7 +913,10 @@ def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
 
     assert result == {"ok": True}
     assert audit.call_count == 1
-    assert PluginInstallation.objects.get(pk=installation.id).status == PluginInstallation.Status.INSTALLED
+    assert (
+        PluginInstallation.objects.get(pk=installation.id).status
+        == PluginInstallation.Status.INSTALLED
+    )
 
 
 def test_workflow_tool_arguments_must_reference_an_earlier_node():
