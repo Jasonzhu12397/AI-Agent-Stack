@@ -5,7 +5,6 @@ from apps.node_agent.metal3_observer import (
     observe_cluster_metal3,
 )
 
-
 VERSIONS = {
     "cluster.x-k8s.io": "v1beta1",
     "infrastructure.cluster.x-k8s.io": "v1beta1",
