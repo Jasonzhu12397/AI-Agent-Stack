@@ -164,7 +164,7 @@ class WorkflowValidateView(APIView):
                     "node_count": node_count,
                     "edge_count": edge_count,
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_200_OK,
             )
 
         depths = {}
