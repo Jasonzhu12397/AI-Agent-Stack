@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import ssl
@@ -13,6 +14,11 @@ class IronicObservationError(Exception):
     pass
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 def ironic_api_configured(environ: Mapping[str, str] | None = None) -> bool:
     values = os.environ if environ is None else environ
     endpoint = values.get("IRONIC_API_URL", "").strip()
@@ -20,6 +26,10 @@ def ironic_api_configured(environ: Mapping[str, str] | None = None) -> bool:
     if bool(endpoint) != bool(token):
         raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
     return bool(endpoint and token)
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("NON_STANDARD_JSON_CONSTANT")
 
 
 def get_ironic_node(
@@ -55,12 +65,20 @@ def get_ironic_node(
         timeout = float(timeout_text)
     except (TypeError, ValueError) as exc:
         raise IronicObservationError("IRONIC_API_TIMEOUT_INVALID") from exc
-    if timeout < 1 or timeout > 60:
+    if not math.isfinite(timeout) or timeout < 1 or timeout > 60:
         raise IronicObservationError("IRONIC_API_TIMEOUT_INVALID")
+
+    token = values["IRONIC_API_TOKEN"].strip()
+    if (
+        not token
+        or len(token) > 8192
+        or any(ord(character) < 33 or ord(character) == 127 for character in token)
+    ):
+        raise IronicObservationError("IRONIC_API_TOKEN_INVALID")
 
     headers = {
         "Accept": "application/json",
-        "X-Auth-Token": values["IRONIC_API_TOKEN"].strip(),
+        "X-Auth-Token": token,
     }
     microversion = values.get("IRONIC_API_MICROVERSION", "").strip()
     if microversion:
@@ -76,8 +94,18 @@ def get_ironic_node(
     ca_file = values.get("IRONIC_API_CA_FILE", "").strip()
     try:
         context = ssl.create_default_context(cafile=ca_file or None)
-        request_opener = urllib.request.urlopen if opener is None else opener
-        with request_opener(request, context=context, timeout=timeout) as response:
+        if opener is None:
+            request_opener = urllib.request.build_opener(
+                _NoRedirectHandler(),
+                urllib.request.HTTPSHandler(context=context),
+            )
+            response_context = request_opener.open(request, timeout=timeout)
+        else:
+            response_context = opener(request, context=context, timeout=timeout)
+        with response_context as response:
+            content_type = response.headers.get("Content-Type", "")
+            if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                raise IronicObservationError("IRONIC_API_CONTENT_TYPE_INVALID")
             raw = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
         raise IronicObservationError(
@@ -89,12 +117,18 @@ def get_ironic_node(
     if len(raw) > 1024 * 1024:
         raise IronicObservationError("IRONIC_API_RESPONSE_TOO_LARGE")
     try:
-        document = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        document = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_JSON") from exc
     if not isinstance(document, dict):
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_SHAPE")
-    if document.get("uuid", "").lower() != node_uuid.lower():
+    response_uuid = document.get("uuid")
+    if not isinstance(response_uuid, str):
+        raise IronicObservationError("IRONIC_NODE_IDENTITY_INVALID")
+    if response_uuid.lower() != node_uuid.lower():
         raise IronicObservationError("IRONIC_NODE_IDENTITY_MISMATCH")
     provision_state = document.get("provision_state")
     maintenance = document.get("maintenance")
@@ -104,7 +138,7 @@ def get_ironic_node(
     if target_state is not None and not isinstance(target_state, str):
         raise IronicObservationError("IRONIC_NODE_TARGET_STATE_INVALID")
     return {
-        "uuid": node_uuid.lower(),
+        "uuid": response_uuid.lower(),
         "provision_state": provision_state,
         "maintenance": maintenance,
         "target_provision_state": target_state,
