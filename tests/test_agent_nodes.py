@@ -781,3 +781,27 @@ def test_worker_provisioning_command_cannot_be_created_outside_deployment_workfl
     assert response.status_code == 403
     assert not AgentCommand.objects.filter(node=node).exists()
 
+
+
+@pytest.mark.django_db
+def test_target_agent_capi_pivot_postflight_command_is_allowed(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "target-capi-pivot-postflight", "node_type": "target_cluster"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.capi.pivot.postflight",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "namespace": "metal3",
+                "baremetal_host_namespace": "metal3-system",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="target-capi-pivot-postflight",
+    )
+    assert response.status_code == 202
