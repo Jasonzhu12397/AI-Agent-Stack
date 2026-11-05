@@ -18,7 +18,11 @@ def test_pivot_agent_image_installs_checksum_pinned_cluster_tools():
         "KUBECTL_SHA256_ARM64",
     ):
         assert f"ARG {argument}" in dockerfile
-        assert 'test -n "$' + argument + '"' in dockerfile
+
+    assert 'test -n "$CLUSTERCTL_VERSION"' in dockerfile
+    assert 'test -n "$KUBECTL_VERSION"' in dockerfile
+    assert 'test -n "$CLUSTERCTL_CHECKSUM"' in dockerfile
+    assert 'test -n "$KUBECTL_CHECKSUM"' in dockerfile
 
     assert "clusterctl-linux-${ASSET_ARCH}" in dockerfile
     assert "/bin/linux/${ASSET_ARCH}/kubectl" in dockerfile
