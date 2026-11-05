@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createWorkflow,
   createWorkflowRun,
   getWorkflowRuns,
   getWorkflows,
   publishWorkflow,
+  validateWorkflow,
   updateWorkflow,
   type WorkflowDraft,
   type WorkflowRun,
@@ -26,6 +27,58 @@ const publishing = ref(false);
 const running = ref(false);
 const error = ref("");
 const notice = ref("");
+const validating = ref(false);
+const validationResult = ref<{
+  is_valid: boolean;
+  errors: string[];
+  execution_layers: string[][];
+  node_count: number;
+  edge_count: number;
+} | null>(null);
+
+const previewGraph = computed(() => {
+  try {
+    const parsed = JSON.parse(definitionText.value) as Record<string, unknown>;
+    return {
+      nodes: Array.isArray(parsed.nodes) ? parsed.nodes as Record<string, unknown>[] : [],
+      edges: Array.isArray(parsed.edges) ? parsed.edges as Record<string, unknown>[] : [],
+      parseError: "",
+    };
+  } catch {
+    return { nodes: [], edges: [], parseError: "The draft is not valid JSON yet." };
+  }
+});
+
+function nodeLabel(node: Record<string, unknown>): string {
+  return String(node.name ?? node.id ?? "Unnamed node");
+}
+
+function nodeType(node: Record<string, unknown>): string {
+  return String(node.type ?? "unknown").toUpperCase();
+}
+
+function edgeLabel(edge: Record<string, unknown>): string {
+  return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
+}
+
+async function validateDraft(): Promise<void> {
+  if (!selectedWorkflowId.value) return;
+  validating.value = true;
+  error.value = "";
+  validationResult.value = null;
+  try {
+    validationResult.value = await validateWorkflow(selectedWorkflowId.value);
+    if (validationResult.value.is_valid) {
+      notice.value = "DAG validation passed. " + validationResult.value.node_count + " nodes and " + validationResult.value.edge_count + " edges.";
+    } else {
+      error.value = validationResult.value.errors.join("; ");
+    }
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Workflow validation failed.";
+  } finally {
+    validating.value = false;
+  }
+}
 let refreshTimer: number | undefined;
 
 function initialDefinition(): Record<string, unknown> {
@@ -54,6 +107,7 @@ function selectWorkflow(workflowId: string): void {
     definitionText.value = "";
   }
   runs.value = [];
+  validationResult.value = null;
   if (workflowId) void loadRuns();
 }
 
@@ -147,6 +201,7 @@ async function saveDraft(): Promise<void> {
       item.id === updated.id ? updated : item,
     );
     selectedWorkflow.value = updated;
+    validationResult.value = null;
     notice.value = "Draft saved. Published versions remain immutable.";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to save workflow.";
@@ -247,6 +302,49 @@ onUnmounted(() => {
           {{ selectedWorkflow.is_archived ? "ARCHIVED" : selectedWorkflow.current_version ? "PUBLISHED v" + selectedWorkflow.current_version : "DRAFT ONLY" }}
         </el-tag>
       </div>
+      <section class="workflow-pipeline">
+        <div class="workflow-run-heading">
+          <div>
+            <h4>Workflow DAG</h4>
+            <p class="task-note">Live visual preview of the editable draft. Server validation remains authoritative.</p>
+          </div>
+          <el-tag type="info" effect="plain">{{ previewGraph.nodes.length }} nodes · {{ previewGraph.edges.length }} edges</el-tag>
+        </div>
+        <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
+        <div v-else class="workflow-pipeline-row">
+          <template v-for="(node, index) in previewGraph.nodes" :key="String(node.id ?? index)">
+            <article class="workflow-node-card">
+              <el-tag size="small" effect="plain">{{ nodeType(node) }}</el-tag>
+              <strong>{{ nodeLabel(node) }}</strong>
+              <code>{{ String(node.id ?? "no-id") }}</code>
+              <small v-if="node.config && typeof node.config === 'object'">
+                {{ String((node.config as Record<string, unknown>).tool_id ?? (node.config as Record<string, unknown>).model_config_id ?? "") }}
+              </small>
+            </article>
+            <span v-if="index < previewGraph.nodes.length - 1" class="workflow-node-arrow">→</span>
+          </template>
+        </div>
+        <div v-if="previewGraph.edges.length" class="workflow-edge-list">
+          <span v-for="(edge, index) in previewGraph.edges" :key="index">{{ edgeLabel(edge) }}</span>
+        </div>
+        <div v-if="validationResult" class="workflow-validation-result">
+          <div class="workflow-run-heading">
+            <strong>Server validation</strong>
+            <el-tag :type="validationResult.is_valid ? 'success' : 'danger'">
+              {{ validationResult.is_valid ? "VALID" : "INVALID" }}
+            </el-tag>
+          </div>
+          <div v-if="validationResult.is_valid" class="workflow-edge-list">
+            <span v-for="(layer, index) in validationResult.execution_layers" :key="index">
+              Layer {{ index + 1 }}: {{ layer.join(", ") }}
+            </span>
+          </div>
+          <el-alert v-for="(item, index) in validationResult.errors" :key="index" :title="item" type="error" :closable="false" />
+        </div>
+        <div class="workflow-actions">
+          <el-button :loading="validating" :disabled="!selectedWorkflowId" @click="validateDraft">Validate DAG</el-button>
+        </div>
+      </section>
       <div class="workflow-editor-grid">
         <div class="workflow-editor-form">
           <h4>Definition</h4>
