@@ -166,3 +166,88 @@ def evaluate_provider_compatibility(payload: dict[str, Any]) -> dict[str, Any]:
             ],
         },
     }
+
+
+IMAGE_COMPONENTS = {
+    "cluster-api-provider-metal3": "capm3",
+    "baremetal-operator": "bmo",
+    "ironic": "ironic",
+    "ironic-standalone-operator": "irso",
+}
+
+
+def discover_provider_images(deployments: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(deployments, list):
+        raise ProviderCompatibilityError("DEPLOYMENT_INVENTORY_INVALID")
+    images = []
+    versions_by_component = {component: set() for component in IMAGE_COMPONENTS.values()}
+    for deployment in deployments:
+        if not isinstance(deployment, dict):
+            continue
+        metadata = deployment.get("metadata", {})
+        spec = deployment.get("spec", {})
+        template = spec.get("template", {})
+        pod_spec = template.get("spec", {}) if isinstance(template, dict) else {}
+        if not isinstance(metadata, dict) or not isinstance(pod_spec, dict):
+            continue
+        namespace = metadata.get("namespace")
+        deployment_name = metadata.get("name")
+        containers = []
+        for container_type in ("containers", "initContainers"):
+            entries = pod_spec.get(container_type, [])
+            if isinstance(entries, list):
+                containers.extend(
+                    (container_type, item)
+                    for item in entries
+                    if isinstance(item, dict)
+                )
+        for container_type, container in containers:
+            image = container.get("image")
+            if not isinstance(image, str) or len(image) > 1024:
+                continue
+            image_without_digest, separator, digest = image.partition("@")
+            image_name = image_without_digest.rsplit("/", 1)[-1]
+            if ":" not in image_name:
+                continue
+            repository_name, tag = image_name.rsplit(":", 1)
+            component = IMAGE_COMPONENTS.get(repository_name)
+            if component is None:
+                continue
+            try:
+                release = _release_minor(tag, component)
+            except ProviderCompatibilityError:
+                release = None
+            images.append(
+                {
+                    "component": component,
+                    "namespace": namespace,
+                    "deployment": deployment_name,
+                    "container": container.get("name"),
+                    "container_type": container_type,
+                    "image": image,
+                    "tag": tag,
+                    "digest": digest if separator else None,
+                    "release": release,
+                }
+            )
+            if release is not None:
+                versions_by_component[component].add(tag)
+
+    provider_versions = {}
+    blockers = []
+    for component, versions in versions_by_component.items():
+        if not versions:
+            blockers.append("provider_image_not_discovered:" + component)
+        elif len(versions) > 1:
+            blockers.append("provider_image_version_ambiguous:" + component)
+        else:
+            provider_versions[component] = next(iter(versions))
+    return {
+        "complete": not blockers,
+        "provider_versions": provider_versions,
+        "images": images[:200],
+        "image_count": len(images),
+        "blockers": blockers,
+        "source": "live_kubernetes_deployment_pod_template_images",
+        "side_effects": False,
+    }
