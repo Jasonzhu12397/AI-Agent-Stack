@@ -9,7 +9,6 @@ from apps.node_agent.ironic_client import (
     ironic_api_configured,
 )
 
-
 NODE_UUID = "12345678-1234-1234-1234-123456789abc"
 
 
