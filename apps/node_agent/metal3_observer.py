@@ -17,6 +17,7 @@ def observe_cluster_metal3(
     payload: dict[str, Any],
     get_item: Callable[[str], dict[str, Any]],
     list_items: Callable[[str], list[dict[str, Any]]],
+    ironic_lookup: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     cluster_name = payload.get("cluster_name")
     namespace = payload.get("namespace", "default")
@@ -81,6 +82,8 @@ def observe_cluster_metal3(
     results = []
     blockers = []
     seen_uids = set()
+    ironic_applicable_count = 0
+    ironic_verified_count = 0
 
     for machine in selected:
         metadata = machine.get("metadata", {})
@@ -228,6 +231,45 @@ def observe_cluster_metal3(
         )
         if blocker:
             blockers.append(blocker)
+
+        ironic_node = None
+        ironic_blocker = None
+        if ironic_lookup is not None and provisioning_state == "provisioned":
+            ironic_applicable_count += 1
+            ironic_uuid = (
+                provisioning.get("ID") or provisioning.get("id")
+                if isinstance(provisioning, dict)
+                else None
+            )
+            valid_uuid = isinstance(ironic_uuid, str) and bool(
+                re.fullmatch(
+                    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                    ironic_uuid,
+                )
+            )
+            if not valid_uuid:
+                ironic_blocker = "ironic_node_uuid_missing_or_invalid"
+            else:
+                try:
+                    ironic_node = ironic_lookup(ironic_uuid)
+                except Exception:
+                    ironic_blocker = "ironic_api_unavailable_or_node_unreadable"
+                if ironic_node is not None:
+                    ironic_healthy = (
+                        ironic_node.get("uuid", "").lower() == ironic_uuid.lower()
+                        and ironic_node.get("provision_state") == "active"
+                        and ironic_node.get("maintenance") is False
+                        and ironic_node.get("target_provision_state") in (None, "")
+                        and ironic_node.get("has_last_error") is False
+                    )
+                    if ironic_healthy:
+                        ironic_verified_count += 1
+                    else:
+                        ironic_blocker = "ironic_node_not_active_or_unhealthy"
+            if ironic_blocker:
+                blockers.append(ironic_blocker)
+
         results.append(
             {
                 "machine": machine_name,
@@ -241,7 +283,9 @@ def observe_cluster_metal3(
                 "baremetal_host_provisioning_state": provisioning_state,
                 "baremetal_host_operational_status": operational_status,
                 "baremetal_host_has_error": has_error,
-                "status": "linked" if host_ready else "linked_unhealthy",
+                "ironic_node": ironic_node,
+                "ironic_blocker": ironic_blocker,
+                "status": "linked" if host_ready and not ironic_blocker else "linked_unhealthy",
                 "blocker": blocker,
             }
         )
@@ -260,10 +304,24 @@ def observe_cluster_metal3(
         "blockers": sorted(set(blockers)),
         "side_effects": False,
         "ironic": {
-            "status": "not_configured",
+            "status": (
+                "not_configured"
+                if ironic_lookup is None
+                else "not_applicable"
+                if ironic_applicable_count == 0
+                else "verified"
+                if ironic_verified_count == ironic_applicable_count
+                else "partially_verified"
+                if ironic_verified_count
+                else "unhealthy"
+            ),
+            "applicable_node_count": ironic_applicable_count,
+            "verified_node_count": ironic_verified_count,
             "reason": (
                 "No authenticated Ironic API adapter is configured; BMH status "
                 "is not proof of direct Ironic API health"
+                if ironic_lookup is None
+                else None
             ),
         },
     }
