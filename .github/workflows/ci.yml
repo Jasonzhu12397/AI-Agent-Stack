@@ -75,6 +75,10 @@ jobs:
         run: |
           cp .env.example .env
           docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+          cp .env.cloud.example .env.cloud
+          docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml config --quiet
+      - name: Build production Vue image
+        run: docker build -f Dockerfile.web-studio -t ai-agent-web:ci .
       - name: Build and start the complete local stack
         run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
       - name: Smoke test Django API and Vue Studio
