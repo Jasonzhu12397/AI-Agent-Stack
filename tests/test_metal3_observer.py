@@ -1,5 +1,8 @@
 import pytest
-from apps.node_agent.metal3_observer import observe_cluster_metal3
+from apps.node_agent.metal3_observer import (
+    Metal3ObservationError,
+    observe_cluster_metal3,
+)
 
 
 VERSIONS = {
@@ -178,7 +181,10 @@ def test_consumer_reference_with_wrong_namespace_is_rejected():
 def test_bmh_missing_uid_fails_closed():
     _, _, host = documents()
     host["metadata"].pop("uid")
-    with pytest.raises(Exception, match="BAREMETAL_HOST_IDENTITY_INVALID"):
+    with pytest.raises(
+        Metal3ObservationError,
+        match="BAREMETAL_HOST_IDENTITY_INVALID",
+    ):
         run_observer(hosts=[host])
 
 
