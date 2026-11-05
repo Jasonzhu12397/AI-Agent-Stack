@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION
+          image: REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
           env:
