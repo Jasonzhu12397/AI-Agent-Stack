@@ -42,7 +42,7 @@ Only the last two can verify the Ironic/IPA provisioning path; only `REAL_HARDWA
 6. CAPM3 associates Metal3Machine with a BMH. When data templates are used, Metal3DataClaim/Metal3Data render metadata/network-data secrets before BMH provisioning starts.
 7. BMO/Ironic performs inspection and deployment. Observe BMH state transitions and controller events; do not equate object creation with deployment.
 8. After the host boots, correlate the workload Node to the BMH through the CAPM3 providerID workflow. Current upstream documentation describes the default providerID as `metal3://<namespace>/<bmh-name>/<m3m-name>`; the legacy BMH-UUID-only format is deprecated in newer CAPM3 releases.
-9. Require BMH `provisioned`, Metal3Machine `Ready`, CAPI Machine `Running`, and a workload Node with matching providerID/identity and `Ready` condition before declaring the machine delivered.
+9. Require BMH `provisioned`, Metal3Machine `Ready`, the Metal3Machine owner reference to match the CAPI Machine UID, CAPI Machine `Running`, and a workload Node whose UID and providerID match the CAPI Machine and Metal3Machine and whose `Ready` condition is true before declaring the machine delivered.
 10. Capture source/target manifests, controller logs, Ironic logs, IPA logs, events and clusterctl move logs as immutable test artifacts.
 
 ## Pivot requirements
