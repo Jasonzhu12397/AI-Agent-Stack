@@ -525,7 +525,13 @@ def test_provider_discovery_inspects_crd_openapi_schemas(monkeypatch):
         "controlplane.cluster.x-k8s.io": ("v1beta1", ["kubeadmcontrolplanes"]),
         "infrastructure.cluster.x-k8s.io": (
             "v1beta1",
-            ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates", "metal3datas"],
+            [
+                "metal3clusters",
+                "metal3machines",
+                "metal3machinetemplates",
+                "metal3datatemplates",
+                "metal3datas",
+            ],
         ),
         "metal3.io": ("v1alpha1", ["baremetalhosts"]),
     }
@@ -3132,10 +3138,11 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     ]
                 ]
             }
-        if path.startswith("/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3machines/"):
+        if path.startswith(
+            "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3machines/"
+        ):
             machine_name = path.rsplit("/", 1)[-1]
             index = int(machine_name.rsplit("-", 1)[-1])
-            machine_number = f"{index}"
             return {
                 "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                 "kind": "Metal3Machine",
@@ -3169,7 +3176,9 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     },
                 },
             }
-        if path.startswith("/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3datas/"):
+        if path.startswith(
+            "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3datas/"
+        ):
             rendered_name = path.rsplit("/", 1)[-1]
             index = int(rendered_name.rsplit("-", 1)[-1])
             return {
@@ -3181,6 +3190,10 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     "uid": f"rendered-data-uid-{index}",
                 },
                 "spec": {
+                    "claim": {
+                        "name": f"worker-infra-{index + 1}",
+                        "namespace": "default",
+                    },
                     "template": {
                         "name": "worker-network-template",
                         "namespace": "default",
