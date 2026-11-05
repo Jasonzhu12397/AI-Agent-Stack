@@ -77,8 +77,12 @@ jobs:
           docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
           cp .env.cloud.example .env.cloud
           docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml config --quiet
-      - name: Build production Vue image
-        run: docker build -f Dockerfile.web-studio -t ai-agent-web:ci .
+      - name: Build and smoke test production Vue image
+        run: |
+          docker build -f Dockerfile.web-studio -t ai-agent-web:ci .
+          docker run -d --name ai-agent-web-ci -p 127.0.0.1:5174:8080 ai-agent-web:ci
+          trap 'docker rm -f ai-agent-web-ci >/dev/null 2>&1 || true' EXIT
+          curl --retry 20 --retry-all-errors --retry-delay 1 --max-time 5 --fail http://localhost:5174/
       - name: Build and start the complete local stack
         run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
       - name: Smoke test Django API and Vue Studio
