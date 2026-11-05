@@ -6,6 +6,9 @@ from core.models import (
     KnowledgeBase,
     ModelConfig,
     ModelProvider,
+    PluginDefinition,
+    PluginInstallation,
+    PluginTool,
     Project,
     ProjectMembership,
     Task,
@@ -15,7 +18,12 @@ from core.models import (
     WorkflowRun,
     WorkflowStepRun,
 )
-from core.workflow_engine import WorkflowValidationError, validate_workflow_definition
+from core.workflow_engine import (
+    WorkflowValidationError,
+    _execute_node,
+    validate_model_references,
+    validate_workflow_definition,
+)
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from worker_app.tasks import process_once
@@ -760,3 +768,143 @@ def test_workflow_validator_rejects_malformed_tool_node(tool_config, message):
     }
     with pytest.raises(WorkflowValidationError, match=message):
         validate_workflow_definition(definition)
+
+
+@pytest.mark.django_db
+def test_workflow_tool_node_requires_approved_project_installation(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    plugin = PluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="workflow-test",
+        name="Workflow Test Connector",
+        version="1.0.0",
+        connector_type=PluginDefinition.ConnectorType.HTTP,
+        review_status=PluginDefinition.ReviewStatus.APPROVED,
+        enabled=True,
+    )
+    tool = PluginTool.objects.create(
+        plugin=plugin,
+        name="search",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 100}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+        risk_level=PluginTool.RiskLevel.LOW,
+        idempotency_mode=PluginTool.IdempotencyMode.READ_ONLY,
+    )
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "tool_step",
+                "type": "tool",
+                "config": {
+                    "tool_id": str(tool.id),
+                    "arguments": {"query": "hello"},
+                },
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "tool_step"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "tool_step"},
+            {"source": "tool_step", "target": "end"},
+        ],
+    }
+    graph = validate_workflow_definition(definition)
+    with pytest.raises(WorkflowValidationError, match="not installed and approved"):
+        validate_model_references(graph, tenant, project)
+
+    PluginInstallation.objects.create(
+        tenant=tenant,
+        project=project,
+        plugin=plugin,
+        plugin_version=plugin.version,
+        status=PluginInstallation.Status.INSTALLED,
+        granted_permissions=[],
+        installed_by=user,
+    )
+    validate_model_references(graph, tenant, project)
+
+    tool.risk_level = PluginTool.RiskLevel.HIGH
+    tool.save(update_fields=["risk_level", "updated_at"])
+    with pytest.raises(WorkflowValidationError, match="human approval"):
+        validate_model_references(graph, tenant, project)
+
+
+@pytest.mark.django_db
+def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    plugin = PluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="workflow-runtime",
+        name="Workflow Runtime Connector",
+        version="1.0.0",
+        connector_type=PluginDefinition.ConnectorType.HTTP,
+        review_status=PluginDefinition.ReviewStatus.APPROVED,
+        enabled=True,
+    )
+    tool = PluginTool.objects.create(
+        plugin=plugin,
+        name="lookup",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 100}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+        risk_level=PluginTool.RiskLevel.LOW,
+        idempotency_mode=PluginTool.IdempotencyMode.READ_ONLY,
+    )
+    installation = PluginInstallation.objects.create(
+        tenant=tenant,
+        project=project,
+        plugin=plugin,
+        plugin_version=plugin.version,
+        status=PluginInstallation.Status.INSTALLED,
+        granted_permissions=[],
+        installed_by=user,
+    )
+    task = SimpleNamespace(id="workflow-task", created_by=user)
+
+    def register_handler(router, registered_tool):
+        router.register(
+            plugin.plugin_key,
+            registered_tool.name,
+            lambda arguments, context: {"ok": arguments["query"] == "hello"},
+            plugin_version=plugin.version,
+        )
+
+    with patch("core.workflow_engine.register_http_tool", side_effect=register_handler):
+        with patch("core.workflow_engine.record_audit_event") as audit:
+            result = _execute_node(
+                {
+                    "id": "tool_step",
+                    "type": "tool",
+                    "config": {"tool_id": str(tool.id), "arguments": {"query": "hello"}},
+                },
+                {"input": {}},
+                {},
+                tenant,
+                project,
+                task,
+            )
+
+    assert result == {"ok": True}
+    assert audit.call_count == 1
+    assert PluginInstallation.objects.get(pk=installation.id).status == PluginInstallation.Status.INSTALLED
