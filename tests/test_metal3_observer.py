@@ -161,6 +161,27 @@ def test_bmh_must_be_provisioned_and_healthy(
     assert run_observer(hosts=[host])["ready"] is expected
 
 
+def test_consumer_reference_without_namespace_defaults_to_metal3machine_namespace():
+    _, _, host = documents()
+    host["spec"]["consumerRef"].pop("namespace")
+    assert run_observer(hosts=[host])["ready"] is True
+
+
+def test_consumer_reference_with_wrong_namespace_is_rejected():
+    _, _, host = documents()
+    host["spec"]["consumerRef"]["namespace"] = "wrong"
+    result = run_observer(hosts=[host])
+    assert result["ready"] is False
+    assert "baremetal_host_consumer_not_found" in result["blockers"]
+
+
+def test_bmh_missing_uid_fails_closed():
+    _, _, host = documents()
+    host["metadata"].pop("uid")
+    with pytest.raises(Exception, match="BAREMETAL_HOST_IDENTITY_INVALID"):
+        run_observer(hosts=[host])
+
+
 def test_missing_ironic_adapter_is_never_reported_as_healthy():
     result = run_observer()
     assert result["ironic"]["status"] == "not_configured"
