@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { connectorTemplates, buildConnectorTemplatePayload } from "../domain/connectorTemplates";
 import {
   approvePlugin,
   createPluginConnection,
@@ -27,6 +28,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const error = ref("");
 const info = ref("");
+const selectedTemplateId = ref("open-meteo");
 const pluginJson = ref(JSON.stringify({
   plugin_key: "example-readonly",
   name: "Example Read-only Connector",
@@ -118,6 +120,23 @@ async function refresh(): Promise<void> {
     error.value = cause instanceof Error ? cause.message : "Unable to load Integration Hub.";
   } finally {
     loading.value = false;
+  }
+}
+
+function loadConnectorTemplate(): void {
+  try {
+    pluginJson.value = JSON.stringify(
+      buildConnectorTemplatePayload(selectedTemplateId.value),
+      null,
+      2,
+    );
+    const template = connectorTemplates.find((item) => item.id === selectedTemplateId.value);
+    info.value = template
+      ? template.label + " template loaded. Add " + template.host + " to PLUGIN_HTTP_ALLOWED_HOSTS before testing."
+      : "Connector template loaded.";
+    error.value = "";
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to load connector template.";
   }
 }
 
@@ -359,7 +378,14 @@ onMounted(() => void refresh());
         <h3>Register connector definition</h3>
         <span>Draft only · tenant administrator</span>
       </div>
-      <el-input v-model="pluginJson" type="textarea" :rows="12" spellcheck="false" />
+      <div class="connection-form">
+        <el-select v-model="selectedTemplateId" placeholder="Choose a starter template">
+          <el-option v-for="template in connectorTemplates" :key="template.id" :label="template.label" :value="template.id" />
+        </el-select>
+        <el-button plain @click="loadConnectorTemplate">Load template</el-button>
+      </div>
+      <p class="integration-safety-note">Starter templates cover weather, Google Maps Places, GitHub and Microsoft Graph read-only operations. Templates create draft metadata only; approval, project installation, host allowlisting and server-side credential resolution are still required. No provider is represented as connected until its health check succeeds.</p>
+      <el-input v-model="pluginJson" type="textarea" :rows="14" spellcheck="false" />
       <el-button type="primary" plain :loading="submitting" :disabled="!tenantId" @click="createPlugin">
         Register draft
       </el-button>
