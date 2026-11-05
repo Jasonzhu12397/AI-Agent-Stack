@@ -342,7 +342,15 @@ def test_http_plugin_connection_health_check_activates_connection(
         "http": {
             "base_url": "https://api.example.com",
             "auth_required": False,
-            "health_check": {"method": "GET", "path": "/health"},
+            "health_check": {
+                "method": "POST",
+                "path": "/search",
+                "path_params": {},
+                "query_params": {},
+                "body_param": "request",
+                "read_only": True,
+                "arguments": {"request": {"textQuery": "coffee"}},
+            },
             "operations": {},
         }
     }
@@ -389,6 +397,8 @@ def test_http_plugin_connection_health_check_activates_connection(
 
     assert response.status_code == 200
     assert health_check.call_count == 1
+    assert health_check.call_args.args[0] == {"request": {"textQuery": "coffee"}}
+    assert health_check.call_args.args[2].idempotency_mode == "read_only"
     connection_record = PluginConnection.objects.get(pk=connection.data["id"])
     assert connection_record.status == PluginConnection.Status.HEALTHY
     assert connection_record.last_health_check_at is not None
