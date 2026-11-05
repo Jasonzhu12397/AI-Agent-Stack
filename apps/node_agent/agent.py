@@ -2855,8 +2855,16 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             infra_template.get("spec", {}).get("template", {}).get("spec", {})
         )
         data_template_ref = infra_template_spec.get("dataTemplate", {})
-        data_template_name = data_template_ref.get("name") if isinstance(data_template_ref, dict) else None
-        data_template_namespace = data_template_ref.get("namespace", namespace) if isinstance(data_template_ref, dict) else None
+        data_template_name = (
+            data_template_ref.get("name")
+            if isinstance(data_template_ref, dict)
+            else None
+        )
+        data_template_namespace = (
+            data_template_ref.get("namespace", namespace)
+            if isinstance(data_template_ref, dict)
+            else None
+        )
         if (
             not isinstance(data_template_name, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", data_template_name)
