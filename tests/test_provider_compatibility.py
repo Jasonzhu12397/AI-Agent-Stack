@@ -1,5 +1,6 @@
 import pytest
 
+from node_agent import agent
 from node_agent.provider_compatibility import (
     ProviderCompatibilityError,
     evaluate_provider_compatibility,
@@ -64,7 +65,7 @@ def test_capm3_capi_api_mismatch_blocks_compatibility():
 
 def test_tested_but_not_currently_supported_releases_are_labeled_tested():
     result = evaluate_provider_compatibility(
-        payload(capm3="1.12.0", bmo="0.12.0", ironic="33.0.0", irso="0.10.0")
+        payload(capm3="1.12.0", bmo="0.12.0", ironic="33.0.0", irso="0.9.0")
     )
 
     assert result["compatibility_status"] == "tested"
@@ -92,4 +93,61 @@ def test_unknown_payload_fields_are_rejected():
                 **payload(),
                 "bmc_password": "never-accept-secrets",
             }
+        )
+
+
+
+def test_node_agent_compatibility_command_uses_live_kubernetes_and_capi_api(monkeypatch):
+    def fake_get(path):
+        if path == "/version":
+            return {"gitVersion": "v1.32.2"}
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta2"},
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.execute_command(
+        {
+            "command_type": "cluster.provider.compatibility",
+            "payload": {
+                "provider_versions": {
+                    "capm3": "1.14.0",
+                    "bmo": "0.14.0",
+                    "ironic": "37.0.0",
+                    "irso": "0.12.0",
+                }
+            },
+        },
+        "eph_node",
+    )
+
+    assert result["compatibility_status"] == "supported"
+    assert result["kubernetes_version"] == "v1.32.2"
+    assert result["capi_api_version"] == "v1beta2"
+    assert result["upstream_ci_profile_tested"] is True
+    assert result["mutation_authorized"] is False
+
+
+def test_node_agent_compatibility_command_is_not_enabled_on_target_role():
+    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.provider.compatibility",
+                "payload": {
+                    "provider_versions": {
+                        "capm3": "1.14.0",
+                        "bmo": "0.14.0",
+                        "ironic": "37.0.0",
+                        "irso": "0.12.0",
+                    }
+                },
+            },
+            "target_cluster",
         )
