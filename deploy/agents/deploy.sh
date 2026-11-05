@@ -57,6 +57,8 @@ rendered_apply() {
 
 require_context "$EPH_CONTEXT"
 require_context "$TARGET_CONTEXT"
+kubectl --context "$EPH_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
+kubectl --context "$TARGET_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
 require_secret_keys "$EPH_CONTEXT" eph-node-agent-credentials control-url node-id token
 require_secret_keys "$EPH_CONTEXT" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-cluster-agent-credentials control-url node-id token
