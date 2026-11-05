@@ -41,10 +41,14 @@ CI_TESTED_PROFILES = {
 }
 
 
-def _release_minor(value: Any, component: str) -> str:
-    if not isinstance(value, str) or len(value) > 32:
+def _release_minor(value: Any, component: str, allow_build_suffix: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > 64:
         raise ProviderCompatibilityError("INVALID_" + component.upper() + "_VERSION")
-    match = re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.[0-9]+)?", value)
+    suffix = r"(?:[-+][0-9A-Za-z.-]+)?" if allow_build_suffix else ""
+    match = re.fullmatch(
+        r"v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:\\.[0-9]+)?" + suffix,
+        value,
+    )
     if match is None:
         raise ProviderCompatibilityError("INVALID_" + component.upper() + "_VERSION")
     return match.group(1) + "." + match.group(2)
