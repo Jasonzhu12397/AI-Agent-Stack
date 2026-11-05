@@ -83,3 +83,18 @@ The Target Agent's CAPI worker executor has a separate least-privilege grant in 
 - Create credentials with an external Secret Manager / External Secrets integration in production. Do not commit token values or plaintext Secret manifests.
 - The EPH RBAC remains read-only. The Target Agent has only the namespaced CAPI MachineDeployment create permission described above; Metal3 BMH access is read-only. Do not add `cluster-admin` as a workaround.
 - The initial bearer token is a development enrollment mechanism. Production must replace it with mTLS or short-lived workload identity before broad deployment.
+
+
+## Direct Ironic API verification for Pivot postflight
+
+The Target Agent's `cluster.capi.pivot.postflight` command checks the CAPI Machine -> Metal3Machine -> BareMetalHost chain. To include direct Ironic evidence, provide an HTTPS Ironic API endpoint and a scoped Ironic API token through the Kubernetes Secret `ironic-api-credentials` in `ai-agent-system`. The Target Agent Deployment reads keys `api-url` and `token` as `IRONIC_API_URL` and `IRONIC_API_TOKEN`. The endpoint must be the Ironic API root (for example, `https://ironic-api.example.net`), without a path, query or fragment. The client validates the server certificate using the container trust store, uses the Ironic token header, disables redirects, and only performs a bounded read-only GET of the node UUID recorded by BMO.
+
+Create the Secret through an external secret manager/External Secrets Operator in production. For an isolated lab only, a manually created Secret can be populated from protected shell variables; do not put real token values in shell history, CI logs, Git, or Agent command payloads. If either Secret key is absent, the Agent reports Ironic as `not_configured`. The Supervisor intentionally refuses to advance from Pivot postflight to Worker provisioning unless every applicable provisioned host has a healthy direct Ironic node record. A Kubernetes-only BMH check is not considered complete hardware verification.
+
+The deployment sequence after Pivot is now enforced by the Supervisor:
+
+1. EPH executes the approved `clusterctl move`.
+2. Target Agent verifies the preserved CAPI Cluster UID, Machines and management controllers.
+3. Target Agent runs `cluster.capi.pivot.postflight` to verify the Metal3Machine/BMH consumer chain, consumed BMO status annotation, stable BMH state and direct Ironic node health.
+4. Only a complete postflight result can queue Worker provisioning preflight.
+5. EPH reclaim remains disabled; it requires a separate lifecycle/reclaim executor and physical Data Plane validation.
