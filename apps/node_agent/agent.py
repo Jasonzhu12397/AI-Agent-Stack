@@ -1014,7 +1014,11 @@ def inspect_rendered_worker_network_data(
     machine_uid = machine_metadata.get("uid")
     infrastructure_ref = machine.get("spec", {}).get("infrastructureRef", {})
     if not isinstance(infrastructure_ref, dict) or not infrastructure_ref:
-        return {"ready": False, "machine_name": machine_name, "reason": "infrastructure_reference_pending"}
+        return {
+            "ready": False,
+            "machine_name": machine_name,
+            "reason": "infrastructure_reference_pending",
+        }
     if (
         infrastructure_ref.get("kind") != "Metal3Machine"
         or infrastructure_ref.get("apiVersion") != infra_api_version
@@ -1031,13 +1035,18 @@ def inspect_rendered_worker_network_data(
         metal3_machine = kubernetes_api_get(metal3_machine_path)
     except NodeAgentError as exc:
         if str(exc) == "KUBERNETES_API_HTTP_404":
-            return {"ready": False, "machine_name": machine_name, "reason": "metal3_machine_pending"}
+            return {
+                "ready": False,
+                "machine_name": machine_name,
+                "reason": "metal3_machine_pending",
+            }
         raise
     metal3_metadata = metal3_machine.get("metadata", {})
     owner_references = metal3_metadata.get("ownerReferences", [])
     if (
         metal3_machine.get("kind") not in {None, "Metal3Machine"}
         or metal3_metadata.get("name") != metal3_machine_name
+        or metal3_machine.get("apiVersion") != infra_api_version
         or metal3_metadata.get("namespace") != namespace
         or not isinstance(metal3_metadata.get("uid"), str)
         or not metal3_metadata.get("uid")
@@ -1068,7 +1077,11 @@ def inspect_rendered_worker_network_data(
     if rendered_namespace != namespace:
         raise NodeAgentError("WORKER_METAL3_RENDERED_DATA_NAMESPACE_MISMATCH")
     if not isinstance(network_secret_ref, dict) or not network_secret_ref.get("name"):
-        return {"ready": False, "machine_name": machine_name, "reason": "network_data_secret_pending"}
+        return {
+            "ready": False,
+            "machine_name": machine_name,
+            "reason": "network_data_secret_pending",
+        }
     secret_namespace = network_secret_ref.get("namespace", namespace)
     if secret_namespace != namespace:
         raise NodeAgentError("WORKER_METAL3_NETWORK_SECRET_NAMESPACE_MISMATCH")
@@ -1090,11 +1103,14 @@ def inspect_rendered_worker_network_data(
     if (
         rendered_data.get("kind") not in {None, "Metal3Data"}
         or rendered_metadata.get("name") != rendered_ref.get("name")
+        or rendered_data.get("apiVersion") != infra_api_version
         or rendered_metadata.get("namespace") != namespace
         or not isinstance(rendered_metadata.get("uid"), str)
         or not rendered_metadata.get("uid")
         or rendered_spec.get("template", {}).get("name") != data_template_name
         or rendered_spec.get("template", {}).get("namespace", namespace) != namespace
+        or rendered_spec.get("claim", {}).get("name") != metal3_machine_name
+        or rendered_spec.get("claim", {}).get("namespace", namespace) != namespace
         or not isinstance(rendered_secret_ref, dict)
         or rendered_secret_ref.get("name") != network_secret_ref.get("name")
         or rendered_secret_ref.get("namespace", namespace) != namespace
@@ -1111,7 +1127,11 @@ def inspect_rendered_worker_network_data(
         secret = kubernetes_api_get(secret_path)
     except NodeAgentError as exc:
         if str(exc) == "KUBERNETES_API_HTTP_404":
-            return {"ready": False, "machine_name": machine_name, "reason": "network_data_secret_pending"}
+            return {
+                "ready": False,
+                "machine_name": machine_name,
+                "reason": "network_data_secret_pending",
+            }
         raise
     secret_metadata = secret.get("metadata", {})
     secret_data = secret.get("data", {})
@@ -1121,6 +1141,7 @@ def inspect_rendered_worker_network_data(
         or secret_metadata.get("namespace") != namespace
         or not isinstance(secret_metadata.get("uid"), str)
         or not secret_metadata.get("uid")
+        or secret.get("type") != "Opaque"
         or not isinstance(encoded_network_data, str)
         or not encoded_network_data
     ):
@@ -3344,10 +3365,9 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 labels = machine.get("metadata", {}).get("labels", {})
                 if (
                     spec.get("clusterName") == cluster_name
-                    and not (
-                        isinstance(labels, dict)
-                        and "cluster.x-k8s.io/control-plane" in labels
-                    )
+                    and isinstance(labels, dict)
+                    and labels.get("cluster.x-k8s.io/deployment-name") == deployment_name
+                    and "cluster.x-k8s.io/control-plane" not in labels
                 ):
                     selected_machines.append(machine)
             worker_machine_names = [
