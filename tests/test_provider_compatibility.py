@@ -7,7 +7,7 @@ from node_agent.provider_compatibility import (
 )
 
 
-def payload(capm3="1.14.0", bmo="0.14.0", ironic="37.0.0", irso="0.12.0"):
+def payload(capm3="1.14.0", bmo="0.14.0", ironic="37.0.0", irso="0.12.0", capi_api_version="v1beta2"):
     return {
         "provider_versions": {
             "capm3": capm3,
@@ -16,7 +16,7 @@ def payload(capm3="1.14.0", bmo="0.14.0", ironic="37.0.0", irso="0.12.0"):
             "irso": irso,
         },
         "kubernetes_version": "v1.32.2",
-        "capi_api_version": "v1beta2",
+        "capi_api_version": capi_api_version,
     }
 
 
@@ -65,12 +65,28 @@ def test_capm3_capi_api_mismatch_blocks_compatibility():
 
 def test_tested_but_not_currently_supported_releases_are_labeled_tested():
     result = evaluate_provider_compatibility(
-        payload(capm3="1.12.0", bmo="0.12.0", ironic="33.0.0", irso="0.9.0")
+        payload(capm3="1.12.0", bmo="0.12.0", ironic="35.0.0", irso="0.11.0", capi_api_version="v1beta1")
     )
 
     assert result["compatibility_status"] == "tested"
-    assert result["upstream_ci_profile_tested"] is True
+    assert result["upstream_ci_profile_tested"] is False
     assert result["mutation_authorized"] is False
+
+
+def test_historic_ci_profile_is_not_treated_as_supported_when_components_are_eol():
+    result = evaluate_provider_compatibility(
+        payload(
+            capm3="1.12.0",
+            bmo="0.12.0",
+            ironic="33.0.0",
+            irso="0.9.0",
+            capi_api_version="v1beta1",
+        )
+    )
+
+    assert result["upstream_ci_profile_tested"] is True
+    assert result["compatibility_status"] == "unsupported"
+    assert any(item.startswith("component_release_eol:") for item in result["blockers"])
 
 
 @pytest.mark.parametrize(
