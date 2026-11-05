@@ -126,3 +126,5 @@ The Target Agent postflight now verifies the complete identity chain rather than
 6. Existing checks still require the CAPM3 BMH status annotation to be consumed, a stable provisioning state, operationalStatus=OK, and no reported BMH error.
 
 The command remains read-only. It reports controller and identity-chain evidence; it does not prove webhook endpoint readiness, Ironic/IPA reachability, BMC protocol access, successful power control, or physical provisioning. Those are separate gates and still require the LIBVIRT_IRONIC test tier before production mutations are enabled.
+
+The repository test suite now includes postflight cases for an unavailable CAPM3 controller and a stale BareMetalHost consumer UID. These are mocked API-contract tests; they are not a substitute for a live cluster or LIBVIRT_IRONIC run.
