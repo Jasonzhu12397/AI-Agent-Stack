@@ -2,13 +2,12 @@ import json
 import urllib.error
 
 import pytest
+
 from apps.node_agent.ironic_client import (
     IronicObservationError,
     get_ironic_node,
     ironic_api_configured,
 )
-
-
 NODE_UUID = "12345678-1234-1234-1234-123456789abc"
 
 
