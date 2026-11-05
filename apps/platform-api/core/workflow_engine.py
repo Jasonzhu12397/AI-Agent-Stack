@@ -245,6 +245,7 @@ def validate_workflow_definition(definition):
         source_node = (
             node["config"].get("input_from")
             or node["config"].get("source_node")
+            or node["config"].get("arguments_from")
         )
         if source_node and order_index[source_node] >= order_index[node_id]:
             raise WorkflowValidationError(
