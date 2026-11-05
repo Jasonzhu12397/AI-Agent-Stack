@@ -161,8 +161,8 @@ def _operation_config(context, tool):
             or not isinstance(value, str)
             or not value
             or len(value) > 2048
-            or "\\n" in value
-            or "\\r" in value
+            or "\n" in value
+            or "\r" in value
         ):
             raise ToolExecutionError("Connector operation contains an unsafe static header.")
         static_headers[name] = value
