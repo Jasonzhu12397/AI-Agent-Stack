@@ -3129,6 +3129,96 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
     assert result["execution_allowed"] is False
     assert result["worker_creation_performed"] is False
 
+def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    network_data = {
+        "links": [
+            {"id": "eno1", "ethernet_mac_address": "02:00:00:00:00:01"},
+            {"id": "ens2f0", "ethernet_mac_address": "02:00:00:00:00:02"},
+        ]
+    }
+    hosts = [{
+        "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+        "status": {"hardware": {"nics": [
+            {"name": "eno1", "mac": "02:00:00:00:00:01"},
+            {"name": "ens2f0", "mac": "02:00:00:00:00:02"},
+        ]}},
+    }]
+
+    result = agent.verify_baremetal_host_network_macs(
+        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system"
+    )
+
+    assert result["ready"] is True
+    assert result["baremetal_host_name"] == "bmh-01"
+    assert result["verified_interface_names"] == ["eno1", "ens2f0"]
+
+
+def test_verify_baremetal_host_network_macs_fails_on_mismatch():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    network_data = {
+        "links": [
+            {"id": "eno1", "ethernet_mac_address": "02:00:00:00:00:01"},
+            {"id": "ens2f0", "ethernet_mac_address": "02:00:00:00:00:99"},
+        ]
+    }
+    hosts = [{
+        "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+        "status": {"hardware": {"nics": [
+            {"name": "eno1", "mac": "02:00:00:00:00:01"},
+            {"name": "ens2f0", "mac": "02:00:00:00:00:02"},
+        ]}},
+    }]
+
+    with pytest.raises(agent.NodeAgentError, match="WORKER_RENDERED_NETWORK_MAC_MISMATCH"):
+        agent.verify_baremetal_host_network_macs(
+            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system"
+        )
+
+
+def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    hosts = [{
+        "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+        "status": {"hardware": {"nics": []}},
+    }]
+
+    result = agent.verify_baremetal_host_network_macs(
+        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system"
+    )
+
+    assert result["ready"] is False
+    assert result["reason"] == "baremetal_host_hardware_inventory_pending"
+
+
+def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    host = {
+        "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+    }
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="WORKER_BAREMETAL_HOST_CONSUMER_REFERENCE_AMBIGUOUS",
+    ):
+        agent.verify_baremetal_host_network_macs(
+            profile, {"links": []}, [host, dict(host)], "worker-infra-1",
+            "default", "metal3-system"
+        )
+
+
 def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
     monkeypatch,
 ):
@@ -3313,12 +3403,18 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
             }
         raise AssertionError(path)
 
+    baremetal_host_list_calls = 0
+
     def fake_list(path, max_items=100000):
+        nonlocal baremetal_host_list_calls
         if "/baremetalhosts" in path:
-            return [
-                {
+            baremetal_host_list_calls += 1
+            hosts = []
+            for index in range(1, 3):
+                host = {
                     "metadata": {
                         "name": f"bmh-{index}",
+                        "namespace": "metal3-system",
                         "uid": f"bmh-uid-{index}",
                         "labels": {"pool": "workers"},
                     },
@@ -3328,8 +3424,19 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                         "provisioning": {"state": "available"},
                     },
                 }
-                for index in range(1, 3)
-            ]
+                if baremetal_host_list_calls > 1:
+                    host["spec"]["consumerRef"] = {
+                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                        "kind": "Metal3Machine",
+                        "name": f"worker-infra-{index}",
+                        "namespace": "default",
+                    }
+                    host["status"]["hardware"] = {"nics": [
+                        {"name": "eno1", "mac": "02:00:00:00:00:01"},
+                        {"name": "ens2f0", "mac": "02:00:00:00:00:02"},
+                    ]}
+                hosts.append(host)
+            return hosts
         if path.endswith("/machines"):
             return [
                 {
