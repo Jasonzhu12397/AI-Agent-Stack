@@ -191,6 +191,17 @@ def observe_cluster_metal3(
         machine_provider_id = machine_spec.get("providerID")
         metal3_provider_id = metal3_spec.get("providerID")
         machine_blockers = []
+        owner_references = mm_metadata.get("ownerReferences", [])
+        expected_owner = any(
+            isinstance(owner, dict)
+            and owner.get("apiVersion") == "cluster.x-k8s.io/" + capi_version
+            and owner.get("kind") == "Machine"
+            and owner.get("name") == machine_name
+            and owner.get("uid") == machine_uid
+            for owner in owner_references
+        )
+        if not expected_owner:
+            machine_blockers.append("metal3_machine_owner_reference_mismatch")
         if machine_phase != "Running":
             machine_blockers.append("capi_machine_not_running")
         if metal3_status.get("ready") is not True:
@@ -212,6 +223,10 @@ def observe_cluster_metal3(
             node_spec = workload_node.get("spec", {})
             node_status = workload_node.get("status", {})
             node_provider_id = node_spec.get("providerID")
+            node_uid = workload_node.get("metadata", {}).get("uid")
+            node_ref_uid = node_ref.get("uid") if isinstance(node_ref, dict) else None
+            if node_ref_uid != node_uid:
+                machine_blockers.append("workload_node_uid_mismatch")
             node_conditions = node_status.get("conditions", [])
             ready_condition = next(
                 (
@@ -350,6 +365,7 @@ def observe_cluster_metal3(
                 "machine_phase": machine_phase,
                 "metal3_machine_ready": metal3_status.get("ready") is True,
                 "node_name": node_name,
+                "node_ref_uid": node_ref.get("uid") if isinstance(node_ref, dict) else None,
                 "node_uid": (
                     workload_node.get("metadata", {}).get("uid")
                     if isinstance(workload_node, dict)
