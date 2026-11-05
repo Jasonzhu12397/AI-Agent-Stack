@@ -3119,6 +3119,109 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                     for group, version in versions.items()
                 ]
             }
+        if path == "/apis/infrastructure.cluster.x-k8s.io/v1beta1":
+            return {
+                "resources": [
+                    {"name": name}
+                    for name in [
+                        "metal3machines",
+                        "metal3machinetemplates",
+                        "metal3datatemplates",
+                        "metal3datas",
+                    ]
+                ]
+            }
+        if path.startswith("/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3machines/"):
+            machine_name = path.rsplit("/", 1)[-1]
+            index = int(machine_name.rsplit("-", 1)[-1])
+            machine_number = f"{index}"
+            return {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "metadata": {
+                    "name": machine_name,
+                    "namespace": "default",
+                    "uid": f"metal3-machine-uid-{index}",
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "cluster.x-k8s.io/v1beta1",
+                            "kind": "Machine",
+                            "name": f"worker-machine-{index}",
+                            "uid": f"worker-machine-uid-{index}",
+                        }
+                    ],
+                },
+                "spec": {
+                    "dataTemplate": {
+                        "name": "worker-network-template",
+                        "namespace": "default",
+                    }
+                },
+                "status": {
+                    "renderedData": {
+                        "name": f"worker-network-template-{index - 1}",
+                        "namespace": "default",
+                    },
+                    "networkData": {
+                        "name": f"worker-machine-{index}-networkdata-0",
+                        "namespace": "default",
+                    },
+                },
+            }
+        if path.startswith("/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/default/metal3datas/"):
+            rendered_name = path.rsplit("/", 1)[-1]
+            index = int(rendered_name.rsplit("-", 1)[-1])
+            return {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Data",
+                "metadata": {
+                    "name": rendered_name,
+                    "namespace": "default",
+                    "uid": f"rendered-data-uid-{index}",
+                },
+                "spec": {
+                    "template": {
+                        "name": "worker-network-template",
+                        "namespace": "default",
+                    },
+                    "networkData": {
+                        "name": f"worker-machine-{index + 1}-networkdata-0",
+                        "namespace": "default",
+                    },
+                },
+                "status": {"ready": True, "error": False},
+            }
+        if path.startswith("/api/v1/namespaces/default/secrets/"):
+            secret_name = path.rsplit("/", 1)[-1]
+            index = int(secret_name.split("-networkdata-", 1)[1])
+            network_data = {
+                "links": [
+                    {
+                        "id": "eno1",
+                        "type": "phy",
+                        "mtu": 1500,
+                        "ethernet_mac_address": "02:00:00:00:00:01",
+                    },
+                    {
+                        "id": "ens2f0",
+                        "type": "phy",
+                        "mtu": 9000,
+                        "ethernet_mac_address": "02:00:00:00:00:02",
+                    },
+                ]
+            }
+            encoded = base64.b64encode(
+                json.dumps(network_data).encode("utf-8")
+            ).decode("ascii")
+            return {
+                "metadata": {
+                    "name": secret_name,
+                    "namespace": "default",
+                    "uid": f"network-secret-uid-{index}",
+                },
+                "type": "Opaque",
+                "data": {"networkData": encoded},
+            }
         if path.startswith("/apis/apps/v1/namespaces/") and "/deployments/" in path:
             deployment_name = path.rsplit("/", 1)[-1]
             return {
@@ -3196,7 +3299,14 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                         "uid": f"worker-machine-uid-{index}",
                         "labels": {"cluster.x-k8s.io/deployment-name": "edge-workers"},
                     },
-                    "spec": {"clusterName": "edge-lab"},
+                    "spec": {
+                        "clusterName": "edge-lab",
+                        "infrastructureRef": {
+                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                            "kind": "Metal3Machine",
+                            "name": f"worker-infra-{index}",
+                        },
+                    },
                     "status": {
                         "conditions": [{"type": "Ready", "status": "True"}],
                         "nodeRef": {"name": f"worker-{index:02d}"},
@@ -3277,6 +3387,9 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
     assert result["worker_readiness_verified"] is True
     assert result["worker_machine_count"] == 2
     assert result["ready_worker_machine_count"] == 2
+    assert result["worker_network_data_verified"] is True
+    assert result["verified_worker_network_data_count"] == 2
+    assert result["pending_worker_network_data"] == []
     assert result["side_effects"] is True
 
 
