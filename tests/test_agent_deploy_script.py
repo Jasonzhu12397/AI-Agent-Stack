@@ -1,7 +1,7 @@
-from pathlib import Path
+import pathlib
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_dual_agent_deploy_script_requires_two_contexts_and_digest_image():
