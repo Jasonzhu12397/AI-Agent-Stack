@@ -55,7 +55,13 @@ def _runner_for(cluster_output: str = None, move_returncode: int = 0):
     return calls, runner
 
 
-def _pivot_runner_for(\n    target_controller_ready=True,\n    pivot_returncode=0,\n    bmh_items=None,\n    source_ironic_replicas=0,\n    target_keepalived=True,\n):
+def _pivot_runner_for(
+    target_controller_ready=True,
+    pivot_returncode=0,
+    bmh_items=None,
+    source_ironic_replicas=0,
+    target_keepalived=True,
+):
     calls = []
     groups = [
         "cluster.x-k8s.io",
