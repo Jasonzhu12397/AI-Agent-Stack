@@ -1936,11 +1936,12 @@ def valid_dual_network_profile():
 def valid_metal3_data_template(profile):
     normalized_profile = agent.validate_network_profile(profile)
     control_interface = profile["control_plane"]["interface"]
+    control_host_interface = normalized_profile["control_plane"]["host_interface"]
     data_interfaces = profile["data_plane"]["interfaces"]
     ethernets = [
         {
             "id": control_interface,
-            "macAddress": {"fromHostInterface": control_interface},
+            "macAddress": {"fromHostInterface": control_host_interface},
             "mtu": profile["control_plane"]["mtu"],
             "type": "phy",
         }
@@ -1948,7 +1949,9 @@ def valid_metal3_data_template(profile):
     ethernets.extend(
         {
             "id": name,
-            "macAddress": {"fromHostInterface": name},
+            "macAddress": {
+                "fromHostInterface": normalized_profile["data_plane"]["host_interfaces"][name]
+            },
             "mtu": profile["data_plane"]["mtu"],
             "type": "phy",
         }
@@ -1981,6 +1984,22 @@ def test_metal3_data_template_verifies_control_and_data_plane_nics():
     )
     assert result["verified"] is True
     assert result["interface_names"] == ["eno1", "ens2f0"]
+
+
+def test_metal3_data_template_supports_host_interface_mapping():
+    profile = valid_dual_network_profile()
+    profile["control_plane"]["host_interface"] = "eno2"
+    profile["data_plane"]["host_interfaces"] = {"ens2f0": "enp2s0"}
+    normalized_profile = agent.validate_network_profile(profile)
+    result = agent.validate_metal3_data_template(
+        normalized_profile,
+        valid_metal3_data_template(profile),
+        "infrastructure.cluster.x-k8s.io/v1beta1",
+        "default",
+    )
+    assert result["verified"] is True
+    assert result["interface_names"] == ["eno1", "ens2f0"]
+
 
 
 def remove_data_plane_link(data_template):
