@@ -1919,6 +1919,30 @@ def valid_dual_network_profile():
         },
     }
 
+def valid_metal3_data_template(profile):
+    return {
+        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "kind": "Metal3DataTemplate",
+        "metadata": {
+            "name": "worker-network-template",
+            "namespace": "default",
+            "uid": "network-template-uid",
+            "annotations": {"ai-agent-stack.io/network-profile-hash": agent.canonical_hash(profile)},
+        },
+        "spec": {
+            "template": {
+                "networkData": {
+                    "links": {
+                        "ethernets": [
+                            {"id": profile["control_plane"]["interface"], "macAddress": {"fromHostInterface": profile["control_plane"]["interface"]}, "mtu": profile["control_plane"]["mtu"], "type": "phy"},
+                            *[{"id": name, "macAddress": {"fromHostInterface": name}, "mtu": profile["data_plane"]["mtu"], "type": "phy"} for name in profile["data_plane"]["interfaces"]],
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
 
 @pytest.mark.parametrize("node_type", ["eph_node", "target_cluster"])
 def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch, node_type):
@@ -2660,6 +2684,8 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        if path.endswith("/metal3datatemplates/worker-network-template"):
+            return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
                 "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -2675,7 +2701,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                 },
                 "spec": {
                     "template": {
-                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}, "dataTemplate": {"name": "worker-network-template", "namespace": "default"}}
                     }
                 },
             }
@@ -2764,6 +2790,8 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        if path.endswith("/metal3datatemplates/worker-network-template"):
+            return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
                 "metadata": {
@@ -2778,7 +2806,7 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
                 },
                 "spec": {
                     "template": {
-                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}, "dataTemplate": {"name": "worker-network-template", "namespace": "default"}}
                     }
                 },
             }
@@ -2857,6 +2885,8 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
             return {"metadata": {"uid": "cluster-uid-1"}}
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        if path.endswith("/metal3datatemplates/worker-network-template"):
+            return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
                 "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -2872,7 +2902,7 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
                 },
                 "spec": {
                     "template": {
-                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}, "dataTemplate": {"name": "worker-network-template", "namespace": "default"}}
                     }
                 },
             }
@@ -2975,6 +3005,8 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
             }
         if path.endswith("/clusters/edge-lab"):
             return {"metadata": {"uid": "cluster-uid-1"}}
+        if path.endswith("/metal3datatemplates/worker-network-template"):
+            return valid_metal3_data_template(profile)
         if path.endswith("/metal3machinetemplates/worker-template"):
             return {
                 "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -2986,7 +3018,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
                 },
                 "spec": {
                     "template": {
-                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}}
+                        "spec": {"hostSelector": {"matchLabels": {"pool": "workers"}}, "dataTemplate": {"name": "worker-network-template", "namespace": "default"}}
                     }
                 },
             }
