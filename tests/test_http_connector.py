@@ -479,7 +479,7 @@ def test_http_connector_adds_safe_static_headers(monkeypatch):
     [
         {"Authorization": "Bearer attacker-controlled"},
         {"X-Goog-Api-Key": "plaintext-secret"},
-        {"X-Test": "bad\\nheader"},
+        {"X-Test": "bad\nheader"},
     ],
 )
 def test_http_connector_rejects_unsafe_static_headers(headers):
@@ -497,10 +497,14 @@ def test_http_connector_rejects_unsafe_static_headers(headers):
             },
         }
     }
-    with pytest.raises(ToolExecutionError, match="unsafe static header"):
-        from core.http_connector import _operation_config
+    with patch(
+        "core.http_connector._validate_base_url",
+        return_value="https://api.example.com",
+    ):
+        with pytest.raises(ToolExecutionError, match="unsafe static header"):
+            from core.http_connector import _operation_config
 
-        _operation_config(
-            context(manifest=manifest),
-            SimpleNamespace(name="search"),
-        )
+            _operation_config(
+                context(manifest=manifest),
+                SimpleNamespace(name="search"),
+            )
