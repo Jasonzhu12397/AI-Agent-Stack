@@ -3149,7 +3149,7 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware():
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system"
+        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1"
     )
 
     assert result["ready"] is True
@@ -3178,7 +3178,7 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch():
 
     with pytest.raises(agent.NodeAgentError, match="WORKER_RENDERED_NETWORK_MAC_MISMATCH"):
         agent.verify_baremetal_host_network_macs(
-            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system"
+            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1"
         )
 
 
@@ -3193,7 +3193,7 @@ def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory():
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system"
+        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1"
     )
 
     assert result["ready"] is False
@@ -3215,7 +3215,103 @@ def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer():
     ):
         agent.verify_baremetal_host_network_macs(
             profile, {"links": []}, [host, dict(host)], "worker-infra-1",
-            "default", "metal3-system"
+            "default", "metal3-system", "v1alpha1"
+        )
+
+
+def test_verify_baremetal_host_network_macs_reads_owned_hardware_data(monkeypatch):
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    network_data = {
+        "links": [
+            {"id": "eno1", "ethernet_mac_address": "02:00:00:00:00:01"},
+            {"id": "ens2f0", "ethernet_mac_address": "02:00:00:00:00:02"},
+        ]
+    }
+    host = {
+        "metadata": {
+            "name": "bmh-01",
+            "namespace": "metal3-system",
+            "uid": "bmh-uid-01",
+        },
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+        "status": {},
+    }
+    requested = []
+
+    def fake_get(path):
+        requested.append(path)
+        return {
+            "apiVersion": "metal3.io/v1alpha1",
+            "kind": "HardwareData",
+            "metadata": {
+                "name": "bmh-01",
+                "namespace": "metal3-system",
+                "uid": "hardware-data-uid-01",
+                "ownerReferences": [{
+                    "apiVersion": "metal3.io/v1alpha1",
+                    "kind": "BareMetalHost",
+                    "name": "bmh-01",
+                    "uid": "bmh-uid-01",
+                }],
+            },
+            "spec": {"hardware": {"nics": [
+                {"name": "eno1", "mac": "02:00:00:00:00:01"},
+                {"name": "ens2f0", "mac": "02:00:00:00:00:02"},
+            ]}},
+        }
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    result = agent.verify_baremetal_host_network_macs(
+        profile, network_data, [host], "worker-infra-1", "default",
+        "metal3-system", "v1alpha1"
+    )
+
+    assert result["ready"] is True
+    assert requested == [
+        "/apis/metal3.io/v1alpha1/namespaces/metal3-system/hardwaredata/bmh-01"
+    ]
+
+
+def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkeypatch):
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    host = {
+        "metadata": {
+            "name": "bmh-01",
+            "namespace": "metal3-system",
+            "uid": "bmh-uid-01",
+        },
+        "spec": {"consumerRef": {
+            "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+        }},
+        "status": {},
+    }
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: {
+            "apiVersion": "metal3.io/v1alpha1",
+            "kind": "HardwareData",
+            "metadata": {
+                "name": "bmh-01",
+                "namespace": "metal3-system",
+                "uid": "hardware-data-uid-01",
+                "ownerReferences": [{
+                    "kind": "BareMetalHost", "name": "bmh-01", "uid": "wrong-bmh-uid"
+                }],
+            },
+            "spec": {"hardware": {"nics": []}},
+        },
+    )
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="WORKER_HARDWARE_DATA_OWNERSHIP_MISMATCH",
+    ):
+        agent.verify_baremetal_host_network_macs(
+            profile, {"links": []}, [host], "worker-infra-1", "default",
+            "metal3-system", "v1alpha1"
         )
 
 
