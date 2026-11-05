@@ -763,6 +763,7 @@ class PluginConnectionTestView(APIView):
         if (
             not isinstance(health_arguments, dict)
             or _contains_sensitive_key(health_arguments)
+            or _validate_payload({"arguments": health_arguments})
         ):
             return Response(
                 {"detail": "Connector health-check arguments must be a non-sensitive JSON object."},
