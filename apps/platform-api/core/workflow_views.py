@@ -150,8 +150,10 @@ class WorkflowValidateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         definition = workflow.draft_definition
-        node_count = len(definition.get("nodes", [])) if isinstance(definition, dict) and isinstance(definition.get("nodes"), list) else 0
-        edge_count = len(definition.get("edges", [])) if isinstance(definition, dict) and isinstance(definition.get("edges"), list) else 0
+        node_values = definition.get("nodes") if isinstance(definition, dict) else None
+        edge_values = definition.get("edges") if isinstance(definition, dict) else None
+        node_count = len(node_values) if isinstance(node_values, list) else 0
+        edge_count = len(edge_values) if isinstance(edge_values, list) else 0
         try:
             graph = validate_workflow_definition(definition)
             validate_model_references(graph, workflow.tenant, workflow.project)
