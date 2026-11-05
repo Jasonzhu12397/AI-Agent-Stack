@@ -20,12 +20,20 @@ Build the repository image and push it to a registry accessible by both manageme
 
 Build the dedicated node-agent image with a Cluster API `clusterctl` version selected from the deployment compatibility matrix. Both tools are required at runtime: the Agent uses `kubectl` for the CAPI/Metal3 pivot and postflight gates, and `clusterctl` for the move operation. Both versions and checksums are mandatory and must be obtained from the trusted release artifacts used by your build pipeline:
 
-```bash
-docker build -f Dockerfile.node-agent \
-  --build-arg CLUSTERCTL_VERSION=<verified-release-tag> \
-  --build-arg CLUSTERCTL_SHA256=<verified-linux-amd64-or-arm64-sha256> \
-  -t <registry>/ai-agent-node-agent:<immutable-tag> .
-```
+~~~bash
+docker login <registry>
+
+IMAGE_REPOSITORY=<registry>/ai-agent-node-agent \
+IMAGE_TAG=<immutable-build-tag> \
+CLUSTERCTL_VERSION=<verified-release-tag> \
+CLUSTERCTL_SHA256=<verified-clusterctl-linux-sha256> \
+KUBECTL_VERSION=<verified-kubernetes-release-tag> \
+KUBECTL_SHA256=<verified-kubectl-linux-sha256> \
+PLATFORMS=linux/amd64 \
+bash deploy/agents/build-node-agent.sh
+~~~
+
+The build script pushes the image and prints an immutable AGENT_IMAGE_REF=repository@sha256:... value. Pass that exact digest to the deployment helper below. For multi-architecture clusters, set PLATFORMS=linux/amd64,linux/arm64.
 
 Do not guess the Cluster API version or checksum. The image build fails if either argument is missing or the checksum does not match. Use this image in both node-agent Deployment templates when enabling pivot preflight, execution and postflight. The kubectl version must be compatible with the target cluster API server (prefer the same minor version); do not use an unverified latest download.
 
