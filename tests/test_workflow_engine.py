@@ -131,6 +131,29 @@ def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
     assert created.status_code == 201
     workflow_id = created.data["id"]
 
+    validation = client.post(
+        f"/api/v1/workflows/{workflow_id}/validate/",
+        {},
+        format="json",
+    )
+    assert validation.status_code == 200
+    assert validation.data["is_valid"] is True
+    assert validation.data["execution_layers"] == [["start"], ["answer"], ["end"]]
+
+    workflow_record = WorkflowDefinition.objects.get(pk=workflow_id)
+    valid_definition = workflow_record.draft_definition
+    workflow_record.draft_definition = {"nodes": [], "edges": []}
+    workflow_record.save(update_fields=["draft_definition", "updated_at"])
+    invalid_validation = client.post(
+        f"/api/v1/workflows/{workflow_id}/validate/",
+        {},
+        format="json",
+    )
+    assert invalid_validation.status_code == 400
+    assert invalid_validation.data["is_valid"] is False
+    workflow_record.draft_definition = valid_definition
+    workflow_record.save(update_fields=["draft_definition", "updated_at"])
+
     published = client.post(
         f"/api/v1/workflows/{workflow_id}/publish/",
         {},
