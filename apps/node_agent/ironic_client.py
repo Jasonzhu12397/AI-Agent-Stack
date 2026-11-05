@@ -121,7 +121,7 @@ def get_ironic_node(
             raw.decode("utf-8"),
             parse_constant=_reject_json_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError) as exc:
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_JSON") from exc
     if not isinstance(document, dict):
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_SHAPE")
