@@ -18,17 +18,49 @@ class NetworkInventoryError(Exception):
     pass
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
+def _validate_kubernetes_request_path(path, method):
+    if not isinstance(path, str) or "?" in path or "#" in path:
+        raise NetworkInventoryError("KUBERNETES_PATH_NOT_ALLOWLISTED")
+    decoded_path = urllib.parse.unquote(path)
+    node_match = re.fullmatch(
+        r"/api/v1/nodes/([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)",
+        decoded_path,
+    )
+    collection_path = "/api/v1/namespaces/ai-agent-inventory/configmaps"
+    configmap_match = re.fullmatch(
+        re.escape(collection_path) + r"/(network-inventory-[a-f0-9]{20})",
+        decoded_path,
+    )
+    if node_match and method == "GET":
+        return
+    if decoded_path == collection_path and method in {"GET", "POST"}:
+        return
+    if configmap_match and method in {"GET", "PUT"}:
+        return
+    raise NetworkInventoryError("KUBERNETES_PATH_NOT_ALLOWLISTED")
+
+
 def kubernetes_request(path, method, payload=None):
     if method not in {"GET", "POST", "PUT"}:
         raise NetworkInventoryError("UNSUPPORTED_KUBERNETES_METHOD")
-    allowed_prefixes = (
-        "/api/v1/nodes/",
-        "/api/v1/namespaces/ai-agent-inventory/configmaps",
-    )
-    if not path.startswith(allowed_prefixes) or ".." in path:
-        raise NetworkInventoryError("KUBERNETES_PATH_NOT_ALLOWLISTED")
-    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
-    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    _validate_kubernetes_request_path(path, method)
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "").strip()
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443").strip()
+    if (
+        not host
+        or not re.fullmatch(r"[A-Za-z0-9.-]+", host)
+        or host.startswith(".")
+        or host.endswith(".")
+        or ".." in host
+        or not port.isdigit()
+        or not 1 <= int(port) <= 65535
+    ):
+        raise NetworkInventoryError("KUBERNETES_SERVICE_ENDPOINT_INVALID")
     token_path = os.environ.get(
         "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
         "/var/run/secrets/kubernetes.io/serviceaccount/token",
@@ -37,11 +69,23 @@ def kubernetes_request(path, method, payload=None):
         "AGENT_SERVICE_ACCOUNT_CA_FILE",
         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
     )
-    if not host or not os.path.isfile(token_path) or not os.path.isfile(ca_path):
+    if not os.path.isfile(token_path) or not os.path.isfile(ca_path):
         raise NetworkInventoryError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
-    with open(token_path, encoding="utf-8") as token_file:
-        token = token_file.read().strip()
-    context = ssl.create_default_context(cafile=ca_path)
+    try:
+        with open(token_path, encoding="utf-8") as token_file:
+            token = token_file.read().strip()
+    except OSError as exc:
+        raise NetworkInventoryError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE") from exc
+    if (
+        not token
+        or len(token) > 8192
+        or any(ord(character) < 33 or ord(character) == 127 for character in token)
+    ):
+        raise NetworkInventoryError("KUBERNETES_SERVICE_ACCOUNT_TOKEN_INVALID")
+    try:
+        context = ssl.create_default_context(cafile=ca_path)
+    except (OSError, ssl.SSLError) as exc:
+        raise NetworkInventoryError("KUBERNETES_CA_CERTIFICATE_INVALID") from exc
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {
         "Authorization": f"Bearer {token}",
@@ -55,14 +99,20 @@ def kubernetes_request(path, method, payload=None):
         headers=headers,
         method=method,
     )
+    opener = urllib.request.build_opener(
+        _NoRedirectHandler(),
+        urllib.request.HTTPSHandler(context=context),
+    )
     try:
-        with urllib.request.urlopen(request, context=context, timeout=15) as response:
+        with opener.open(request, timeout=15) as response:
             raw = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and method == "GET":
             return None
+        if 300 <= exc.code < 400:
+            raise NetworkInventoryError("KUBERNETES_API_REDIRECT_REJECTED") from exc
         raise NetworkInventoryError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise NetworkInventoryError("KUBERNETES_API_UNAVAILABLE") from exc
     if len(raw) > 1024 * 1024:
         raise NetworkInventoryError("KUBERNETES_RESPONSE_TOO_LARGE")
@@ -73,7 +123,6 @@ def kubernetes_request(path, method, payload=None):
     if not isinstance(result, dict):
         raise NetworkInventoryError("KUBERNETES_RESPONSE_INVALID_SHAPE")
     return result
-
 
 def build_inventory_report(node_name, node_uid):
     hardware = inspect_host_network_hardware()
