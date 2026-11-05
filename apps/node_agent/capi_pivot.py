@@ -699,3 +699,178 @@ def run_capi_pivot(
         "stdout_summary": stdout,
         "stderr_summary": stderr,
     }
+
+
+def run_capi_pivot_postflight(
+    payload: dict[str, Any],
+    environ: dict[str, str] | None = None,
+    executable_lookup=None,
+    process_runner=None,
+) -> dict[str, Any]:
+    env = dict(os.environ if environ is None else environ)
+    if set(payload) - {"cluster_name", "namespace"}:
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_PAYLOAD_FIELD_NOT_ALLOWED")
+    cluster_name = _validate_identifier(
+        payload.get("cluster_name"), "INVALID_CLUSTER_NAME"
+    )
+    namespace = _validate_identifier(
+        payload.get("namespace", "default"), "INVALID_NAMESPACE"
+    )
+    secret_root = Path(
+        env.get("CAPI_PIVOT_SECRET_DIR", "/var/run/secrets/ai-agent/capi-pivot")
+    )
+    target_kubeconfig = _resolve_kubeconfig(
+        env, "CAPI_PIVOT_TARGET_KUBECONFIG", secret_root
+    )
+    lookup = executable_lookup or shutil.which
+    runner = process_runner or subprocess.run
+    kubectl = lookup("kubectl")
+    if not kubectl:
+        raise CapiPivotError("KUBECTL_NOT_INSTALLED")
+    process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+    }
+
+    cluster_list = _kubectl_json(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace", namespace, "get", "clusters.cluster.x-k8s.io",
+            cluster_name, "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_POSTFLIGHT_CLUSTER_NOT_FOUND",
+    )
+    cluster_uid = cluster_list.get("metadata", {}).get("uid")
+    if not isinstance(cluster_uid, str) or not cluster_uid:
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_CLUSTER_IDENTITY_INVALID")
+
+    machine_list = _kubectl_json(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace", namespace, "get", "machines.cluster.x-k8s.io",
+            "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_POSTFLIGHT_MACHINES_UNAVAILABLE",
+    )
+    m3m_list = _kubectl_json(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace", namespace, "get", "metal3machines.infrastructure.cluster.x-k8s.io",
+            "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_POSTFLIGHT_METAL3MACHINES_UNAVAILABLE",
+    )
+    bmh_list = _kubectl_json(
+        runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace", namespace, "get", "baremetalhosts.metal3.io",
+            "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_POSTFLIGHT_BMHS_UNAVAILABLE",
+    )
+    machines = machine_list.get("items")
+    m3ms = m3m_list.get("items")
+    hosts = bmh_list.get("items")
+    if not all(isinstance(items, list) for items in (machines, m3ms, hosts)):
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
+
+    cluster_machines = []
+    for machine in machines:
+        metadata = machine.get("metadata", {}) if isinstance(machine, dict) else {}
+        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if labels.get("cluster.x-k8s.io/cluster-name") == cluster_name:
+            cluster_machines.append(machine)
+    if not cluster_machines:
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_NO_CLUSTER_MACHINES")
+
+    m3m_by_name = {}
+    for m3m in m3ms:
+        if not isinstance(m3m, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
+        metadata = m3m.get("metadata", {})
+        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if labels.get("cluster.x-k8s.io/cluster-name") == cluster_name:
+            name = metadata.get("name")
+            if not isinstance(name, str) or not name:
+                raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_IDENTITY_INVALID")
+            m3m_by_name[name] = m3m
+    if not m3m_by_name:
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_NO_METAL3MACHINES")
+
+    bmh_by_name = {}
+    for host in hosts:
+        if not isinstance(host, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
+        metadata = host.get("metadata", {})
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if isinstance(name, str) and name:
+            bmh_by_name[name] = host
+
+    verified = []
+    for m3m_name, m3m in sorted(m3m_by_name.items()):
+        annotations = m3m.get("metadata", {}).get("annotations", {})
+        host_name = annotations.get("metal3.io/BareMetalHost") if isinstance(annotations, dict) else None
+        if not isinstance(host_name, str) or not host_name:
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_BMH_REFERENCE_MISSING:" + m3m_name
+            )
+        host = bmh_by_name.get(host_name)
+        if host is None:
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_FOUND:" + m3m_name + ":" + host_name
+            )
+        host_meta = host.get("metadata", {})
+        host_annotations = host_meta.get("annotations", {}) if isinstance(host_meta, dict) else {}
+        if "baremetalhost.metal3.io/status" in host_annotations:
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_RECONSTRUCTION_PENDING:" + host_name
+            )
+        status = host.get("status", {})
+        provisioning = status.get("provisioning", {}) if isinstance(status, dict) else {}
+        state = provisioning.get("state") if isinstance(provisioning, dict) else None
+        operational = status.get("operationalStatus") if isinstance(status, dict) else None
+        if state not in {"available", "ready", "provisioned", "externally provisioned"}:
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_STABLE:" + host_name
+            )
+        if operational != "OK":
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_HEALTHY:" + host_name
+            )
+        if status.get("errorMessage") or status.get("errorType"):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_HAS_ERROR:" + host_name
+            )
+        verified.append({
+            "metal3machine": m3m_name,
+            "baremetalhost": host_name,
+            "provisioning_state": state,
+            "operational_status": operational,
+            "status_annotation_consumed": True,
+        })
+
+    return {
+        "cluster_name": cluster_name,
+        "cluster_uid": cluster_uid,
+        "namespace": namespace,
+        "postflight_passed": True,
+        "execution_mode": "read_only_target_cluster_verification",
+        "cluster_machine_count": len(cluster_machines),
+        "metal3machine_count": len(m3m_by_name),
+        "verified_bmh_count": len(verified),
+        "verified_bmhs": verified[:200],
+        "bmh_status_annotations_consumed": True,
+        "side_effects": False,
+    }
