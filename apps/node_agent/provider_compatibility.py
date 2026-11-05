@@ -17,8 +17,8 @@ UPSTREAM_SOURCES = {
 COMPONENT_RELEASE_STATUS = {
     "capm3": {"1.14": "supported", "1.13": "supported", "1.12": "tested"},
     "bmo": {"0.14": "supported", "0.13": "supported", "0.12": "tested"},
-    "ironic": {"39.0": "supported", "38.0": "supported", "37.0": "supported", "35.0": "tested", "33.0": "tested"},
-    "irso": {"0.12": "supported", "0.11": "supported", "0.10": "tested", "0.9": "tested"},
+    "ironic": {"39.0": "supported", "38.0": "supported", "37.0": "supported", "35.0": "tested", "33.0": "eol"},
+    "irso": {"0.12": "supported", "0.11": "supported", "0.10": "tested", "0.9": "eol"},
 }
 
 IRSO_IRONIC_COMPATIBILITY = {
@@ -85,6 +85,8 @@ def evaluate_provider_compatibility(payload: dict[str, Any]) -> dict[str, Any]:
         }
         if status == "unsupported":
             blockers.append("unsupported_" + component + "_release:" + release)
+        elif status == "eol":
+            blockers.append("component_release_eol:" + component + ":" + release)
         elif status == "tested":
             warnings.append("component_release_tested_not_currently_supported:" + component)
 
