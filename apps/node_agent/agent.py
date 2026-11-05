@@ -2536,6 +2536,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 "metal3machines",
                 "metal3machinetemplates",
                 "metal3datatemplates",
+                "metal3datas",
             },
             "metal3.io": {"baremetalhosts"},
         }
@@ -2991,6 +2992,18 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             != expected_bootstrap_api_version
         ):
             raise NodeAgentError("WORKER_PROVISIONING_API_VERSION_CHANGED")
+        infra_api_document = kubernetes_api_get(
+            f"/apis/infrastructure.cluster.x-k8s.io/{versions['infrastructure.cluster.x-k8s.io']}"
+        )
+        infra_resources = {
+            item.get("name")
+            for item in infra_api_document.get("resources", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        if not {"metal3machines", "metal3datatemplates", "metal3datas"}.issubset(
+            infra_resources
+        ):
+            raise NodeAgentError("WORKER_METAL3_RENDERED_DATA_API_MISSING")
         expected_controllers = {
             "capi-system": "capi-controller-manager",
             "capi-kubeadm-bootstrap-system": (
@@ -3303,6 +3316,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
         worker_machine_names = []
         ready_worker_machine_names = []
         not_ready_worker_machine_names = []
+        verified_worker_network_data = []
+        pending_worker_network_data = []
         for _attempt in range(120):
             machines = list_all_kubernetes_items(
                 f"/apis/cluster.x-k8s.io/{machine_version}/namespaces/"
@@ -3355,6 +3370,8 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             ready_worker_machine_names = []
             not_ready_worker_machine_names = []
             worker_node_ref_names = []
+            verified_worker_network_data = []
+            pending_worker_network_data = []
             for machine in selected_machines:
                 metadata = machine.get("metadata", {})
                 conditions = machine.get("status", {}).get("conditions", [])
@@ -3368,10 +3385,27 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
                 node_name = machine.get("status", {}).get("nodeRef", {}).get("name")
                 if isinstance(node_name, str) and node_name:
                     worker_node_ref_names.append(node_name)
+                network_data_result = inspect_rendered_worker_network_data(
+                    machine,
+                    namespace,
+                    data_template_name,
+                    expected_infra_api_version,
+                    network_profile,
+                )
+                if network_data_result.get("ready") is True:
+                    verified_worker_network_data.append(network_data_result)
+                else:
+                    pending_worker_network_data.append(
+                        {
+                            "machine_name": metadata.get("name"),
+                            "reason": network_data_result.get("reason"),
+                        }
+                    )
                 is_ready = (
                     ready_condition.get("status") == "True"
                     and isinstance(node_name, str)
                     and node_ready.get(node_name) is True
+                    and network_data_result.get("ready") is True
                 )
                 if is_ready:
                     ready_worker_machine_names.append(metadata.get("name"))
@@ -3382,6 +3416,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             if (
                 len(selected_machines) == expected_replicas
                 and len(ready_worker_machine_names) == expected_replicas
+                and len(verified_worker_network_data) == expected_replicas
             ):
                 break
             if _attempt < 119:
@@ -3407,6 +3442,10 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             "worker_machine_count": len(worker_machine_names),
             "ready_worker_machine_count": len(ready_worker_machine_names),
             "not_ready_worker_machine_names": not_ready_worker_machine_names,
+            "worker_network_data_verified": True,
+            "verified_worker_network_data_count": len(verified_worker_network_data),
+            "pending_worker_network_data": pending_worker_network_data,
+            "verified_worker_network_data": verified_worker_network_data,
             "worker_node_names": [
                 machine.get("status", {}).get("nodeRef", {}).get("name")
                 for machine in selected_machines
