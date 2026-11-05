@@ -611,7 +611,11 @@ def _postflight_runner(annotation_present=False, include_bmh=True):
 def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
     calls, runner = _postflight_runner()
     result = run_capi_pivot_postflight(
-        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        {
+            "cluster_name": "target-cluster",
+            "namespace": "metal3",
+            "baremetal_host_namespace": "metal3-hosts",
+        },
         environ=_environment(tmp_path),
         executable_lookup=lambda name: f"/usr/bin/{name}",
         process_runner=runner,
@@ -623,6 +627,8 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
     assert result["bmh_status_annotations_consumed"] is True
     assert result["verified_bmhs"][0]["baremetalhost"] == "worker-01"
     assert len(calls) == 4
+    bmh_command = next(command for command in calls if "baremetalhosts.metal3.io" in command)
+    assert bmh_command[bmh_command.index("--namespace") + 1] == "metal3-hosts"
 
 
 def test_pivot_postflight_rejects_unconsumed_bmh_status_annotation(tmp_path):
