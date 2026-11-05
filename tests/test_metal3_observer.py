@@ -26,7 +26,7 @@ def documents():
         },
         "status": {
             "phase": "Running",
-            "nodeRef": {"name": "node-0"},
+            "nodeRef": {"name": "node-0", "uid": "node-uid"},
         },
     }
     metal3_machine = {
@@ -34,6 +34,12 @@ def documents():
             "name": "worker-0",
             "namespace": "default",
             "uid": "mm-uid",
+            "ownerReferences": [{
+                "apiVersion": "cluster.x-k8s.io/v1beta1",
+                "kind": "Machine",
+                "name": "worker-0",
+                "uid": "machine-uid",
+            }],
         },
         "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
         "status": {"ready": True},
@@ -335,3 +341,19 @@ def test_workload_node_not_ready_fails_closed():
     result = run_observer(nodes=[node])
     assert result["ready"] is False
     assert "workload_node_not_ready" in result["blockers"]
+
+
+def test_metal3_machine_owner_reference_must_match_capi_machine_uid():
+    _, metal3_machine, _ = documents()
+    metal3_machine["metadata"]["ownerReferences"][0]["uid"] = "stale-machine-uid"
+    result = run_observer(metal3_machine=metal3_machine)
+    assert result["ready"] is False
+    assert "metal3_machine_owner_reference_mismatch" in result["blockers"]
+
+
+def test_capi_machine_node_reference_uid_must_match_live_node():
+    machine, _, _ = documents()
+    machine["status"]["nodeRef"]["uid"] = "stale-node-uid"
+    result = run_observer(machine=machine)
+    assert result["ready"] is False
+    assert "workload_node_uid_mismatch" in result["blockers"]
