@@ -311,21 +311,24 @@ def validate_model_references(graph, tenant, project):
             ).first()
             if tool is None:
                 raise WorkflowValidationError(
-                    "A workflow tool node references a tool that is not installed and approved in this project."
+                    "A workflow tool node references a tool that is not "
+                    "installed and approved in this project."
                 )
             if tool.risk_level in {
                 PluginTool.RiskLevel.HIGH,
                 PluginTool.RiskLevel.CRITICAL,
             }:
                 raise WorkflowValidationError(
-                    "High-risk workflow tools require a human approval node and cannot execute directly."
+                    "High-risk workflow tools require a human approval node "
+                    "and cannot execute directly."
                 )
             if tool.idempotency_mode not in {
                 PluginTool.IdempotencyMode.READ_ONLY,
                 PluginTool.IdempotencyMode.IDEMPOTENT,
             }:
                 raise WorkflowValidationError(
-                    "Workflow tools must be read-only or idempotent because workflow retries may replay a step."
+                    "Workflow tools must be read-only or idempotent because "
+                    "workflow retries may replay a step."
                 )
             continue
         if node["type"] != "llm":
