@@ -1970,12 +1970,24 @@ def test_metal3_data_template_verifies_control_and_data_plane_nics():
     assert result["interface_names"] == ["eno1", "ens2f0"]
 
 
+def remove_data_plane_link(data_template):
+    data_template["spec"]["template"]["networkData"]["links"]["ethernets"].pop()
+
+
+def change_control_plane_mtu(data_template):
+    data_template["spec"]["template"]["networkData"]["links"]["ethernets"][0]["mtu"] = 9000
+
+
+def change_network_profile_hash(data_template):
+    data_template["metadata"]["annotations"]["ai-agent-stack.io/network-profile-hash"] = "0" * 64
+
+
 @pytest.mark.parametrize(
     "mutate,error",
     [
-        (lambda item: item["spec"]["template"]["networkData"]["links"]["ethernets"].pop(), "METAL3_DATA_TEMPLATE_INTERFACE_MISSING_OR_DUPLICATE"),
-        (lambda item: item["spec"]["template"]["networkData"]["links"]["ethernets"][0].update({"mtu": 9000}), "METAL3_DATA_TEMPLATE_INTERFACE_CONFIGURATION_MISMATCH"),
-        (lambda item: item["metadata"]["annotations"].update({"ai-agent-stack.io/network-profile-hash": "0" * 64}), "METAL3_DATA_TEMPLATE_IDENTITY_OR_PROFILE_MISMATCH"),
+        (remove_data_plane_link, "METAL3_DATA_TEMPLATE_INTERFACE_MISSING_OR_DUPLICATE"),
+        (change_control_plane_mtu, "METAL3_DATA_TEMPLATE_INTERFACE_CONFIGURATION_MISMATCH"),
+        (change_network_profile_hash, "METAL3_DATA_TEMPLATE_IDENTITY_OR_PROFILE_MISMATCH"),
     ],
 )
 def test_metal3_data_template_rejects_missing_or_mismatched_network_config(mutate, error):
