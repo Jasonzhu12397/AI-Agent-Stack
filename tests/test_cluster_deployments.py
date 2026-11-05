@@ -1923,3 +1923,84 @@ def test_worker_provisioning_result_without_independent_approval_is_rejected(
     assert deployment.status == ClusterDeployment.Status.FAILED
     assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
 
+
+
+@pytest.mark.django_db
+def test_pivot_postflight_rejects_missing_direct_ironic_verification(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="pivot-postflight-ironic-required",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_token = "pivot-postflight-target-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="pivot-postflight-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        }
+    }
+    deployment.save(update_fields=["target_node", "status", "plan_result"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.postflight",
+        payload={"cluster_name": "edge-lab", "namespace": "default"},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="pivot-postflight-ironic-required-command",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "postflight_passed": True,
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "cluster_uid": "source-cluster-uid",
+            "side_effects": False,
+            "complete_hardware_verification": False,
+            "verification_scope": "capi_metal3_without_direct_ironic_api",
+            "ironic_verification": "not_configured",
+            "metal3_observation": {
+                "ready": True,
+                "machine_count": 1,
+                "resolved_machine_count": 1,
+                "ironic": {
+                    "status": "not_configured",
+                    "applicable_node_count": 0,
+                    "verified_node_count": 0,
+                },
+            },
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.worker.preflight",
+    ).exists()
