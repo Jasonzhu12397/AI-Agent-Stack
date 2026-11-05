@@ -3147,7 +3147,10 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware(monkey
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:01"},
@@ -3156,7 +3159,14 @@ def test_verify_baremetal_host_network_macs_matches_consumer_and_hardware(monkey
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
+        profile,
+        network_data,
+        hosts,
+        "worker-infra-1",
+        "default",
+        "metal3-system",
+        "v1alpha1",
+        TEST_INFRA_API_VERSION,
     )
 
     assert result["ready"] is True
@@ -3180,7 +3190,10 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch(monkeypatch):
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:01"},
@@ -3190,7 +3203,14 @@ def test_verify_baremetal_host_network_macs_fails_on_mismatch(monkeypatch):
 
     with pytest.raises(agent.NodeAgentError, match="WORKER_RENDERED_NETWORK_MAC_MISMATCH"):
         agent.verify_baremetal_host_network_macs(
-            profile, network_data, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
+            profile,
+        network_data,
+        hosts,
+        "worker-infra-1",
+        "default",
+        "metal3-system",
+        "v1alpha1",
+        TEST_INFRA_API_VERSION,
         )
 
 
@@ -3204,13 +3224,23 @@ def test_verify_baremetal_host_network_macs_waits_for_hardware_inventory(monkeyp
     hosts = [{
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
         "status": {"hardware": {"nics": []}},
     }]
 
     result = agent.verify_baremetal_host_network_macs(
-        profile, {"links": []}, hosts, "worker-infra-1", "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
+        profile,
+        {"links": []},
+        hosts,
+        "worker-infra-1",
+        "default",
+        "metal3-system",
+        "v1alpha1",
+        TEST_INFRA_API_VERSION,
     )
 
     assert result["ready"] is False
@@ -3227,7 +3257,10 @@ def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer(monkeypat
     host = {
         "metadata": {"name": "bmh-01", "namespace": "metal3-system", "uid": "bmh-uid-01"},
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
     }
 
@@ -3236,8 +3269,14 @@ def test_verify_baremetal_host_network_macs_rejects_ambiguous_consumer(monkeypat
         match="WORKER_BAREMETAL_HOST_CONSUMER_REFERENCE_AMBIGUOUS",
     ):
         agent.verify_baremetal_host_network_macs(
-            profile, {"links": []}, [host, dict(host)], "worker-infra-1",
-            "default", "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
+            profile,
+            {"links": []},
+            [host, dict(host)],
+            "worker-infra-1",
+            "default",
+            "metal3-system",
+            "v1alpha1",
+            TEST_INFRA_API_VERSION,
         )
 
 
@@ -3256,7 +3295,10 @@ def test_verify_baremetal_host_network_macs_reads_owned_hardware_data(monkeypatc
             "uid": "bmh-uid-01",
         },
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
         "status": {"hardware": {"nics": [
             {"name": "eno1", "mac": "02:00:00:00:00:99"},
@@ -3308,7 +3350,10 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
             "uid": "bmh-uid-01",
         },
         "spec": {"consumerRef": {
-            "apiVersion": TEST_INFRA_API_VERSION, "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
+            "apiVersion": TEST_INFRA_API_VERSION,
+            "kind": "Metal3Machine",
+            "name": "worker-infra-1",
+            "namespace": "default",
         }},
         "status": {},
     }
@@ -3335,8 +3380,14 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
         match="WORKER_HARDWARE_DATA_OWNERSHIP_MISMATCH",
     ):
         agent.verify_baremetal_host_network_macs(
-            profile, {"links": []}, [host], "worker-infra-1", "default",
-            "metal3-system", "v1alpha1", TEST_INFRA_API_VERSION
+            profile,
+            {"links": []},
+            [host],
+            "worker-infra-1",
+            "default",
+            "metal3-system",
+            "v1alpha1",
+            TEST_INFRA_API_VERSION,
         )
 
 
