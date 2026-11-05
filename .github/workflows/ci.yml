@@ -82,7 +82,11 @@ jobs:
           docker build -f Dockerfile.web-studio -t ai-agent-web:ci .
           docker run -d --name ai-agent-web-ci -p 127.0.0.1:5174:8080 ai-agent-web:ci
           trap 'docker rm -f ai-agent-web-ci >/dev/null 2>&1 || true' EXIT
-          curl --retry 20 --retry-all-errors --retry-delay 1 --max-time 5 --fail http://localhost:5174/
+          if ! curl --retry 10 --retry-all-errors --retry-delay 1 --max-time 5 --fail http://localhost:5174/; then
+            docker logs ai-agent-web-ci
+            docker inspect ai-agent-web-ci --format '{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}'
+            exit 1
+          fi
       - name: Build and start the complete local stack
         run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
       - name: Smoke test Django API and Vue Studio
