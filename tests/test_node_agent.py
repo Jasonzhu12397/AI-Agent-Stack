@@ -2003,6 +2003,55 @@ def test_metal3_data_template_rejects_missing_or_mismatched_network_config(mutat
         )
 
 
+def valid_rendered_network_data(profile):
+    return {
+        "links": [
+            {
+                "id": profile["control_plane"]["interface"],
+                "type": "phy",
+                "mtu": profile["control_plane"]["mtu"],
+                "ethernet_mac_address": "02:00:00:00:00:01",
+            },
+            *[
+                {
+                    "id": name,
+                    "type": "phy",
+                    "mtu": profile["data_plane"]["mtu"],
+                    "ethernet_mac_address": "02:00:00:00:00:02",
+                }
+                for name in profile["data_plane"]["interfaces"]
+            ],
+        ]
+    }
+
+
+def test_rendered_network_data_verifies_actual_interface_links():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    result = agent.validate_rendered_network_data(
+        profile, valid_rendered_network_data(profile)
+    )
+    assert result["verified"] is True
+    assert result["interface_names"] == ["eno1", "ens2f0"]
+
+
+def test_rendered_network_data_rejects_missing_interface_and_invalid_mac():
+    profile = agent.validate_network_profile(valid_dual_network_profile())
+    network_data = valid_rendered_network_data(profile)
+    network_data["links"].pop()
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="METAL3_RENDERED_NETWORK_INTERFACE_MISSING_OR_DUPLICATE",
+    ):
+        agent.validate_rendered_network_data(profile, network_data)
+    network_data = valid_rendered_network_data(profile)
+    network_data["links"][0]["ethernet_mac_address"] = "not-a-mac"
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="METAL3_RENDERED_NETWORK_INTERFACE_CONFIGURATION_MISMATCH",
+    ):
+        agent.validate_rendered_network_data(profile, network_data)
+
+
 @pytest.mark.parametrize("node_type", ["eph_node", "target_cluster"])
 def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch, node_type):
     calls = []
