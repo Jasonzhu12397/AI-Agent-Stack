@@ -3256,7 +3256,10 @@ def test_verify_baremetal_host_network_macs_reads_owned_hardware_data(monkeypatc
         "spec": {"consumerRef": {
             "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-infra-1", "namespace": "default"
         }},
-        "status": {},
+        "status": {"hardware": {"nics": [
+            {"name": "eno1", "mac": "02:00:00:00:00:99"},
+            {"name": "ens2f0", "mac": "02:00:00:00:00:98"},
+        ]}},
     }
     requested = []
 
