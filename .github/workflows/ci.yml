@@ -42,7 +42,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Validate deployment script syntax
-        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh
+        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh && bash -n deploy/cloud-control-plane/deploy.sh
       - name: Lint
         run: ruff check .
       - name: Django system checks
