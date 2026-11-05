@@ -3,6 +3,7 @@ import pytest
 from node_agent import agent
 from node_agent.provider_compatibility import (
     ProviderCompatibilityError,
+    discover_provider_images,
     evaluate_provider_compatibility,
 )
 
@@ -125,7 +126,79 @@ def test_unknown_payload_fields_are_rejected():
 
 
 
-def test_node_agent_compatibility_command_uses_live_kubernetes_and_capi_api(monkeypatch):
+def provider_deployments():
+    components = [
+        ("capm3", "cluster-api-provider-metal3", "v1.14.0"),
+        ("bmo", "baremetal-operator", "v0.14.0"),
+        ("ironic", "ironic", "v37.0.0"),
+        ("irso", "ironic-standalone-operator", "v0.12.0"),
+    ]
+    return [
+        {
+            "metadata": {
+                "name": component + "-controller",
+                "namespace": "metal3-system",
+            },
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": component,
+                                "image": "quay.io/metal3-io/" + image_name + ":" + version,
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+        for component, image_name, version in components
+    ]
+
+
+def test_live_provider_image_inventory_extracts_component_versions():
+    result = discover_provider_images(provider_deployments())
+
+    assert result["complete"] is True
+    assert result["provider_versions"] == {
+        "capm3": "v1.14.0",
+        "bmo": "v0.14.0",
+        "ironic": "v37.0.0",
+        "irso": "v0.12.0",
+    }
+    assert result["image_count"] == 4
+    assert result["side_effects"] is False
+
+
+def test_live_provider_image_inventory_fails_on_missing_or_ambiguous_components():
+    incomplete = discover_provider_images(provider_deployments()[:-1])
+    assert incomplete["complete"] is False
+    assert "provider_image_not_discovered:irso" in incomplete["blockers"]
+
+    deployments = provider_deployments()
+    duplicate = dict(deployments[0])
+    duplicate["metadata"] = {
+        "name": "capm3-controller-new",
+        "namespace": "metal3-system",
+    }
+    duplicate["spec"] = {
+        "template": {
+            "spec": {
+                "containers": [
+                    {
+                        "name": "capm3",
+                        "image": "quay.io/metal3-io/cluster-api-provider-metal3:v1.13.0",
+                    }
+                ]
+            }
+        }
+    }
+    ambiguous = discover_provider_images(deployments + [duplicate])
+    assert ambiguous["complete"] is False
+    assert "provider_image_version_ambiguous:capm3" in ambiguous["blockers"]
+
+
+def test_node_agent_compatibility_command_uses_live_deployment_images_and_api(monkeypatch):
     def fake_get(path):
         if path == "/version":
             return {"gitVersion": "v1.32.2"}
@@ -141,30 +214,32 @@ def test_node_agent_compatibility_command_uses_live_kubernetes_and_capi_api(monk
         raise AssertionError(path)
 
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
-    result = agent.execute_command(
-        {
-            "command_type": "cluster.provider.compatibility",
-            "payload": {
-                "provider_versions": {
-                    "capm3": "1.14.0",
-                    "bmo": "0.14.0",
-                    "ironic": "37.0.0",
-                    "irso": "0.12.0",
-                }
-            },
-        },
-        "eph_node",
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: provider_deployments(),
     )
+    for node_type in ["eph_node", "target_cluster"]:
+        result = agent.execute_command(
+            {
+                "command_type": "cluster.provider.compatibility",
+                "payload": {},
+            },
+            node_type,
+        )
 
-    assert result["compatibility_status"] == "supported"
-    assert result["kubernetes_version"] == "v1.32.2"
-    assert result["capi_api_version"] == "v1beta2"
-    assert result["upstream_ci_profile_tested"] is True
-    assert result["mutation_authorized"] is False
+        assert result["compatibility_status"] == "supported"
+        assert result["kubernetes_version"] == "v1.32.2"
+        assert result["capi_api_version"] == "v1beta2"
+        assert result["upstream_ci_profile_tested"] is True
+        assert result["component_versions_source"] == (
+            "live_kubernetes_deployment_pod_template_images"
+        )
+        assert result["mutation_authorized"] is False
 
 
-def test_node_agent_compatibility_command_is_not_enabled_on_target_role():
-    with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+def test_node_agent_compatibility_command_rejects_caller_supplied_versions(monkeypatch):
+    with pytest.raises(agent.NodeAgentError, match="PROVIDER_COMPATIBILITY_PAYLOAD_INVALID"):
         agent.execute_command(
             {
                 "command_type": "cluster.provider.compatibility",
@@ -177,5 +252,5 @@ def test_node_agent_compatibility_command_is_not_enabled_on_target_role():
                     }
                 },
             },
-            "target_cluster",
+            "eph_node",
         )
