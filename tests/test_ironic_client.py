@@ -1,5 +1,6 @@
 import json
 import urllib.error
+import urllib.request
 
 import pytest
 from node_agent.ironic_client import (
@@ -89,7 +90,7 @@ def test_get_ironic_node_uses_tls_token_and_read_only_get():
 
 def test_redirect_handler_never_forwards_authenticated_request():
     handler = _NoRedirectHandler()
-    request = __import__("urllib.request").request.Request(
+    request = urllib.request.Request(
         "https://ironic.example.test/v1/nodes/" + NODE_UUID,
         headers={"X-Auth-Token": "secret"},
     )
