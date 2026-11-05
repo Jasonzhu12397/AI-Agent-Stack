@@ -759,11 +759,24 @@ class PluginConnectionTestView(APIView):
             credential_ref=connection.credential_ref,
             plugin_manifest=manifest,
         )
+        health_arguments = health_check.get("arguments", {})
+        if (
+            not isinstance(health_arguments, dict)
+            or _contains_sensitive_key(health_arguments)
+        ):
+            return Response(
+                {"detail": "Connector health-check arguments must be a non-sensitive JSON object."},
+                status=409,
+            )
         try:
             execute_http_operation(
-                {},
+                health_arguments,
                 context,
-                SimpleNamespace(name="__health_check__", timeout_seconds=15),
+                SimpleNamespace(
+                    name="__health_check__",
+                    timeout_seconds=15,
+                    idempotency_mode="read_only",
+                ),
             )
         except ToolExecutionError as exc:
             connection.status = PluginConnection.Status.ERROR
