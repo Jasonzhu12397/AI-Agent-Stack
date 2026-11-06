@@ -389,8 +389,6 @@ class ToolRouterTests(unittest.TestCase):
                 granted_permissions=["sample:read"],
             )
 
-if __name__ == "__main__":
-    unittest.main()
 
 
     def test_approved_high_risk_tool_executes_handler(self):
@@ -411,3 +409,6 @@ if __name__ == "__main__":
         )
         self.assertEqual(result["result"], {"items": ["sent"]})
         self.assertEqual(observed, ["approved notification"])
+
+if __name__ == "__main__":
+    unittest.main()
