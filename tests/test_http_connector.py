@@ -644,7 +644,10 @@ def test_http_connector_rejects_query_credential_unless_operation_explicitly_all
         timeout_seconds=5,
         idempotency_mode="read_only",
     )
-    with override_settings(PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve"):
+    with override_settings(
+        PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"],
+        PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve",
+    ):
         with pytest.raises(ToolExecutionError, match="does not match"):
             execute_http_operation(
                 {"query": "coffee"},
