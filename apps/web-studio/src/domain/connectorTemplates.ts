@@ -11,11 +11,13 @@ export type ConnectorTemplate = {
 const objectSchema = (
   properties: Record<string, unknown>,
   required: string[] = [],
+  constraints: Record<string, unknown> = {},
 ): Record<string, unknown> => ({
   type: "object",
   properties,
   required,
   additionalProperties: false,
+  ...constraints,
 });
 
 const readOnlyTool = (
@@ -737,6 +739,8 @@ export const connectorTemplates: ConnectorTemplate[] = [
             photo_show: { type: "string", enum: ["true", "false"] },
             ret_coordtype: { type: "string", enum: ["bd09ll", "gcj02ll"] },
             output: { type: "string", enum: ["json"] },
+          }, [], {
+            anyOf: [{ required: ["uid"] }, { required: ["uids"] }],
           }),
           objectSchema({
             status: { type: "integer" },
