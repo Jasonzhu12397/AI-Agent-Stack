@@ -246,5 +246,78 @@ class ToolRouterTests(unittest.TestCase):
         self.assertEqual(result["result"]["items"], ["v2"])
 
 
+    def test_validates_constraints_inside_array_items(self):
+        installation, tool = fixture()
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 3, "enum": ["ok", "yes"]},
+                    "maxItems": 4,
+                }
+            },
+            "required": ["tags"],
+            "additionalProperties": False,
+        }
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+        with self.assertRaisesRegex(ToolExecutionError, "invalid length|allowed value"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"tags": ["valid", "bad"]},
+                granted_permissions=["sample:read"],
+            )
+
+    def test_validates_numeric_bounds_and_nested_arrays(self):
+        installation, tool = fixture()
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "matrix": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "minItems": 1,
+                        "maxItems": 2,
+                    },
+                    "maxItems": 2,
+                }
+            },
+            "required": ["matrix"],
+            "additionalProperties": False,
+        }
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+        with self.assertRaisesRegex(ToolExecutionError, "below its minimum"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"matrix": [[0]]},
+                granted_permissions=["sample:read"],
+            )
+
+    def test_rejects_non_finite_numbers_inside_arrays(self):
+        installation, tool = fixture()
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "values": {"type": "array", "items": {"type": "number"}, "maxItems": 3}
+            },
+            "required": ["values"],
+            "additionalProperties": False,
+        }
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+        with self.assertRaisesRegex(ToolExecutionError, "finite"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"values": [float("nan")]},
+                granted_permissions=["sample:read"],
+            )
+
 if __name__ == "__main__":
     unittest.main()
