@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from core.tool_router import ToolExecutionError, ToolRouter
+from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 
 
 def fixture(risk="low"):
@@ -89,7 +89,7 @@ class ToolRouterTests(unittest.TestCase):
         installation, tool = fixture(risk="high")
         router = ToolRouter()
         router.register("sample", "lookup", lambda args, context: {"items": []})
-        with self.assertRaisesRegex(ToolExecutionError, "approval"):
+        with self.assertRaisesRegex(ToolApprovalRequired, "approval"):
             router.execute(
                 installation=installation,
                 tool=tool,
