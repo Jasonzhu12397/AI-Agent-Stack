@@ -238,7 +238,7 @@ class ToolApprovalDecisionView(APIView):
         record_audit_event(
             request,
             tenant,
-            f"plugin.tool_approval.{decision}d",
+            f"plugin.tool_approval.{ 'approved' if decision == 'approve' else 'rejected' }",
             "tool_approval",
             approval.id,
             project=project,
