@@ -62,9 +62,9 @@ def _validate_base_url(base_url):
     return base_url.rstrip("/")
 
 
-def _resolve_auth_headers(context):
+def _resolve_auth(context):
     if context.connection_auth_type == "none":
-        return {}
+        return {}, None
     if not context.credential_ref:
         raise ToolExecutionError("Connector credential reference is missing.")
     resolver_path = getattr(settings, "PLUGIN_CREDENTIAL_RESOLVER", "")
@@ -73,16 +73,16 @@ def _resolve_auth_headers(context):
     try:
         resolver = import_string(resolver_path)
         credential = resolver(context.credential_ref)
-    except Exception as exc:
-        raise ToolExecutionError("Connector credential could not be resolved.") from exc
+    except Exception:
+        raise ToolExecutionError("Connector credential could not be resolved.") from None
     if not isinstance(credential, dict):
         raise ToolExecutionError("Credential resolver returned an invalid credential.")
     credential_type = credential.get("type")
     if credential_type == "bearer":
         token = credential.get("token")
-        if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
+        if not isinstance(token, str) or not token or "\\n" in token or "\\r" in token:
             raise ToolExecutionError("Credential resolver returned an invalid bearer token.")
-        return {"Authorization": "Bearer " + token}
+        return {"Authorization": "Bearer " + token}, None
     if credential_type == "header":
         name = credential.get("name")
         value = credential.get("value")
@@ -91,13 +91,33 @@ def _resolve_auth_headers(context):
             or not HEADER_NAME.fullmatch(name)
             or not isinstance(value, str)
             or not value
-            or "\n" in value
-            or "\r" in value
+            or "\\n" in value
+            or "\\r" in value
             or name.lower() in {"host", "content-length", "transfer-encoding"}
         ):
             raise ToolExecutionError("Credential resolver returned an invalid header credential.")
-        return {name: value}
+        return {name: value}, None
+    if credential_type == "query":
+        name = credential.get("name")
+        value = credential.get("value")
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", name)
+            or not isinstance(value, str)
+            or not value
+            or len(value) > 4096
+            or any(ord(char) < 32 for char in value)
+        ):
+            raise ToolExecutionError("Credential resolver returned an invalid query credential.")
+        return {}, (name, value)
     raise ToolExecutionError("Credential resolver returned an unsupported credential type.")
+
+
+def _resolve_auth_headers(context):
+    headers, query_credential = _resolve_auth(context)
+    if query_credential is not None:
+        raise ToolExecutionError("Query credentials require an explicitly configured operation.")
+    return headers
 
 
 def _operation_config(context, tool):
@@ -145,6 +165,7 @@ def _operation_config(context, tool):
     query_params = operation.get("query_params", {})
     body_param = operation.get("body_param")
     configured_headers = operation.get("headers", {})
+    auth_query_parameter = operation.get("auth_query_parameter")
     if not isinstance(configured_headers, dict):
         raise ToolExecutionError("Connector operation headers are invalid.")
     static_headers = {}
@@ -166,6 +187,11 @@ def _operation_config(context, tool):
         ):
             raise ToolExecutionError("Connector operation contains an unsafe static header.")
         static_headers[name] = value
+    if auth_query_parameter is not None and (
+        not isinstance(auth_query_parameter, str)
+        or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", auth_query_parameter)
+    ):
+        raise ToolExecutionError("Connector authentication query parameter is invalid.")
     if (
         not isinstance(path_params, dict)
         or not isinstance(query_params, dict)
@@ -192,11 +218,11 @@ def _operation_config(context, tool):
         mapped_args.add(body_param)
     if len(mapped_args) != len(path_params) + len(query_params) + (1 if body_param else 0):
         raise ToolExecutionError("Connector HTTP argument mapping contains duplicates.")
-    return parsed_base, method.upper(), path, path_params, query_params, body_param, static_headers
+    return parsed_base, method.upper(), path, path_params, query_params, body_param, static_headers, auth_query_parameter
 
 
 def execute_http_operation(arguments, context: ToolContext, tool):
-    base, method, path, path_params, query_params, body_param, static_headers = _operation_config(
+    base, method, path, path_params, query_params, body_param, static_headers, auth_query_parameter = _operation_config(
         context,
         tool,
     )
@@ -230,6 +256,16 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                 raise ToolExecutionError("Connector query parameters must be scalar values.")
             query.append((key, str(item)))
 
+    auth_headers, auth_query = _resolve_auth(context)
+    if auth_query is not None:
+        if auth_query_parameter != auth_query[0]:
+            raise ToolExecutionError("Connector query credential does not match the operation configuration.")
+        if any(key == auth_query[0] for key, _ in query):
+            raise ToolExecutionError("Connector query credential conflicts with an operation argument.")
+        query.append(auth_query)
+    elif auth_query_parameter is not None:
+        raise ToolExecutionError("Connector operation requires a query credential.")
+
     body = arguments.get(body_param) if body_param else None
     if body is not None:
         try:
@@ -248,7 +284,7 @@ def execute_http_operation(arguments, context: ToolContext, tool):
 
     url = str(base).rstrip("/") + rendered_path
     headers = {"Accept": "application/json"}
-    headers.update(_resolve_auth_headers(context))
+    headers.update(auth_headers)
     headers.update(static_headers)
     timeout_seconds = min(max(int(tool.timeout_seconds), 1), 300)
     timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10))
@@ -290,8 +326,8 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                 payload = b"".join(chunks)
     except ToolExecutionError:
         raise
-    except httpx.HTTPError as exc:
-        raise ToolExecutionError("Connector HTTP request failed.") from exc
+    except httpx.HTTPError:
+        raise ToolExecutionError("Connector HTTP request failed.") from None
 
     try:
         result = json.loads(
