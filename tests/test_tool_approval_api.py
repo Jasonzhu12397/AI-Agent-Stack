@@ -183,6 +183,9 @@ def test_project_admin_can_reject_and_stop_waiting_task(approval_context):
     task.refresh_from_db()
     assert approval.status == ToolApprovalRequest.Status.REJECTED
     assert approval.rejection_reason == "Change not authorized"
+    assert approval.rejected_by_id == ctx["admin"].id
+    assert approval.rejected_at is not None
+    assert approval.approved_by_id is None
     assert task.status == Task.Status.FAILED
     assert task.error["code"] == "TOOL_APPROVAL_REJECTED"
 
