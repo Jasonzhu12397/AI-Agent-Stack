@@ -20,6 +20,7 @@ from core.models import (
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
+from core.tool_approvals import create_pending_tool_approval
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
@@ -30,6 +31,10 @@ from django.utils import timezone
 
 
 class PermanentTaskError(Exception):
+    pass
+
+
+class TaskSuspendedForApproval(Exception):
     pass
 
 
@@ -368,6 +373,12 @@ def _execute_agent_tool(task, tool, arguments):
             connection=connection,
             approved=False,
         )
+    except ToolApprovalRequired as exc:
+        exc.tool = tool
+        exc.installation = installation
+        exc.connection = connection
+        exc.arguments = arguments
+        raise
     except ToolExecutionError:
         _record_connector_tool_event(
             task,
@@ -542,14 +553,40 @@ def execute_agent_run(task):
                 "tool_calls": response.tool_calls,
             }
         )
-        for call in calls:
+        for call_index, call in enumerate(calls):
             tool = tools_by_name[call["name"]]
             _renew_agent_lease(task)
             try:
                 result = _execute_agent_tool(task, tool, call["arguments"])
             except ToolApprovalRequired as exc:
-                raise PermanentTaskError(
-                    "Agent execution stopped because a connector tool requires approval"
+                checkpoint = {
+                    "version": 1,
+                    "messages": messages,
+                    "pending_calls": calls[call_index:],
+                    "iteration": _,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "latency_ms": latency_ms,
+                    "total_tool_calls": total_tool_calls,
+                    "max_iterations": max_iterations,
+                    "model_config_id": str(model_config.id),
+                }
+                try:
+                    create_pending_tool_approval(
+                        task_id=task.id,
+                        tool=exc.tool,
+                        installation=exc.installation,
+                        connection=exc.connection,
+                        call_id=call["id"],
+                        arguments=exc.arguments,
+                        execution_checkpoint=checkpoint,
+                    )
+                except (ValueError, TypeError) as checkpoint_error:
+                    raise PermanentTaskError(
+                        "Unable to persist the high-risk tool approval checkpoint"
+                    ) from checkpoint_error
+                raise TaskSuspendedForApproval(
+                    "Agent run is waiting for explicit connector tool approval"
                 ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
@@ -657,6 +694,8 @@ def process_task(task, worker_id):
     try:
         result = execute_task(task, worker_id)
         finish_task(task.id, task.lease_token, result)
+    except TaskSuspendedForApproval:
+        return
     except PermanentTaskError as exc:
         fail_task(
             task.id,
