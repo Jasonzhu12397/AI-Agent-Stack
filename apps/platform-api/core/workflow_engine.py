@@ -630,6 +630,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
                 workflow.project,
                 workflow_run.task,
             )
+            if not renew_lease(task.id, task.lease_token, worker_id):
+                raise RuntimeError("Workflow task cancellation requested or lease lost")
         except Exception as exc:
             step.status = WorkflowStepRun.Status.FAILED
             step.error = {
