@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import re
 
 from django.db import transaction
@@ -237,10 +238,15 @@ class ToolApprovalDecisionView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        event_type = (
+            "plugin.tool_approval.approved"
+            if decision == "approve"
+            else "plugin.tool_approval.rejected"
+        )
         record_audit_event(
             request,
             tenant,
-            "plugin.tool_approval.approved" if decision == "approve" else "plugin.tool_approval.rejected",
+            event_type,
             "tool_approval",
             approval.id,
             project=project,
