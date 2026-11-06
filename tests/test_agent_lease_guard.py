@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from worker_app import tasks
 
 
