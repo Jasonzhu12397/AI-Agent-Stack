@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createKnowledgeBase,
   createKnowledgeDocument,
+  deleteKnowledgeDocument,
   getKnowledgeBases,
   getKnowledgeDocuments,
   getModelConfigs,
@@ -24,6 +25,7 @@ const title = ref("");
 const content = ref("");
 const error = ref("");
 const busy = ref(false);
+const deletingDocumentId = ref("");
 let timer: number | undefined;
 
 async function loadDocs(): Promise<void> {
@@ -97,6 +99,25 @@ async function addDocument(): Promise<void> {
   }
 }
 
+
+async function deleteDocument(document: KnowledgeDocument): Promise<void> {
+  if (deletingDocumentId.value || busy.value) return;
+  if (!window.confirm(`Delete "${document.title}" and its indexed vectors?`)) return;
+  deletingDocumentId.value = document.id;
+  error.value = "";
+  try {
+    await deleteKnowledgeDocument(document.id);
+    docs.value = docs.value.filter((item) => item.id !== document.id);
+    const base = bases.value.find((item) => item.id === baseId.value);
+    if (base && base.document_count > 0) base.document_count -= 1;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to delete document.";
+    await loadDocs();
+  } finally {
+    deletingDocumentId.value = "";
+  }
+}
+
 watch(baseId, () => void loadDocs());
 watch(() => [props.tenantId, props.projectId], () => void load());
 onMounted(() => {
@@ -161,6 +182,19 @@ onUnmounted(() => {
         <el-table-column prop="title" label="Document" min-width="180" />
         <el-table-column prop="status" label="Status" width="120" />
         <el-table-column prop="chunk_count" label="Chunks" width="90" />
+        <el-table-column label="Actions" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="danger"
+              text
+              :loading="deletingDocumentId === row.id"
+              :disabled="Boolean(deletingDocumentId) || busy"
+              @click="deleteDocument(row)"
+            >
+              Delete
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <el-empty v-else description="No documents yet" :image-size="72" />
       <p class="task-note">Worker ingestion stores chunks in Qdrant. Only text input is enabled in this milestone.</p>
