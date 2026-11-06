@@ -26,7 +26,7 @@ from core.workflow_engine import (
 )
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
-from worker_app.tasks import process_once
+from worker_app.tasks import process_once, renew_lease
 
 
 def linear_workflow(model_id):
@@ -180,10 +180,7 @@ def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
     run_id = run_response.data["id"]
     assert run_response.data["task_status"] == Task.Status.QUEUED
 
-    with patch("worker_app.tasks.renew_lease", wraps=__import__(
-        "worker_app.tasks",
-        fromlist=["renew_lease"],
-    ).renew_lease) as heartbeat:
+    with patch("worker_app.tasks.renew_lease", wraps=renew_lease) as heartbeat:
         assert process_once("workflow-test-worker") is True
 
     assert heartbeat.call_count == 6
