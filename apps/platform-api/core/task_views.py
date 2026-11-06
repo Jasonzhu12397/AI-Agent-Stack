@@ -16,6 +16,7 @@ from core.models import (
     ProjectMembership,
     Task,
     Tenant,
+    ToolApprovalRequest,
     TenantMembership,
 )
 from core.serializers import TaskSerializer
@@ -189,6 +190,14 @@ class TaskCancelView(APIView):
                     "updated_at",
                 ]
             )
+            if task.status == Task.Status.CANCELLED:
+                ToolApprovalRequest.objects.filter(
+                    task=task,
+                    status__in=[
+                        ToolApprovalRequest.Status.PENDING,
+                        ToolApprovalRequest.Status.APPROVED,
+                    ],
+                ).update(status=ToolApprovalRequest.Status.CANCELLED)
             if task.task_type == "agent.run" and task.status == Task.Status.CANCELLED:
                 AgentRun.objects.filter(task=task).update(finished_at=timezone.now())
             if task.task_type == "workflow.run" and task.status == Task.Status.CANCELLED:
