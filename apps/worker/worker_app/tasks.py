@@ -16,11 +16,16 @@ from core.models import (
     PluginInstallation,
     PluginTool,
     Task,
+    ToolApprovalRequest,
     WorkflowRun,
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
-from core.tool_approvals import create_pending_tool_approval
+from core.tool_approvals import (
+    consume_approved_tool_call,
+    create_pending_tool_approval,
+    validate_execution_checkpoint,
+)
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
@@ -365,13 +370,24 @@ def _execute_agent_tool(task, tool, arguments):
         )
     connection = connections[0] if connections else None
     try:
+        approved = consume_approved_tool_call(
+            task=task,
+            tool=tool,
+            installation=installation,
+            connection=connection,
+            call_id=getattr(task, "_active_tool_call_id", ""),
+            arguments=arguments,
+        )
+    except ValueError as exc:
+        raise PermanentTaskError("Approved connector tool call failed integrity checks") from exc
+    try:
         result = TOOL_ROUTER.execute(
             installation=installation,
             tool=tool,
             arguments=arguments,
             granted_permissions=installation.granted_permissions,
             connection=connection,
-            approved=False,
+            approved=approved,
         )
     except ToolApprovalRequired as exc:
         exc.tool = tool
@@ -497,73 +513,123 @@ def execute_agent_run(task):
     output_tokens = 0
     latency_ms = 0
     total_tool_calls = 0
-    gateway = ModelGateway()
-    max_iterations = config.get("max_iterations", 4)
-    if (
-        not isinstance(max_iterations, int)
-        or isinstance(max_iterations, bool)
-        or not 1 <= max_iterations <= 8
-    ):
-        raise PermanentTaskError("Published agent max_iterations is invalid")
-    for _ in range(max_iterations):
-        _renew_agent_lease(task)
-        try:
-            response = gateway.complete(
-                model_config,
-                messages,
-                max_tokens=config["max_tokens"],
-                timeout_seconds=config["timeout_seconds"],
-                tools=offered_tools if offered_tools else None,
-                tool_choice="auto" if offered_tools else None,
-            )
-        except ModelGatewayError as exc:
-            if exc.retryable:
-                raise RuntimeError(exc.code) from exc
-            raise PermanentTaskError(exc.code) from exc
-        _renew_agent_lease(task)
-        input_tokens += response.input_tokens
-        output_tokens += response.output_tokens
-        latency_ms += response.latency_ms
-        if not response.tool_calls:
-            return {
-                "content": response.content,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "provider": response.provider,
-                "model": response.model,
-                "latency_ms": latency_ms,
-                "tool_calls": total_tool_calls,
-            }
-        if not offered_tools:
-            raise PermanentTaskError("Model returned tool calls but no tools were authorized")
-        try:
-            calls = parse_openai_tool_calls(
-                {"tool_calls": response.tool_calls},
-                offered_tools,
-            )
-        except ValueError as exc:
-            raise PermanentTaskError("Model returned invalid tool calls") from exc
-        total_tool_calls += len(calls)
-        if total_tool_calls > MAX_AGENT_TOOL_CALLS:
-            raise PermanentTaskError("Agent exceeded the total tool-call limit")
-        messages.append(
-            {
-                "role": "assistant",
-                "content": response.content or None,
-                "tool_calls": response.tool_calls,
-            }
+    start_iteration = 0
+    resume_calls = None
+    approved_call_id = None
+    resume_approval = (
+        ToolApprovalRequest.objects.filter(
+            task=task,
+            status=ToolApprovalRequest.Status.APPROVED,
         )
+        .order_by("-requested_at")
+        .first()
+    )
+    if resume_approval is not None:
+        try:
+            checkpoint = validate_execution_checkpoint(resume_approval.execution_checkpoint)
+            raw_calls = checkpoint["raw_tool_calls"]
+            call_index = checkpoint["call_index"]
+            if not isinstance(raw_calls, list) or not isinstance(call_index, int):
+                raise ValueError("Invalid pending tool call checkpoint")
+            if isinstance(call_index, bool) or call_index < 0 or call_index >= len(raw_calls):
+                raise ValueError("Invalid pending tool call index")
+            if str(model_config.id) != checkpoint["model_config_id"]:
+                raise ValueError("Model configuration changed while approval was pending")
+            resume_calls = parse_openai_tool_calls(
+                {"tool_calls": raw_calls},
+                offered_tools,
+            )[call_index:]
+            if not resume_calls or resume_calls[0]["id"] != resume_approval.call_id:
+                raise ValueError("Approved call does not match the execution checkpoint")
+            messages = checkpoint["messages"]
+            if not isinstance(messages, list) or not messages:
+                raise ValueError("Execution checkpoint messages are invalid")
+            input_tokens = checkpoint["input_tokens"]
+            output_tokens = checkpoint["output_tokens"]
+            latency_ms = checkpoint["latency_ms"]
+            total_tool_calls = checkpoint["total_tool_calls"]
+            start_iteration = checkpoint["iteration"]
+            if (
+                not isinstance(start_iteration, int)
+                or isinstance(start_iteration, bool)
+                or start_iteration < 0
+                or start_iteration >= max_iterations
+            ):
+                raise ValueError("Execution checkpoint iteration is invalid")
+            approved_call_id = resume_approval.call_id
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PermanentTaskError("Approved agent execution checkpoint is invalid") from exc
+
+    gateway = ModelGateway()
+    for iteration in range(start_iteration, max_iterations):
+        _renew_agent_lease(task)
+        if resume_calls is not None:
+            calls = resume_calls
+            resume_calls = None
+        else:
+            try:
+                response = gateway.complete(
+                    model_config,
+                    messages,
+                    max_tokens=config["max_tokens"],
+                    timeout_seconds=config["timeout_seconds"],
+                    tools=offered_tools if offered_tools else None,
+                    tool_choice="auto" if offered_tools else None,
+                )
+            except ModelGatewayError as exc:
+                if exc.retryable:
+                    raise RuntimeError(exc.code) from exc
+                raise PermanentTaskError(exc.code) from exc
+            _renew_agent_lease(task)
+            input_tokens += response.input_tokens
+            output_tokens += response.output_tokens
+            latency_ms += response.latency_ms
+            if not response.tool_calls:
+                return {
+                    "content": response.content,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "provider": response.provider,
+                    "model": response.model,
+                    "latency_ms": latency_ms,
+                    "tool_calls": total_tool_calls,
+                }
+            if not offered_tools:
+                raise PermanentTaskError("Model returned tool calls but no tools were authorized")
+            try:
+                calls = parse_openai_tool_calls(
+                    {"tool_calls": response.tool_calls},
+                    offered_tools,
+                )
+            except ValueError as exc:
+                raise PermanentTaskError("Model returned invalid tool calls") from exc
+            total_tool_calls += len(calls)
+            if total_tool_calls > MAX_AGENT_TOOL_CALLS:
+                raise PermanentTaskError("Agent exceeded the total tool-call limit")
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content or None,
+                    "tool_calls": response.tool_calls,
+                }
+            )
         for call_index, call in enumerate(calls):
             tool = tools_by_name[call["name"]]
             _renew_agent_lease(task)
+            task._active_tool_call_id = call["id"]
             try:
                 result = _execute_agent_tool(task, tool, call["arguments"])
             except ToolApprovalRequired as exc:
                 checkpoint = {
                     "version": 1,
                     "messages": messages,
-                    "pending_calls": calls[call_index:],
-                    "iteration": _,
+                    "raw_tool_calls": (
+                        response.tool_calls
+                        if resume_calls is None and "response" in locals()
+                        else resume_approval.execution_checkpoint["raw_tool_calls"]
+                    ),
+                    "call_index": call_index,
+                    "iteration": iteration,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "latency_ms": latency_ms,
@@ -590,6 +656,8 @@ def execute_agent_run(task):
                 ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
+            finally:
+                task._active_tool_call_id = ""
             messages.append(
                 {
                     "role": "tool",
@@ -597,6 +665,8 @@ def execute_agent_run(task):
                     "content": _serialize_agent_tool_result(result),
                 }
             )
+            if call["id"] == approved_call_id:
+                approved_call_id = None
     raise PermanentTaskError("Agent reached max_iterations before producing a final answer")
 
 
