@@ -674,6 +674,79 @@ def test_target_agent_checkpoint_blocks_phase_skips_and_eph_reclaim(
     assert checkpoint.phase == "target_agent_bootstrap"
 
 
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("worker_count", [3, 5])
+def test_worker_pool_checkpoint_must_match_requested_replica_count(
+    cluster_delivery_workspace,
+    worker_count,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-worker-count-gate-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="worker-count-gate-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="worker-count-gate-" + str(worker_count),
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.plan_result = {
+        "dual_agent": {"target_agent_owns_cluster": True},
+    }
+    deployment.save(update_fields=["status", "plan_result"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+    ClusterDeploymentCheckpoint.objects.create(
+        deployment=deployment,
+        agent_node=target_node,
+        generation=1,
+        sequence=1,
+        phase="worker_provisioning",
+        data={},
+    )
+
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/",
+        {
+            "node_id": str(target_node.id),
+            "generation": 1,
+            "sequence": 2,
+            "phase": "worker_pool_verified",
+            "data": {
+                "worker_count": worker_count,
+                "ready_worker_count": worker_count,
+                "not_ready_worker_names": [],
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "WORKER_POOL_NOT_FULLY_READY"
+    assert response.data["expected_worker_count"] == 4
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.phase == "worker_provisioning"
+    assert checkpoint.sequence == 1
+
+
 @pytest.mark.django_db
 def test_target_agent_checkpoint_rejects_replay_and_credentials(
     cluster_delivery_workspace,
