@@ -162,6 +162,18 @@ class TaskCancelView(APIView):
     def post(self, request, task_id):
         task = TaskDetailView().get_task(request, task_id)
         with transaction.atomic():
+            approval_ids = list(
+                ToolApprovalRequest.objects.select_for_update()
+                .filter(
+                    task=task,
+                    status__in=[
+                        ToolApprovalRequest.Status.PENDING,
+                        ToolApprovalRequest.Status.APPROVED,
+                    ],
+                )
+                .order_by("id")
+                .values_list("id", flat=True)
+            )
             task = Task.objects.select_for_update().get(pk=task.pk)
             if task.status == Task.Status.QUEUED:
                 task.status = Task.Status.CANCELLED
@@ -190,14 +202,10 @@ class TaskCancelView(APIView):
                     "updated_at",
                 ]
             )
-            if task.status == Task.Status.CANCELLED:
-                ToolApprovalRequest.objects.filter(
-                    task=task,
-                    status__in=[
-                        ToolApprovalRequest.Status.PENDING,
-                        ToolApprovalRequest.Status.APPROVED,
-                    ],
-                ).update(status=ToolApprovalRequest.Status.CANCELLED)
+            if task.status == Task.Status.CANCELLED and approval_ids:
+                ToolApprovalRequest.objects.filter(id__in=approval_ids).update(
+                    status=ToolApprovalRequest.Status.CANCELLED
+                )
             if task.task_type == "agent.run" and task.status == Task.Status.CANCELLED:
                 AgentRun.objects.filter(task=task).update(finished_at=timezone.now())
             if task.task_type == "workflow.run" and task.status == Task.Status.CANCELLED:
