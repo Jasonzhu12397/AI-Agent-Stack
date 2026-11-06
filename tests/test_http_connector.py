@@ -10,7 +10,7 @@ from core.http_connector import (
     execute_http_operation,
     register_http_tool,
 )
-from core.tool_router import ToolExecutionError, ToolRouter
+from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 
 
 class FakeResponse:
@@ -959,40 +959,93 @@ def test_http_connector_allows_only_explicit_approval_gated_side_effect_post(mon
             (2, 1, 6, "", ("93.184.216.34", 443))
         ],
     )
-    manifest = {
-        "http": {
-            "base_url": "https://api.example.com",
-            "operations": {
-                "send-message": {
-                    "method": "POST",
-                    "path": "/v1/messages",
-                    "path_params": {},
-                    "query_params": {},
-                    "body_param": "payload",
-                    "read_only": False,
-                    "requires_approval": True,
+    plugin = SimpleNamespace(
+        id="plugin-message",
+        plugin_key="sample-message",
+        version="1.0.0",
+        connector_type="http",
+        enabled=True,
+        review_status="approved",
+        manifest={
+            "http": {
+                "base_url": "https://api.example.com",
+                "operations": {
+                    "send-message": {
+                        "method": "POST",
+                        "path": "/v1/messages",
+                        "path_params": {},
+                        "query_params": {},
+                        "body_param": "payload",
+                        "read_only": False,
+                        "requires_approval": True,
+                    }
+                },
+            }
+        },
+    )
+    installation = SimpleNamespace(
+        id="installation-message",
+        tenant_id="tenant-message",
+        project_id="project-message",
+        plugin_id=plugin.id,
+        plugin=plugin,
+        plugin_version=plugin.version,
+        status="installed",
+        granted_permissions=["message:send"],
+    )
+    selected_tool = SimpleNamespace(
+        plugin_id=plugin.id,
+        plugin=plugin,
+        name="send-message",
+        enabled=True,
+        risk_level="high",
+        required_permissions=["message:send"],
+        idempotency_mode="none",
+        timeout_seconds=5,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                    "additionalProperties": False,
                 }
             },
-        }
-    }
-    selected_tool = SimpleNamespace(
-        name="send-message",
-        timeout_seconds=5,
-        risk_level="high",
-        idempotency_mode="none",
+            "required": ["payload"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"accepted": {"type": "boolean"}},
+            "required": ["accepted"],
+            "additionalProperties": False,
+        },
     )
+    router = ToolRouter()
+    assert register_http_tool(router, selected_tool) is True
     response = FakeResponse(chunks=[b'{"accepted":true}'])
     with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
         with patch(
             "core.http_connector.httpx.Client",
             return_value=FakeClient(response, captured),
         ):
-            result = execute_http_operation(
-                {"payload": {"text": "deployment completed"}},
-                context(manifest=manifest),
-                selected_tool,
+            with pytest.raises(ToolApprovalRequired, match="approval"):
+                router.execute(
+                    installation=installation,
+                    tool=selected_tool,
+                    arguments={"payload": {"text": "deployment completed"}},
+                    granted_permissions=["message:send"],
+                )
+            assert captured == {}
+            result = router.execute(
+                installation=installation,
+                tool=selected_tool,
+                arguments={"payload": {"text": "deployment completed"}},
+                granted_permissions=["message:send"],
+                approved=True,
             )
-    assert result == {"accepted": True}
+    assert result["result"] == {"accepted": True}
     assert captured["method"] == "POST"
     assert captured["url"] == "https://api.example.com/v1/messages"
     assert captured["json"] == {"text": "deployment completed"}
