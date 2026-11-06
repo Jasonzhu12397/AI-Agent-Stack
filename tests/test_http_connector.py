@@ -773,3 +773,89 @@ def test_http_connector_rejects_query_credential_parameter_collision(monkeypatch
                 context(manifest=manifest, auth_type="credential_ref", credential_ref="vault://key"),
                 SimpleNamespace(name="search"),
             )
+
+
+def test_http_connector_rejects_auth_header_collision_with_static_header(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "header",
+            "name": "X-Provider-Key",
+            "value": "server-side-secret",
+        },
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/items",
+                    "path_params": {},
+                    "query_params": {},
+                    "headers": {"x-provider-key": "manifest-value"},
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search",
+        timeout_seconds=5,
+        idempotency_mode="read_only",
+    )
+    with override_settings(
+        PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"],
+        PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve",
+    ):
+        with patch(
+            "core.http_connector.httpx.Client",
+            side_effect=lambda **options: pytest.fail("request must not be sent"),
+        ):
+            with pytest.raises(ToolExecutionError, match="headers conflict"):
+                execute_http_operation(
+                    {},
+                    context(
+                        manifest=manifest,
+                        auth_type="credential_ref",
+                        credential_ref="vault://provider/key",
+                    ),
+                    selected_tool,
+                )
+
+
+def test_http_connector_rejects_case_insensitive_duplicate_static_headers():
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/items",
+                    "path_params": {},
+                    "query_params": {},
+                    "headers": {
+                        "X-Provider-Mode": "first",
+                        "x-provider-mode": "second",
+                    },
+                }
+            },
+        }
+    }
+    with patch(
+        "core.http_connector._validate_base_url",
+        return_value="https://api.example.com",
+    ):
+        with pytest.raises(ToolExecutionError, match="duplicate static headers"):
+            from core.http_connector import _operation_config
+
+            _operation_config(
+                context(manifest=manifest),
+                SimpleNamespace(name="search"),
+            )

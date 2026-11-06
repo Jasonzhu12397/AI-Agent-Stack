@@ -169,6 +169,7 @@ def _operation_config(context, tool):
     if not isinstance(configured_headers, dict):
         raise ToolExecutionError("Connector operation headers are invalid.")
     static_headers = {}
+    static_header_names = set()
     forbidden_headers = {
         "authorization", "proxy-authorization", "cookie", "set-cookie",
         "host", "content-length", "transfer-encoding", "connection",
@@ -186,6 +187,10 @@ def _operation_config(context, tool):
             or "\r" in value
         ):
             raise ToolExecutionError("Connector operation contains an unsafe static header.")
+        normalized_name = name.lower()
+        if normalized_name in static_header_names:
+            raise ToolExecutionError("Connector operation contains duplicate static headers.")
+        static_header_names.add(normalized_name)
         static_headers[name] = value
     if auth_query_parameter is not None and (
         not isinstance(auth_query_parameter, str)
@@ -285,6 +290,14 @@ def execute_http_operation(arguments, context: ToolContext, tool):
             query.append((key, str(item)))
 
     auth_headers, auth_query = _resolve_auth(context)
+    auth_header_names = {name.lower() for name in auth_headers}
+    if (
+        auth_header_names.intersection(static_header_names)
+        or "accept" in auth_header_names
+    ):
+        raise ToolExecutionError(
+            "Connector authentication headers conflict with platform or operation headers."
+        )
     if auth_query is not None:
         if auth_query_parameter != auth_query[0]:
             raise ToolExecutionError(
