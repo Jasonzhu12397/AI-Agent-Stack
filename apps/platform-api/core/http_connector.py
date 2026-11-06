@@ -154,11 +154,13 @@ def _operation_config(context, tool):
         read_only_post or approved_side_effect_post
     ):
         raise ToolExecutionError(
-            "POST requires an explicitly read-only operation or a high-risk approval-gated operation."
+            "POST requires an explicitly read-only operation or a "
+            "high-risk approval-gated operation."
         )
     if requires_approval and not approved_side_effect_post:
         raise ToolExecutionError(
-            "Approval-gated connector operations must be non-read-only POST tools with high or critical risk."
+            "Approval-gated connector operations must be non-read-only POST "
+            "tools with high or critical risk."
         )
     if (
         not isinstance(path, str)
