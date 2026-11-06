@@ -816,6 +816,64 @@ class PluginConnection(models.Model):
         ]
 
 
+class ToolApprovalRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        EXPIRED = "expired", "Expired"
+        CONSUMED = "consumed", "Consumed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="tool_approvals")
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="tool_approvals")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="tool_approvals")
+    tool = models.ForeignKey(PluginTool, on_delete=models.PROTECT, related_name="approval_requests")
+    installation = models.ForeignKey(
+        PluginInstallation,
+        on_delete=models.PROTECT,
+        related_name="approval_requests",
+    )
+    connection = models.ForeignKey(
+        PluginConnection,
+        on_delete=models.PROTECT,
+        related_name="approval_requests",
+        null=True,
+        blank=True,
+    )
+    call_id = models.CharField(max_length=128)
+    arguments = models.JSONField()
+    arguments_hash = models.CharField(max_length=64)
+    plugin_version = models.CharField(max_length=40)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="approved_tool_requests",
+        null=True,
+        blank=True,
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-requested_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "call_id"],
+                name="uniq_tool_approval_task_call",
+            ),
+            models.Index(
+                fields=["tenant", "project", "status", "expires_at"],
+                name="tool_approval_scope_idx",
+            ),
+        ]
+
+
 
 class AuditEvent(models.Model):
     class Outcome(models.TextChoices):
