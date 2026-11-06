@@ -843,7 +843,7 @@ def test_workflow_tool_node_requires_approved_project_installation(workflow_work
     validate_model_references(graph, tenant, project)
 
     tool.risk_level = PluginTool.RiskLevel.HIGH
-    tool.save(update_fields=["risk_level", "updated_at"])
+    tool.save(update_fields=["risk_level"])
     with pytest.raises(WorkflowValidationError, match="human approval"):
         validate_model_references(graph, tenant, project)
 
@@ -913,7 +913,7 @@ def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
                 task,
             )
 
-    assert result == {"ok": True}
+    assert result == {"ok": True, "tool": "lookup", "result": {"ok": True}}
     assert audit.call_count == 1
     assert (
         PluginInstallation.objects.get(pk=installation.id).status
