@@ -210,3 +210,14 @@ onMounted(() => void refresh());
     <p class="operations-note">Approval controls call the protected backend endpoints. They do not execute a deployment or bypass the separate command execution gates.</p>
   </section>
 </template>
+
+
+<style scoped>
+.approval-actions {
+  display: flex;
+  min-width: 220px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+</style>
