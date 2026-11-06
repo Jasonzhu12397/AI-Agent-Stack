@@ -208,7 +208,9 @@ def _operation_config(context, tool):
     if set(path_params) != placeholders:
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
     if auth_query_parameter is not None and auth_query_parameter in query_params:
-        raise ToolExecutionError("Connector authentication query parameter conflicts with an operation mapping.")
+        raise ToolExecutionError(
+            "Connector authentication query parameter conflicts with an operation mapping."
+        )
     if transport.get("auth_required") is True and (
         context.connection_auth_type == "none" or not context.credential_ref
     ):
@@ -220,11 +222,29 @@ def _operation_config(context, tool):
         mapped_args.add(body_param)
     if len(mapped_args) != len(path_params) + len(query_params) + (1 if body_param else 0):
         raise ToolExecutionError("Connector HTTP argument mapping contains duplicates.")
-    return parsed_base, method.upper(), path, path_params, query_params, body_param, static_headers, auth_query_parameter
+    return (
+        parsed_base,
+        method.upper(),
+        path,
+        path_params,
+        query_params,
+        body_param,
+        static_headers,
+        auth_query_parameter,
+    )
 
 
 def execute_http_operation(arguments, context: ToolContext, tool):
-    base, method, path, path_params, query_params, body_param, static_headers, auth_query_parameter = _operation_config(
+    (
+        base,
+        method,
+        path,
+        path_params,
+        query_params,
+        body_param,
+        static_headers,
+        auth_query_parameter,
+    ) = _operation_config(
         context,
         tool,
     )
@@ -261,9 +281,13 @@ def execute_http_operation(arguments, context: ToolContext, tool):
     auth_headers, auth_query = _resolve_auth(context)
     if auth_query is not None:
         if auth_query_parameter != auth_query[0]:
-            raise ToolExecutionError("Connector query credential does not match the operation configuration.")
+            raise ToolExecutionError(
+                "Connector query credential does not match the operation configuration."
+            )
         if any(key == auth_query[0] for key, _ in query):
-            raise ToolExecutionError("Connector query credential conflicts with an operation argument.")
+            raise ToolExecutionError(
+                "Connector query credential conflicts with an operation argument."
+            )
         query.append(auth_query)
     elif auth_query_parameter is not None:
         raise ToolExecutionError("Connector operation requires a query credential.")
