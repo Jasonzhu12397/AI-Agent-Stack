@@ -924,3 +924,60 @@ export function getAuditEvents(
 export function verifyAuditChain(tenantId: string): Promise<AuditChainVerification> {
   return request("/api/v1/tenants/" + tenantId + "/audit-events/verify/");
 }
+
+
+export type ToolApprovalRequest = {
+  id: string;
+  task_id: string;
+  tenant_id: string;
+  project_id: string;
+  tool: string;
+  plugin: string;
+  plugin_version: string;
+  installation_id: string;
+  connection_id: string | null;
+  call_id: string;
+  arguments: Record<string, unknown>;
+  arguments_hash: string;
+  status: string;
+  requested_at: string;
+  expires_at: string;
+  approved_at: string | null;
+  consumed_at: string | null;
+  approved_by_id: number | null;
+  rejected_by_id: number | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+};
+
+export function getToolApprovals(
+  tenantId: string,
+  projectId: string,
+): Promise<{ items: ToolApprovalRequest[]; count: number }> {
+  return request(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/?status=pending`,
+  );
+}
+
+export function approveToolApproval(
+  tenantId: string,
+  projectId: string,
+  approvalId: string,
+): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
+  return request(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/approve/`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function rejectToolApproval(
+  tenantId: string,
+  projectId: string,
+  approvalId: string,
+  reason: string,
+): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
+  return request(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/reject/`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
