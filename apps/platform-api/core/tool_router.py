@@ -47,71 +47,68 @@ def _matches_type(value: Any, expected: str) -> bool:
     return check(value) if check else False
 
 
-def validate_schema(value: Any, schema: dict[str, Any], path: str = "$") -> None:
-    """Validate the deliberately small JSON Schema subset accepted by the registry."""
-    if not isinstance(schema, dict) or schema.get("type") != "object":
-        raise ToolExecutionError("Tool schema must be an object schema.")
-    if not isinstance(value, dict):
-        raise ToolExecutionError(f"{path} must be an object.")
-
-    properties = schema.get("properties", {})
-    required = schema.get("required", [])
-    if not isinstance(properties, dict) or not isinstance(required, list):
+def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth: int = 0) -> None:
+    """Validate the registry's bounded JSON Schema subset recursively."""
+    if _depth > 16:
+        raise ToolExecutionError("Tool arguments exceed the maximum schema nesting depth.")
+    if not isinstance(schema, dict):
         raise ToolExecutionError("Tool schema is malformed.")
-    if schema.get("additionalProperties", False) is not False:
-        raise ToolExecutionError("Tool schemas must reject additional properties.")
-
-    missing = [key for key in required if key not in value]
-    if missing:
-        raise ToolExecutionError(f"Missing required tool arguments: {', '.join(missing)}.")
-
-    unknown = sorted(set(value) - set(properties))
-    if unknown:
-        raise ToolExecutionError(f"Unknown tool arguments: {', '.join(unknown)}.")
-
-    for key, item in value.items():
-        definition = properties[key]
-        if not isinstance(definition, dict) or not _matches_type(item, definition.get("type", "")):
-            raise ToolExecutionError(f"Invalid value for tool argument '{key}'.")
-        if isinstance(item, str):
-            if (
-                len(item) < int(definition.get("minLength", 0))
-                or len(item) > int(definition.get("maxLength", 65536))
-            ):
-                raise ToolExecutionError(f"Tool argument '{key}' has an invalid length.")
-            if "enum" in definition and item not in definition["enum"]:
-                raise ToolExecutionError(f"Invalid value for tool argument '{key}'.")
-        if isinstance(item, (int, float)) and not isinstance(item, bool):
-            if isinstance(item, float) and not math.isfinite(item):
-                raise ToolExecutionError(f"Tool argument '{key}' must be finite.")
-            if "minimum" in definition and item < definition["minimum"]:
-                raise ToolExecutionError(f"Tool argument '{key}' is below its minimum.")
-            if "maximum" in definition and item > definition["maximum"]:
-                raise ToolExecutionError(f"Tool argument '{key}' exceeds its maximum.")
-        if isinstance(item, dict) and definition.get("type") == "object":
-            validate_schema(item, definition, f"{path}.{key}")
-        if isinstance(item, list):
-            minimum = definition.get("minItems", 0)
-            maximum = definition.get("maxItems", 100)
-            item_schema = definition.get("items")
-            if (
-                not isinstance(minimum, int)
-                or isinstance(minimum, bool)
-                or not isinstance(maximum, int)
-                or isinstance(maximum, bool)
-                or minimum < 0
-                or maximum < minimum
-                or len(item) < minimum
-                or len(item) > maximum
-                or not isinstance(item_schema, dict)
-            ):
-                raise ToolExecutionError(f"Tool argument '{key}' has an invalid array shape.")
-            for element in item:
-                if not _matches_type(element, item_schema.get("type", "")):
-                    raise ToolExecutionError(f"Tool argument '{key}' contains an invalid item.")
-                if isinstance(element, dict):
-                    validate_schema(element, item_schema, f"{path}.{key}")
-
+    expected = schema.get("type")
+    if not isinstance(expected, str) or not _matches_type(value, expected):
+        raise ToolExecutionError(f"{path} has an invalid value type.")
+    if expected == "object":
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            raise ToolExecutionError("Tool schema is malformed.")
+        if schema.get("additionalProperties", False) is not False:
+            raise ToolExecutionError("Tool schemas must reject additional properties.")
+        missing = [key for key in required if not isinstance(key, str) or key not in value]
+        if missing:
+            raise ToolExecutionError(f"Missing required tool arguments: {', '.join(missing)}.")
+        unknown = sorted(set(value) - set(properties))
+        if unknown:
+            raise ToolExecutionError(f"Unknown tool arguments: {', '.join(unknown)}.")
+        for key, item in value.items():
+            validate_schema(item, properties[key], f"{path}.{key}", _depth + 1)
+        return
+    if expected == "array":
+        minimum = schema.get("minItems", 0)
+        maximum = schema.get("maxItems", 100)
+        item_schema = schema.get("items")
+        if (
+            not isinstance(minimum, int) or isinstance(minimum, bool)
+            or not isinstance(maximum, int) or isinstance(maximum, bool)
+            or minimum < 0 or maximum < minimum
+            or len(value) < minimum or len(value) > maximum
+            or not isinstance(item_schema, dict)
+        ):
+            raise ToolExecutionError(f"{path} has an invalid array shape.")
+        for index, item in enumerate(value):
+            try:
+                validate_schema(item, item_schema, f"{path}[{index}]", _depth + 1)
+            except ToolExecutionError as exc:
+                if "invalid value type" in str(exc):
+                    raise ToolExecutionError(f"{path} contains an invalid item.") from exc
+                raise
+        return
+    if expected == "string":
+        minimum = schema.get("minLength", 0)
+        maximum = schema.get("maxLength", 65536)
+        if (not isinstance(minimum, int) or isinstance(minimum, bool)
+            or not isinstance(maximum, int) or isinstance(maximum, bool)
+            or minimum < 0 or maximum < minimum
+            or len(value) < minimum or len(value) > maximum):
+            raise ToolExecutionError(f"{path} has an invalid length.")
+    if expected in {"integer", "number"}:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ToolExecutionError(f"{path} must be finite.")
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ToolExecutionError(f"{path} is below its minimum.")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ToolExecutionError(f"{path} exceeds its maximum.")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ToolExecutionError(f"{path} is not an allowed value.")
 
 class ToolRouter:
     """Policy-enforcing dispatcher; connector transports must register trusted handlers."""
