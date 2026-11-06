@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from types import SimpleNamespace
 
 import pytest
