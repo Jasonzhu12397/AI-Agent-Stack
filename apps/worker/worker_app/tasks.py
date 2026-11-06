@@ -335,7 +335,7 @@ def _load_agent_tools(task, config):
     return offered, by_name
 
 
-def _execute_agent_tool(task, tool, arguments):
+def _execute_agent_tool(task, tool, arguments, call_id):
     try:
         installation = PluginInstallation.objects.select_related("plugin").get(
             tenant=task.tenant,
@@ -375,7 +375,7 @@ def _execute_agent_tool(task, tool, arguments):
             tool=tool,
             installation=installation,
             connection=connection,
-            call_id=getattr(task, "_active_tool_call_id", ""),
+            call_id=call_id,
             arguments=arguments,
         )
     except ValueError as exc:
@@ -516,6 +516,8 @@ def execute_agent_run(task):
     start_iteration = 0
     resume_calls = None
     approved_call_id = None
+    current_raw_tool_calls = None
+    current_call_offset = 0
     resume_approval = (
         ToolApprovalRequest.objects.filter(
             task=task,
@@ -535,6 +537,8 @@ def execute_agent_run(task):
                 raise ValueError("Invalid pending tool call index")
             if str(model_config.id) != checkpoint["model_config_id"]:
                 raise ValueError("Model configuration changed while approval was pending")
+            current_raw_tool_calls = raw_calls
+            current_call_offset = call_index
             resume_calls = parse_openai_tool_calls(
                 {"tool_calls": raw_calls},
                 offered_tools,
@@ -603,6 +607,8 @@ def execute_agent_run(task):
                 )
             except ValueError as exc:
                 raise PermanentTaskError("Model returned invalid tool calls") from exc
+            current_raw_tool_calls = response.tool_calls
+            current_call_offset = 0
             total_tool_calls += len(calls)
             if total_tool_calls > MAX_AGENT_TOOL_CALLS:
                 raise PermanentTaskError("Agent exceeded the total tool-call limit")
@@ -614,21 +620,18 @@ def execute_agent_run(task):
                 }
             )
         for call_index, call in enumerate(calls):
+            absolute_call_index = current_call_offset + call_index
             tool = tools_by_name[call["name"]]
             _renew_agent_lease(task)
-            task._active_tool_call_id = call["id"]
             try:
-                result = _execute_agent_tool(task, tool, call["arguments"])
+                result = _execute_agent_tool(task, tool, call["arguments"], call["id"])
             except ToolApprovalRequired as exc:
                 checkpoint = {
                     "version": 1,
                     "messages": messages,
-                    "raw_tool_calls": (
-                        response.tool_calls
-                        if resume_calls is None and "response" in locals()
-                        else resume_approval.execution_checkpoint["raw_tool_calls"]
-                    ),
-                    "call_index": call_index,
+                    "raw_tool_calls": current_raw_tool_calls,
+                    "pending_calls": calls[call_index:],
+                    "call_index": absolute_call_index,
                     "iteration": iteration,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -656,8 +659,6 @@ def execute_agent_run(task):
                 ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
-            finally:
-                task._active_tool_call_id = ""
             messages.append(
                 {
                     "role": "tool",
