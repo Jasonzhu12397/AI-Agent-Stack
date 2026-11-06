@@ -266,3 +266,27 @@ def test_worker_expiry_sweeper_fails_expired_approval_tasks(approval_context):
     assert approval.status == ToolApprovalRequest.Status.EXPIRED
     assert task.status == Task.Status.FAILED
     assert task.error["code"] == "TOOL_APPROVAL_EXPIRED"
+
+
+
+@pytest.mark.django_db
+def test_worker_expiry_sweeper_expires_approved_but_unexecuted_call(approval_context):
+    ctx = approval_context
+    task, approval = ctx["create_pending"]("approved-expired")
+    approval.status = ToolApprovalRequest.Status.APPROVED
+    approval.approved_by = ctx["admin"]
+    approval.approved_at = timezone.now()
+    approval.expires_at = timezone.now() - timedelta(seconds=1)
+    approval.save(
+        update_fields=["status", "approved_by", "approved_at", "expires_at"]
+    )
+    task.status = Task.Status.QUEUED
+    task.save(update_fields=["status", "updated_at"])
+
+    assert expire_pending_tool_approvals(limit=10) == 1
+
+    approval.refresh_from_db()
+    task.refresh_from_db()
+    assert approval.status == ToolApprovalRequest.Status.EXPIRED
+    assert task.status == Task.Status.FAILED
+    assert task.error["code"] == "TOOL_APPROVAL_EXPIRED"
