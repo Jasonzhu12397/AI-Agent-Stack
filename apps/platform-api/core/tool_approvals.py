@@ -6,7 +6,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import Task, ToolApprovalRequest
+from core.models import AgentRun, Task, ToolApprovalRequest
 
 
 MAX_APPROVAL_CHECKPOINT_BYTES = 65536
@@ -232,8 +232,6 @@ def expire_pending_tool_approvals(limit=100):
                 ).exclude(pk=approval.pk).update(
                     status=ToolApprovalRequest.Status.CANCELLED
                 )
-                from core.models import AgentRun
-
                 AgentRun.objects.filter(task=task, finished_at__isnull=True).update(
                     finished_at=now
                 )
