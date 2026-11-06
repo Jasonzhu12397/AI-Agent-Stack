@@ -19,7 +19,7 @@ from core.models import (
     WorkflowRun,
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
-from core.tool_router import ToolExecutionError, ToolRouter
+from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
@@ -547,6 +547,10 @@ def execute_agent_run(task):
             _renew_agent_lease(task)
             try:
                 result = _execute_agent_tool(task, tool, call["arguments"])
+            except ToolApprovalRequired as exc:
+                raise PermanentTaskError(
+                    "Agent execution stopped because a connector tool requires approval"
+                ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
             messages.append(
