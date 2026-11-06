@@ -434,6 +434,7 @@ def execute_agent_run(task):
     for knowledge_base in knowledge_bases:
         if sum(len(item["text"]) for item in retrieved_chunks) >= 12000:
             break
+        _renew_agent_lease(task)
         try:
             matches = retrieve_context(
                 tenant_id=str(task.tenant_id),
@@ -445,6 +446,7 @@ def execute_agent_run(task):
             )
         except RagRuntimeError as exc:
             raise RuntimeError("Knowledge retrieval failed") from exc
+        _renew_agent_lease(task)
         for match in matches:
             if sum(len(item["text"]) for item in retrieved_chunks) >= 12000:
                 break
@@ -591,6 +593,7 @@ def execute_knowledge_ingest(task):
             },
             chunk_size=knowledge_base.chunk_size,
             overlap=knowledge_base.chunk_overlap,
+            heartbeat=lambda: _renew_agent_lease(task),
         )
     except Exception as exc:
         document.status = KnowledgeDocument.Status.FAILED
