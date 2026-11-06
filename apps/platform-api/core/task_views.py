@@ -162,6 +162,7 @@ class TaskCancelView(APIView):
     def post(self, request, task_id):
         task = TaskDetailView().get_task(request, task_id)
         with transaction.atomic():
+            task = Task.objects.select_for_update().get(pk=task.pk)
             approval_ids = list(
                 ToolApprovalRequest.objects.select_for_update()
                 .filter(
@@ -174,7 +175,6 @@ class TaskCancelView(APIView):
                 .order_by("id")
                 .values_list("id", flat=True)
             )
-            task = Task.objects.select_for_update().get(pk=task.pk)
             if task.status == Task.Status.QUEUED:
                 task.status = Task.Status.CANCELLED
                 task.finished_at = timezone.now()
