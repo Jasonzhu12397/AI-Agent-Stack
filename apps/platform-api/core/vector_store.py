@@ -115,6 +115,27 @@ class QdrantVectorStore:
         )
         return {"upserted": len(points)}
 
+    def delete_document(self, tenant_id, project_id, document_id):
+        if not tenant_id or not project_id or not document_id:
+            raise VectorStoreError("Tenant, project and document scope are mandatory.")
+        self._request(
+            "POST",
+            f"/collections/{self.collection}/points/delete?wait=true",
+            {
+                "filter": {
+                    "must": [
+                        {"key": "tenant_id", "match": {"value": str(tenant_id)}},
+                        {"key": "project_id", "match": {"value": str(project_id)}},
+                        {
+                            "key": "metadata.document_id",
+                            "match": {"value": str(document_id)},
+                        },
+                    ]
+                }
+            },
+        )
+        return {"deleted": True}
+
     def search(
         self,
         tenant_id,

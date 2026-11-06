@@ -95,6 +95,11 @@ urlpatterns = [
         name="knowledge-base-document-list-create",
     ),
     path(
+        "api/v1/knowledge-documents/<uuid:knowledge_document_id>/",
+        KnowledgeDocumentDetailView.as_view(),
+        name="knowledge-document-detail",
+    ),
+    path(
         "api/v1/connectors/",
         PluginCatalogListCreateView.as_view(),
         name="plugin-catalog",

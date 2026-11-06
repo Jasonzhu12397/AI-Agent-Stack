@@ -263,3 +263,71 @@ def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
     assert retrieval.call_args.kwargs["metadata_filters"] == {
         "knowledge_base_id": str(knowledge_base.id)
     }
+
+
+@pytest.mark.django_db
+def test_knowledge_document_delete_cleans_vectors_and_source(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-delete",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="b" * 64, status=KnowledgeDocument.Status.READY, chunk_count=2,
+    )
+    with patch("core.knowledge_views.QdrantVectorStore") as store_class:
+        response = scope["client"].delete(f"/api/v1/knowledge-documents/{document.id}/")
+    assert response.status_code == 204
+    store_class.return_value.delete_document.assert_called_once_with(
+        tenant_id=str(scope["tenant"].id), project_id=str(scope["project"].id),
+        document_id=str(document.id),
+    )
+    assert not KnowledgeDocument.objects.filter(pk=document.id).exists()
+
+
+@pytest.mark.django_db
+def test_knowledge_document_delete_retains_source_when_vector_cleanup_fails(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-delete-failure",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="c" * 64, status=KnowledgeDocument.Status.READY, chunk_count=2,
+    )
+    from core.vector_store import VectorStoreError
+
+    with patch("core.knowledge_views.QdrantVectorStore") as store_class:
+        store_class.return_value.delete_document.side_effect = VectorStoreError("unavailable")
+        response = scope["client"].delete(f"/api/v1/knowledge-documents/{document.id}/")
+    assert response.status_code == 503
+    assert KnowledgeDocument.objects.filter(pk=document.id).exists()
+
+
+@pytest.mark.django_db
+def test_knowledge_document_delete_cancels_queued_ingestion(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-delete-queued",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="d" * 64,
+    )
+    task = Task.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        task_type="knowledge.ingest", payload={"knowledge_document_id": str(document.id)},
+        idempotency_key="knowledge-delete-queued", available_at=timezone.now(),
+    )
+    with patch("core.knowledge_views.QdrantVectorStore"):
+        response = scope["client"].delete(f"/api/v1/knowledge-documents/{document.id}/")
+    task.refresh_from_db()
+    assert response.status_code == 204
+    assert task.status == Task.Status.CANCELLED
+    assert not KnowledgeDocument.objects.filter(pk=document.id).exists()

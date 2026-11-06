@@ -22,6 +22,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.vector_store import QdrantVectorStore, VectorStoreError
 
 
 def _tenant_and_project(request, tenant_id, project_id):
@@ -280,3 +281,59 @@ class KnowledgeBaseDocumentListCreateView(APIView):
                 available_at=timezone.now(),
             )
         return Response(_document_data(document), status=status.HTTP_202_ACCEPTED)
+
+
+class KnowledgeDocumentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, knowledge_document_id):
+        try:
+            with transaction.atomic():
+                document = get_object_or_404(
+                    KnowledgeDocument.objects.select_for_update().select_related(
+                        "knowledge_base",
+                        "knowledge_base__tenant",
+                        "knowledge_base__project",
+                    ),
+                    pk=knowledge_document_id,
+                    knowledge_base__is_archived=False,
+                    knowledge_base__tenant__memberships__user=request.user,
+                )
+                knowledge_base = document.knowledge_base
+                if not _can_edit(request, knowledge_base.tenant, knowledge_base.project):
+                    return Response(
+                        {"detail": "Project editor permission required."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                document_tasks = Task.objects.select_for_update().filter(
+                    payload__knowledge_document_id=str(document.id),
+                )
+                if document_tasks.filter(status=Task.Status.RUNNING).exists():
+                    return Response(
+                        {"detail": "Document ingestion is running; retry deletion after it finishes."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                document_tasks.filter(status=Task.Status.QUEUED).update(
+                    status=Task.Status.CANCELLED,
+                    finished_at=timezone.now(),
+                    error={
+                        "code": "KNOWLEDGE_DOCUMENT_DELETED",
+                        "message": "The source document was deleted before ingestion.",
+                        "retryable": False,
+                    },
+                    lease_owner=None,
+                    lease_token=None,
+                    lease_expires_at=None,
+                )
+                QdrantVectorStore().delete_document(
+                    tenant_id=str(knowledge_base.tenant_id),
+                    project_id=str(knowledge_base.project_id),
+                    document_id=str(document.id),
+                )
+                document.delete()
+        except VectorStoreError:
+            return Response(
+                {"detail": "Vector cleanup failed; the source document was retained."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
