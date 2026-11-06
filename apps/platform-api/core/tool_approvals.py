@@ -200,20 +200,35 @@ def expire_pending_tool_approvals(limit=100):
         raise ValueError("Approval expiry batch size must be between 1 and 1000")
     expired_count = 0
     now = timezone.now()
-    for _ in range(limit):
+    candidate_ids = list(
+        ToolApprovalRequest.objects.filter(
+            status=ToolApprovalRequest.Status.PENDING,
+            expires_at__lte=now,
+        )
+        .order_by("expires_at")
+        .values_list("id", flat=True)[:limit]
+    )
+    for approval_id in candidate_ids:
         with transaction.atomic():
+            task_id = ToolApprovalRequest.objects.filter(pk=approval_id).values_list(
+                "task_id", flat=True
+            ).first()
+            if task_id is None:
+                continue
+            task = Task.objects.select_for_update(skip_locked=True).filter(pk=task_id).first()
+            if task is None:
+                continue
             approval = (
-                ToolApprovalRequest.objects.select_for_update(skip_locked=True)
+                ToolApprovalRequest.objects.select_for_update()
                 .filter(
+                    pk=approval_id,
                     status=ToolApprovalRequest.Status.PENDING,
                     expires_at__lte=now,
                 )
-                .order_by("expires_at")
                 .first()
             )
             if approval is None:
-                break
-            task = Task.objects.select_for_update().get(pk=approval.task_id)
+                continue
             approval.status = ToolApprovalRequest.Status.EXPIRED
             approval.save(update_fields=["status"])
             if task.status == Task.Status.WAITING_APPROVAL:
