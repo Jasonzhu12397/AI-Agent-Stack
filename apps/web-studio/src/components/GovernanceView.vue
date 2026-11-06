@@ -6,6 +6,10 @@ import {
   getAgentCommands,
   getAgentNodes,
   getPluginCatalog,
+  getToolApprovals,
+  approveToolApproval,
+  rejectToolApproval,
+  type ToolApprovalRequest,
   type AgentCommand,
   type AgentNode,
   type PluginDefinition,
@@ -15,6 +19,8 @@ const props = defineProps<{ tenantId: string; projectId: string }>();
 const nodes = ref<AgentNode[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const plugins = ref<PluginDefinition[]>([]);
+const toolApprovals = ref<ToolApprovalRequest[]>([]);
+const rejectionReasons = ref<Record<string, string>>({});
 const loading = ref(false);
 const busyId = ref("");
 const error = ref("");
@@ -23,6 +29,7 @@ const info = ref("");
 const pendingCommands = computed(() => commands.value.filter((item) => item.status === "waiting_approval"));
 const draftPlugins = computed(() => plugins.value.filter((item) => item.review_status === "draft"));
 const approvedPlugins = computed(() => plugins.value.filter((item) => item.review_status === "approved"));
+const pendingToolApprovals = computed(() => toolApprovals.value.filter((item) => item.status === "pending"));
 
 async function refresh(): Promise<void> {
   if (!props.tenantId || !props.projectId) {
@@ -40,6 +47,12 @@ async function refresh(): Promise<void> {
     ]);
     nodes.value = nodePage.results;
     plugins.value = catalog.results;
+    try {
+      const approvals = await getToolApprovals(props.tenantId, props.projectId);
+      toolApprovals.value = approvals.items;
+    } catch {
+      toolApprovals.value = [];
+    }
     const commandPages = await Promise.all(
       nodes.value.map((node) => getAgentCommands(node.id)),
     );
@@ -67,6 +80,41 @@ async function approveCommand(command: AgentCommand): Promise<void> {
     await refresh();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Command approval failed.";
+  } finally {
+    busyId.value = "";
+  }
+}
+
+async function approveToolCall(approval: ToolApprovalRequest): Promise<void> {
+  busyId.value = approval.id;
+  error.value = "";
+  info.value = "";
+  try {
+    await approveToolApproval(props.tenantId, props.projectId, approval.id);
+    info.value = approval.plugin + " / " + approval.tool + " approved; the Agent task has been queued to resume.";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Tool approval failed.";
+  } finally {
+    busyId.value = "";
+  }
+}
+
+async function rejectToolCall(approval: ToolApprovalRequest): Promise<void> {
+  const reason = (rejectionReasons.value[approval.id] ?? "").trim();
+  if (!reason) {
+    error.value = "Enter a reason before rejecting a high-risk tool call.";
+    return;
+  }
+  busyId.value = approval.id;
+  error.value = "";
+  info.value = "";
+  try {
+    await rejectToolApproval(props.tenantId, props.projectId, approval.id, reason);
+    info.value = approval.plugin + " / " + approval.tool + " rejected; the Agent task was stopped.";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Tool rejection failed.";
   } finally {
     busyId.value = "";
   }
@@ -105,7 +153,31 @@ onMounted(() => void refresh());
       <article><span>Pending command approvals</span><strong>{{ pendingCommands.length }}</strong></article>
       <article><span>Connectors awaiting review</span><strong>{{ draftPlugins.length }}</strong></article>
       <article><span>Approved connectors</span><strong>{{ approvedPlugins.length }}</strong></article>
+      <article><span>Pending high-risk tool calls</span><strong>{{ pendingToolApprovals.length }}</strong></article>
     </div>
+    <section class="operations-panel">
+      <div class="operations-panel-heading"><h4>High-risk tool approvals</h4><span>ARGUMENT-HASH BOUND · ONE-TIME USE</span></div>
+      <el-table :data="pendingToolApprovals" size="small" class="task-table">
+        <el-table-column prop="plugin" label="Plugin" min-width="140" />
+        <el-table-column prop="tool" label="Tool" min-width="130" />
+        <el-table-column label="Arguments (secrets redacted)" min-width="220">
+          <template #default="scope"><code>{{ JSON.stringify(scope.row.arguments) }}</code></template>
+        </el-table-column>
+        <el-table-column label="Expires" min-width="150">
+          <template #default="scope">{{ new Date(scope.row.expires_at).toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column label="Decision" min-width="260" fixed="right">
+          <template #default="scope">
+            <div class="approval-actions">
+              <el-button type="primary" size="small" :loading="busyId === scope.row.id" @click="approveToolCall(scope.row)">Approve & resume</el-button>
+              <el-input v-model="rejectionReasons[scope.row.id]" size="small" placeholder="Rejection reason" />
+              <el-button type="danger" plain size="small" :loading="busyId === scope.row.id" @click="rejectToolCall(scope.row)">Reject</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!loading && !pendingToolApprovals.length" description="No high-risk Agent tool calls are waiting for approval" :image-size="56" />
+    </section>
     <section class="operations-panel">
       <div class="operations-panel-heading"><h4>Infrastructure command approvals</h4><span>PLAN-HASH BOUND</span></div>
       <el-table :data="pendingCommands" size="small" class="task-table">
