@@ -2,10 +2,9 @@ import hashlib
 import json
 from datetime import timedelta
 
+from core.models import Task, ToolApprovalRequest
 from django.db import transaction
 from django.utils import timezone
-
-from core.models import Task, ToolApprovalRequest
 
 
 MAX_APPROVAL_CHECKPOINT_BYTES = 65536
