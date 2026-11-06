@@ -165,7 +165,7 @@ export const connectorTemplates: ConnectorTemplate[] = [
             {
               keywords: { type: "string", minLength: 2, maxLength: 100 },
               city: { type: "string", maxLength: 80 },
-              city_limit: { type: "boolean" },
+              city_limit: { type: "string", enum: ["true", "false"] },
               page_size: { type: "integer", minimum: 1, maximum: 25 },
               page: { type: "integer", minimum: 1, maximum: 100 },
               extensions: { type: "string", enum: ["base", "all"] },
