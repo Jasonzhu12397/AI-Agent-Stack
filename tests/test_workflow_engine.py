@@ -180,8 +180,13 @@ def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
     run_id = run_response.data["id"]
     assert run_response.data["task_status"] == Task.Status.QUEUED
 
-    assert process_once("workflow-test-worker") is True
+    with patch("worker_app.tasks.renew_lease", wraps=__import__(
+        "worker_app.tasks",
+        fromlist=["renew_lease"],
+    ).renew_lease) as heartbeat:
+        assert process_once("workflow-test-worker") is True
 
+    assert heartbeat.call_count == 6
     run = WorkflowRun.objects.select_related("task").get(pk=run_id)
     assert run.task.status == Task.Status.SUCCEEDED
     assert run.output_data["content"] == "workflow response"
