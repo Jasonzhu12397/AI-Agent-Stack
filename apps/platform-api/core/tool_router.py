@@ -11,6 +11,10 @@ class ToolExecutionError(Exception):
     """A safe, user-facing tool execution failure."""
 
 
+class ToolApprovalRequired(ToolExecutionError):
+    """A policy gate that must not be converted into an ordinary tool result."""
+
+
 @dataclass(frozen=True)
 class ToolContext:
     tenant_id: str
@@ -197,7 +201,9 @@ class ToolRouter:
             raise ToolExecutionError("Required connector permissions have not been granted.")
 
         if tool.risk_level in {"high", "critical"} and not approved:
-            raise ToolExecutionError("This tool requires explicit approval before execution.")
+            raise ToolApprovalRequired(
+                "This tool requires explicit approval before execution."
+            )
         if connection is not None:
             if connection.installation_id != installation.id or connection.status != "healthy":
                 raise ToolExecutionError("Connector connection is not healthy or is out of scope.")
