@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { connectorTemplates, buildConnectorTemplatePayload } from "../domain/connectorTemplates";
+import { validatePluginConnectionInput } from "../domain/pluginConnection";
 import {
   approvePlugin,
   createPluginConnection,
@@ -247,18 +248,34 @@ async function testConnection(connectionId: string): Promise<void> {
 
 async function addConnection(): Promise<void> {
   const installation = selectedInstallation.value;
-  if (!installation || !connectionName.value.trim()) return;
+  if (!installation) return;
+  const name = connectionName.value.trim();
+  const selectedAuthType = authType.value;
+  const selectedCredentialRef = credentialRef.value.trim();
+  const validationError = validatePluginConnectionInput(
+    name,
+    selectedAuthType,
+    selectedCredentialRef,
+  );
+  if (validationError) {
+    error.value = validationError;
+    info.value = "";
+    return;
+  }
   submitting.value = true;
   error.value = "";
+  info.value = "";
   try {
     await createPluginConnection(installation.id, {
-      name: connectionName.value.trim(),
-      auth_type: authType.value,
-      credential_ref: authType.value === "none" ? "" : credentialRef.value.trim(),
+      name,
+      auth_type: selectedAuthType,
+      credential_ref: selectedAuthType === "none" ? "" : selectedCredentialRef,
     });
     connectionName.value = "";
     credentialRef.value = "";
-    info.value = "Credential reference saved. No secret value was sent to the platform.";
+    info.value = selectedAuthType === "none"
+      ? "Unauthenticated connection saved. No secret value was sent to the platform."
+      : "Credential reference saved. No secret value was sent to the platform.";
     await refresh();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create plugin connection.";
@@ -480,7 +497,7 @@ onMounted(() => void refresh());
           placeholder="vault://path/to/credential"
         />
         <el-button type="primary" plain :loading="submitting" @click="addConnection">
-          Save credential reference
+          {{ authType === "none" ? "Save connection" : "Save credential reference" }}
         </el-button>
       </div>
       <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>

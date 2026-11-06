@@ -4,6 +4,7 @@ import {
   connectorTemplates,
   buildConnectorTemplatePayload,
 } from "../src/domain/connectorTemplates.ts";
+import { validatePluginConnectionInput } from "../src/domain/pluginConnection.ts";
 
 const byId = (id) => {
   const template = connectorTemplates.find((item) => item.id === id);
@@ -103,4 +104,15 @@ test("template payload builder returns an isolated deep copy", () => {
   const second = buildConnectorTemplatePayload("baidu-map-places");
   assert.equal(second.manifest.http.base_url, "https://api.map.baidu.com");
   assert.throws(() => buildConnectorTemplatePayload("missing-template"), /Unknown connector template/);
+});
+
+test("plugin connection references are validated before submission", () => {
+  assert.equal(validatePluginConnectionInput("Weather", "none", ""), null);
+  assert.equal(validatePluginConnectionInput("Maps", "credential_ref", "vault://maps/baidu-ak"), null);
+  assert.equal(validatePluginConnectionInput("OAuth", "oauth_ref", "secret://providers/google"), null);
+  assert.match(validatePluginConnectionInput("", "none", "") ?? "", /name is required/i);
+  assert.match(validatePluginConnectionInput("x".repeat(121), "none", "") ?? "", /120 characters/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "") ?? "", /valid non-secret URI/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://user:password@example.com/key") ?? "", /valid non-secret URI/i);
+  assert.match(validatePluginConnectionInput("Maps", "none", "vault://maps/key") ?? "", /not allowed/i);
 });
