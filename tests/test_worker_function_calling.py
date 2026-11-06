@@ -192,8 +192,14 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         task.lease_owner = "worker-resume"
         task.lease_token = uuid.uuid4()
         task.save(update_fields=["status", "lease_owner", "lease_token", "updated_at"])
-        with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
-            resumed_result = worker_tasks.execute_agent_run(task)
+        worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = (
+            lambda arguments, context: {"value": f"{arguments['key']}-ready"}
+        )
+        try:
+            with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
+                resumed_result = worker_tasks.execute_agent_run(task)
+        finally:
+            worker_tasks.TOOL_ROUTER._handlers = handlers
 
         approval.refresh_from_db()
         assert approval.status == ToolApprovalRequest.Status.CONSUMED
