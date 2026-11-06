@@ -510,7 +510,9 @@ def test_http_connector_rejects_unsafe_static_headers(headers):
             )
 
 
-def test_http_connector_injects_server_side_query_credentials_without_putting_secret_in_url(monkeypatch):
+def test_http_connector_injects_server_side_query_credentials_without_secret_in_url(
+    monkeypatch,
+):
     captured = {}
     monkeypatch.setattr(
         "core.http_connector.socket.getaddrinfo",
