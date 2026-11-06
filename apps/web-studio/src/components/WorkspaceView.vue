@@ -251,7 +251,7 @@ onUnmounted(() => {
             <el-table-column label="Status" min-width="120">
               <template #default="scope">
                 <el-tag
-                  :type="scope.row.status === 'succeeded' ? 'success' : scope.row.status === 'failed' ? 'danger' : scope.row.status === 'running' ? 'warning' : 'info'"
+                  :type="scope.row.status === 'succeeded' ? 'success' : scope.row.status === 'failed' ? 'danger' : ['running', 'waiting_approval'].includes(scope.row.status) ? 'warning' : 'info'"
                   size="small"
                 >{{ scope.row.status }}</el-tag>
               </template>
