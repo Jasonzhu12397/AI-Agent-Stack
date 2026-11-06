@@ -310,7 +310,11 @@ class KnowledgeDocumentDetailView(APIView):
                 )
                 if document_tasks.filter(status=Task.Status.RUNNING).exists():
                     return Response(
-                        {"detail": "Document ingestion is running; retry deletion after it finishes."},
+                        {
+                            "detail": (
+                                "Document ingestion is running; retry deletion after it finishes."
+                            )
+                        },
                         status=status.HTTP_409_CONFLICT,
                     )
                 document_tasks.filter(status=Task.Status.QUEUED).update(
