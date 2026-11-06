@@ -1206,3 +1206,8 @@ export function buildConnectorTemplatePayload(templateId: string): Record<string
   }
   return JSON.parse(JSON.stringify(template.payload)) as Record<string, unknown>;
 }
+
+export function findConnectorTemplate(pluginKey: string | null | undefined): ConnectorTemplate | undefined {
+  if (!pluginKey) return undefined;
+  return connectorTemplates.find((template) => template.payload.plugin_key === pluginKey);
+}

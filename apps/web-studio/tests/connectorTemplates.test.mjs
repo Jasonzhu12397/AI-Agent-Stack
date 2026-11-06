@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   connectorTemplates,
   buildConnectorTemplatePayload,
+  findConnectorTemplate,
 } from "../src/domain/connectorTemplates.ts";
 import { validatePluginConnectionInput } from "../src/domain/pluginConnection.ts";
 
@@ -119,4 +120,11 @@ test("plugin connection references are validated before submission", () => {
   assert.equal(validatePluginConnectionInput("Maps", "credential_ref", "vault://maps/production"), null);
   assert.equal(validatePluginConnectionInput("Maps", "credential_ref", "op://Engineering/Maps/API-Key"), null);
   assert.match(validatePluginConnectionInput("Maps", "none", "vault://maps/key") ?? "", /not allowed/i);
+});
+
+test("installed connector guidance resolves only by exact plugin key", () => {
+  assert.equal(findConnectorTemplate("amap-places")?.id, "amap-places");
+  assert.equal(findConnectorTemplate("open-meteo-weather")?.auth, "none");
+  assert.equal(findConnectorTemplate("unknown-connector"), undefined);
+  assert.equal(findConnectorTemplate(undefined), undefined);
 });

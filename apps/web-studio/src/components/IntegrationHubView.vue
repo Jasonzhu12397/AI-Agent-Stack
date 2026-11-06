@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { connectorTemplates, buildConnectorTemplatePayload } from "../domain/connectorTemplates";
+import {
+  connectorTemplates,
+  buildConnectorTemplatePayload,
+  findConnectorTemplate,
+} from "../domain/connectorTemplates";
 import { validatePluginConnectionInput } from "../domain/pluginConnection";
 import {
   approvePlugin,
@@ -90,6 +94,14 @@ const selectedInstallation = computed(
     (item) => item.id === selectedInstallationId.value,
   ) ?? installations.value[0] ?? null,
 );
+const selectedConnectionTemplate = computed(() =>
+  findConnectorTemplate(selectedInstallation.value?.plugin_key),
+);
+
+watch(selectedInstallation, (installation) => {
+  const template = findConnectorTemplate(installation?.plugin_key);
+  if (template) authType.value = template.auth;
+}, { immediate: true });
 
 async function refresh(): Promise<void> {
   if (!props.tenantId) {
@@ -252,6 +264,14 @@ async function addConnection(): Promise<void> {
   const name = connectionName.value.trim();
   const selectedAuthType = authType.value;
   const selectedCredentialRef = credentialRef.value.trim();
+  const template = selectedConnectionTemplate.value;
+  if (template && selectedAuthType !== template.auth) {
+    error.value = template.auth === "credential_ref"
+      ? "This connector requires a Secret Manager reference; unauthenticated connections are not allowed."
+      : "This connector template does not accept credential references.";
+    info.value = "";
+    return;
+  }
   const validationError = validatePluginConnectionInput(
     name,
     selectedAuthType,
@@ -489,7 +509,7 @@ onMounted(() => void refresh());
       </div>
       <div class="connection-form">
         <el-input v-model="connectionName" placeholder="Connection name" />
-        <el-select v-model="authType">
+        <el-select v-model="authType" :disabled="Boolean(selectedConnectionTemplate)">
           <el-option label="Credential reference" value="credential_ref" />
           <el-option label="OAuth reference" value="oauth_ref" />
           <el-option label="No authentication" value="none" />
@@ -503,7 +523,10 @@ onMounted(() => void refresh());
           {{ authType === "none" ? "Save connection" : "Save credential reference" }}
         </el-button>
       </div>
-      <p class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>
+      <p v-if="selectedConnectionTemplate" class="integration-safety-note">
+        {{ selectedConnectionTemplate.summary }} Allowed host: {{ selectedConnectionTemplate.host }}; add this host to PLUGIN_HTTP_ALLOWED_HOSTS. {{ selectedConnectionTemplate.credentialHint }} Store only a Secret Manager reference here, never the API key, access token or webhook URL itself.
+      </p>
+      <p v-else class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>
     </section>
   </section>
 </template>
