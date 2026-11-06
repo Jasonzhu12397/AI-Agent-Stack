@@ -1,3 +1,4 @@
+import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -212,6 +213,9 @@ def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
         task_type="agent.run",
         payload={},
         idempotency_key="knowledge-agent-run",
+        status=Task.Status.RUNNING,
+        lease_owner="worker-test",
+        lease_token=uuid.uuid4(),
         available_at=timezone.now(),
     )
     AgentRun.objects.create(
