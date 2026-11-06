@@ -858,3 +858,93 @@ def test_http_connector_rejects_case_insensitive_duplicate_static_headers():
                 context(manifest=manifest),
                 SimpleNamespace(name="search"),
             )
+
+
+
+def test_google_maps_places_search_uses_server_side_api_key_and_field_mask(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("142.250.72.14", 443))
+        ],
+    )
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "header",
+            "name": "X-Goog-Api-Key",
+            "value": "server-side-google-maps-secret",
+        },
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://places.googleapis.com/v1",
+            "auth_required": True,
+            "operations": {
+                "search-places": {
+                    "method": "POST",
+                    "path": "/places:searchText",
+                    "path_params": {},
+                    "query_params": {},
+                    "body_param": "request",
+                    "read_only": True,
+                    "headers": {
+                        "X-Goog-FieldMask": (
+                            "places.id,places.displayName,places.formattedAddress"
+                        )
+                    },
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search-places",
+        timeout_seconds=20,
+        idempotency_mode="read_only",
+    )
+    response = FakeResponse(
+        chunks=[
+            b'{"places":[{"id":"place-1","displayName":{"text":"Coffee Shop"},'
+            b'"formattedAddress":"1 Main Street"}]}'
+        ]
+    )
+    with override_settings(
+        PLUGIN_HTTP_ALLOWED_HOSTS=["places.googleapis.com"],
+        PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve",
+    ):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(response, captured),
+        ):
+            result = execute_http_operation(
+                {"request": {"textQuery": "coffee in Dallas", "maxResultCount": 5}},
+                context(
+                    manifest=manifest,
+                    auth_type="credential_ref",
+                    credential_ref="vault://maps/google-places",
+                ),
+                selected_tool,
+            )
+
+    assert result == {
+        "places": [
+            {
+                "id": "place-1",
+                "displayName": {"text": "Coffee Shop"},
+                "formattedAddress": "1 Main Street",
+            }
+        ]
+    }
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://places.googleapis.com/v1/places:searchText"
+    assert captured["json"] == {
+        "textQuery": "coffee in Dallas",
+        "maxResultCount": 5,
+    }
+    assert captured["headers"]["X-Goog-Api-Key"] == "server-side-google-maps-secret"
+    assert captured["headers"]["X-Goog-FieldMask"] == (
+        "places.id,places.displayName,places.formattedAddress"
+    )
+    assert "server-side-google-maps-secret" not in captured["url"]
+    assert "server-side-google-maps-secret" not in str(captured["json"])

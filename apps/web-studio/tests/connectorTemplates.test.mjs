@@ -128,3 +128,29 @@ test("installed connector guidance resolves only by exact plugin key", () => {
   assert.equal(findConnectorTemplate("unknown-connector"), undefined);
   assert.equal(findConnectorTemplate(undefined), undefined);
 });
+
+
+test("Google Maps Places template uses read-only Places API New with server-side API key", () => {
+  const template = byId("google-maps-places");
+  const http = template.payload.manifest.http;
+  const operation = http.operations["search-places"];
+  const tool = toolByName(template, "search-places");
+  assert.equal(template.host, "places.googleapis.com");
+  assert.equal(http.base_url, "https://places.googleapis.com/v1");
+  assert.equal(http.auth_required, true);
+  assert.equal(template.auth, "credential_ref");
+  assert.equal(operation.method, "POST");
+  assert.equal(operation.path, "/places:searchText");
+  assert.equal(operation.read_only, true);
+  assert.equal(operation.body_param, "request");
+  assert.deepEqual(operation.headers, {
+    "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress",
+  });
+  assert.equal(http.health_check.auth_query_parameter, undefined);
+  assert.equal(http.health_check.headers["X-Goog-FieldMask"], operation.headers["X-Goog-FieldMask"]);
+  assert.deepEqual(tool.required_permissions, ["maps:places:read"]);
+  assert.equal(tool.risk_level, "low");
+  assert.equal(tool.idempotency_mode, "read_only");
+  assert.deepEqual(tool.input_schema.required, ["request"]);
+  assert.equal(tool.input_schema.properties.request.properties.textQuery.maxLength, 300);
+});
