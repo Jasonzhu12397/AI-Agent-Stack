@@ -814,6 +814,12 @@ export function createKnowledgeDocument(
   });
 }
 
+export function deleteKnowledgeDocument(documentId: string): Promise<void> {
+  return request("/api/v1/knowledge-documents/" + documentId + "/", {
+    method: "DELETE",
+  });
+}
+
 
 export function createOpenAICompatibleProvider(
   tenantId: string,
