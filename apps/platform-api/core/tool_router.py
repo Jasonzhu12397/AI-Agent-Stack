@@ -77,7 +77,13 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
     if not isinstance(schema, dict):
         raise ToolExecutionError("Tool schema is malformed.")
     expected = schema.get("type")
-    if not isinstance(expected, str) or not _matches_type(value, expected):
+    if not isinstance(expected, str):
+        raise ToolExecutionError("Tool schema is malformed.")
+    if expected in {"integer", "number"} and isinstance(value, float) and not math.isfinite(value):
+        raise ToolExecutionError(f"{path} must be finite.")
+    if expected == "object" and not isinstance(value, dict):
+        raise ToolExecutionError(f"{path} must be an object.")
+    if not _matches_type(value, expected):
         raise ToolExecutionError(f"{path} has an invalid value type.")
     if "enum" in schema:
         allowed_values = schema["enum"]
