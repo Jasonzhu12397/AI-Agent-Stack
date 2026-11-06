@@ -1,7 +1,7 @@
 export type PluginConnectionAuthType = "none" | "credential_ref" | "oauth_ref";
 
 const CREDENTIAL_REFERENCE_PATTERN =
-  /^[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._/-]{1,180}$/;
+  /^(?:vault|secret|aws-sm|azure-keyvault|gcp-secret|op):\/\/[A-Za-z0-9._/-]{1,180}$/;
 
 export function validatePluginConnectionInput(
   name: string,
@@ -15,7 +15,7 @@ export function validatePluginConnectionInput(
     return "Connection name is required and must not exceed 120 characters.";
   }
   if (authType !== "none" && !CREDENTIAL_REFERENCE_PATTERN.test(normalizedReference)) {
-    return "A valid non-secret URI such as vault://path/to/credential is required.";
+    return "Use a supported secret-manager reference such as vault://path/to/credential; raw URLs and secret values are not accepted."
   }
   if (authType === "none" && normalizedReference) {
     return "A credential reference is not allowed when authentication is set to none.";

@@ -113,6 +113,10 @@ test("plugin connection references are validated before submission", () => {
   assert.match(validatePluginConnectionInput("", "none", "") ?? "", /name is required/i);
   assert.match(validatePluginConnectionInput("x".repeat(121), "none", "") ?? "", /120 characters/i);
   assert.match(validatePluginConnectionInput("Maps", "credential_ref", "") ?? "", /valid non-secret URI/i);
-  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://user:password@example.com/key") ?? "", /valid non-secret URI/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://user:password@example.com/key") ?? "", /secret-manager reference/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://example.com/key") ?? "", /secret-manager reference/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "token://maps/production") ?? "", /secret-manager reference/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "vault://maps/production") ?? "", /secret-manager reference/i);
+  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "op://Engineering/Maps/API-Key") ?? "", /secret-manager reference/i);
   assert.match(validatePluginConnectionInput("Maps", "none", "vault://maps/key") ?? "", /not allowed/i);
 });
