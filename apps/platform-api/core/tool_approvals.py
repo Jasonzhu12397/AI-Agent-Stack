@@ -257,7 +257,10 @@ def expire_pending_tool_approvals(limit=100):
                 )
                 ToolApprovalRequest.objects.filter(
                     task=task,
-                    status=ToolApprovalRequest.Status.PENDING,
+                    status__in=[
+                        ToolApprovalRequest.Status.PENDING,
+                        ToolApprovalRequest.Status.APPROVED,
+                    ],
                 ).exclude(pk=approval.pk).update(
                     status=ToolApprovalRequest.Status.CANCELLED
                 )
