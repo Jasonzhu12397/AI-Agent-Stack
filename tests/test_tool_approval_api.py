@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from datetime import timedelta
 
 import pytest
