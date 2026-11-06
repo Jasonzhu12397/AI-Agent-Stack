@@ -21,7 +21,8 @@ from worker_app import tasks as worker_tasks
 
 
 @pytest.mark.django_db
-def test_agent_worker_executes_tool_then_returns_final_model_answer():
+@pytest.mark.parametrize("risk_level", ["low", "high"])
+def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
     user = get_user_model().objects.create_user(username="tool-agent-user")
     tenant = Tenant.objects.create(name="Tool tenant", slug="tool-tenant")
     project = Project.objects.create(tenant=tenant, name="Tool project", slug="tool-project")
@@ -72,6 +73,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer():
             "additionalProperties": False,
         },
         enabled=True,
+        risk_level=risk_level,
     )
     PluginInstallation.objects.create(
         tenant=tenant,
@@ -151,9 +153,22 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer():
     )
     try:
         with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
-            result = worker_tasks.execute_agent_run(task)
+            if risk_level == "high":
+                with pytest.raises(
+                    worker_tasks.PermanentTaskError,
+                    match="requires approval",
+                ):
+                    worker_tasks.execute_agent_run(task)
+            else:
+                result = worker_tasks.execute_agent_run(task)
     finally:
         worker_tasks.TOOL_ROUTER._handlers = handlers
+
+    assert fake_gateway.calls[0]["kwargs"]["tools"][0]["function"]["name"] == "demo__lookup"
+    if risk_level == "high":
+        assert len(fake_gateway.calls) == 1
+        assert fake_gateway.calls[0]["messages"][-1]["role"] == "user"
+        return
 
     assert result["content"] == "The service is ready."
     assert result["tool_calls"] == 1
@@ -162,4 +177,3 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer():
     second_turn_messages = fake_gateway.calls[1]["messages"]
     assert second_turn_messages[-1]["role"] == "tool"
     assert "service-status-ready" in second_turn_messages[-1]["content"]
-    assert fake_gateway.calls[0]["kwargs"]["tools"][0]["function"]["name"] == "demo__lookup"
