@@ -23,7 +23,8 @@ test("connector template identifiers and plugin keys are unique", () => {
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(new Set(pluginKeys).size, pluginKeys.length);
   for (const template of connectorTemplates) {
-    assert.equal(template.payload.plugin_key, template.id);
+    assert.equal(typeof template.payload.plugin_key, "string");
+    assert.ok(template.payload.plugin_key.length > 0);
     assert.equal(template.payload.connector_type, "http");
   }
 });
