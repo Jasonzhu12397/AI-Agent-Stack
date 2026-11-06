@@ -56,6 +56,11 @@ from core.model_views import (
     ModelProviderListCreateView,
     ModelTestView,
 )
+from core.task_approval_views import (
+    ToolApprovalApproveView,
+    ToolApprovalListView,
+    ToolApprovalRejectView,
+)
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.views import TenantListView, TenantProjectListView, liveness, readiness
 from core.workflow_views import (
@@ -311,6 +316,21 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/members/<uuid:membership_id>/",
         ProjectMemberDetailView.as_view(),
         name="project-member-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/",
+        ToolApprovalListView.as_view(),
+        name="tool-approval-list",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/approve/",
+        ToolApprovalApproveView.as_view(),
+        name="tool-approval-approve",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/reject/",
+        ToolApprovalRejectView.as_view(),
+        name="tool-approval-reject",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tasks/",
