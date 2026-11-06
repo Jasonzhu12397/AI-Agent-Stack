@@ -615,6 +615,88 @@ def test_http_connector_injects_server_side_query_credentials_without_secret_in_
     assert "server-side-api-secret" not in captured["url"]
 
 
+def test_baidu_nearby_search_sends_latitude_longitude_and_server_side_ak(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "query",
+            "name": "ak",
+            "value": "server-side-baidu-secret",
+        },
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.map.baidu.com",
+            "auth_required": True,
+            "operations": {
+                "search-baidu-places-around": {
+                    "method": "GET",
+                    "path": "/place/v3/around",
+                    "path_params": {},
+                    "query_params": {
+                        "query": "query",
+                        "location": "location",
+                        "radius": "radius",
+                        "page_size": "page_size",
+                        "page_num": "page_num",
+                        "output": "output",
+                    },
+                    "auth_query_parameter": "ak",
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search-baidu-places-around",
+        timeout_seconds=5,
+        idempotency_mode="read_only",
+    )
+    with override_settings(
+        PLUGIN_HTTP_ALLOWED_HOSTS=["api.map.baidu.com"],
+        PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve",
+    ):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(FakeResponse(), captured),
+        ):
+            result = execute_http_operation(
+                {
+                    "query": "coffee",
+                    "location": "39.915,116.404",
+                    "radius": 2000,
+                    "page_size": 20,
+                    "page_num": 0,
+                    "output": "json",
+                },
+                context(
+                    manifest=manifest,
+                    auth_type="credential_ref",
+                    credential_ref="vault://maps/baidu-ak",
+                ),
+                selected_tool,
+            )
+
+    assert result == {"items": ["ok"]}
+    assert captured["url"] == "https://api.map.baidu.com/place/v3/around"
+    assert captured["params"] == [
+        ("query", "coffee"),
+        ("location", "39.915,116.404"),
+        ("radius", "2000"),
+        ("page_size", "20"),
+        ("page_num", "0"),
+        ("output", "json"),
+        ("ak", "server-side-baidu-secret"),
+    ]
+    assert "server-side-baidu-secret" not in captured["url"]
+
+
 def test_http_connector_rejects_query_credential_unless_operation_explicitly_allows_it(monkeypatch):
     monkeypatch.setattr(
         "core.http_connector.socket.getaddrinfo",
