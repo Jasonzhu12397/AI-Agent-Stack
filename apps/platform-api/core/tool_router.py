@@ -56,6 +56,12 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
     expected = schema.get("type")
     if not isinstance(expected, str) or not _matches_type(value, expected):
         raise ToolExecutionError(f"{path} has an invalid value type.")
+    if "enum" in schema:
+        allowed_values = schema["enum"]
+        if not isinstance(allowed_values, list) or not any(
+            value == allowed for allowed in allowed_values
+        ):
+            raise ToolExecutionError(f"{path} is not an allowed value.")
     if expected == "object":
         properties = schema.get("properties", {})
         required = schema.get("required", [])
@@ -107,8 +113,6 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
             raise ToolExecutionError(f"{path} is below its minimum.")
         if "maximum" in schema and value > schema["maximum"]:
             raise ToolExecutionError(f"{path} exceeds its maximum.")
-    if "enum" in schema and value not in schema["enum"]:
-        raise ToolExecutionError(f"{path} is not an allowed value.")
 
 class ToolRouter:
     """Policy-enforcing dispatcher; connector transports must register trusted handlers."""
