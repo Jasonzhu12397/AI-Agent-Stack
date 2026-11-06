@@ -319,5 +319,54 @@ class ToolRouterTests(unittest.TestCase):
                 granted_permissions=["sample:read"],
             )
 
+
+    def test_enforces_enum_constraints_for_objects_and_arrays(self):
+        installation, tool = fixture()
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                    "additionalProperties": False,
+                    "enum": [{"name": "allowed"}],
+                }
+            },
+            "required": ["payload"],
+            "additionalProperties": False,
+        }
+        with self.assertRaisesRegex(ToolExecutionError, "allowed value"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"payload": {"name": "denied"}},
+                granted_permissions=["sample:read"],
+            )
+
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 2,
+                    "enum": [["allowed"]],
+                }
+            },
+            "required": ["values"],
+            "additionalProperties": False,
+        }
+        with self.assertRaisesRegex(ToolExecutionError, "allowed value"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"values": ["denied"]},
+                granted_permissions=["sample:read"],
+            )
+
 if __name__ == "__main__":
     unittest.main()
