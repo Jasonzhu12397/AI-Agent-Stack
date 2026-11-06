@@ -292,7 +292,7 @@ def execute_http_operation(arguments, context: ToolContext, tool):
     auth_headers, auth_query = _resolve_auth(context)
     auth_header_names = {name.lower() for name in auth_headers}
     if (
-        auth_header_names.intersection(static_header_names)
+        auth_header_names.intersection({name.lower() for name in static_headers})
         or "accept" in auth_header_names
     ):
         raise ToolExecutionError(

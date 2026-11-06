@@ -776,7 +776,6 @@ def test_http_connector_rejects_query_credential_parameter_collision(monkeypatch
 
 
 def test_http_connector_rejects_auth_header_collision_with_static_header(monkeypatch):
-    captured = {}
     monkeypatch.setattr(
         "core.http_connector.socket.getaddrinfo",
         lambda *args, **kwargs: [
