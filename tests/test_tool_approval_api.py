@@ -227,3 +227,19 @@ def test_expired_approval_fails_closed(approval_context):
     task.refresh_from_db()
     assert approval.status == ToolApprovalRequest.Status.EXPIRED
     assert task.status == Task.Status.FAILED
+
+
+@pytest.mark.django_db
+def test_cancelling_waiting_task_cancels_its_pending_approval(approval_context):
+    ctx = approval_context
+    task, approval = ctx["create_pending"]("cancel")
+    client = APIClient()
+    client.force_authenticate(user=ctx["admin"])
+
+    response = client.post(f"/api/v1/tasks/{task.id}/cancel/", {}, format="json")
+
+    assert response.status_code == 202
+    task.refresh_from_db()
+    approval.refresh_from_db()
+    assert task.status == Task.Status.CANCELLED
+    assert approval.status == ToolApprovalRequest.Status.CANCELLED
