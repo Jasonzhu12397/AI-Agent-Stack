@@ -508,3 +508,137 @@ def test_http_connector_rejects_unsafe_static_headers(headers):
                 context(manifest=manifest),
                 SimpleNamespace(name="search"),
             )
+
+
+def test_http_connector_injects_server_side_query_credentials_without_putting_secret_in_url(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "query",
+            "name": "key",
+            "value": "server-side-api-secret",
+        },
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": True,
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/places",
+                    "path_params": {},
+                    "query_params": {"q": "query"},
+                    "auth_query_parameter": "key",
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search",
+        timeout_seconds=5,
+        idempotency_mode="read_only",
+    )
+    with override_settings(
+        PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"],
+        PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve",
+    ):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(FakeResponse(), captured),
+        ):
+            result = execute_http_operation(
+                {"query": "coffee"},
+                context(
+                    manifest=manifest,
+                    auth_type="credential_ref",
+                    credential_ref="vault://maps/api-key",
+                ),
+                selected_tool,
+            )
+
+    assert result == {"items": ["ok"]}
+    assert captured["url"] == "https://api.example.com/v1/places"
+    assert captured["params"] == [
+        ("q", "coffee"),
+        ("key", "server-side-api-secret"),
+    ]
+    assert "server-side-api-secret" not in captured["url"]
+
+
+def test_http_connector_rejects_query_credential_unless_operation_explicitly_allows_it(monkeypatch):
+    monkeypatch.setattr(
+        "core.http_connector.import_string",
+        lambda path: lambda reference: {
+            "type": "query",
+            "name": "key",
+            "value": "server-side-api-secret",
+        },
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": True,
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/places",
+                    "path_params": {},
+                    "query_params": {"q": "query"},
+                    "auth_query_parameter": "access_token",
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="search",
+        timeout_seconds=5,
+        idempotency_mode="read_only",
+    )
+    with override_settings(PLUGIN_CREDENTIAL_RESOLVER="platform.secrets.resolve"):
+        with pytest.raises(ToolExecutionError, match="does not match"):
+            execute_http_operation(
+                {"query": "coffee"},
+                context(
+                    manifest=manifest,
+                    auth_type="credential_ref",
+                    credential_ref="vault://maps/api-key",
+                ),
+                selected_tool,
+            )
+
+
+def test_http_connector_rejects_query_credential_parameter_collision(monkeypatch):
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": True,
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/places",
+                    "path_params": {},
+                    "query_params": {"key": "query"},
+                    "auth_query_parameter": "key",
+                }
+            },
+        }
+    }
+    with patch(
+        "core.http_connector._validate_base_url",
+        return_value="https://api.example.com",
+    ):
+        with pytest.raises(ToolExecutionError, match="conflicts"):
+            from core.http_connector import _operation_config
+
+            _operation_config(
+                context(manifest=manifest, auth_type="credential_ref", credential_ref="vault://key"),
+                SimpleNamespace(name="search"),
+            )
