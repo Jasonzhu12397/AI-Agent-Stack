@@ -47,6 +47,25 @@ def _matches_type(value: Any, expected: str) -> bool:
     return check(value) if check else False
 
 
+def _json_values_equal(left: Any, right: Any) -> bool:
+    try:
+        return json.dumps(
+            left,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ) == json.dumps(
+            right,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return False
+
+
 def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth: int = 0) -> None:
     """Validate the registry's bounded JSON Schema subset recursively."""
     if _depth > 16:
@@ -59,7 +78,7 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
     if "enum" in schema:
         allowed_values = schema["enum"]
         if not isinstance(allowed_values, list) or not any(
-            value == allowed for allowed in allowed_values
+            _json_values_equal(value, allowed) for allowed in allowed_values
         ):
             raise ToolExecutionError(f"{path} is not an allowed value.")
     if expected == "object":
