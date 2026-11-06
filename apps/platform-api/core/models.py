@@ -846,6 +846,7 @@ class ToolApprovalRequest(models.Model):
     arguments = models.JSONField()
     arguments_hash = models.CharField(max_length=64)
     plugin_version = models.CharField(max_length=40)
+    execution_checkpoint = models.JSONField(default=dict)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
     requested_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
