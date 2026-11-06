@@ -368,5 +368,26 @@ class ToolRouterTests(unittest.TestCase):
                 granted_permissions=["sample:read"],
             )
 
+
+    def test_enum_comparison_preserves_json_scalar_types(self):
+        installation, tool = fixture()
+        tool.input_schema = {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "enum": [1]}
+            },
+            "required": ["enabled"],
+            "additionalProperties": False,
+        }
+        router = ToolRouter()
+        router.register("sample", "lookup", lambda args, context: {"items": []})
+        with self.assertRaisesRegex(ToolExecutionError, "allowed value"):
+            router.execute(
+                installation=installation,
+                tool=tool,
+                arguments={"enabled": True},
+                granted_permissions=["sample:read"],
+            )
+
 if __name__ == "__main__":
     unittest.main()
