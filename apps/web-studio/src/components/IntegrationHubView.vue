@@ -384,7 +384,7 @@ onMounted(() => void refresh());
         </el-select>
         <el-button plain @click="loadConnectorTemplate">Load template</el-button>
       </div>
-      <p class="integration-safety-note">Starter templates cover weather, Google Maps Places, GitHub and Microsoft Graph read-only operations. Templates create draft metadata only; approval, project installation, host allowlisting and server-side credential resolution are still required. No provider is represented as connected until its health check succeeds.</p>
+      <p class="integration-safety-note">Starter templates cover Open-Meteo weather, Amap Places, Baidu Map Places, Google Maps Places, GitHub and Microsoft Graph read-only operations. Templates create draft metadata only; approval, project installation, host allowlisting and server-side credential resolution are still required. No provider is represented as connected until its health check succeeds.</p>
       <el-input v-model="pluginJson" type="textarea" :rows="14" spellcheck="false" />
       <el-button type="primary" plain :loading="submitting" :disabled="!tenantId" @click="createPlugin">
         Register draft
