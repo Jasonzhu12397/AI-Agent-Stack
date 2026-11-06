@@ -32,6 +32,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
+    KnowledgeDocumentDetailView,
     KnowledgeBaseDocumentListCreateView,
     KnowledgeBaseListCreateView,
 )
