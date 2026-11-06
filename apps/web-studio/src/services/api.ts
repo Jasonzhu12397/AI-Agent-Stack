@@ -954,7 +954,7 @@ export function getToolApprovals(
   tenantId: string,
   projectId: string,
 ): Promise<{ items: ToolApprovalRequest[]; count: number }> {
-  return request(
+  return request<{ items: ToolApprovalRequest[]; count: number }>(
     `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/?status=pending`,
   );
 }
@@ -964,7 +964,7 @@ export function approveToolApproval(
   projectId: string,
   approvalId: string,
 ): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
-  return request(
+  return request<{ approval: ToolApprovalRequest; task_status: string }>(
     `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/approve/`,
     { method: "POST", body: JSON.stringify({}) },
   );
@@ -976,7 +976,7 @@ export function rejectToolApproval(
   approvalId: string,
   reason: string,
 ): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
-  return request(
+  return request<{ approval: ToolApprovalRequest; task_status: string }>(
     `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/reject/`,
     { method: "POST", body: JSON.stringify({ reason }) },
   );
