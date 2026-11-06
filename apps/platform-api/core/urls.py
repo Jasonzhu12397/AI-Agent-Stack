@@ -56,7 +56,7 @@ from core.model_views import (
     ModelProviderListCreateView,
     ModelTestView,
 )
-from core.task_approval_views import (
+from core.tool_approval_views import (
     ToolApprovalApproveView,
     ToolApprovalListView,
     ToolApprovalRejectView,
