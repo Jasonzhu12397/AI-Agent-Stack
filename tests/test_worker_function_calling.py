@@ -1,3 +1,4 @@
+import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from core.models import (
     Project,
     Task,
     Tenant,
+    ToolApprovalRequest,
 )
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -75,7 +77,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         enabled=True,
         risk_level=risk_level,
     )
-    PluginInstallation.objects.create(
+    installation = PluginInstallation.objects.create(
         tenant=tenant,
         project=project,
         plugin=plugin,
@@ -103,6 +105,9 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         task_type="agent.run",
         payload={},
         idempotency_key="tool-agent-run",
+        status=Task.Status.RUNNING,
+        lease_owner="worker-test",
+        lease_token=uuid.uuid4(),
         available_at=timezone.now(),
     )
     AgentRun.objects.create(
@@ -155,8 +160,8 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
             if risk_level == "high":
                 with pytest.raises(
-                    worker_tasks.PermanentTaskError,
-                    match="requires approval",
+                    worker_tasks.TaskSuspendedForApproval,
+                    match="waiting for explicit connector tool approval",
                 ):
                     worker_tasks.execute_agent_run(task)
             else:
@@ -166,6 +171,16 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
 
     assert fake_gateway.calls[0]["kwargs"]["tools"][0]["function"]["name"] == "demo__lookup"
     if risk_level == "high":
+        task.refresh_from_db()
+        approval = ToolApprovalRequest.objects.get(task=task, call_id="call-1")
+        assert task.status == Task.Status.WAITING_APPROVAL
+        assert task.lease_token is None
+        assert approval.status == ToolApprovalRequest.Status.PENDING
+        assert approval.tool_id == tool.id
+        assert approval.installation_id == installation.id
+        assert approval.arguments == {"key": "service-status"}
+        assert approval.execution_checkpoint["pending_calls"][0]["id"] == "call-1"
+        assert approval.execution_checkpoint["messages"][-1]["role"] == "assistant"
         assert len(fake_gateway.calls) == 1
         assert fake_gateway.calls[0]["messages"][-1]["role"] == "user"
         return
