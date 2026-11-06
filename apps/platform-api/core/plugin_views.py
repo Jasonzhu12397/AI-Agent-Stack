@@ -628,6 +628,22 @@ class PluginConnectionListCreateView(APIView):
             return Response({"detail": "Connection name is required."}, status=400)
         if auth_type not in PluginConnection.AuthType.values:
             return Response({"detail": "Unsupported auth_type."}, status=400)
+        transport = (
+            installation.plugin.manifest.get("http")
+            if isinstance(installation.plugin.manifest, dict)
+            else None
+        )
+        if isinstance(transport, dict) and transport.get("auth_required") is True:
+            if auth_type == PluginConnection.AuthType.NONE:
+                return Response(
+                    {
+                        "detail": (
+                            "This connector requires authentication; configure a "
+                            "Secret Manager credential reference before creating a connection."
+                        )
+                    },
+                    status=400,
+                )
         if auth_type != PluginConnection.AuthType.NONE and (
             not isinstance(credential_ref, str)
             or not re.fullmatch(

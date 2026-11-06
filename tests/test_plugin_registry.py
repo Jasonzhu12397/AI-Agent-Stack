@@ -183,6 +183,64 @@ def test_plugin_registration_rejects_plaintext_secret_in_manifest(plugin_workspa
 
 
 @pytest.mark.django_db
+def test_auth_required_http_connector_rejects_unauthenticated_connection(plugin_workspace):
+    _, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"] = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": True,
+            "health_check": {"method": "GET", "path": "/health"},
+            "operations": {},
+        }
+    }
+    registered = client.post("/api/v1/connectors/", payload, format="json")
+    assert registered.status_code == 201
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    assert installed.status_code == 201
+
+    rejected = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "missing-credential",
+            "auth_type": "none",
+            "credential_ref": "",
+            "config": {},
+        },
+        format="json",
+    )
+    accepted = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "configured-credential",
+            "auth_type": "credential_ref",
+            "credential_ref": "vault://platform/example-api",
+            "config": {},
+        },
+        format="json",
+    )
+
+    assert rejected.status_code == 400
+    assert "requires authentication" in rejected.data["detail"]
+    assert accepted.status_code == 201
+    assert accepted.data["credential_configured"] is True
+    assert PluginConnection.objects.count() == 1
+
+
+@pytest.mark.django_db
 def test_plugin_connection_rejects_plaintext_credential(plugin_workspace):
     user, tenant, project, client = plugin_workspace
     registered = register_plugin(client, tenant)
