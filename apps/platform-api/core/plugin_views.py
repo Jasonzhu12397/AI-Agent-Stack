@@ -639,7 +639,8 @@ class PluginConnectionListCreateView(APIView):
                 {
                     "detail": (
                         "credential_ref must use a supported secret-manager URI "
-                        "such as vault://path/to/credential; raw URLs and secret values are not accepted."
+                        "such as vault://path/to/credential; raw URLs and secret values "
+                        "are not accepted."
                     )
                 },
                 status=400,
