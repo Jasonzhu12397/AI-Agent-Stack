@@ -80,7 +80,7 @@ def _resolve_auth(context):
     credential_type = credential.get("type")
     if credential_type == "bearer":
         token = credential.get("token")
-        if not isinstance(token, str) or not token or "\\n" in token or "\\r" in token:
+        if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
             raise ToolExecutionError("Credential resolver returned an invalid bearer token.")
         return {"Authorization": "Bearer " + token}, None
     if credential_type == "header":
@@ -91,8 +91,8 @@ def _resolve_auth(context):
             or not HEADER_NAME.fullmatch(name)
             or not isinstance(value, str)
             or not value
-            or "\\n" in value
-            or "\\r" in value
+            or "\n" in value
+            or "\r" in value
             or name.lower() in {"host", "content-length", "transfer-encoding"}
         ):
             raise ToolExecutionError("Credential resolver returned an invalid header credential.")
@@ -207,6 +207,8 @@ def _operation_config(context, tool):
         raise ToolExecutionError("Connector HTTP parameter mapping is invalid.")
     if set(path_params) != placeholders:
         raise ToolExecutionError("Connector HTTP path parameter mapping is incomplete.")
+    if auth_query_parameter is not None and auth_query_parameter in query_params:
+        raise ToolExecutionError("Connector authentication query parameter conflicts with an operation mapping.")
     if transport.get("auth_required") is True and (
         context.connection_auth_type == "none" or not context.credential_ref
     ):
