@@ -193,3 +193,49 @@ def consume_approved_tool_call(
         approval.consumed_at = timezone.now()
         approval.save(update_fields=["status", "consumed_at"])
         return True
+
+
+def expire_pending_tool_approvals(limit=100):
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise ValueError("Approval expiry batch size must be between 1 and 1000")
+    expired_count = 0
+    now = timezone.now()
+    for _ in range(limit):
+        with transaction.atomic():
+            approval = (
+                ToolApprovalRequest.objects.select_for_update(skip_locked=True)
+                .filter(
+                    status=ToolApprovalRequest.Status.PENDING,
+                    expires_at__lte=now,
+                )
+                .order_by("expires_at")
+                .first()
+            )
+            if approval is None:
+                break
+            task = Task.objects.select_for_update().get(pk=approval.task_id)
+            approval.status = ToolApprovalRequest.Status.EXPIRED
+            approval.save(update_fields=["status"])
+            if task.status == Task.Status.WAITING_APPROVAL:
+                task.status = Task.Status.FAILED
+                task.finished_at = now
+                task.error = {
+                    "code": "TOOL_APPROVAL_EXPIRED",
+                    "message": "The high-risk tool approval request expired.",
+                }
+                task.save(
+                    update_fields=["status", "finished_at", "error", "updated_at"]
+                )
+                ToolApprovalRequest.objects.filter(
+                    task=task,
+                    status=ToolApprovalRequest.Status.PENDING,
+                ).exclude(pk=approval.pk).update(
+                    status=ToolApprovalRequest.Status.CANCELLED
+                )
+                from core.models import AgentRun
+
+                AgentRun.objects.filter(task=task, finished_at__isnull=True).update(
+                    finished_at=now
+                )
+            expired_count += 1
+    return expired_count
