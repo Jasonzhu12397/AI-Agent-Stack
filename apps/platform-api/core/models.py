@@ -876,6 +876,8 @@ class ToolApprovalRequest(models.Model):
                 fields=["task", "call_id"],
                 name="uniq_tool_approval_task_call",
             ),
+        ]
+        indexes = [
             models.Index(
                 fields=["tenant", "project", "status", "expires_at"],
                 name="tool_approval_scope_idx",
