@@ -251,7 +251,11 @@ def execute_http_operation(arguments, context: ToolContext, tool):
     mapped_args = set(path_params.values()) | set(query_params.values())
     if body_param:
         mapped_args.add(body_param)
-    if mapped_args != set(arguments):
+    supplied_args = set(arguments)
+    required_args = set(path_params.values())
+    if body_param:
+        required_args.add(body_param)
+    if not supplied_args.issubset(mapped_args) or not required_args.issubset(supplied_args):
         raise ToolExecutionError("Connector HTTP argument mapping does not match its input schema.")
 
     path_values = {}
@@ -271,7 +275,9 @@ def execute_http_operation(arguments, context: ToolContext, tool):
 
     query = []
     for key, argument_name in query_params.items():
-        value = arguments.get(argument_name)
+        if argument_name not in arguments:
+            continue
+        value = arguments[argument_name]
         values = value if isinstance(value, list) else [value]
         for item in values:
             if isinstance(item, (dict, list)) or item is None or isinstance(item, bool):
