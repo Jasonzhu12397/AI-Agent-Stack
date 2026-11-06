@@ -135,13 +135,20 @@ class ToolApprovalDecisionView(APIView):
             )
 
         with transaction.atomic():
+            approval_ref = get_object_or_404(
+                ToolApprovalRequest.objects.only("id", "task_id"),
+                pk=approval_id,
+                tenant=tenant,
+                project=project,
+            )
+            task = Task.objects.select_for_update().get(pk=approval_ref.task_id)
             approval = get_object_or_404(
                 ToolApprovalRequest.objects.select_for_update(),
                 pk=approval_id,
                 tenant=tenant,
                 project=project,
+                task=task,
             )
-            task = Task.objects.select_for_update().get(pk=approval.task_id)
             now = timezone.now()
             if approval.status != ToolApprovalRequest.Status.PENDING:
                 return Response(
