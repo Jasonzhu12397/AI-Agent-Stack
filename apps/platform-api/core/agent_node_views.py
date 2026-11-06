@@ -1153,24 +1153,29 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                 worker_count = checkpoint_data.get("worker_count")
                 ready_worker_count = checkpoint_data.get("ready_worker_count")
                 not_ready_worker_names = checkpoint_data.get("not_ready_worker_names")
+                expected_worker_count = deployment.spec.get("worker_replicas")
                 if (
                     checkpoint is None
                     or checkpoint.phase != "worker_provisioning"
+                    or not isinstance(expected_worker_count, int)
+                    or isinstance(expected_worker_count, bool)
                     or not isinstance(worker_count, int)
                     or isinstance(worker_count, bool)
-                    or worker_count < 1
+                    or worker_count != expected_worker_count
                     or not isinstance(ready_worker_count, int)
                     or isinstance(ready_worker_count, bool)
-                    or ready_worker_count != worker_count
+                    or ready_worker_count != expected_worker_count
                     or not isinstance(not_ready_worker_names, list)
                     or not_ready_worker_names
                 ):
                     return Response(
                         {
                             "detail": (
-                                "Worker pool verification requires a complete ready inventory."
+                                "Worker pool verification must match the requested replica "
+                                "count and every requested worker must be Ready."
                             ),
                             "code": "WORKER_POOL_NOT_FULLY_READY",
+                            "expected_worker_count": expected_worker_count,
                         },
                         status=409,
                     )
