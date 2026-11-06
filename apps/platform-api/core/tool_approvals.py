@@ -164,6 +164,7 @@ def consume_approved_tool_call(
     call_id,
     arguments,
 ):
+    expired = False
     with transaction.atomic():
         locked_task = Task.objects.select_for_update().get(pk=task.pk)
         if locked_task.status != Task.Status.RUNNING:
@@ -179,20 +180,23 @@ def consume_approved_tool_call(
         if approval.expires_at <= timezone.now():
             approval.status = ToolApprovalRequest.Status.EXPIRED
             approval.save(update_fields=["status"])
-            raise ValueError("Tool approval has expired")
-        if not approval_matches_call(
-            approval,
-            task=locked_task,
-            tool=tool,
-            installation=installation,
-            connection=connection,
-            arguments=arguments,
-        ):
-            raise ValueError("Approved tool call no longer matches its original request")
-        approval.status = ToolApprovalRequest.Status.CONSUMED
-        approval.consumed_at = timezone.now()
-        approval.save(update_fields=["status", "consumed_at"])
-        return True
+            expired = True
+        else:
+            if not approval_matches_call(
+                approval,
+                task=locked_task,
+                tool=tool,
+                installation=installation,
+                connection=connection,
+                arguments=arguments,
+            ):
+                raise ValueError("Approved tool call no longer matches its original request")
+            approval.status = ToolApprovalRequest.Status.CONSUMED
+            approval.consumed_at = timezone.now()
+            approval.save(update_fields=["status", "consumed_at"])
+    if expired:
+        raise ValueError("Tool approval has expired")
+    return True
 
 
 def expire_pending_tool_approvals(limit=100):
@@ -202,7 +206,10 @@ def expire_pending_tool_approvals(limit=100):
     now = timezone.now()
     candidate_ids = list(
         ToolApprovalRequest.objects.filter(
-            status=ToolApprovalRequest.Status.PENDING,
+            status__in=[
+                ToolApprovalRequest.Status.PENDING,
+                ToolApprovalRequest.Status.APPROVED,
+            ],
             expires_at__lte=now,
         )
         .order_by("expires_at")
@@ -222,7 +229,10 @@ def expire_pending_tool_approvals(limit=100):
                 ToolApprovalRequest.objects.select_for_update()
                 .filter(
                     pk=approval_id,
-                    status=ToolApprovalRequest.Status.PENDING,
+                    status__in=[
+                        ToolApprovalRequest.Status.PENDING,
+                        ToolApprovalRequest.Status.APPROVED,
+                    ],
                     expires_at__lte=now,
                 )
                 .first()
@@ -231,7 +241,11 @@ def expire_pending_tool_approvals(limit=100):
                 continue
             approval.status = ToolApprovalRequest.Status.EXPIRED
             approval.save(update_fields=["status"])
-            if task.status == Task.Status.WAITING_APPROVAL:
+            if task.status in {
+                Task.Status.WAITING_APPROVAL,
+                Task.Status.QUEUED,
+                Task.Status.RUNNING,
+            }:
                 task.status = Task.Status.FAILED
                 task.finished_at = now
                 task.error = {
