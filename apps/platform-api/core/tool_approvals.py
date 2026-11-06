@@ -151,3 +151,43 @@ def create_pending_tool_approval(
             ]
         )
         return approval
+
+
+def consume_approved_tool_call(
+    *,
+    task,
+    tool,
+    installation,
+    connection,
+    call_id,
+    arguments,
+):
+    with transaction.atomic():
+        approval = (
+            ToolApprovalRequest.objects.select_for_update()
+            .select_related("task", "tenant", "project", "tool__plugin", "installation")
+            .filter(task=task, call_id=call_id)
+            .first()
+        )
+        if approval is None or approval.status != ToolApprovalRequest.Status.APPROVED:
+            return False
+        locked_task = Task.objects.select_for_update().get(pk=task.pk)
+        if locked_task.status != Task.Status.RUNNING:
+            raise ValueError("Approved tool call task is not running")
+        if approval.expires_at <= timezone.now():
+            approval.status = ToolApprovalRequest.Status.EXPIRED
+            approval.save(update_fields=["status"])
+            raise ValueError("Tool approval has expired")
+        if not approval_matches_call(
+            approval,
+            task=locked_task,
+            tool=tool,
+            installation=installation,
+            connection=connection,
+            arguments=arguments,
+        ):
+            raise ValueError("Approved tool call no longer matches its original request")
+        approval.status = ToolApprovalRequest.Status.CONSUMED
+        approval.consumed_at = timezone.now()
+        approval.save(update_fields=["status", "consumed_at"])
+        return True
