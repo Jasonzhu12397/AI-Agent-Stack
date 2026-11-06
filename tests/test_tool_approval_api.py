@@ -17,6 +17,8 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.tool_approvals import expire_pending_tool_approvals
+
 
 @pytest.fixture
 def approval_context(db):
@@ -247,3 +249,20 @@ def test_cancelling_waiting_task_cancels_its_pending_approval(approval_context):
     approval.refresh_from_db()
     assert task.status == Task.Status.CANCELLED
     assert approval.status == ToolApprovalRequest.Status.CANCELLED
+
+
+
+@pytest.mark.django_db
+def test_worker_expiry_sweeper_fails_expired_approval_tasks(approval_context):
+    ctx = approval_context
+    task, approval = ctx["create_pending"]("sweeper")
+    approval.expires_at = timezone.now() - timedelta(seconds=1)
+    approval.save(update_fields=["expires_at"])
+
+    assert expire_pending_tool_approvals(limit=10) == 1
+
+    approval.refresh_from_db()
+    task.refresh_from_db()
+    assert approval.status == ToolApprovalRequest.Status.EXPIRED
+    assert task.status == Task.Status.FAILED
+    assert task.error["code"] == "TOOL_APPROVAL_EXPIRED"
