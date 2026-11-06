@@ -116,7 +116,7 @@ test("plugin connection references are validated before submission", () => {
   assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://user:password@example.com/key") ?? "", /secret-manager reference/i);
   assert.match(validatePluginConnectionInput("Maps", "credential_ref", "https://example.com/key") ?? "", /secret-manager reference/i);
   assert.match(validatePluginConnectionInput("Maps", "credential_ref", "token://maps/production") ?? "", /secret-manager reference/i);
-  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "vault://maps/production") ?? "", /secret-manager reference/i);
-  assert.match(validatePluginConnectionInput("Maps", "credential_ref", "op://Engineering/Maps/API-Key") ?? "", /secret-manager reference/i);
+  assert.equal(validatePluginConnectionInput("Maps", "credential_ref", "vault://maps/production"), null);
+  assert.equal(validatePluginConnectionInput("Maps", "credential_ref", "op://Engineering/Maps/API-Key"), null);
   assert.match(validatePluginConnectionInput("Maps", "none", "vault://maps/key") ?? "", /not allowed/i);
 });

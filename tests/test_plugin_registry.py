@@ -185,19 +185,26 @@ def test_plugin_connection_rejects_plaintext_credential(plugin_workspace):
         format="json",
     )
 
-    response = client.post(
-        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
-        {
-            "name": "bad-connection",
-            "auth_type": "credential_ref",
-            "credential_ref": "ghp_plaintext_token",
-            "config": {},
-        },
-        format="json",
-    )
-
-    assert response.status_code == 400
-    assert PluginConnection.objects.count() == 0
+    invalid_references = [
+        "ghp_plaintext_token",
+        "token://platform/github-reader",
+        "https://vault.example.com/path",
+        "https://user:password@example.com/secret",
+        "file:///etc/secrets/token",
+    ]
+    for reference in invalid_references:
+        response = client.post(
+            f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+            {
+                "name": "bad-connection",
+                "auth_type": "credential_ref",
+                "credential_ref": reference,
+                "config": {},
+            },
+            format="json",
+        )
+        assert response.status_code == 400, reference
+        assert PluginConnection.objects.count() == 0
 
 
 @pytest.mark.django_db

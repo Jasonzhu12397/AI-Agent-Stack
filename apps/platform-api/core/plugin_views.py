@@ -631,15 +631,15 @@ class PluginConnectionListCreateView(APIView):
         if auth_type != PluginConnection.AuthType.NONE and (
             not isinstance(credential_ref, str)
             or not re.fullmatch(
-                r"[a-z][a-z0-9+.-]*://[A-Za-z0-9._/-]{1,180}",
+                r"(?:vault|secret|aws-sm|azure-keyvault|gcp-secret|op)://[A-Za-z0-9._/-]{1,180}",
                 credential_ref,
             )
         ):
             return Response(
                 {
                     "detail": (
-                        "credential_ref must be a non-secret URI such as "
-                        "vault://path/to/credential."
+                        "credential_ref must use a supported secret-manager URI "
+                        "such as vault://path/to/credential; raw URLs and secret values are not accepted."
                     )
                 },
                 status=400,
