@@ -78,6 +78,8 @@ def _approval_data(approval):
         "approved_at": approval.approved_at,
         "consumed_at": approval.consumed_at,
         "approved_by_id": approval.approved_by_id,
+        "rejected_by_id": approval.rejected_by_id,
+        "rejected_at": approval.rejected_at,
         "rejection_reason": approval.rejection_reason,
     }
 
@@ -194,14 +196,14 @@ class ToolApprovalDecisionView(APIView):
                 expired = False
             else:
                 approval.status = ToolApprovalRequest.Status.REJECTED
-                approval.approved_by = request.user
-                approval.approved_at = now
+                approval.rejected_by = request.user
+                approval.rejected_at = now
                 approval.rejection_reason = reason.strip()
                 approval.save(
                     update_fields=[
                         "status",
-                        "approved_by",
-                        "approved_at",
+                        "rejected_by",
+                        "rejected_at",
                         "rejection_reason",
                     ]
                 )
