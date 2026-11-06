@@ -537,6 +537,8 @@ def execute_agent_run(task):
                 raise ValueError("Invalid pending tool call index")
             if str(model_config.id) != checkpoint["model_config_id"]:
                 raise ValueError("Model configuration changed while approval was pending")
+            if checkpoint["max_iterations"] != max_iterations:
+                raise ValueError("Agent iteration policy changed while approval was pending")
             current_raw_tool_calls = raw_calls
             current_call_offset = call_index
             resume_calls = parse_openai_tool_calls(
