@@ -136,15 +136,29 @@ def _operation_config(context, tool):
     path = operation.get("path")
     if not isinstance(method, str) or method.upper() not in HTTP_METHODS:
         raise ToolExecutionError("Connector HTTP method is not allowed.")
-    if (
-        method.upper() == "POST"
-        and not (
-            operation.get("read_only") is True
-            and tool.idempotency_mode == "read_only"
-        )
+    requires_approval = operation.get("requires_approval", False)
+    if not isinstance(requires_approval, bool):
+        raise ToolExecutionError("Connector operation approval policy is invalid.")
+    read_only_post = (
+        operation.get("read_only") is True
+        and tool.idempotency_mode == "read_only"
+        and not requires_approval
+    )
+    approved_side_effect_post = (
+        operation.get("read_only") is False
+        and requires_approval
+        and tool.risk_level in {"high", "critical"}
+        and tool.idempotency_mode in {"none", "idempotent"}
+    )
+    if method.upper() == "POST" and not (
+        read_only_post or approved_side_effect_post
     ):
         raise ToolExecutionError(
-            "POST is allowed only for explicitly read-only connector operations."
+            "POST requires an explicitly read-only operation or a high-risk approval-gated operation."
+        )
+    if requires_approval and not approved_side_effect_post:
+        raise ToolExecutionError(
+            "Approval-gated connector operations must be non-read-only POST tools with high or critical risk."
         )
     if (
         not isinstance(path, str)

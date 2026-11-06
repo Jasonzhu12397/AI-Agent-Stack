@@ -391,3 +391,23 @@ class ToolRouterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_approved_high_risk_tool_executes_handler(self):
+        installation, tool = fixture(risk="high")
+        router = ToolRouter()
+        observed = []
+        router.register(
+            "sample",
+            "lookup",
+            lambda args, context: observed.append(args["query"]) or {"items": ["sent"]},
+        )
+        result = router.execute(
+            installation=installation,
+            tool=tool,
+            arguments={"query": "approved notification"},
+            granted_permissions=["sample:read"],
+            approved=True,
+        )
+        self.assertEqual(result["result"], {"items": ["sent"]})
+        self.assertEqual(observed, ["approved notification"])

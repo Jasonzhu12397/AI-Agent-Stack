@@ -948,3 +948,103 @@ def test_google_maps_places_search_uses_server_side_api_key_and_field_mask(monke
     )
     assert "server-side-google-maps-secret" not in captured["url"]
     assert "server-side-google-maps-secret" not in str(captured["json"])
+
+
+
+def test_http_connector_allows_only_explicit_approval_gated_side_effect_post(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "send-message": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "path_params": {},
+                    "query_params": {},
+                    "body_param": "payload",
+                    "read_only": False,
+                    "requires_approval": True,
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="send-message",
+        timeout_seconds=5,
+        risk_level="high",
+        idempotency_mode="none",
+    )
+    response = FakeResponse(chunks=[b'{"accepted":true}'])
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(response, captured),
+        ):
+            result = execute_http_operation(
+                {"payload": {"text": "deployment completed"}},
+                context(manifest=manifest),
+                selected_tool,
+            )
+    assert result == {"accepted": True}
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.example.com/v1/messages"
+    assert captured["json"] == {"text": "deployment completed"}
+
+
+@pytest.mark.parametrize(
+    "risk,idempotency,requires_approval",
+    [
+        ("low", "none", True),
+        ("high", "read_only", False),
+        ("high", "none", False),
+        ("medium", "none", True),
+    ],
+)
+def test_http_connector_rejects_side_effect_post_without_safe_approval_policy(
+    monkeypatch,
+    risk,
+    idempotency,
+    requires_approval,
+):
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "send-message": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "path_params": {},
+                    "query_params": {},
+                    "body_param": "payload",
+                    "read_only": False,
+                    "requires_approval": requires_approval,
+                }
+            },
+        }
+    }
+    selected_tool = SimpleNamespace(
+        name="send-message",
+        timeout_seconds=5,
+        risk_level=risk,
+        idempotency_mode=idempotency,
+    )
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with pytest.raises(ToolExecutionError):
+            execute_http_operation(
+                {"payload": {"text": "hello"}},
+                context(manifest=manifest),
+                selected_tool,
+            )
