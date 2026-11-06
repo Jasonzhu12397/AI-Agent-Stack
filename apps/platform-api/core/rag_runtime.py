@@ -51,8 +51,11 @@ def ingest_text(
     metadata=None,
     chunk_size=1200,
     overlap=160,
+    heartbeat=None,
 ):
     _validate_scope(tenant_id, project_id, embedding_model)
+    if heartbeat is not None and not callable(heartbeat):
+        raise RagRuntimeError("Heartbeat must be callable when provided.")
     if not isinstance(document_id, str) or not document_id.strip():
         raise RagRuntimeError("Document ID is required.")
     chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
@@ -61,6 +64,8 @@ def ingest_text(
     gateway = ModelGateway()
     try:
         for batch_start in range(0, len(chunks), 128):
+            if heartbeat is not None:
+                heartbeat()
             batch = chunks[batch_start : batch_start + 128]
             embedded = gateway.embed(embedding_model, batch)
             for offset, (content, vector) in enumerate(zip(batch, embedded.vectors, strict=True)):
@@ -79,6 +84,8 @@ def ingest_text(
                         },
                     }
                 )
+        if heartbeat is not None:
+            heartbeat()
         result = store.upsert(tenant_id, project_id, records)
     except (ModelGatewayError, VectorStoreError) as exc:
         raise RagRuntimeError(str(exc)) from exc
