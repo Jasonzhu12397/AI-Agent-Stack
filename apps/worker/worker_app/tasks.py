@@ -509,6 +509,13 @@ def execute_agent_run(task):
             )
         messages.append({"role": "user", "content": reference_text[:16000]})
     messages.append({"role": "user", "content": agent_run.input_text})
+    max_iterations = config.get("max_iterations", 4)
+    if (
+        not isinstance(max_iterations, int)
+        or isinstance(max_iterations, bool)
+        or not 1 <= max_iterations <= 8
+    ):
+        raise PermanentTaskError("Published agent max_iterations is invalid")
     input_tokens = 0
     output_tokens = 0
     latency_ms = 0
