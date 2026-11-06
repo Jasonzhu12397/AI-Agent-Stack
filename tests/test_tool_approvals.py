@@ -87,7 +87,7 @@ def test_execution_checkpoint_accepts_bounded_json_object():
                         "id": "call-1",
                         "function": {
                             "name": "connector__update",
-                            "arguments": "{\\"enabled\\":true}",
+                            "arguments": '{"enabled":true}',
                         },
                     }
                 ],
