@@ -15,7 +15,7 @@ export function validatePluginConnectionInput(
     return "Connection name is required and must not exceed 120 characters.";
   }
   if (authType !== "none" && !CREDENTIAL_REFERENCE_PATTERN.test(normalizedReference)) {
-    return "Use a supported secret-manager reference such as vault://path/to/credential; raw URLs and secret values are not accepted."
+    return "Use a supported secret-manager reference such as vault://path/to/credential; raw URLs and secret values are not accepted.";
   }
   if (authType === "none" && normalizedReference) {
     return "A credential reference is not allowed when authentication is set to none.";
