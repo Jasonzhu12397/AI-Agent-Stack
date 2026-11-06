@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from core import rag_runtime
 
 
