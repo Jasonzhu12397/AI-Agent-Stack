@@ -68,6 +68,8 @@ jobs:
           cache-dependency-path: apps/web-studio/package.json
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Test connector templates
+        run: npm test
       - name: Build Vue Studio
         run: npm run build
 
