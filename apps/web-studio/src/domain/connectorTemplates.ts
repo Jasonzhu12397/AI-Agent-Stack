@@ -194,6 +194,99 @@ export const connectorTemplates: ConnectorTemplate[] = [
     },
   },
   {
+    id: "baidu-map-places",
+    label: "Baidu Map Places",
+    summary: "Read-only Baidu Place Search. The AK credential is resolved server-side and injected into the configured query parameter.",
+    host: "api.map.baidu.com",
+    auth: "credential_ref",
+    credentialHint: "Credential resolver must return a query credential named ak.",
+    payload: {
+      plugin_key: "baidu-map-places",
+      name: "Baidu Map Places",
+      description: "Search points of interest with the Baidu Map Place API.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "Baidu",
+      license: "Baidu Map Open Platform Terms",
+      source_url: "https://lbsyun.baidu.com/index.php?title=webapi/guide/webservice-placeapi",
+      manifest: {
+        http: {
+          base_url: "https://api.map.baidu.com",
+          auth_required: true,
+          health_check: {
+            method: "GET",
+            path: "/place/v2/search",
+            path_params: {},
+            query_params: {
+              query: "query",
+              region: "region",
+              output: "output",
+            },
+            auth_query_parameter: "ak",
+            arguments: {
+              query: "coffee",
+              region: "Beijing",
+              output: "json",
+            },
+          },
+          operations: {
+            "search-baidu-places": {
+              method: "GET",
+              path: "/place/v2/search",
+              path_params: {},
+              query_params: {
+                query: "query",
+                region: "region",
+                output: "output",
+                scope: "scope",
+                page_size: "page_size",
+                page_num: "page_num",
+              },
+              auth_query_parameter: "ak",
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "search-baidu-places",
+          "Search Baidu Map points of interest by keyword and region.",
+          objectSchema(
+            {
+              query: { type: "string", minLength: 2, maxLength: 100 },
+              region: { type: "string", minLength: 1, maxLength: 80 },
+              output: { type: "string", enum: ["json", "xml"] },
+              scope: { type: "integer", enum: [1, 2] },
+              page_size: { type: "integer", minimum: 1, maximum: 20 },
+              page_num: { type: "integer", minimum: 0, maximum: 100 },
+            },
+            ["query", "region", "output"],
+          ),
+          objectSchema({
+            status: { type: "integer" },
+            message: { type: "string" },
+            total: { type: "integer" },
+            results: {
+              type: "array",
+              items: objectSchema({
+                name: { type: "string" },
+                address: { type: "string" },
+                uid: { type: "string" },
+                telephone: { type: "string" },
+                detail: { type: "number" },
+                location: objectSchema({
+                  lat: { type: "number" },
+                  lng: { type: "number" },
+                }),
+              }),
+            },
+          }),
+          ["baidu:places:read"],
+        ),
+      ],
+    },
+  },
+  {
     id: "google-maps-places",
     label: "Google Maps Places",
     summary: "Read-only Places text search using the Places API (New). Requires a server-side Google API key reference.",
