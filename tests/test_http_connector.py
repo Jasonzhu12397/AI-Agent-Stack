@@ -122,6 +122,46 @@ def test_http_connector_builds_bounded_request_and_parses_json(monkeypatch):
     assert captured["client_options"]["trust_env"] is False
 
 
+def test_http_connector_allows_omitted_optional_query_arguments(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    manifest = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "operations": {
+                "search": {
+                    "method": "GET",
+                    "path": "/v1/places",
+                    "path_params": {},
+                    "query_params": {
+                        "keywords": "keywords",
+                        "city": "city",
+                        "citylimit": "city_limit",
+                    },
+                }
+            },
+        }
+    }
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["api.example.com"]):
+        with patch(
+            "core.http_connector.httpx.Client",
+            return_value=FakeClient(FakeResponse(), captured),
+        ):
+            result = execute_http_operation(
+                {"keywords": "coffee"},
+                context(manifest=manifest),
+                tool(),
+            )
+
+    assert result == {"items": ["ok"]}
+    assert captured["params"] == [("keywords", "coffee")]
+
+
 def test_http_connector_rejects_non_public_dns_results(monkeypatch):
     monkeypatch.setattr(
         "core.http_connector.socket.getaddrinfo",
