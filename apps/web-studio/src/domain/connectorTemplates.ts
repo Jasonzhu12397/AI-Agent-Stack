@@ -112,6 +112,88 @@ export const connectorTemplates: ConnectorTemplate[] = [
     },
   },
   {
+    id: "amap-places",
+    label: "Amap Places",
+    summary: "Read-only Amap POI text search. API keys are resolved server-side and injected only into the configured key query parameter.",
+    host: "restapi.amap.com",
+    auth: "credential_ref",
+    credentialHint: "Credential resolver must return a query credential named key.",
+    payload: {
+      plugin_key: "amap-places",
+      name: "Amap Places",
+      description: "Search points of interest with the Amap Web Service API.",
+      version: "1.0.0",
+      connector_type: "http",
+      maintainer: "Amap",
+      license: "Amap Web Service Terms",
+      source_url: "https://lbs.amap.com/api/webservice/guide/api/search",
+      manifest: {
+        http: {
+          base_url: "https://restapi.amap.com",
+          auth_required: true,
+          health_check: {
+            method: "GET",
+            path: "/v3/place/text",
+            path_params: {},
+            query_params: { keywords: "keywords", city: "city" },
+            auth_query_parameter: "key",
+            arguments: { keywords: "Beijing", city: "北京" },
+          },
+          operations: {
+            "search-amap-places": {
+              method: "GET",
+              path: "/v3/place/text",
+              path_params: {},
+              query_params: {
+                keywords: "keywords",
+                city: "city",
+                citylimit: "city_limit",
+                offset: "page_size",
+                page: "page",
+                extensions: "extensions",
+              },
+              auth_query_parameter: "key",
+            },
+          },
+        },
+      },
+      tools: [
+        readOnlyTool(
+          "search-amap-places",
+          "Search Amap points of interest by keyword and optional city.",
+          objectSchema(
+            {
+              keywords: { type: "string", minLength: 2, maxLength: 100 },
+              city: { type: "string", maxLength: 80 },
+              city_limit: { type: "boolean" },
+              page_size: { type: "integer", minimum: 1, maximum: 25 },
+              page: { type: "integer", minimum: 1, maximum: 100 },
+              extensions: { type: "string", enum: ["base", "all"] },
+            },
+            ["keywords"],
+          ),
+          objectSchema({
+            status: { type: "string" },
+            info: { type: "string" },
+            count: { type: "string" },
+            pois: {
+              type: "array",
+              items: objectSchema({
+                id: { type: "string" },
+                name: { type: "string" },
+                address: { type: "string" },
+                location: { type: "string" },
+                type: { type: "string" },
+                cityname: { type: "string" },
+              }),
+            },
+          }),
+          ["amap:places:read"],
+        ),
+      ],
+    },
+  },
+  {
     id: "google-maps-places",
     label: "Google Maps Places",
     summary: "Read-only Places text search using the Places API (New). Requires a server-side Google API key reference.",
