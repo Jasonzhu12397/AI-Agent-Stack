@@ -6,6 +6,7 @@ from core.tool_approvals import (
     approval_matches_call,
     canonical_tool_arguments,
     tool_arguments_hash,
+    validate_execution_checkpoint,
 )
 
 
@@ -72,3 +73,46 @@ def test_approval_matches_exact_task_tool_installation_connection_and_arguments(
         connection=None,
         arguments=arguments,
     )
+
+
+
+def test_execution_checkpoint_accepts_bounded_json_object():
+    checkpoint = {
+        "messages": [
+            {"role": "assistant", "content": None},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "connector__update",
+                            "arguments": "{\\"enabled\\":true}",
+                        },
+                    }
+                ],
+            },
+        ],
+        "input_tokens": 128,
+        "output_tokens": 32,
+    }
+
+    assert validate_execution_checkpoint(checkpoint) is checkpoint
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    [
+        [],
+        "not-an-object",
+        {"value": float("inf")},
+    ],
+)
+def test_execution_checkpoint_rejects_invalid_json(checkpoint):
+    with pytest.raises(ValueError):
+        validate_execution_checkpoint(checkpoint)
+
+
+def test_execution_checkpoint_rejects_payload_over_64_kib():
+    with pytest.raises(ValueError, match="64 KiB"):
+        validate_execution_checkpoint({"content": "x" * 65536})
