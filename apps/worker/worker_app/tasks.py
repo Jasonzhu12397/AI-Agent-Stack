@@ -24,6 +24,7 @@ from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRoute
 from core.tool_approvals import (
     consume_approved_tool_call,
     create_pending_tool_approval,
+    expire_pending_tool_approvals,
     validate_execution_checkpoint,
 )
 from core.audit import record_audit_event
@@ -801,6 +802,7 @@ def process_task(task, worker_id):
 
 
 def process_once(worker_id, lease_seconds=150):
+    expire_pending_tool_approvals(limit=100)
     task = claim_next_task(worker_id, lease_seconds=lease_seconds)
     if task is None:
         return False
