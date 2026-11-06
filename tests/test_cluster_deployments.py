@@ -703,16 +703,19 @@ def test_worker_pool_checkpoint_must_match_requested_replica_count(
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
     deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
-    deployment.plan_result = {
-        "dual_agent": {"target_agent_owns_cluster": True},
-    }
-    deployment.save(update_fields=["status", "plan_result"])
+    deployment.save(update_fields=["status"])
     handoff = client.post(
         f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
         {"target_node_id": str(target_node.id)},
         format="json",
     )
     assert handoff.status_code == 202
+    deployment.refresh_from_db()
+    deployment.plan_result = {
+        **(deployment.plan_result or {}),
+        "dual_agent": {"target_agent_owns_cluster": True},
+    }
+    deployment.save(update_fields=["plan_result"])
     ClusterDeploymentCheckpoint.objects.create(
         deployment=deployment,
         agent_node=target_node,
