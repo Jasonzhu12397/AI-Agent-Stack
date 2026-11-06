@@ -858,6 +858,14 @@ class ToolApprovalRequest(models.Model):
         blank=True,
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="rejected_tool_requests",
+        null=True,
+        blank=True,
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
     consumed_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.CharField(max_length=500, blank=True)
 
