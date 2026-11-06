@@ -183,6 +183,36 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         assert approval.execution_checkpoint["messages"][-1]["role"] == "assistant"
         assert len(fake_gateway.calls) == 1
         assert fake_gateway.calls[0]["messages"][-1]["role"] == "user"
+
+        approval.status = ToolApprovalRequest.Status.APPROVED
+        approval.approved_by = user
+        approval.approved_at = timezone.now()
+        approval.save(update_fields=["status", "approved_by", "approved_at"])
+        task.status = Task.Status.RUNNING
+        task.lease_owner = "worker-resume"
+        task.lease_token = uuid.uuid4()
+        task.save(update_fields=["status", "lease_owner", "lease_token", "updated_at"])
+        with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
+            resumed_result = worker_tasks.execute_agent_run(task)
+
+        approval.refresh_from_db()
+        assert approval.status == ToolApprovalRequest.Status.CONSUMED
+        assert approval.consumed_at is not None
+        assert resumed_result["content"] == "The service is ready."
+        assert resumed_result["tool_calls"] == 1
+        assert resumed_result["input_tokens"] == 27
+        assert len(fake_gateway.calls) == 2
+        resumed_messages = fake_gateway.calls[1]["messages"]
+        assert resumed_messages[-1]["role"] == "tool"
+        assert "service-status-ready" in resumed_messages[-1]["content"]
+        assert not worker_tasks.consume_approved_tool_call(
+            task=task,
+            tool=tool,
+            installation=installation,
+            connection=None,
+            call_id="call-1",
+            arguments={"key": "service-status"},
+        )
         return
 
     assert result["content"] == "The service is ready."
