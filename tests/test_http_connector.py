@@ -617,6 +617,10 @@ def test_http_connector_injects_server_side_query_credentials_without_secret_in_
 
 def test_http_connector_rejects_query_credential_unless_operation_explicitly_allows_it(monkeypatch):
     monkeypatch.setattr(
+        "core.http_connector.socket.getaddrinfo",
+        lambda host, port, type: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    monkeypatch.setattr(
         "core.http_connector.import_string",
         lambda path: lambda reference: {
             "type": "query",
