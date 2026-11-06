@@ -628,7 +628,7 @@ export type PluginConnection = {
   id: string;
   name: string;
   auth_type: "none" | "credential_ref" | "oauth_ref";
-  credential_ref: string;
+  credential_configured: boolean;
   status: "pending" | "healthy" | "error" | "disabled";
   last_health_check_at: string | null;
 };

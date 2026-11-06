@@ -136,7 +136,7 @@ def _installation_data(installation):
                 "id": str(connection.id),
                 "name": connection.name,
                 "auth_type": connection.auth_type,
-                "credential_ref": connection.credential_ref,
+                "credential_configured": bool(connection.credential_ref),
                 "status": connection.status,
                 "last_health_check_at": connection.last_health_check_at,
             }
@@ -676,7 +676,7 @@ class PluginConnectionListCreateView(APIView):
                 "id": str(connection.id),
                 "name": connection.name,
                 "auth_type": connection.auth_type,
-                "credential_ref": connection.credential_ref,
+                "credential_configured": bool(connection.credential_ref),
                 "status": connection.status,
             },
             status=201,

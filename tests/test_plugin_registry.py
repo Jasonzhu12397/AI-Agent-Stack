@@ -150,7 +150,14 @@ def test_approved_plugin_can_be_installed_with_explicit_permission_and_credentia
 
     assert connection.status_code == 201
     assert connection.data["status"] == PluginConnection.Status.PENDING
-    assert connection.data["credential_ref"] == "vault://platform/github-reader"
+    assert connection.data["credential_configured"] is True
+    assert "credential_ref" not in connection.data
+    listed = client.get(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/"
+    )
+    assert listed.status_code == 200
+    assert listed.data["results"][0]["credential_configured"] is True
+    assert "credential_ref" not in listed.data["results"][0]
     assert PluginConnection.objects.count() == 1
 
 

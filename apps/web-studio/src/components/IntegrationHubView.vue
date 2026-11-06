@@ -423,6 +423,9 @@ onMounted(() => void refresh());
         <small>Granted: {{ installation.granted_permissions.join(", ") || "none" }}</small>
         <div v-for="connection in installation.connections" :key="connection.id" class="connection-row">
           <span>{{ connection.name }} · {{ connection.auth_type }}</span>
+          <el-tag :type="connection.credential_configured ? 'success' : 'info'" size="small">
+            {{ connection.credential_configured ? "Secret reference configured" : "No secret reference" }}
+          </el-tag>
           <el-tag :type="connection.status === 'healthy' ? 'success' : connection.status === 'error' ? 'danger' : 'info'" size="small">{{ connection.status }}</el-tag>
           <el-button
             v-if="connection.status !== 'disabled'"
