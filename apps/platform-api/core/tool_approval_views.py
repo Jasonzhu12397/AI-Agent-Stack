@@ -142,6 +142,11 @@ class ToolApprovalDecisionView(APIView):
                 project=project,
             )
             task = Task.objects.select_for_update().get(pk=approval_ref.task_id)
+            if task.created_by_id == request.user.id:
+                return Response(
+                    {"detail": "A different project administrator must decide this approval."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             approval = get_object_or_404(
                 ToolApprovalRequest.objects.select_for_update(),
                 pk=approval_id,
