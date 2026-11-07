@@ -8,7 +8,7 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41421249429](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421249429), commit `8e2d51233e163b0d0e4661dea1cdd90e0ca47789`, completed successfully across Python, Vue and Compose jobs. Pytest: 61 passed. Ruff, Django checks, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes the basic Workflow DAG backend, Workflow Studio UI, request validation, idempotency tests and Workflow implementation documentation.
+[GitHub Actions run 41426913466](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41426913466), commit `6660ae8e32508ddf543f029b28f994eb6aa03ccb`, completed successfully across Python, Vue and Compose jobs. Pytest: 103 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, persisted EPH preflight → cluster-plan orchestration, Vue dashboard, dual-agent console and Integration Hub registry/installation metadata. Documentation-only updates after this commit are undergoing CI.
 
 [Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
 
@@ -21,13 +21,13 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Area | Target | Status |
 |---|---|---|
 | Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
-| REST API | Django REST Framework | Tenant self-service creation, project/member APIs, session auth and scoped asynchronous task create/list/detail/cancel APIs tested in runs 41408139658, 41408491282 and 41410163318 |
+| REST API | Django REST Framework | Tenant/project APIs, session auth, durable task APIs, Agent/Workflow APIs and new node enrollment/command/approval/runtime routes; new routes are awaiting PR CI |
 | ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
 | Worker | Separate Python process / durable PostgreSQL queue | Atomic `select_for_update(skip_locked)` claim, attempt counter, lease owner/token, lease expiry recovery, heartbeat renewal, bounded retries, cooperative cancellation and persisted terminal states. Demo, single-turn LLM Agent and basic Workflow Run handlers are connected; Workflow execution evidence is in run 41420838331 |
-| Frontend | Vue 3 + TypeScript + Vite | Production build, session login, tenant/project workspace, task queue, fake model manager, Agent Builder/run console and Workflow Studio JSON editor/publish/run history passed in run 41420838331 |
+| Frontend | Vue 3 + TypeScript + Vite | Vue navigation for Overview, Model Manager, Agent Studio, Workflow DAG and Infrastructure Agents; dual-agent console and dashboard reference port added. Core navigation build passed in run 41423617275; DashboardView changes are pending newer CI |
 | UI components | Element Plus | Installed and registered |
 | State management | Pinia | Installed and registered |
 | Routing | Vue Router | Dependency selected; route table not yet implemented |
@@ -41,12 +41,12 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 | Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe demo tasks and text-only Agent Runs; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. No external side-effect handlers or Workflow Engine integration yet |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Partial: published Agent versions and asynchronous single-turn LLM runs work. Multi-step tool calling, model routing/fallback, memory and tool policy integration remain unimplemented |
 | Workflow engine | Versioned DAG, branches, recovery | Partial: immutable versions; start/LLM/condition/end nodes; DAG validation; branch skip; persisted node steps; idempotent run creation. No drag/drop canvas, loop/parallel/join, human approval, HTTP/Code nodes, scheduler/webhook triggers or fault-injection proof of process restart recovery |
-| Policy and approval | Default deny, hash-bound one-time approval | Not implemented; high-risk external actions remain disabled |
+| Policy and approval | Default deny, hash-bound one-time approval | Partial: infrastructure provisioning/bootstrap commands require a second tenant administrator and canonical plan-hash match before dispatch. General Tool Router policy, expiry/revocation checks at every tool call and complete approval UI remain unimplemented |
 | Real MCP | SDK, transport, negotiation and protocol tests | Not implemented; FakeMCP is an in-process fixture |
 | Plugin isolation / SSRF | Sandboxed executor and network egress controls | Not implemented |
 | RAG / Memory | ACL-filtered ingestion, retrieval and deletion | Not implemented |
 | Vendor connectors | GitHub/Jira/Graph/Maps/Weather and others | Not implemented / no live API verification |
-| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Not verified |
+| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Partial: node-agent enrollment, heartbeat, command leasing and read-only Kubernetes API inspection are implemented in this branch; CAPI/Metal3 API group discovery is available. Actual Cluster/MachineDeployment/BareMetalHost writes, Ironic/IPA/BMC operations, target-agent bootstrap and end-to-end cluster postconditions are disabled and not verified |
 | Production readiness | OIDC, secret manager, backup/restore, HA, SLO and security scans | Not implemented / not verified |
 
 ## Evidence policy
@@ -55,3 +55,24 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 - Tests that are skipped or absent remain unverified.
 - Simulations are labeled as simulations, not live integrations.
 - A successful migration CI run is required before this stack is called validated.
+
+
+## Dual-agent infrastructure slice (branch: feature/dual-agent-control-plane)
+
+| Capability | Implementation | Evidence / limitation |
+|---|---|---|
+| EPH and target node enrollment | Tenant/project-scoped AgentNode records; one-time random token returned once; only SHA-256 hash stored; revoke cancels queued commands | Code and API tests added; awaiting PR CI |
+| Remote command queue | PostgreSQL AgentCommand, idempotency key, node binding, attempts, lease token and 90-second lease; stale lease results rejected | Code and API tests added; awaiting PR CI |
+| Approval gate | Cluster provision and target-agent bootstrap begin in WAITING_APPROVAL; separate tenant admin approves canonical payload hash | Self-approval and hash mismatch protection added; awaiting PR CI |
+| Node agent runner | Python stdlib HTTPS client; outbound heartbeat/poll/result; compiled command allowlist; no shell execution | 83-test Python CI passed in run 41423617275, including host preflight, cluster plan dry-run, Kubernetes read-only operations and output redaction |
+| EPH safe operations | Host preflight; cluster-plan validation for provider versions, network/image references, BMH role capacity, boot MAC, root-device hints, network-data and credential references; dynamic CAPI Cluster/Machine and Metal3 BareMetalHost read-only inspection | Logic/contract tests added; no live management cluster tested |
+| Target cluster safe operations | In-cluster ServiceAccount GET requests for Kubernetes version, nodes, namespaces, pods/events/services; sanitized resource summaries, readiness and warning-event summaries | Unit tests added; no live target cluster tested |
+| CAPI/Metal3/Ironic provisioning | Version-aware declarative adapter, resource writes, Ironic/BMC lifecycle and target-agent bootstrap | Not implemented; must wait for exact target version/CRD and credential verification |
+| Production agent identity | mTLS or short-lived workload identity, certificate rotation and external secret delivery | Development one-time bearer token only; production deployment not verified |
+| Vue infrastructure console | Reference-style dark navigation, project-scoped dashboard, EPH/Target enrollment, heartbeat, typed command dispatch, command history, approval hash and EPH cluster-plan wizard | Dashboard and navigation passed run 41423783202; cluster-plan wizard and pod rollout additions are awaiting newer CI |
+
+| Cluster delivery orchestration | Persistent ClusterDeployment; EPH preflight → automatic cluster.plan; plan result/hash persistence; cancellation and idempotency | 5 API orchestration tests passed in run 41425741918. Workflow intentionally stops at PLAN_READY; no provisioning write is issued |
+| Kubernetes agent deployment | Separate EPH/Target Deployments, ServiceAccounts, read-only RBAC, non-root security context, readiness/liveness checks | Templates and probes passed repository CI; YAML/application not yet tested against a real management or target cluster |
+
+| Plugin registry | Versioned tenant connector catalog, closed tool schemas, admin review, project installation, explicit permission grants, version pinning and credential-reference connections | 8 registry API tests passed in run 41426913466. Metadata and connection references only; executor and real connectors are not implemented |
+| Plugin executor / SDK | Isolated execution, network policy, tool router, schema validation at invocation | Not implemented; registry installation does not execute plugin code |

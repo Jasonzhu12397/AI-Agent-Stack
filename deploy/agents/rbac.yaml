@@ -1,0 +1,354 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eph-node-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eph-node-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments", "machinehealthchecks"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machines", "metal3machinetemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list"]
+  - nonResourceURLs: ["/version", "/api", "/apis", "/apis/*"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eph-node-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: eph-node-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: eph-node-agent-readonly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eph-node-agent-network-inspection
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eph-node-agent-network-inspection
+  namespace: kube-system
+subjects:
+  - kind: ServiceAccount
+    name: eph-node-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eph-node-agent-network-inspection
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eph-node-agent-workload-readonly
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eph-node-agent-workload-readonly
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: eph-node-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eph-node-agent-workload-readonly
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: target-cluster-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-cluster-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list"]
+  - nonResourceURLs: ["/version", "/api", "/apis", "/apis/*"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-cluster-agent-capi-provisioner
+rules:
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["machinedeployments"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigtemplates"]
+    verbs: ["get"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3machinetemplates", "metal3machines", "metal3datatemplates", "metal3datas"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-capi-provisioner-default
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-capi-provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-capi-provisioner-metal3
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-capi-provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-cluster-agent-metal3-host-inventory
+rules:
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metal3.io"]
+    resources: ["hardwaredata"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-metal3-host-inventory-metal3-system
+  namespace: metal3-system
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-metal3-host-inventory
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-metal3-host-inventory-metal3
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-metal3-host-inventory
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: target-cluster-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-cluster-agent-readonly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-cluster-agent-network-inspection
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-network-inspection
+  namespace: kube-system
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-cluster-agent-network-inspection
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-cluster-agent-workload-readonly
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-workload-readonly
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-cluster-agent-workload-readonly
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-cluster-agent-network-inventory-readonly
+  namespace: ai-agent-inventory
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-network-inventory-readonly
+  namespace: ai-agent-inventory
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-cluster-agent-network-inventory-readonly
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: network-inventory-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: network-inventory-agent-node-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: network-inventory-agent-node-readonly
+subjects:
+  - kind: ServiceAccount
+    name: network-inventory-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: network-inventory-agent-node-readonly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: network-inventory-agent-configmap-writer
+  namespace: ai-agent-inventory
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: network-inventory-agent-configmap-writer
+  namespace: ai-agent-inventory
+subjects:
+  - kind: ServiceAccount
+    name: network-inventory-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: network-inventory-agent-configmap-writer

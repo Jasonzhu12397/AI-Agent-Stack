@@ -7,7 +7,12 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
-if APP_ENV == "production" and (DEBUG or SECRET_KEY == "local-only-change-before-production"):
+if APP_ENV == "production" and (
+    DEBUG
+    or SECRET_KEY == "local-only-change-before-production"
+    or SECRET_KEY.startswith("replace-")
+    or len(SECRET_KEY) < 32
+):
     raise RuntimeError("Production requires DEBUG=false and a non-default SECRET_KEY")
 
 ALLOWED_HOSTS = [
@@ -86,6 +91,13 @@ LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = APP_ENV == "production"
+CSRF_COOKIE_SECURE = APP_ENV == "production"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
@@ -95,3 +107,16 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
     ],
 }
+
+LOCAL_MODEL_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("LOCAL_MODEL_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+
+PLUGIN_HTTP_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+PLUGIN_CREDENTIAL_RESOLVER = os.getenv("PLUGIN_CREDENTIAL_RESOLVER", "").strip()

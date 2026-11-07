@@ -1,0 +1,224 @@
+# EPH Node Ephemeral Bootstrap and Reclamation Lifecycle
+
+## Core definition
+
+The EPH-node is a temporary bare-metal bootstrap worker borrowed from the capacity that will ultimately belong to the target Kubernetes cluster. It is not a permanent management server and must not be modeled as a long-lived infrastructure control plane.
+
+The EPH-node boots a RAM-resident operating system (for example, a PXE/iPXE- or equivalent network-booted image). Its local disk is not the source of truth and must not be required for recovery. It starts a single-node Kubernetes cluster in memory and runs the EPH AI Agent as a Pod in that cluster. The EPH Agent is the temporary on-node execution endpoint controlled by the central AI Agent Studio.
+
+The same physical machine is reclaimed after bootstrap and joins the final target Kubernetes cluster as a compute/worker node. It is not intended to remain a separate EPH management node.
+
+## Roles
+
+- **Central AI Agent Studio / Supervisor:** durable source of truth for deployment plans, approvals, command history, physical-node identity, lifecycle state, credentials references, and audit events. It remains available when the EPH machine reboots or its RAM-based OS is destroyed.
+- **EPH RAM OS + single-node Kubernetes:** temporary execution environment. It hosts the EPH Agent Pod and any explicitly required temporary bootstrap components. All local cluster state is disposable.
+- **EPH Agent Pod:** performs host checks, reads the temporary Kubernetes API, discovers installed CAPI/Metal3 CRDs, validates candidate manifests, and coordinates the approved bootstrap workflow. It must not assume that its pod filesystem, Kubernetes etcd, or local credentials survive reboot.
+- **Target Kubernetes cluster:** the final workload cluster. Its Target Agent runs as a Pod after the target API and worker/control-plane scheduling are ready.
+- **Physical node identity:** the same hardware must be correlated across EPH enrollment and target-worker enrollment using a stable inventory identity (for example, a verified system UUID/BMC inventory identifier). Do not use a transient Pod name, DHCP address, or MAC address as the only identity.
+
+## Lifecycle
+
+```text
+Capacity pool / physical inventory
+  -> reserve one bare-metal node for temporary EPH use
+  -> network-boot RAM OS
+  -> start single-node Kubernetes in RAM
+  -> start EPH Agent Pod and enroll with central Supervisor
+  -> preflight hardware, network, image and target plan
+  -> validate candidate CAPI/Metal3 manifests against live CRD schemas
+  -> approved provisioning of the target control plane only
+  -> target control plane API, etcd and core networking become Ready
+  -> deploy the Target Agent Pod onto a target control-plane node
+  -> restore the durable deployment/task checkpoint and establish Supervisor heartbeat
+  -> verify Target Agent identity, API access, lease ownership and command execution
+  -> pivot CAPI management components and Cluster API objects from the EPH bootstrap
+     cluster into the target cluster (clusterctl move or a version-tested equivalent)
+  -> verify CAPI controllers are healthy and the moved Cluster/ControlPlane objects reconcile
+  -> only now stop the EPH Agent and temporary EPH Kubernetes bootstrap cluster
+  -> invalidate EPH runtime credentials and persist the handoff checkpoint centrally
+  -> provision remaining control-plane replicas (if any) and Data Plane worker nodes
+     from the now self-hosted target management plane
+  -> Target Agent verifies all requested nodes and networking are Ready
+  -> reboot/re-network-boot the same physical EPH host into the target worker OS
+  -> enroll that physical host with a new Target Agent identity and join as a worker
+  -> Target Agent verifies the expected physical identity and Ready condition
+  -> mark the EPH hardware reclaimed and return it to target compute capacity
+```
+
+The Target Agent runtime now discovers deployments assigned to its enrolled node through the central Supervisor heartbeat. For each newly assigned deployment it retrieves the central checkpoint over the authenticated agent API and retains the validated checkpoint in process memory; the API returns only the assigned deployment and checkpoint metadata/data, never local EPH state or credentials. The runtime emits a structured `deployment_checkpoint_restored` event containing the deployment ID, phase, sequence and resume flag. Checkpoint writes use a monotonically increasing sequence, reject replay/conflicting reuse, restrict lifecycle phases, cap payloads at 32 KiB, and reject credential/executable fields. The checkpoint is still an orchestration recovery record, not a snapshot of a running process; command-specific resume handlers and automatic CAPI pivot execution remain separate implementation work. The current checkpoint generation is fixed at 1 and does not yet provide a rotating handoff lease or multi-generation agent identity transfer.
+
+The Target Agent exposes the read-only `cluster.control-plane.verify` command. It checks the live Kubernetes version and Node objects, counts only nodes carrying the `node-role.kubernetes.io/control-plane` or legacy master role label, and requires every discovered Control Plane node to be Ready and the configured expected replica count to be met. Its result explicitly gates both `capi_pivot_allowed` and `worker_provisioning_allowed`; it performs no writes. For the bootstrap handoff, set `expected_control_plane_replicas` to the number of Control Plane nodes that must exist at that stage (normally 1 for the first-CP pivot), not the final desired count when additional Control Plane replicas are intentionally deferred.
+
+The target Control Plane must be operational before the EPH Agent is moved. The Agent is recreated as a Pod in the target cluster; its process memory and Pod filesystem are not migrated. The central Supervisor is the durable task source of truth, so the new Pod resumes using the same logical deployment/task identity and a fresh target-cluster credential. Schedule it onto a control-plane node with the standard control-plane NoSchedule toleration and an explicit control-plane node selector, because no workers exist yet.
+
+The CAPI bootstrap-cluster pivot is a separate and mandatory operation. If CAPI controllers and Cluster API objects live in the temporary EPH Kubernetes cluster, merely moving the AI Agent Pod does not move CAPI ownership or reconciliation. Before shutting down EPH, move the CAPI management components and owned Cluster API objects into the target cluster using `clusterctl move` (or a provider/version-tested equivalent), then verify controllers and objects reconcile there. Only after that pivot is healthy may the workflow create the remaining control-plane replicas and Data Plane workers. The exact pivot procedure must be tested against the selected CAPI/CAPM3 versions and provider topology.
+
+The exact OS transition mechanism (new RAM image, disk-backed target OS, or another approved worker image) is an environment-specific implementation detail. It must be explicitly configured and tested; the platform must not assume that a running EPH OS can simply be converted in-place into a target worker.
+
+## Critical lifecycle invariants
+
+1. **EPH is temporary:** EPH-node capacity is reserved only for the bootstrap window. It must not be counted as steady-state target capacity until the Target Agent confirms that the same physical machine has joined and is Ready.
+2. **No local durability assumptions:** deployment state, plans, approval hashes, audit logs, physical identity mapping, image references, and recovery checkpoints are persisted in the central platform or another durable external service before the EPH node is reclaimed.
+3. **RAM loss is expected:** power loss, reboot, or RAM reset destroys the EPH operating system and its single-node Kubernetes state. Recovery resumes from the central deployment record and physical inventory, not from local etcd or the EPH Pod filesystem.
+4. **Separate agent identities:** EPH enrollment and Target Agent enrollment are separate identities with separate scopes and credentials. EPH credentials are revoked/expired during handoff. Target enrollment uses a new short-lived token/certificate.
+5. **No premature success:** target cluster readiness does not mean EPH reclamation is complete. The deployment is complete only after the Target Agent confirms the EPH physical node is a Ready worker in the target cluster, or an explicitly configured policy records a different disposition.
+6. **Expected EPH disconnect:** the EPH Agent going offline during an approved handoff is an expected lifecycle event, not automatically a failed deployment. The Supervisor tracks a handoff deadline and waits for Target Agent confirmation. A timeout becomes a recoverable handoff failure requiring reconciliation.
+7. **No overlapping control planes:** the temporary single-node EPH Kubernetes cluster must be stopped before the same host joins the target cluster. Do not run both kubelets/control planes concurrently on the same host.
+8. **No secret carry-over:** temporary Kubernetes credentials, bootstrap tokens, kubeconfigs and ephemeral secrets must not be copied into the final worker environment. Only the minimum short-lived target join material is delivered through the approved bootstrap channel.
+9. **CAPI bootstrap pivot before workers:** if CAPI controllers and Cluster API objects are hosted inside EPH, they must be moved into the target cluster and verified healthy before EPH shutdown and before worker provisioning. Moving only the AI Agent Pod is insufficient; it does not transfer CAPI ownership or reconciliation state. The target cluster becomes the durable self-hosted CAPI management plane, unless a separate external management cluster is explicitly configured.
+10. **No premature worker provisioning:** worker provisioning must not start until the target Agent is healthy on the target Control Plane and the CAPI pivot has completed and reconciled successfully.
+11. **Idempotent reclaim:** handoff, EPH credential revocation, target worker enrollment, and completion reporting must be idempotent and bound to the same deployment ID and physical inventory identity.
+
+## Suggested deployment states
+
+```text
+EPH_RESERVED
+  -> EPH_RAM_BOOTING
+  -> EPH_LOCAL_K8S_READY
+  -> EPH_AGENT_ENROLLED
+  -> PREFLIGHT
+  -> PLAN_READY
+  -> WAITING_APPROVAL
+  -> TARGET_PROVISIONING
+  -> TARGET_CONTROL_PLANE_READY
+  -> TARGET_AGENT_DEPLOYING
+  -> TARGET_AGENT_READY
+  -> CAPI_BOOTSTRAP_PIVOT_PENDING
+  -> CAPI_BOOTSTRAP_PIVOT_VERIFIED
+  -> WORKER_PROVISIONING
+  -> WORKERS_READY
+  -> EPH_HANDOFF_PENDING
+  -> EPH_REBOOTING
+  -> EPH_TARGET_WORKER_JOINING
+  -> EPH_RECLAIMED
+  -> SUCCEEDED
+```
+
+Terminal or recoverable failure states must preserve the last durable checkpoint and distinguish provisioning failure from worker-reclaim failure. A target cluster may be usable while the EPH node remains unreclaimed; that is a partial outcome, not full success.
+
+## Control-plane API and data requirements
+
+The central platform should persist at least:
+
+- deployment ID and immutable deployment specification/hash;
+- physical inventory ID and verified hardware identity;
+- EPH reservation ID, boot session ID, RAM image version and local Kubernetes version;
+- EPH agent enrollment ID, boot/session identity, heartbeat and lease expiry;
+- target cluster identity, endpoint and target Kubernetes version;
+- CAPI/Metal3/Ironic/IPA versions and external service references needed during bootstrap;
+- target-agent enrollment and postflight result;
+- handoff intent, expected reboot window, worker bootstrap reference, and reclaim deadline;
+- observed target node UID/name, hardware identity match and Ready condition;
+- credential revocation and audit timestamps.
+
+Do not persist raw BMC passwords, kubeconfigs, bearer tokens, or join tokens in deployment JSON. Store secret-manager references and short-lived credential handles.
+
+## Implemented Target Agent handoff API boundary
+
+The platform now exposes a Control-Plane-first handoff binding endpoint:
+
+- An authenticated project editor calls `POST /api/v1/cluster-deployments/{deployment_id}/target-agent/handoff/` with the enrolled Target Agent node ID.
+- The endpoint accepts only `CONTROL_PLANE_READY` or an idempotent `TARGET_AGENT_PENDING` deployment, requires a fresh Target Agent heartbeat, and binds exactly one target identity to the deployment.
+- The response includes the durable checkpoint endpoint and explicitly returns `worker_provisioning_allowed: false`.
+- The Target Agent reads or advances its central checkpoint through `GET/POST /api/v1/agent-runtime/deployments/{deployment_id}/checkpoint/`, authenticated with its own enrollment credential.
+- Checkpoints are scoped to the bound Target Agent identity and deployment, use generation 1 and monotonically increasing sequence numbers, support exact-request idempotency, and reject replay, stale agent heartbeats, credential fields, and executable payload fields. The checkpoint payload is capped at 32 KiB.
+
+This is a durable checkpoint storage and restore API, not yet automatic Pod deployment or automatic CAPI pivot. The caller must currently ensure that the first Control Plane readiness transition to `CONTROL_PLANE_READY` has been independently verified. The CAPI pivot executor, checkpoint-driven workflow scheduler, and worker provisioning gate remain to be implemented.
+
+## Read-only CAPI Pivot target preflight
+
+The Target Agent now exposes `cluster.capi.pivot.target.preflight`. This command is intentionally read-only and validates the destination management plane before any pivot executor can be considered:
+
+- Discover the served API versions for Cluster API, Kubeadm Bootstrap, Kubeadm Control Plane, CAPM3 and Metal3.
+- Confirm the required Cluster, Machine, KubeadmConfig, KubeadmControlPlane, Metal3Cluster, Metal3Machine, Metal3MachineTemplate and BareMetalHost resources are served.
+- Confirm the CAPI core, Kubeadm bootstrap, Kubeadm control-plane and CAPM3 controller Deployments have all desired replicas available and their observed generation is current.
+- Check that the requested cluster name does not already exist in the destination namespace.
+- Return explicit blockers and `pivot_execution_allowed`; missing APIs, unavailable controllers or a cluster-name collision fail closed.
+
+This is only the target-side preflight. It does not validate the EPH source ownership graph, copy credentials, run `clusterctl move`, transfer provider objects, or prove post-pivot reconciliation. A source-side inventory and version/provider compatibility check are still required before an executor can be enabled.
+
+The Control Plane-first handoff endpoint now queues `cluster.capi.pivot.target.preflight` directly to the assigned Target Agent. The API validates the returned cluster/namespace, exact four-controller inventory, controller readiness, API blockers and the no-side-effects flag before persisting the result in the deployment plan. A successful preflight is recorded as `preflight_validated`; it deliberately does not advance the deployment to worker provisioning or authorize a pivot mutation.
+
+The same handoff now queues `cluster.capi.pivot.source.preflight` to the EPH Agent. It performs read-only discovery of CAPI core, Kubeadm bootstrap/control-plane, CAPM3 and Metal3 APIs; traverses every required resource list across namespaces using Kubernetes continuation tokens (500 objects per page, a 100,000-object safety ceiling); records resource totals; computes UID uniqueness and the full OwnerReference graph over all retrieved objects; and checks source management-controller Deployments. Repeated/invalid continuation tokens, malformed pages, a missing API, unavailable controllers, an incomplete graph or malformed result data fail closed. The Agent returns a byte-bounded summary of at most 200 objects (48 KiB), with the requested Cluster root prioritized, plus the full inventory total and a summary-truncation indicator. The Supervisor validates the EPH node binding, provider API versions, all required resource-count keys, the full inventory total against the sum of resource counts, bounded object summaries, owner-graph totals and the no-side-effects flag before persisting `capi_pivot_source_preflight`. Summary truncation is not treated as source inventory loss: completeness is established from full pagination and full-graph metrics, not from the number of returned summary rows. Both source and destination results are evidence only; neither authorizes `clusterctl move` or worker provisioning.
+
+The destination preflight returns the same five provider API-group versions and checks the complete source inventory resource set, including MachineSets and KubeadmConfigTemplates. The Supervisor validates the destination version map and, once both sides have independently passed their read-only checks, compares every provider group version. The comparison is persisted as `capi_pivot_provider_compatibility`, including explicit source/target mismatches. A version mismatch prevents compatibility from being marked true. Even an exact match is evidence only: `execution_allowed` remains false until a separately reviewed, version-specific pivot executor, credential transfer and post-move reconciliation workflow exist.
+
+The EPH Agent must also find exactly one source `Cluster` object matching the requested deployment cluster name and return its namespace, UID and API version. Missing, ambiguous or incomplete source Cluster identity prevents the source preflight from passing. The full owner graph is computed from every paginated object in the Agent, while the control plane stores only a bounded summary; the summary alone is not evidence of graph completeness.
+
+## Operational failure handling
+
+- If EPH fails before target provisioning completes, re-reserve or reboot the same physical machine into the RAM image, re-enroll a new EPH session, and resume from the central checkpoint after reconciling external state.
+- If EPH disappears after handoff starts, do not automatically fail the target cluster. Wait for the expected target worker enrollment and reconcile by physical identity.
+- If the target worker does not join before the deadline, mark reclaim as failed/pending recovery, retain the target cluster state, and use the out-of-band provisioning system to recover the physical node.
+- If the same hardware appears with a different boot session, treat it as a new EPH runtime session, not as proof that the previous session is still alive.
+- Never mark the node reclaimed solely because the EPH heartbeat stopped; require Target Agent confirmation that the expected physical machine is Ready in the target cluster.
+
+## Implementation boundary
+
+The current repository has EPH/Target agent enrollment, heartbeat, typed command dispatch, plan persistence, a Control-Plane-first Target Agent binding endpoint, and a central durable checkpoint read/write API with generation, monotonic sequence, idempotency and credential-field rejection; it also has read-only provider discovery and live CRD-backed schema validation. The target-Agent-on-Control-Plane deployment, durable task resume, CAPI bootstrap-cluster pivot, worker provisioning state machine, physical identity correlation, EPH handoff, credential revocation, OS re-image/reboot and same-machine worker re-enrollment are not implemented yet. CAPI/Metal3/Ironic mutation and the production provisioning adapter also remain disabled. This document defines the required behavior; it is not a claim that the complete lifecycle is already automated.
+
+
+## Current implementation boundary: dual-agent pivot preflight
+
+The handoff API now requires a fresh heartbeat from both the EPH Agent and the Target Agent. It queues two independent read-only commands: `cluster.capi.pivot.source.preflight` on EPH and `cluster.capi.pivot.target.preflight` on the Target Agent. The EPH source command inventories the required CAPI, kubeadm bootstrap/control-plane, CAPM3 and BareMetalHost resources across namespaces, records bounded object identity and owner references, and builds a root-Cluster ownership graph. Missing APIs, incomplete pagination, truncated inventory, duplicate UIDs, unresolved tracked owners, orphaned cluster-labeled objects, or unavailable controllers block the source preflight. The Supervisor validates the result against the enrolled EPH identity and deployment cluster name before persisting it.
+
+The Supervisor compares the source and target discovery versions for the five required API groups. This comparison is explicitly only a **served API version compatibility signal**; it does not prove that CAPI, kubeadm bootstrap/control-plane, CAPM3 or Ironic controller releases, CRD schemas, conversion webhooks, feature gates, or provider configuration are compatible. A mismatch is recorded and blocks a compatible result. Even a matching result has `execution_allowed=false`.
+
+**Not implemented yet:** the actual `clusterctl move` / CAPI pivot executor, target kubeconfig/credential brokering, provider release/schema compatibility validation, target controller reconciliation verification after a move, remaining Control Plane/Worker provisioning, EPH hardware reimage/reclaim, and end-to-end lifecycle completion. Neither preflight performs Kubernetes writes. Do not treat successful preflight or Agent handoff as permission to shut down EPH or provision Workers.
+
+
+## Target adoption readiness invariant
+
+The Target Agent's post-pivot verification scopes Machine inventory by `spec.clusterName`; Machines from other clusters in the same namespace are excluded. Every matching Machine must have a Kubernetes/CAPI `Ready=True` condition, every Machine must have a unique non-empty name, and the inventory must contain at least one matching Machine. The control plane independently requires `ready_machine_count == machine_count` and an empty `not_ready_machine_names` list before recording Target Agent ownership. A partial Machine inventory can never authorize EPH reclamation. This is still an adoption verification gate, not a worker-reclaim implementation.
+
+## Durable checkpoint transition gates
+
+Target Agent checkpoints are persisted with a monotonically increasing sequence and a server-enforced phase transition graph: `target_agent_bootstrap` → `capi_pivot_preflight` → `capi_pivot_verified` → `worker_provisioning` → `worker_pool_verified`. Repeated updates within the current phase are allowed, but skipped or backward transitions are rejected. The first checkpoint must be `target_agent_bootstrap`.
+
+The Supervisor accepts `capi_pivot_verified` only after its own CAPI adoption verification has set `target_agent_owns_cluster=true` and confirmed that the target Cluster UID matches the source Cluster UID. Worker provisioning checkpoints are blocked until that ownership gate has passed. A worker-pool verification checkpoint must report a positive worker count, an equal ready-worker count, and an empty not-ready worker list.
+
+**EPH reclaim remains explicitly disabled.** Checkpoint submissions for `eph_reclaim_pending` and `completed` return HTTP 409 with `EPH_RECLAIM_EXECUTOR_NOT_ENABLED`. The checkpoint API is progress persistence, not authorization to shut down, wipe, reboot, or release a physical node. A future reclaim implementation must add a separate idempotent command flow and verify hardware-management acknowledgement, reset/reimage completion, storage sanitization, and Agent shutdown before the node can be returned to the compute pool.
+
+## CAPI Worker postflight
+
+After the control plane accepts Target Agent adoption and confirms the original Cluster UID, it automatically queues `cluster.postflight` on the Target Agent. The command carries the deployment's expected `worker_replicas`, cluster name, and CAPI namespace.
+
+The Target Agent checks both Kubernetes Nodes and CAPI Machines. It selects only Machines whose `spec.clusterName` matches the deployment, excludes control-plane Machines, requires a unique Machine identity, and verifies each worker Machine's Ready condition and `status.nodeRef` against a Ready Kubernetes Node. The Machine count and ready worker count must both equal the requested worker replica count. The control plane independently checks these counts, the empty not-ready list, unique worker Node names, and the explicit complete-inventory flag before marking the deployment successful.
+
+This is a read-only verification step. It does not create Machines, provision BareMetalHosts, reboot hardware, or authorize EPH reclamation. Worker creation and Ironic provisioning remain separate implementation work; the postflight gate will fail closed if the requested Worker inventory is incomplete.
+
+
+## CAPI Worker provisioning preflight
+
+The Target Agent now exposes the read-only `cluster.capi.worker.preflight` command. It requires an explicit worker provisioning contract: MachineDeployment name, CAPM3 Metal3MachineTemplate name, KubeadmConfigTemplate name, BareMetalHost namespace and label selector, expected replica count, and the versioned dual-network profile. The command discovers the live preferred API versions and verifies the required MachineDeployment, Metal3MachineTemplate, KubeadmConfigTemplate and BareMetalHost APIs before reading resources.
+
+The preflight verifies the target Cluster UID, checks that the requested MachineDeployment name is not already occupied, resolves both referenced templates and checks their UIDs, then paginates the selected BareMetalHost namespace and counts only hosts matching every requested label. A host is considered available only when it is online, has provisioning state `available`, has no consumer reference, and has no reported status error. The available host count must meet the requested replica count. The network profile is validated using the existing strict control-plane/data-plane contract: ordinary control-plane interface, separate data-plane interfaces, Calico primary CNI, Multus meta-CNI, and SR-IOV/DPDK prerequisites when requested.
+
+The command is intentionally target-Agent-only and read-only. It reports `execution_allowed: false` and `worker_creation_performed: false` even when all checks pass. It does not create a MachineDeployment or templates, patch labels, claim a BareMetalHost, call Ironic, or mutate Kubernetes resources. The preflight is evidence for a later version-aware provisioning adapter, not permission to provision hardware. Missing API resources, templates, sufficient available hosts, or valid network configuration fail closed.
+
+
+## Supervisor-gated Worker provisioning preflight
+
+After Target Agent adoption has been independently verified against the original Cluster UID, the Supervisor no longer queues the final Worker postflight directly when the deployment requests one or more Workers. It first queues `cluster.capi.worker.preflight` on the bound Target Agent and passes the exact `worker_provisioning` contract from the immutable deployment spec. A missing contract moves the deployment to an approval-required blocked phase rather than claiming success.
+
+The Supervisor validates the returned Target Agent identity, deployment cluster and namespace, expected replica count, preserved Cluster UID, exact template names and non-empty UIDs, sufficient unique available BareMetalHost identities, discovered provider API versions, the network profile hash, and all explicit no-write flags. A failed or incomplete report fails the deployment. A successful report is persisted and moves the deployment to `WAITING_APPROVAL` with phase `worker_preflight_passed_waiting_provisioning_approval`; it does not create a MachineDeployment, mutate templates, claim BMHs, or call Ironic. The final `cluster.postflight` remains a later gate and cannot be considered complete until the provisioned Worker Machine and Node inventory is fully Ready.
+
+### Worker preflight controller and inventory hardening
+
+The Worker preflight also re-checks the CAPI core, Kubeadm bootstrap, Kubeadm control-plane and CAPM3 controller Deployments immediately before provisioning. Each controller must have all desired replicas available and an observed generation at least equal to its Deployment generation. The live discovery check includes both Metal3Machine and Metal3MachineTemplate resources.
+
+BareMetalHost candidates must have unique, non-empty names and UIDs, be online, have provisioning state available, have no consumer reference, and have no operational error. A non-empty status.errorMessage or an operational status other than OK blocks the host. Referenced templates must match the requested names, namespace, UID and the currently discovered served API versions. The Supervisor independently verifies the exact four-controller readiness evidence and unique BMH identities before accepting the preflight result.
+
+These checks remain read-only. They do not reserve a BMH or eliminate the race between preflight and a future provisioning write. The eventual executor must re-read and atomically claim through the CAPM3 reconciliation model, and must handle concurrent claims idempotently.
+
+### Approved CAPI Worker MachineDeployment execution
+
+After a successful read-only worker preflight, the control plane now creates a dedicated `cluster.capi.worker.provision` command in `WAITING_APPROVAL`. It is visible in the deployment's `dual_agent.worker_provisioning_command_id` field and must be approved by a different tenant owner or administrator. The command payload is immutable and approval is bound to its plan hash and existing short approval lifetime.
+
+The Target Agent re-checks the target Cluster UID, provider API versions, infrastructure/bootstrap template UIDs, the exact network profile attestation on the Metal3MachineTemplate, and the available BareMetalHost inventory immediately before writing. It constructs only a constrained CAPI `MachineDeployment` referencing the pre-existing `Metal3MachineTemplate` and `KubeadmConfigTemplate`. It performs Kubernetes API Server-Side Dry-Run (`dryRun=All`) before the actual create. No arbitrary manifest or shell payload is accepted.
+
+The MachineDeployment carries deployment ID, provisioning plan hash and Cluster UID annotations. On retry, the Agent verifies these annotations and the relevant immutable spec fields; an unrelated object with the same name is a hard conflict. A create race returning HTTP 409 is reconciled by reading the object and verifying the same identity. The Agent then waits for the Machines owned by that MachineDeployment and their referenced Kubernetes Nodes to become Ready before reporting success. The control plane independently validates the approved command and result, then queues the existing postflight inventory verification.
+
+The Metal3MachineTemplate must carry `ai-agent-stack.io/network-profile-hash` equal to the validated profile hash, and its `spec.template.spec.hostSelector.matchLabels` must exactly equal the preflight BMH selector. Worker provisioning rejects a profile without a Multus SR-IOV attachment marked `dpdk: true`, hugepages, NUMA policy and static CPU Manager. This is a fail-closed attestation that the referenced infrastructure template was prepared for the requested control-plane/data-plane design, not a substitute for validating the underlying host configuration. This implementation does not dynamically rewrite the Metal3MachineTemplate or create NetworkAttachmentDefinitions, SR-IOV resource pools, hugepages, CPU Manager settings or DPDK device plugins; those remain prerequisites to be provisioned and verified by the network/node preparation workflow. BMHs are not manually patched or reserved by the Agent; CAPM3 remains responsible for claiming them through its reconciliation process.
+
+A timeout after MachineDeployment creation is an ambiguous partial deployment and must be reconciled by inspecting the annotated MachineDeployment, Machines, Metal3Machines and BareMetalHosts. The Agent does not delete the MachineDeployment or retry a destructive action automatically. EPH reclamation remains disabled.

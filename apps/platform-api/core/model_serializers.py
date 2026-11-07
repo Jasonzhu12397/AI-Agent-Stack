@@ -49,6 +49,9 @@ def contains_secret_key(value):
 
 
 class ModelProviderWriteSerializer(serializers.ModelSerializer):
+    base_url = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    credential_ref = serializers.CharField(required=False, allow_blank=True, max_length=200)
+
     class Meta:
         model = ModelProvider
         fields = ["name", "provider_type", "base_url", "credential_ref", "config"]
@@ -71,29 +74,49 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
                 )
         elif provider_type == ModelProvider.ProviderType.OPENAI_COMPATIBLE:
             parsed = urlsplit(base_url)
-            allowed_hosts = {
+            remote_hosts = {
                 host.strip().lower()
                 for host in getattr(settings, "MODEL_PROVIDER_ALLOWED_HOSTS", [])
                 if host.strip()
             }
-            if parsed.scheme != "https" or not parsed.hostname:
+            local_hosts = {
+                host.strip().lower()
+                for host in getattr(settings, "LOCAL_MODEL_ALLOWED_HOSTS", [])
+                if host.strip()
+            }
+            host = (parsed.hostname or "").lower()
+            local_http = parsed.scheme == "http" and host in local_hosts
+            remote_https = parsed.scheme == "https" and host in remote_hosts
+            if not parsed.hostname or not (local_http or remote_https):
                 raise serializers.ValidationError(
-                    {"base_url": "OpenAI-compatible providers require an HTTPS URL."}
+                    {
+                        "base_url": (
+                            "Use HTTPS with MODEL_PROVIDER_ALLOWED_HOSTS for remote providers, "
+                            "or HTTP with LOCAL_MODEL_ALLOWED_HOSTS for local model servers."
+                        )
+                    }
                 )
             if (
                 parsed.username
                 or parsed.password
                 or parsed.query
                 or parsed.fragment
-                or parsed.port not in (None, 443)
-                or parsed.hostname.lower() not in allowed_hosts
+                or (remote_https and parsed.port not in (None, 443))
             ):
                 raise serializers.ValidationError(
-                    {"base_url": "Provider host is not in MODEL_PROVIDER_ALLOWED_HOSTS."}
+                    {"base_url": "Provider URL contains unsupported components."}
                 )
-            if not re.fullmatch(r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref):
+            if local_http and credential_ref and not re.fullmatch(
+                r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref
+            ):
                 raise serializers.ValidationError(
-                    {"credential_ref": "Use an environment reference such as env:OPENAI_API_KEY."}
+                    {"credential_ref": "Use an environment reference such as env:LOCAL_MODEL_KEY."}
+                )
+            if remote_https and not re.fullmatch(
+                r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref
+            ):
+                raise serializers.ValidationError(
+                    {"credential_ref": "Remote providers require an env: credential reference."}
                 )
         else:
             raise serializers.ValidationError({"provider_type": "Unsupported provider type."})

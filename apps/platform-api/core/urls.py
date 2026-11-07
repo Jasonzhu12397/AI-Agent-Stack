@@ -1,5 +1,21 @@
+# ruff: noqa: I001
 from django.urls import path
 
+from core.audit_views import AuditEventListView, AuditEventVerifyView
+
+from core.agent_node_views import (
+    AgentCommandApproveView,
+    AgentNodeCommandListCreateView,
+    AgentNodeCredentialRotateView,
+    AgentProjectCommandListView,
+    AgentNodeListCreateView,
+    AgentNodeRevokeView,
+    AgentRuntimeDeploymentCheckpointView,
+    AgentRuntimeHeartbeatView,
+    AgentRuntimeLeaseRenewView,
+    AgentRuntimePollView,
+    AgentRuntimeResultView,
+)
 from core.agent_views import (
     AgentDetailView,
     AgentListCreateView,
@@ -8,16 +24,43 @@ from core.agent_views import (
     AgentRunListCreateView,
 )
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.cluster_deployment_views import (
+    ClusterDeploymentCancelView,
+    ClusterDeploymentDetailView,
+    ClusterDeploymentListCreateView,
+    ClusterDeploymentTargetAgentHandoffView,
+    ClusterDeploymentTargetPostflightView,
+)
+from core.knowledge_views import (
+    KnowledgeDocumentDetailView,
+    KnowledgeBaseDocumentListCreateView,
+    KnowledgeBaseListCreateView,
+)
 from core.membership_views import (
     ProjectMemberDetailView,
     ProjectMemberListCreateView,
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
+from core.plugin_views import (
+    PluginApproveView,
+    PluginCatalogListCreateView,
+    PluginConnectionListCreateView,
+    PluginConnectionTestView,
+    PluginConnectionStatusView,
+    PluginDetailView,
+    PluginInstallationListCreateView,
+    PluginInstallationStatusView,
+)
 from core.model_views import (
     ModelConfigListCreateView,
     ModelProviderListCreateView,
     ModelTestView,
+)
+from core.tool_approval_views import (
+    ToolApprovalApproveView,
+    ToolApprovalListView,
+    ToolApprovalRejectView,
 )
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.views import TenantListView, TenantProjectListView, liveness, readiness
@@ -25,11 +68,158 @@ from core.workflow_views import (
     WorkflowDetailView,
     WorkflowListCreateView,
     WorkflowPublishView,
+    WorkflowValidateView,
     WorkflowRunDetailView,
     WorkflowRunListCreateView,
 )
 
+
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/audit-events/verify/",
+        AuditEventVerifyView.as_view(),
+        name="audit-event-verify",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/audit-events/",
+        AuditEventListView.as_view(),
+        name="audit-event-list",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/knowledge-bases/",
+        KnowledgeBaseListCreateView.as_view(),
+        name="knowledge-base-list-create",
+    ),
+    path(
+        "api/v1/knowledge-bases/<uuid:knowledge_base_id>/documents/",
+        KnowledgeBaseDocumentListCreateView.as_view(),
+        name="knowledge-base-document-list-create",
+    ),
+    path(
+        "api/v1/knowledge-documents/<uuid:knowledge_document_id>/",
+        KnowledgeDocumentDetailView.as_view(),
+        name="knowledge-document-detail",
+    ),
+    path(
+        "api/v1/connectors/",
+        PluginCatalogListCreateView.as_view(),
+        name="plugin-catalog",
+    ),
+    path(
+        "api/v1/connectors/<uuid:plugin_id>/",
+        PluginDetailView.as_view(),
+        name="plugin-detail",
+    ),
+    path(
+        "api/v1/connectors/<uuid:plugin_id>/approve/",
+        PluginApproveView.as_view(),
+        name="plugin-approve",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/plugin-installations/",
+        PluginInstallationListCreateView.as_view(),
+        name="plugin-installations",
+    ),
+    path(
+        "api/v1/plugin-installations/<uuid:installation_id>/status/",
+        PluginInstallationStatusView.as_view(),
+        name="plugin-installation-status",
+    ),
+    path(
+        "api/v1/plugin-installations/<uuid:installation_id>/connections/",
+        PluginConnectionListCreateView.as_view(),
+        name="plugin-connections",
+    ),
+    path(
+        "api/v1/plugin-connections/<uuid:connection_id>/test/",
+        PluginConnectionTestView.as_view(),
+        name="plugin-connection-test",
+    ),
+    path(
+        "api/v1/plugin-connections/<uuid:connection_id>/status/",
+        PluginConnectionStatusView.as_view(),
+        name="plugin-connection-status",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
+        ClusterDeploymentListCreateView.as_view(),
+        name="cluster-deployment-list-create",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/",
+        ClusterDeploymentDetailView.as_view(),
+        name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
+        ClusterDeploymentCancelView.as_view(),
+        name="cluster-deployment-cancel",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/target-agent/handoff/",
+        ClusterDeploymentTargetAgentHandoffView.as_view(),
+        name="cluster-deployment-target-agent-handoff",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
+        ClusterDeploymentTargetPostflightView.as_view(),
+        name="cluster-deployment-target-postflight",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
+        AgentNodeListCreateView.as_view(),
+        name="agent-node-list-create",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/credentials/rotate/",
+        AgentNodeCredentialRotateView.as_view(),
+        name="agent-node-credential-rotate",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/revoke/",
+        AgentNodeRevokeView.as_view(),
+        name="agent-node-revoke",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/commands/",
+        AgentNodeCommandListCreateView.as_view(),
+        name="agent-node-commands",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-commands/",
+        AgentProjectCommandListView.as_view(),
+        name="project-agent-commands",
+    ),
+    path(
+        "api/v1/agent-commands/<uuid:command_id>/approve/",
+        AgentCommandApproveView.as_view(),
+        name="agent-command-approve",
+    ),
+    path(
+        "api/v1/agent-runtime/heartbeat/",
+        AgentRuntimeHeartbeatView.as_view(),
+        name="agent-runtime-heartbeat",
+    ),
+    path(
+        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
+        AgentRuntimeDeploymentCheckpointView.as_view(),
+        name="agent-runtime-deployment-checkpoint",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/poll/",
+        AgentRuntimePollView.as_view(),
+        name="agent-runtime-poll",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/<uuid:command_id>/lease/renew/",
+        AgentRuntimeLeaseRenewView.as_view(),
+        name="agent-runtime-lease-renew",
+    ),
+    path(
+        "api/v1/agent-runtime/commands/<uuid:command_id>/result/",
+        AgentRuntimeResultView.as_view(),
+        name="agent-runtime-result",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agents/",
         AgentListCreateView.as_view(),
@@ -64,6 +254,11 @@ urlpatterns = [
         "api/v1/workflows/<uuid:workflow_id>/",
         WorkflowDetailView.as_view(),
         name="workflow-detail",
+    ),
+    path(
+        "api/v1/workflows/<uuid:workflow_id>/validate/",
+        WorkflowValidateView.as_view(),
+        name="workflow-validate",
     ),
     path(
         "api/v1/workflows/<uuid:workflow_id>/publish/",
@@ -127,6 +322,21 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/members/<uuid:membership_id>/",
         ProjectMemberDetailView.as_view(),
         name="project-member-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/",
+        ToolApprovalListView.as_view(),
+        name="tool-approval-list",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/approve/",
+        ToolApprovalApproveView.as_view(),
+        name="tool-approval-approve",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/reject/",
+        ToolApprovalRejectView.as_view(),
+        name="tool-approval-reject",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tasks/",
