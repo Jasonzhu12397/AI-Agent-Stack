@@ -72,11 +72,11 @@ def approval_context(db):
         installed_by=admin,
     )
 
-    def create_pending(key):
+    def create_pending(key, created_by=None):
         task = Task.objects.create(
             tenant=tenant,
             project=project,
-            created_by=admin,
+            created_by=created_by or editor,
             task_type="agent.run",
             payload={},
             idempotency_key=key,
@@ -212,6 +212,26 @@ def test_project_editor_cannot_approve_high_risk_tool_call(approval_context):
     assert approval.status == ToolApprovalRequest.Status.PENDING
     assert task.status == Task.Status.WAITING_APPROVAL
 
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_task_creator_cannot_decide_own_high_risk_approval(approval_context, decision):
+    ctx = approval_context
+    task, approval = ctx["create_pending"]("self-" + decision, created_by=ctx["admin"])
+    client = APIClient()
+    client.force_authenticate(user=ctx["admin"])
+    url = (
+        f"/api/v1/tenants/{ctx['tenant'].id}/projects/"
+        f"{ctx['project'].id}/tool-approvals/{approval.id}/{decision}/"
+    )
+
+    response = client.post(url, {"reason": "Self-approval must be denied"}, format="json")
+
+    assert response.status_code == 403
+    approval.refresh_from_db()
+    task.refresh_from_db()
+    assert approval.status == ToolApprovalRequest.Status.PENDING
+    assert task.status == Task.Status.WAITING_APPROVAL
 
 @pytest.mark.django_db
 def test_expired_approval_fails_closed(approval_context):
