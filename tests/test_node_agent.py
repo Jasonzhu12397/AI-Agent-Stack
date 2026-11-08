@@ -1197,6 +1197,28 @@ def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch
     assert result["side_effects"] is False
 
 
+def test_target_agent_heartbeat_advertises_worker_provisioning_capabilities():
+    client = agent.ControlPlaneClient("https://control.example", "node-123", "agent-token")
+    captured = {}
+
+    def fake_request(path, payload=None, lease_token="", method="POST"):
+        captured["path"] = path
+        captured["payload"] = payload
+        captured["method"] = method
+        return {"ok": True}
+
+    client.request = fake_request
+    result = client.heartbeat("target_cluster")
+
+    assert result == {"ok": True}
+    assert captured["path"] == "/api/v1/agent-runtime/heartbeat/"
+    assert captured["method"] == "POST"
+    assert {
+        "cluster.capi.worker.preflight",
+        "cluster.capi.worker.provision",
+    }.issubset(set(captured["payload"]["capabilities"]))
+
+
 def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch):
     captured = {}
 
