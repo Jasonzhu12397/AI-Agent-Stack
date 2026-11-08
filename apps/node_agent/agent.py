@@ -4392,6 +4392,8 @@ class ControlPlaneClient:
                 "cluster.control-plane.verify",
                 "cluster.capi.pivot.target.preflight",
                 "cluster.capi.pivot.postflight",
+                "cluster.capi.worker.preflight",
+                "cluster.capi.worker.provision",
                 "k8s.resource.read",
             ]
         )
