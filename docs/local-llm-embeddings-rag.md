@@ -52,18 +52,14 @@ Published Agent versions can pin up to 8 Knowledge Base IDs from the same tenant
 
 Workflow DAGs also support a `knowledge_search` node. The node pins 1–8 project knowledge bases, accepts a query template and bounded result limit, and emits document/chunk source IDs plus retrieved text. Downstream LLM nodes receive the results with an explicit untrusted-reference instruction. Publish and run both revalidate tenant/project scope and embedding-model capability.
 
-The current document API accepts text content; PDF/DOCX parsing, file upload, document deletion/vector cleanup, reranking, retention controls and ingestion progress streaming are not implemented yet.
+The current document API accepts text content (up to 1 MB per request). Document deletion and Qdrant vector cleanup are implemented: deletion is rejected while ingestion is running, queued ingestion is cancelled, and the source document is retained if vector cleanup fails. PDF/DOCX parsing, binary file upload, reranking, retention controls and ingestion progress streaming are not implemented yet.
 
 ## Agent and Workflow integration status
 
-The Agent Worker executes real chat completions and now supports bounded OpenAI-compatible function calling. Published Agent versions may pin project-installed connector tool IDs; the Worker validates tool-call names/arguments and dispatches only through the trusted ToolRouter. Connector-specific handlers are not registered by default, and high/critical-risk tools remain blocked until a human-approval workflow exists. Embedding and Qdrant retrieval primitives are implemented, but they are not yet exposed as Knowledge Base CRUD APIs or automatically injected into Agent/Workflow prompts.
+The Agent Worker executes real chat completions and supports bounded OpenAI-compatible function calling. Published Agent versions may pin project-installed connector tool IDs; the Worker validates tool-call names and arguments and dispatches only through the trusted ToolRouter. High/critical-risk Agent tool calls use persisted approval requests bound to the task, tool, installation, connection, plugin version and canonical argument hash. A different project administrator must decide the request; the task is checkpointed and re-queued after approval. Workflow tool nodes still reject high/critical-risk tools because a resumable Human Approval workflow node has not been implemented. Provider-specific live connector handlers are not registered by default, so the ToolRouter fails closed when no trusted handler exists.
 
-The next integration milestone is:
-- Add KnowledgeBase, KnowledgeDocument and ingestion-job persistence in PostgreSQL.
-- Add authenticated tenant/project-scoped document upload and ingestion APIs.
-- Add retrieval configuration to published Agent and Workflow versions.
-- Inject retrieved chunks into LLM context with source citations.
-- Add function/tool calling to the Model Gateway and connect approved tool calls to Tool Router.
-- Add streaming responses, token/cost telemetry, model fallback and per-agent model routing.
+Knowledge Base CRUD and ingestion are implemented with PostgreSQL as the source of truth and Qdrant as the vector index. Authenticated APIs provide tenant/project-scoped Knowledge Base and text-document operations. The Worker ingests documents asynchronously, and published Agent versions can pin Knowledge Bases for retrieval. Workflow DAGs provide a `knowledge_search` node with publish/run scope validation and explicitly untrusted retrieved context. The Vue Studio includes Knowledge Base and document management views.
+
+Remaining RAG work includes PDF/DOCX parsing, binary upload, reranking, retention controls, ingestion progress streaming, and broader failure/reconciliation testing for PostgreSQL/Qdrant consistency. Remaining Agent/Workflow work includes streaming responses, token/cost telemetry, model fallback and per-agent model routing, plus a durable Human Approval workflow node.
 
 EPH Agent and Target Cluster Agent remain separate remote execution identities. Each may use a model profile reachable from its own runtime, including a local model endpoint; central Supervisor can use a different model profile. Credentials and model endpoints are configured per execution environment, not sent as plaintext in remote command payloads.
