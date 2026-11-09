@@ -805,3 +805,100 @@ def test_target_agent_capi_pivot_postflight_command_is_allowed(node_workspace):
         HTTP_IDEMPOTENCY_KEY="target-capi-pivot-postflight",
     )
     assert response.status_code == 202
+
+
+
+@pytest.mark.django_db
+def test_fleet_inventory_returns_project_scoped_agent_machines_and_hardware(node_workspace):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {
+            "name": "rack-a-node-01",
+            "node_type": "eph_node",
+            "labels": {
+                "hardware_inventory": {
+                    "cpu": {"logical_cpus": 64},
+                    "memory": {"bytes": 274877906944},
+                    "nics": [{"name": "ens1f0", "speed_mbps": 100000}],
+                }
+            },
+        },
+        format="json",
+    )
+    response = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/"
+    )
+
+    assert enrolled.status_code == 201
+    assert response.status_code == 200
+    assert response.data["count"] == 1
+    machine = response.data["results"][0]
+    assert machine["name"] == "rack-a-node-01"
+    assert machine["identity"]["agent_node_id"] == enrolled.data["id"]
+    assert machine["hardware_inventory"]["cpu"]["logical_cpus"] == 64
+    assert machine["inventory_source"] == "agent_report"
+    assert machine["capabilities"]["stable_hardware_identity"] == "not_yet_attested"
+
+
+@pytest.mark.django_db
+def test_fleet_inventory_filters_search_and_paginates(node_workspace):
+    _, tenant, project, client = node_workspace
+    for name in ["rack-a-01", "rack-a-02", "rack-b-01"]:
+        response = client.post(
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+            {"name": name, "node_type": "target_cluster"},
+            format="json",
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/",
+        {"search": "rack-a", "limit": 1, "offset": 1, "node_type": "target_cluster"},
+    )
+
+    assert response.status_code == 200
+    assert response.data["count"] == 2
+    assert len(response.data["results"]) == 1
+    assert response.data["results"][0]["name"] == "rack-a-02"
+
+
+@pytest.mark.django_db
+def test_fleet_inventory_reports_stale_heartbeat_without_mutating_agent_status(node_workspace):
+    from django.utils import timezone
+
+    import datetime
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "stale-agent", "node_type": "eph_node"},
+        format="json",
+    )
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    node.status = AgentNode.Status.ONLINE
+    node.last_seen_at = timezone.now() - datetime.timedelta(minutes=5)
+    node.save(update_fields=["status", "last_seen_at"])
+
+    response = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/",
+        {"status": "stale"},
+    )
+
+    node.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["count"] == 1
+    assert response.data["results"][0]["observed_status"] == "stale"
+    assert node.status == AgentNode.Status.ONLINE
+
+
+@pytest.mark.django_db
+def test_fleet_inventory_rejects_invalid_filters_and_pagination(node_workspace):
+    _, tenant, project, client = node_workspace
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/"
+
+    invalid_status = client.get(url, {"status": "unknown"})
+    invalid_page = client.get(url, {"limit": 500})
+
+    assert invalid_status.status_code == 400
+    assert invalid_page.status_code == 400

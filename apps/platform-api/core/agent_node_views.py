@@ -273,6 +273,89 @@ class AgentNodeListCreateView(APIView):
         return Response(data, status=status.HTTP_201_CREATED)
 
 
+class FleetMachineInventoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id):
+        tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        try:
+            limit = int(request.query_params.get("limit", "50"))
+            offset = int(request.query_params.get("offset", "0"))
+        except (TypeError, ValueError):
+            return Response({"detail": "limit and offset must be integers."}, status=400)
+        if not 1 <= limit <= 200 or offset < 0:
+            return Response(
+                {"detail": "limit must be 1–200 and offset must be non-negative."},
+                status=400,
+            )
+
+        nodes = AgentNode.objects.filter(tenant=tenant, project=project)
+        node_type = request.query_params.get("node_type")
+        if node_type:
+            if node_type not in AgentNode.NodeType.values:
+                return Response({"detail": "Unknown node_type."}, status=400)
+            nodes = nodes.filter(node_type=node_type)
+
+        requested_status = request.query_params.get("status")
+        if requested_status:
+            if requested_status not in {
+                AgentNode.Status.ONLINE,
+                AgentNode.Status.OFFLINE,
+                AgentNode.Status.REVOKED,
+                "stale",
+            }:
+                return Response({"detail": "Unknown machine status."}, status=400)
+            if requested_status == "stale":
+                nodes = nodes.filter(
+                    status=AgentNode.Status.ONLINE,
+                    last_seen_at__lt=timezone.now() - datetime.timedelta(seconds=60),
+                )
+            else:
+                nodes = nodes.filter(status=requested_status)
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            nodes = nodes.filter(
+                Q(name__icontains=search)
+                | Q(cluster_name__icontains=search)
+                | Q(agent_version__icontains=search)
+            )
+
+        total = nodes.count()
+        page = nodes.order_by("name", "id")[offset : offset + limit]
+        stale_before = timezone.now() - datetime.timedelta(seconds=60)
+        results = []
+        for node in page:
+            data = _node_data(node)
+            data["observed_status"] = (
+                "stale"
+                if node.status == AgentNode.Status.ONLINE
+                and (node.last_seen_at is None or node.last_seen_at < stale_before)
+                else node.status
+            )
+            data["identity"] = {
+                "agent_node_id": str(node.id),
+                "name": node.name,
+                "cluster_name": node.cluster_name,
+            }
+            data["hardware_inventory"] = node.labels.get("hardware_inventory", {})
+            data["inventory_source"] = "agent_report"
+            results.append(data)
+
+        return Response(
+            {
+                "count": total,
+                "limit": limit,
+                "offset": offset,
+                "results": results,
+                "capabilities": {
+                    "hardware_inventory": "agent_reported_when_available",
+                    "stable_hardware_identity": "not_yet_attested",
+                },
+            }
+        )
+
+
 class AgentNodeRevokeView(APIView):
     permission_classes = [IsAuthenticated]
 

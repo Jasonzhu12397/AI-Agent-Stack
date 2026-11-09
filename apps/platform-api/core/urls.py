@@ -9,6 +9,7 @@ from core.agent_node_views import (
     AgentNodeCredentialRotateView,
     AgentProjectCommandListView,
     AgentNodeListCreateView,
+    FleetMachineInventoryView,
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
@@ -175,6 +176,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
         AgentNodeListCreateView.as_view(),
         name="agent-node-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/",
+        FleetMachineInventoryView.as_view(),
+        name="fleet-machine-inventory",
     ),
     path(
         "api/v1/agent-nodes/<uuid:node_id>/credentials/rotate/",
