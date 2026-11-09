@@ -1898,7 +1898,6 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
         payload,
         format="json",
         REMOTE_ADDR="198.51.100.20",
-        REMOTE_ADDR=trusted_proxy,
         HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
         **token_header,
     )
@@ -1926,6 +1925,7 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
         heartbeat_url,
         payload,
         format="json",
+        REMOTE_ADDR=trusted_proxy,
         HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
         **token_header,
     )
@@ -1941,6 +1941,7 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
         heartbeat_url,
         payload,
         format="json",
+        REMOTE_ADDR=trusted_proxy,
         HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
         **token_header,
     )
