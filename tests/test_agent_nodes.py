@@ -1491,3 +1491,71 @@ def test_redfish_identity_review_rejects_duplicate_machine_identity(node_workspa
         ["system_uuid", "product_serial"],
         "duplicate_machine_identity",
     )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "headers", "body", "error_type"),
+    [
+        (401, {"content-type": "application/json"}, b"{}", PermissionError),
+        (403, {"content-type": "application/json"}, b"{}", PermissionError),
+        (302, {"location": "https://attacker.invalid"}, b"", ValueError),
+        (200, {"content-type": "text/html"}, b"{}", ValueError),
+        (200, {"content-type": "application/json"}, b"[]", ValueError),
+    ],
+)
+def test_redfish_read_json_rejects_unsafe_http_responses(
+    status_code, headers, body, error_type
+):
+    import httpx
+
+    from core.agent_node_views import _redfish_read_json
+
+    def handler(request):
+        return httpx.Response(status_code, headers=headers, content=body, request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(error_type):
+            _redfish_read_json(
+                client,
+                "https://192.168.10.30/redfish/v1/Systems",
+                httpx.BasicAuth("admin", "secret"),
+            )
+
+
+def test_redfish_read_json_rejects_oversized_response():
+    import httpx
+
+    from core.agent_node_views import _redfish_read_json
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=b" " * 1048577,
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="size limit"):
+            _redfish_read_json(
+                client,
+                "https://192.168.10.30/redfish/v1/Systems",
+                httpx.BasicAuth("admin", "secret"),
+            )
+
+
+def test_redfish_read_json_propagates_timeout():
+    import httpx
+
+    from core.agent_node_views import _redfish_read_json
+
+    def handler(request):
+        raise httpx.ReadTimeout("BMC read timed out", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.ReadTimeout):
+            _redfish_read_json(
+                client,
+                "https://192.168.10.30/redfish/v1/Systems",
+                httpx.BasicAuth("admin", "secret"),
+            )
