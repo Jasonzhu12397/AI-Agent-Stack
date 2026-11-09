@@ -219,20 +219,21 @@ def _authenticate_node(request, node_id):
         return None
     if expected_fingerprint:
         remote_addr = request.META.get("REMOTE_ADDR", "")
-        trusted_proxy_values = getattr(
-            settings,
-            "AGENT_MTLS_TRUSTED_PROXY_CIDRS",
-            [],
-        )
-        legacy_proxy_ip = getattr(settings, "AGENT_MTLS_TRUSTED_PROXY_IP", "")
-        if legacy_proxy_ip:
-            trusted_proxy_values = [*trusted_proxy_values, legacy_proxy_ip]
+        trusted_proxy_ip = getattr(settings, "AGENT_MTLS_TRUSTED_PROXY_IP", "")
         try:
             request_peer = ipaddress.ip_address(remote_addr)
-            trusted_proxy = any(
-                request_peer in ipaddress.ip_network(value, strict=False)
-                for value in trusted_proxy_values
-            )
+            if trusted_proxy_ip:
+                trusted_proxy = request_peer == ipaddress.ip_address(trusted_proxy_ip)
+            else:
+                trusted_proxy_values = getattr(
+                    settings,
+                    "AGENT_MTLS_TRUSTED_PROXY_CIDRS",
+                    [],
+                )
+                trusted_proxy = any(
+                    request_peer in ipaddress.ip_network(value, strict=False)
+                    for value in trusted_proxy_values
+                )
         except ValueError:
             return None
         if not trusted_proxy:
