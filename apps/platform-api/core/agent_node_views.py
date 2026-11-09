@@ -587,7 +587,8 @@ class FleetMachineBMCConfigView(APIView):
 
     def post(self, request, tenant_id, project_id, machine_id):
         if request.data not in ({}, None):
-            return Response(\n                {"detail": "This endpoint does not accept a request body."},\n                status=400,\n            )
+            return Response(
+                {"detail": "This endpoint does not accept a request body."},\n                status=400,\n            )
         tenant, project, is_tenant_admin = _tenant_and_project(
             request,
             tenant_id,
@@ -800,6 +801,8 @@ def _redfish_systems(endpoint, credential, trust_bundle_pem):
 
 
 def _redfish_identity_review(machine, systems):
+    if machine.identity_status == AgentMachine.IdentityStatus.CONFLICT:
+        return "conflict", [], "existing_identity_conflict_requires_review"
     material = machine.identity_material or {}
     dmi_uuid = _identity_value(machine.system_uuid or material.get("product_uuid"))
     dmi_serial = _identity_value(material.get("product_serial"))
