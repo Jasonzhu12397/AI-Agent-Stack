@@ -618,6 +618,7 @@ def _postflight_runner(
                     "metadata": {
                         "name": "worker-01",
                         "namespace": "metal3",
+                        "uid": "bmh-uid-01",
                         "annotations": annotations,
                     },
                     "spec": {
@@ -768,3 +769,53 @@ def test_pivot_postflight_matches_each_machine_to_its_own_infrastructure_ref(tmp
     assert result["verified_machine_count"] == 2
     assert result["metal3machine_count"] == 2
     assert result["verified_bmh_count"] == 2
+
+
+def test_pivot_postflight_rejects_malformed_machine_cluster_labels(tmp_path):
+    _, base_runner = _postflight_runner()
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        if "machines.cluster.x-k8s.io" in command:
+            document = json.loads(completed.stdout)
+            document["items"][0]["metadata"]["labels"] = []
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(document), completed.stderr
+            )
+        return completed
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_MACHINE_LABELS_INVALID",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
+def test_pivot_postflight_rejects_duplicate_bmh_identity(tmp_path):
+    _, base_runner = _postflight_runner()
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        if "baremetalhosts.metal3.io" in command:
+            document = json.loads(completed.stdout)
+            document["items"].append(json.loads(json.dumps(document["items"][0])))
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(document), completed.stderr
+            )
+        return completed
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_BMH_IDENTITY_INVALID",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
