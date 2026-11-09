@@ -216,6 +216,15 @@ def _authenticate_node(request, node_id):
         return None
     expected_fingerprint = node.client_certificate_fingerprint
     if expected_fingerprint:
+        trusted_proxy_ip = getattr(settings, "AGENT_MTLS_TRUSTED_PROXY_IP", "")
+        remote_addr = request.META.get("REMOTE_ADDR", "")
+        try:
+            trusted_proxy = ipaddress.ip_address(trusted_proxy_ip)
+            request_peer = ipaddress.ip_address(remote_addr)
+        except ValueError:
+            return None
+        if request_peer != trusted_proxy:
+            return None
         verified_fingerprint = request.headers.get(
             "X-Verified-Client-Cert-SHA256",
             "",
