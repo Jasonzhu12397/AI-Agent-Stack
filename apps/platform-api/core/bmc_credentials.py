@@ -23,12 +23,15 @@ def _parse_vault_reference(reference):
         or parsed.fragment
     ):
         raise ValueError("Vault reference has an invalid format.")
+    mount = parsed.netloc
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", mount):
+        raise ValueError("Vault mount is invalid.")
     path = parsed.path.lstrip("/")
     if not _SECRET_REF_PATTERN.fullmatch(path):
         raise ValueError("Vault reference path is invalid.")
     if any(part in {".", ".."} for part in path.split("/")):
         raise ValueError("Vault reference path is invalid.")
-    return parsed.netloc, path
+    return mount, path
 
 
 def _vault_url():

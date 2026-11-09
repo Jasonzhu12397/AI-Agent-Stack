@@ -1,6 +1,4 @@
 import pytest
-from django.test import override_settings
-
 from core.bmc_credentials import _parse_vault_reference, resolve_bmc_credentials
 
 
@@ -49,13 +47,31 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
     import httpx
 
     requests = []
+    original_client = httpx.Client
 
     def handler(request):
         requests.append(request)
         if request.url.path == "/v1/secret/data/bmc/rack-a":
-            payload = {"data": {"data": {"username": "redfish-user", "password": "redfish-pass"}}}
+            payload = {
+                "data": {
+                    "data": {
+                        "username": "redfish-user",
+                        "password": "redfish-pass",
+                    }
+                }
+            }
         elif request.url.path == "/v1/pki/data/redfish/ca":
-            payload = {"data": {"data": {"pem": "-----BEGIN CERTIFICATE-----\\nCA\\n-----END CERTIFICATE-----"}}}
+            payload = {
+                "data": {
+                    "data": {
+                        "pem": (
+                            "-----BEGIN CERTIFICATE-----\\n"
+                            "CA\\n"
+                            "-----END CERTIFICATE-----"
+                        )
+                    }
+                }
+            }
         else:
             return httpx.Response(404, json={"errors": ["not found"]})
         return httpx.Response(200, json=payload)
@@ -67,7 +83,7 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
     monkeypatch.setattr(
         vault_module.httpx,
         "Client",
-        lambda **kwargs: httpx.Client(
+        lambda **kwargs: original_client(
             transport=httpx.MockTransport(handler),
             **kwargs,
         ),
@@ -82,16 +98,27 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
     assert result["password"] == "redfish-pass"
     assert "BEGIN CERTIFICATE" in result["trust_bundle_pem"]
     assert len(requests) == 2
-    assert all(request.headers["X-Vault-Token"] == "vault-test-token" for request in requests)
-    assert all(request.headers["X-Vault-Namespace"] == "tenant/platform" for request in requests)
+    assert all(
+        request.headers["X-Vault-Token"] == "vault-test-token"
+        for request in requests
+    )
+    assert all(
+        request.headers["X-Vault-Namespace"] == "tenant/platform"
+        for request in requests
+    )
 
 
 def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
     import core.bmc_credentials as vault_module
     import httpx
 
+    original_client = httpx.Client
+
     def handler(request):
-        return httpx.Response(200, json={"data": {"data": {"username": "only-user"}}})
+        return httpx.Response(
+            200,
+            json={"data": {"data": {"username": "only-user"}}},
+        )
 
     settings.BMC_VAULT_TOKEN = "vault-test-token"
     settings.BMC_VAULT_ADDR = "https://vault.example.net"
