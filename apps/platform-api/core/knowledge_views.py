@@ -341,3 +341,75 @@ class KnowledgeDocumentDetailView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KnowledgeDocumentRetryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, knowledge_document_id):
+        try:
+            with transaction.atomic():
+                document = get_object_or_404(
+                    KnowledgeDocument.objects.select_for_update().select_related(
+                        "knowledge_base",
+                        "knowledge_base__tenant",
+                        "knowledge_base__project",
+                    ),
+                    pk=knowledge_document_id,
+                    knowledge_base__is_archived=False,
+                    knowledge_base__tenant__memberships__user=request.user,
+                )
+                knowledge_base = document.knowledge_base
+                if not _can_edit(request, knowledge_base.tenant, knowledge_base.project):
+                    return Response(
+                        {"detail": "Project editor permission required."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                if document.status != KnowledgeDocument.Status.FAILED:
+                    return Response(
+                        {"detail": "Only failed documents can be retried."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                existing_tasks = Task.objects.select_for_update().filter(
+                    payload__knowledge_document_id=str(document.id),
+                )
+                if existing_tasks.filter(
+                    status__in=[Task.Status.QUEUED, Task.Status.RUNNING]
+                ).exists():
+                    return Response(
+                        {"detail": "A document ingestion task is already active."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                QdrantVectorStore().delete_document(
+                    tenant_id=str(knowledge_base.tenant_id),
+                    project_id=str(knowledge_base.project_id),
+                    document_id=str(document.id),
+                )
+                document.status = KnowledgeDocument.Status.PENDING
+                document.chunk_count = 0
+                document.error = None
+                document.ingested_at = None
+                document.save(
+                    update_fields=[
+                        "status",
+                        "chunk_count",
+                        "error",
+                        "ingested_at",
+                        "updated_at",
+                    ]
+                )
+                Task.objects.create(
+                    tenant=knowledge_base.tenant,
+                    project=knowledge_base.project,
+                    created_by=request.user,
+                    task_type="knowledge.ingest",
+                    payload={"knowledge_document_id": str(document.id)},
+                    idempotency_key=f"knowledge-ingest-retry:{document.id}:{uuid.uuid4()}",
+                    available_at=timezone.now(),
+                )
+        except VectorStoreError:
+            return Response(
+                {"detail": "Vector cleanup failed; retry was not queued."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(_document_data(document), status=status.HTTP_202_ACCEPTED)

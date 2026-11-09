@@ -7,7 +7,7 @@ import {
   getKnowledgeBases,
   getKnowledgeDocuments,
   getModelConfigs,
-  getModelProviders,
+  getModelProviders,\n  retryKnowledgeDocument,
   type KnowledgeBase,
   type KnowledgeDocument,
   type ModelConfig,
@@ -100,6 +100,22 @@ async function addDocument(): Promise<void> {
   }
 }
 
+
+
+async function retryDocument(document: KnowledgeDocument): Promise<void> {
+  if (busy.value || deletingDocumentId.value || document.status !== "failed") return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await retryKnowledgeDocument(document.id);
+    await loadDocs();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to retry document ingestion.";
+    await loadDocs();
+  } finally {
+    busy.value = false;
+  }
+}
 
 async function deleteDocument(document: KnowledgeDocument): Promise<void> {
   if (deletingDocumentId.value || busy.value) return;
@@ -197,8 +213,17 @@ onUnmounted(() => {
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="120" fixed="right">
+        <el-table-column label="Actions" width="190" fixed="right">
           <template #default="{ row }">
+            <el-button
+              v-if="row.status === "failed""
+              type="warning"
+              text
+              :disabled="Boolean(deletingDocumentId) || busy"
+              @click="retryDocument(row)"
+            >
+              Retry
+            </el-button>
             <el-button
               type="danger"
               text

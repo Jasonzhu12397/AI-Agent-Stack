@@ -32,7 +32,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
-    KnowledgeDocumentDetailView,
+    KnowledgeDocumentDetailView,\n    KnowledgeDocumentRetryView,
     KnowledgeBaseDocumentListCreateView,
     KnowledgeBaseListCreateView,
 )
@@ -99,6 +99,11 @@ urlpatterns = [
         "api/v1/knowledge-documents/<uuid:knowledge_document_id>/",
         KnowledgeDocumentDetailView.as_view(),
         name="knowledge-document-detail",
+    ),
+    path(
+        "api/v1/knowledge-documents/<uuid:knowledge_document_id>/retry/",
+        KnowledgeDocumentRetryView.as_view(),
+        name="knowledge-document-retry",
     ),
     path(
         "api/v1/connectors/",

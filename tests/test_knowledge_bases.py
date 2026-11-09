@@ -331,3 +331,90 @@ def test_knowledge_document_delete_cancels_queued_ingestion(knowledge_scope):
     assert response.status_code == 204
     assert task.status == Task.Status.CANCELLED
     assert not KnowledgeDocument.objects.filter(pk=document.id).exists()
+
+
+@pytest.mark.django_db
+def test_failed_knowledge_document_can_be_retried(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-retry",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="e" * 64, status=KnowledgeDocument.Status.FAILED,
+        chunk_count=1, error={"code": "INGESTION_FAILED", "message": "Provider unavailable"},
+    )
+    with patch("core.knowledge_views.QdrantVectorStore") as store_class:
+        response = scope["client"].post(
+            f"/api/v1/knowledge-documents/{document.id}/retry/"
+        )
+    document.refresh_from_db()
+    task = Task.objects.get(
+        task_type="knowledge.ingest",
+        payload__knowledge_document_id=str(document.id),
+    )
+    assert response.status_code == 202
+    assert document.status == KnowledgeDocument.Status.PENDING
+    assert document.chunk_count == 0
+    assert document.error is None
+    assert document.ingested_at is None
+    assert task.status == Task.Status.QUEUED
+    store_class.return_value.delete_document.assert_called_once_with(
+        tenant_id=str(scope["tenant"].id), project_id=str(scope["project"].id),
+        document_id=str(document.id),
+    )
+
+
+@pytest.mark.django_db
+def test_ready_knowledge_document_cannot_be_retried(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-retry-ready",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="f" * 64, status=KnowledgeDocument.Status.READY,
+        chunk_count=2,
+    )
+    with patch("core.knowledge_views.QdrantVectorStore") as store_class:
+        response = scope["client"].post(
+            f"/api/v1/knowledge-documents/{document.id}/retry/"
+        )
+    assert response.status_code == 409
+    assert not Task.objects.filter(
+        task_type="knowledge.ingest",
+        payload__knowledge_document_id=str(document.id),
+    ).exists()
+    store_class.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_retry_does_not_queue_when_vector_cleanup_fails(knowledge_scope):
+    scope = knowledge_scope
+    knowledge_base = KnowledgeBase.objects.create(
+        tenant=scope["tenant"], project=scope["project"], created_by=scope["user"],
+        embedding_model=scope["model"], name="Operations", slug="operations-retry-failure",
+    )
+    document = KnowledgeDocument.objects.create(
+        knowledge_base=knowledge_base, uploaded_by=scope["user"], title="Runbook",
+        content="A runbook with cluster health checks.", metadata={"source": "test"},
+        checksum="1" * 64, status=KnowledgeDocument.Status.FAILED,
+    )
+    from core.vector_store import VectorStoreError
+
+    with patch("core.knowledge_views.QdrantVectorStore") as store_class:
+        store_class.return_value.delete_document.side_effect = VectorStoreError("unavailable")
+        response = scope["client"].post(
+            f"/api/v1/knowledge-documents/{document.id}/retry/"
+        )
+    document.refresh_from_db()
+    assert response.status_code == 503
+    assert document.status == KnowledgeDocument.Status.FAILED
+    assert not Task.objects.filter(
+        task_type="knowledge.ingest",
+        payload__knowledge_document_id=str(document.id),
+    ).exists()

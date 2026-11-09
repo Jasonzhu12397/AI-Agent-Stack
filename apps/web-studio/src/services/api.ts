@@ -987,3 +987,9 @@ export function rejectToolApproval(
     { method: "POST", body: JSON.stringify({ reason }) },
   );
 }
+
+export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDocument> {
+  return request("/api/v1/knowledge-documents/" + documentId + "/retry/", {
+    method: "POST",
+  });
+}
