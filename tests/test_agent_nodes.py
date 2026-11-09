@@ -1398,7 +1398,7 @@ def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
         bmc_endpoint="https://bmc01.example.net",
         bmc_credential_ref="vault://lab/bmc/host",
     )
-    settings.BMC_CREDENTIAL_RESOLVER = "tests.test_agent_nodes.redfish_test_resolver"
+    settings.BMC_CREDENTIAL_RESOLVER = "test_agent_nodes.redfish_test_resolver"
     response = client.post(
         (
             f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"

@@ -587,7 +587,7 @@ class FleetMachineBMCConfigView(APIView):
 
     def post(self, request, tenant_id, project_id, machine_id):
         if request.data not in ({}, None):
-            return Response({"detail": "This endpoint does not accept a request body."}, status=400)
+            return Response(\n                {"detail": "This endpoint does not accept a request body."},\n                status=400,\n            )
         tenant, project, is_tenant_admin = _tenant_and_project(
             request,
             tenant_id,
@@ -611,7 +611,7 @@ class FleetMachineBMCConfigView(APIView):
         if machine is None:
             return Response({"detail": "Machine not found."}, status=404)
         if not machine.bmc_endpoint or not machine.bmc_credential_ref:
-            return Response({"detail": "BMC endpoint and credential reference must be configured."}, status=409)
+            return Response(\n                {"detail": "BMC endpoint and credential reference must be configured."},\n                status=409,\n            )
         resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
         if not resolver_path:
             return Response(
@@ -720,7 +720,7 @@ def _redfish_read_json(client, url, auth):
             raise PermissionError("BMC authentication failed.")
         if response.status_code != 200:
             raise RuntimeError("Redfish endpoint returned an unsuccessful status.")
-        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        content_type = (\n            response.headers.get("content-type", "")\n            .split(";", 1)[0]\n            .strip()\n            .lower()\n        )
         if content_type != "application/json":
             raise ValueError("Redfish endpoint did not return JSON.")
         chunks = []
@@ -745,7 +745,7 @@ def _redfish_systems(endpoint, credential, trust_bundle_pem):
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError as exc:
-        raise ValueError("Redfish verification currently requires a literal BMC IP address.") from exc
+        raise ValueError(\n            "Redfish verification currently requires a literal BMC IP address."\n        ) from exc
     if (
         not address.is_private
         or address.is_loopback
@@ -759,7 +759,7 @@ def _redfish_systems(endpoint, credential, trust_bundle_pem):
         raise ValueError("BMC credential resolver returned an invalid value.")
     username = credential.get("username")
     password = credential.get("password")
-    if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
+    if (\n        not isinstance(username, str)\n        or not username\n        or not isinstance(password, str)\n        or not password\n    ):
         raise ValueError("BMC credential resolver did not return username and password.")
     context = ssl.create_default_context(cadata=trust_bundle_pem or None)
     auth = httpx.BasicAuth(username, password)
