@@ -653,7 +653,10 @@ class FleetMachineBMCConfigView(APIView):
         if (
             not resolver_path
             and getattr(settings, "BMC_VAULT_ADDR", "")
-            and getattr(settings, "BMC_VAULT_TOKEN", "")
+            and (
+                getattr(settings, "BMC_VAULT_TOKEN", "")
+                or getattr(settings, "BMC_VAULT_TOKEN_RESOLVER", "")
+            )
         ):
             resolver_path = "core.bmc_credentials.resolve_bmc_credentials"
         if not resolver_path:

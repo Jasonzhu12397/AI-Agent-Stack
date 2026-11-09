@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from django.conf import settings
+from django.utils.module_loading import import_string
 
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9._-]+)*$")
@@ -97,9 +98,22 @@ def resolve_bmc_credentials(
     tenant_id="",
     project_id="",
 ):
-    token = getattr(settings, "BMC_VAULT_TOKEN", "")
-    if not isinstance(token, str) or not token:
-        raise RuntimeError("Vault authentication is not configured.")
+    _tenant_scoped_path("validation", tenant_id, project_id)
+    resolver_path = getattr(settings, "BMC_VAULT_TOKEN_RESOLVER", "")
+    if resolver_path:
+        token_resolver = import_string(resolver_path)
+        token = token_resolver(tenant_id=str(tenant_id), project_id=str(project_id))
+        if (
+            not isinstance(token, str)
+            or not token
+            or token.strip() != token
+            or any(character.isspace() for character in token)
+        ):
+            raise RuntimeError("Scoped Vault token resolver returned an invalid token.")
+    else:
+        token = getattr(settings, "BMC_VAULT_TOKEN", "")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("Vault authentication is not configured.")
     address = _vault_url()
     mount, path = _parse_vault_reference(credential_ref)
     path = _tenant_scoped_path(path, tenant_id, project_id)
