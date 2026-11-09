@@ -541,18 +541,38 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_EXTERNAL_IRONIC_HANDOFF_NOT_CONFIRMED")
         source_ironic_state = "external_handoff_attested"
     else:
-        replicas = source_ironic.get("spec", {}).get("replicas", 1)
-        available = source_ironic.get("status", {}).get("availableReplicas", 0)
+        metadata = source_ironic.get("metadata", {})
+        spec = source_ironic.get("spec", {})
+        status = source_ironic.get("status", {})
+        generation = metadata.get("generation") if isinstance(metadata, dict) else None
+        observed = status.get("observedGeneration") if isinstance(status, dict) else None
+        replicas = spec.get("replicas") if isinstance(spec, dict) else None
+        running_counts = (
+            status.get("replicas"),
+            status.get("readyReplicas", 0),
+            status.get("updatedReplicas", 0),
+            status.get("availableReplicas"),
+        ) if isinstance(status, dict) else None
         if (
-            not isinstance(replicas, int)
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 1
+            or not isinstance(observed, int)
+            or isinstance(observed, bool)
+            or observed < generation
+            or not isinstance(replicas, int)
             or isinstance(replicas, bool)
             or replicas != 0
-            or not isinstance(available, int)
-            or isinstance(available, bool)
-            or available != 0
+            or not isinstance(running_counts, tuple)
+            or any(
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or count != 0
+                for count in running_counts
+            )
         ):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED")
-        source_ironic_state = "deployment_scaled_to_zero"
+        source_ironic_state = "deployment_scaled_to_zero_and_observed"
 
     target_ironic = _kubectl_optional_json(
         runner,
