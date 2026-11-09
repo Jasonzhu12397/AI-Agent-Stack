@@ -62,6 +62,10 @@ def _pivot_runner_for(
     bmh_items=None,
     source_ironic_replicas=0,
     target_keepalived=True,
+    source_ironic_observed_generation=1,
+    source_ironic_status_replicas=0,
+    source_ironic_ready_replicas=0,
+    source_ironic_updated_replicas=0,
 ):
     calls = []
     groups = [
@@ -118,8 +122,15 @@ def _pivot_runner_for(
                         command,
                         0,
                         json.dumps({
+                            "metadata": {"generation": 1},
                             "spec": {"replicas": source_ironic_replicas},
-                            "status": {"availableReplicas": source_ironic_replicas},
+                            "status": {
+                                "observedGeneration": source_ironic_observed_generation,
+                                "replicas": source_ironic_status_replicas,
+                                "readyReplicas": source_ironic_ready_replicas,
+                                "updatedReplicas": source_ironic_updated_replicas,
+                                "availableReplicas": source_ironic_replicas,
+                            },
                         }),
                         "",
                     )
@@ -654,6 +665,41 @@ def test_pivot_execution_rejects_source_ironic_still_running(tmp_path):
         item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
         for item in calls
     )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_code"),
+    [
+        (
+            {"source_ironic_observed_generation": 0},
+            "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+        ),
+        (
+            {"source_ironic_status_replicas": 1},
+            "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+        ),
+        (
+            {"source_ironic_ready_replicas": 1},
+            "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+        ),
+        (
+            {"source_ironic_updated_replicas": 1},
+            "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+        ),
+    ],
+)
+def test_pivot_execution_requires_observed_zero_replica_source_ironic(
+    tmp_path, overrides, error_code
+):
+    _, runner = _pivot_runner_for(**overrides)
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
 
 
 def test_pivot_execution_rejects_target_ironic_without_keepalived(tmp_path):
