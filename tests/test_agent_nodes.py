@@ -1636,3 +1636,69 @@ def test_redfish_read_json_propagates_timeout():
                 "https://192.168.10.30/redfish/v1/Systems",
                 httpx.BasicAuth("admin", "secret"),
             )
+
+ 
+@pytest.mark.django_db
+def test_bmc_api_automatically_uses_builtin_vault_resolver(
+    node_workspace, settings, monkeypatch
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-vault-auto", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        identity_status=AgentMachine.IdentityStatus.CANDIDATE,
+        bmc_endpoint="https://192.168.10.32",
+        bmc_credential_ref="vault://secret/bmc/rack-a",
+    )
+    settings.BMC_CREDENTIAL_RESOLVER = ""
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    settings.BMC_VAULT_TOKEN = "vault-test-token"
+    settings.BMC_VAULT_NAMESPACE = ""
+    settings.BMC_VAULT_CA_BUNDLE = ""
+    resolved = {}
+
+    def read_secret(client, address, mount, path, headers):
+        resolved.update(
+            {
+                "address": address,
+                "mount": mount,
+                "path": path,
+                "token": headers.get("X-Vault-Token"),
+            }
+        )
+        return {"username": "vault-user", "password": "vault-password"}
+
+    def redfish_systems(endpoint, credential, trust_bundle_pem):
+        assert endpoint == machine.bmc_endpoint
+        assert credential == {
+            "username": "vault-user",
+            "password": "vault-password",
+        }
+        assert trust_bundle_pem == ""
+        return []
+
+    monkeypatch.setattr("core.bmc_credentials._read_kv_v2", read_secret)
+    monkeypatch.setattr("core.agent_node_views._redfish_systems", redfish_systems)
+    response = client.post(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["verification_status"] == "candidate"
+    assert resolved == {
+        "address": "https://vault.example.net",
+        "mount": "secret",
+        "path": "bmc/rack-a",
+        "token": "vault-test-token",
+    }

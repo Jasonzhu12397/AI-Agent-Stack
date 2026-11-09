@@ -650,6 +650,12 @@ class FleetMachineBMCConfigView(APIView):
                 status=409,
             )
         resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
+        if (
+            not resolver_path
+            and getattr(settings, "BMC_VAULT_ADDR", "")
+            and getattr(settings, "BMC_VAULT_TOKEN", "")
+        ):
+            resolver_path = "core.bmc_credentials.resolve_bmc_credentials"
         if not resolver_path:
             observed = timezone.now().isoformat()
             with transaction.atomic():
