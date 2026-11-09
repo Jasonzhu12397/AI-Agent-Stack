@@ -14,6 +14,7 @@ from core.models import (
     TenantMembership,
 )
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 
@@ -1869,6 +1870,7 @@ def test_agent_client_certificate_can_be_revoked_and_node_goes_offline(node_work
 
 
 @pytest.mark.django_db
+@override_settings(AGENT_MTLS_TRUSTED_PROXY_IP="192.0.2.10")
 def test_bound_agent_requires_matching_verified_client_certificate(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
@@ -1886,16 +1888,35 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
     ).status_code == 200
 
     runtime = APIClient()
+    trusted_proxy = "192.0.2.10"
     heartbeat_url = "/api/v1/agent-runtime/heartbeat/"
     payload = {"node_id": enrolled.data["id"]}
     token_header = {"HTTP_AUTHORIZATION": f"Bearer {enrolled.data['enrollment_token']}"}
 
-    missing = runtime.post(heartbeat_url, payload, format="json", **token_header)
+    spoofed = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        REMOTE_ADDR="198.51.100.20",
+        REMOTE_ADDR=trusted_proxy,
+        HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
+        **token_header,
+    )
+    assert spoofed.status_code == 401
+
+    missing = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        REMOTE_ADDR=trusted_proxy,
+        **token_header,
+    )
     assert missing.status_code == 401
     mismatched = runtime.post(
         heartbeat_url,
         payload,
         format="json",
+        REMOTE_ADDR=trusted_proxy,
         HTTP_X_VERIFIED_CLIENT_CERT_SHA256="c" * 64,
         **token_header,
     )
@@ -1928,6 +1949,7 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
         heartbeat_url,
         payload,
         format="json",
+        REMOTE_ADDR=trusted_proxy,
         HTTP_X_VERIFIED_CLIENT_CERT_SHA256=rotated_fingerprint,
         **token_header,
     )
