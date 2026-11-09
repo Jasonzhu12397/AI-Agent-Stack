@@ -3937,7 +3937,12 @@ def execute_command(
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.capi.pivot.execute":
         try:
-            return run_capi_pivot(payload, cancellation_event=cancellation_event)
+            if cancellation_event is None:
+                return run_capi_pivot(payload)
+            return run_capi_pivot(
+                payload,
+                cancellation_event=cancellation_event,
+            )
         except CapiPivotError as exc:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.capi.pivot.postflight":
