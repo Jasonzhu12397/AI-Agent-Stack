@@ -4275,8 +4275,14 @@ def build_control_plane_tls_context() -> ssl.SSLContext | None:
     ca_file = os.environ.get("AGENT_TLS_CA_FILE", "").strip()
     cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
     key_file = os.environ.get("AGENT_TLS_KEY_FILE", "").strip()
+    required_value = os.environ.get("AGENT_TLS_CLIENT_CERT_REQUIRED", "false").strip().lower()
+    if required_value not in {"", "0", "1", "false", "true", "no", "yes", "off", "on"}:
+        raise NodeAgentError("AGENT_TLS_CLIENT_CERT_REQUIRED_INVALID")
+    client_cert_required = required_value in {"1", "true", "yes", "on"}
     if bool(cert_file) != bool(key_file):
         raise NodeAgentError("AGENT_TLS_CLIENT_CERT_AND_KEY_MUST_BE_CONFIGURED_TOGETHER")
+    if client_cert_required and not cert_file:
+        raise NodeAgentError("AGENT_TLS_CLIENT_CERTIFICATE_REQUIRED")
     if not any((ca_file, cert_file, key_file)):
         return None
     try:
