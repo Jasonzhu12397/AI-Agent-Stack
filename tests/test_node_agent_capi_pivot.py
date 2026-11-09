@@ -751,6 +751,7 @@ def test_pivot_postflight_matches_each_machine_to_its_own_infrastructure_ref(tmp
         elif resource == "baremetalhosts.metal3.io":
             second = json.loads(json.dumps(document["items"][0]))
             second["metadata"]["name"] = "worker-02"
+            second["metadata"]["uid"] = "bmh-uid-02"
             second["spec"]["consumerRef"]["name"] = "worker-02"
             second["spec"]["consumerRef"]["uid"] = "metal3machine-uid-02"
             document["items"].append(second)
