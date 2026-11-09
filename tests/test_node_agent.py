@@ -4114,3 +4114,34 @@ def test_control_plane_client_requires_https_when_custom_tls_is_configured(monke
         match="AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS",
     ):
         agent.ControlPlaneClient("http://control.example", "node-1", "node-token")
+
+
+
+def test_control_plane_tls_requires_client_certificate_when_mtls_is_required(monkeypatch):
+    monkeypatch.delenv("AGENT_TLS_CA_FILE", raising=False)
+    monkeypatch.delenv("AGENT_TLS_CERT_FILE", raising=False)
+    monkeypatch.delenv("AGENT_TLS_KEY_FILE", raising=False)
+    monkeypatch.setenv("AGENT_TLS_CLIENT_CERT_REQUIRED", "true")
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="AGENT_TLS_CLIENT_CERTIFICATE_REQUIRED",
+    ):
+        agent.build_control_plane_tls_context()
+
+
+@pytest.mark.parametrize("value", ["maybe", "enabled", "2"])
+def test_control_plane_tls_rejects_ambiguous_client_certificate_requirement(
+    monkeypatch,
+    value,
+):
+    monkeypatch.delenv("AGENT_TLS_CA_FILE", raising=False)
+    monkeypatch.delenv("AGENT_TLS_CERT_FILE", raising=False)
+    monkeypatch.delenv("AGENT_TLS_KEY_FILE", raising=False)
+    monkeypatch.setenv("AGENT_TLS_CLIENT_CERT_REQUIRED", value)
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="AGENT_TLS_CLIENT_CERT_REQUIRED_INVALID",
+    ):
+        agent.build_control_plane_tls_context()
