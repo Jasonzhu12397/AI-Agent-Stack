@@ -423,6 +423,92 @@ def _machine_conflicts(node, material, machine):
     return conflicts
 
 
+class FleetMachineLifecycleReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, project_id, machine_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request,
+            tenant_id,
+            project_id,
+        )
+        project_editor = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+        if not is_tenant_admin and not project_editor:
+            return Response(
+                {"detail": "Project editor or administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        expected_state = request.data.get("expected_state")
+        target_state = request.data.get("target_state")
+        reason = request.data.get("reason")
+        if not isinstance(expected_state, str) or not isinstance(target_state, str):
+            return Response(
+                {"detail": "expected_state and target_state are required strings."},
+                status=400,
+            )
+        if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 500:
+            return Response(
+                {"detail": "reason must contain 10 to 500 characters."},
+                status=400,
+            )
+        transitions = {
+            "discovered": {"identity_review"},
+            "identity_review": {"discovered"},
+        }
+        if target_state not in transitions.get(expected_state, set()):
+            return Response(
+                {
+                    "detail": "This lifecycle transition is not enabled.",
+                    "code": "LIFECYCLE_TRANSITION_NOT_ENABLED",
+                },
+                status=409,
+            )
+        with transaction.atomic():
+            machine = AgentMachine.objects.select_for_update().filter(
+                pk=machine_id,
+                tenant=tenant,
+                project=project,
+            ).first()
+            if machine is None:
+                return Response({"detail": "Machine not found."}, status=404)
+            if machine.lifecycle_state != expected_state:
+                return Response(
+                    {
+                        "detail": "Machine lifecycle state changed.",
+                        "current_state": machine.lifecycle_state,
+                    },
+                    status=409,
+                )
+            machine.lifecycle_state = target_state
+            machine.save(update_fields=["lifecycle_state", "updated_at"])
+            record_audit_event(
+                request,
+                tenant,
+                "fleet.machine.lifecycle_reviewed",
+                "agent_machine",
+                machine.id,
+                project=project,
+                metadata={
+                    "agent_node_id": str(machine.agent_node_id),
+                    "from_state": expected_state,
+                    "to_state": target_state,
+                    "reason": reason.strip(),
+                },
+            )
+        return Response(
+            {
+                "machine_id": str(machine.id),
+                "lifecycle_state": machine.lifecycle_state,
+            }
+        )
+
+
 class AgentRuntimeInventoryReportView(APIView):
     authentication_classes = []
     permission_classes = []

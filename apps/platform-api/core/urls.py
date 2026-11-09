@@ -10,6 +10,7 @@ from core.agent_node_views import (
     AgentProjectCommandListView,
     AgentNodeListCreateView,
     FleetMachineInventoryView,
+    FleetMachineLifecycleReviewView,
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
@@ -182,6 +183,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/",
         FleetMachineInventoryView.as_view(),
         name="fleet-machine-inventory",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/<uuid:machine_id>/lifecycle-review/",
+        FleetMachineLifecycleReviewView.as_view(),
+        name="fleet-machine-lifecycle-review",
     ),
     path(
         "api/v1/agent-nodes/<uuid:node_id>/credentials/rotate/",

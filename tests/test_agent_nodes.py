@@ -1024,3 +1024,102 @@ def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_re
         HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
     )
     assert rejected.status_code == 401
+
+
+@pytest.mark.django_db
+def test_fleet_machine_lifecycle_review_is_audited_and_uses_compare_and_set(node_workspace):
+    from core.models import AuditEvent
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "lifecycle-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    runtime = APIClient()
+    ingested = runtime.post(
+        "/api/v1/agent-runtime/inventory/",
+        {
+            "node_id": enrolled.data["id"],
+            "hardware_inventory": {
+                "status": "observed",
+                "system_identity": {"product_uuid": "11111111-2222-3333-4444-555555555555"},
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+    assert ingested.status_code == 200
+    machine = AgentMachine.objects.get(agent_node_id=enrolled.data["id"])
+    url = (
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+        f"machines/{machine.id}/lifecycle-review/"
+    )
+    response = client.post(
+        url,
+        {
+            "expected_state": "discovered",
+            "target_state": "identity_review",
+            "reason": "Review hardware identity before provisioning.",
+        },
+        format="json",
+    )
+    assert response.status_code == 200
+    machine.refresh_from_db()
+    assert machine.lifecycle_state == "identity_review"
+    event = AuditEvent.objects.get(
+        event_type="fleet.machine.lifecycle_reviewed",
+        resource_id=str(machine.id),
+    )
+    assert event.metadata["from_state"] == "discovered"
+    assert event.metadata["to_state"] == "identity_review"
+    stale = client.post(
+        url,
+        {
+            "expected_state": "discovered",
+            "target_state": "identity_review",
+            "reason": "Attempt transition with stale state.",
+        },
+        format="json",
+    )
+    assert stale.status_code == 409
+
+
+@pytest.mark.django_db
+def test_fleet_machine_lifecycle_review_rejects_unverified_provisioning(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "unverified-lifecycle", "node_type": "eph_node"},
+        format="json",
+    )
+    runtime = APIClient()
+    runtime.post(
+        "/api/v1/agent-runtime/inventory/",
+        {
+            "node_id": enrolled.data["id"],
+            "hardware_inventory": {
+                "status": "observed",
+                "system_identity": {"product_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+    machine = AgentMachine.objects.get(agent_node_id=enrolled.data["id"])
+    response = client.post(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/lifecycle-review/"
+        ),
+        {
+            "expected_state": "discovered",
+            "target_state": "ready_for_provisioning",
+            "reason": "Attempt provisioning without hardware attestation.",
+        },
+        format="json",
+    )
+    assert response.status_code == 409
+    assert response.data["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
+    machine.refresh_from_db()
+    assert machine.lifecycle_state == "discovered"
