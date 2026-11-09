@@ -2,6 +2,7 @@
 import datetime
 import hashlib
 import json
+import uuid
 
 import pytest
 from core.models import (
@@ -2181,16 +2182,12 @@ def test_eph_agent_cannot_poll_deployment_commands_after_target_ownership(
         key="eph-command-fencing-poll",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
-    command = AgentCommand.objects.create(
-        tenant=tenant,
-        project=project,
-        node=eph_node,
-        requested_by=user,
+    command = AgentCommand.objects.filter(
         deployment=deployment,
-        command_type="cluster.capi.pivot.source.preflight",
-        payload={},
-        idempotency_key=f"eph-fenced-poll:{deployment.id}",
-    )
+        node=eph_node,
+        status=AgentCommand.Status.QUEUED,
+    ).order_by("created_at").first()
+    assert command is not None
     deployment.plan_result = {
         **(deployment.plan_result or {}),
         "dual_agent": {"target_agent_owns_cluster": True},
@@ -2216,8 +2213,6 @@ def test_eph_agent_cannot_poll_deployment_commands_after_target_ownership(
 def test_eph_agent_cannot_submit_result_after_target_ownership_fence(
     cluster_delivery_workspace,
 ):
-    import uuid
-
     user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
     created = create_deployment(
         client,
