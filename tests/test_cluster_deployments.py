@@ -1349,7 +1349,7 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption(
+def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
     cluster_delivery_workspace,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
@@ -1358,7 +1358,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         tenant,
         project,
         eph_node,
-        key="dual-agent-pivot-flow",
+        key="dual-agent-pivot-simulation",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
     target_token = "dual-agent-target-token"
@@ -1374,32 +1374,7 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
         last_seen_at=timezone.now(),
     )
     deployment.target_node = target_node
-    deployment.spec = {
-        **deployment.spec,
-        "capi_namespace": "metal3",
-        "worker_provisioning": {
-            "machine_deployment_name": "edge-workers",
-            "infrastructure_template_name": "edge-worker-template",
-            "bootstrap_template_name": "edge-worker-bootstrap",
-            "baremetal_host_namespace": "metal3",
-            "host_selector": {"pool": "workers"},
-            "network_profile": {
-                "version": "v1",
-                "control_plane": {
-                    "interface": "eno1",
-                    "cidr": "192.0.2.10/24",
-                    "gateway": "192.0.2.1",
-                    "mtu": 1500,
-                },
-                "data_plane": {
-                    "interfaces": ["ens2f0"],
-                    "mtu": 9000,
-                    "cni": {"primary": "calico", "meta": "multus", "attachments": []},
-                },
-                "pod_traffic_default": "data_plane",
-            },
-        },
-    }
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "preflight_validated": True,
@@ -1426,108 +1401,99 @@ def test_dual_agent_pivot_requires_both_preflights_then_verifies_target_adoption
     )
     assert pivot_command.node_id == eph_node.id
     assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
-    assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
-    pivot_result = {
-        "pivot_executed": True,
-        "dry_run_passed": True,
-        "source_namespace_scope_verified": True,
-        "target_management_plane_verified": True,
-        "cluster_name": "edge-lab",
-        "namespace": "metal3",
-        "automatic_retry_allowed": False,
-    }
     handle_deployment_command_result(
         pivot_command,
         "succeeded",
-        pivot_result,
+        {
+            "pivot_executed": False,
+            "pivot_simulated": True,
+            "execution_mode": "preflight_verified_simulation",
+            "simulation_status": "ready_for_target_agent_acknowledgement",
+            "dry_run_passed": True,
+            "source_namespace_scope_verified": True,
+            "target_management_plane_verified": True,
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "ownership_transferred": False,
+            "target_agent_acknowledgement_required": True,
+            "postflight_required": True,
+            "side_effects": False,
+        },
         None,
     )
-    target_verify = AgentCommand.objects.get(
+
+    deployment.refresh_from_db()
+    dual_agent = deployment.plan_result["dual_agent"]
+    assert dual_agent["phase"] == "pivot_simulation_ready"
+    assert dual_agent["pivot_simulated"] is True
+    assert dual_agent["pivot_completed"] is False
+    assert dual_agent["target_agent_owns_cluster"] is False
+    assert dual_agent["eph_reclaim_allowed"] is False
+    assert deployment.error is None
+    assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.capi.pivot.target.verify",
-    )
-    assert target_verify.node_id == target_node.id
-    assert target_verify.status == AgentCommand.Status.QUEUED
-    assert target_verify.payload["expected_cluster_uid"] == "source-cluster-uid"
-
-    handle_deployment_command_result(
-        target_verify,
-        "succeeded",
-        {
-            "cluster_name": "edge-lab",
-            "namespace": "metal3",
-            "cluster_uid": "source-cluster-uid",
-            "source_cluster_uid": "source-cluster-uid",
-            "cluster_identity_preserved": True,
-            "pivot_adoption_verified": True,
-            "machine_inventory_ready": True,
-            "controllers_ready": True,
-            "machine_count": 3,
-            "ready_machine_count": 3,
-            "not_ready_machine_names": [],
-            "side_effects": False,
-        },
-        None,
-    )
-    deployment.refresh_from_db()
-    assert (
-        deployment.plan_result["dual_agent"]["phase"]
-        == "pivot_metal3_ironic_postflight_pending"
-    )
-    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
-    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    pivot_postflight = AgentCommand.objects.get(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.postflight",
-    )
-    assert pivot_postflight.node_id == target_node.id
-    assert pivot_postflight.payload["baremetal_host_namespace"] == "metal3"
-    assert pivot_postflight.status == AgentCommand.Status.QUEUED
-
-    handle_deployment_command_result(
-        pivot_postflight,
-        "succeeded",
-        {
-            "postflight_passed": True,
-            "cluster_name": "edge-lab",
-            "namespace": "metal3",
-            "cluster_uid": "source-cluster-uid",
-            "side_effects": False,
-            "complete_hardware_verification": True,
-            "verification_scope": "capi_metal3_ironic",
-            "ironic_verification": "verified",
-            "metal3_observation": {
-                "ready": True,
-                "machine_count": 3,
-                "resolved_machine_count": 3,
-                "ironic": {
-                    "status": "verified",
-                    "applicable_node_count": 3,
-                    "verified_node_count": 3,
-                },
-            },
-        },
-        None,
-    )
-    deployment.refresh_from_db()
-    assert deployment.plan_result["dual_agent"]["phase"] == "worker_preflight_pending"
-    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
-    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    worker_preflight = AgentCommand.objects.get(
+    ).exists()
+    assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.capi.worker.preflight",
-    )
-    assert worker_preflight.node_id == target_node.id
-    assert worker_preflight.payload["cluster_name"] == "edge-lab"
-    assert worker_preflight.payload["namespace"] == "metal3"
-    assert worker_preflight.payload["expected_worker_replicas"] == 4
-    assert worker_preflight.payload["worker_provisioning"]["machine_deployment_name"] == (
-        "edge-workers"
-    )
-    assert deployment.status == ClusterDeployment.Status.PROVISIONING
+    ).exists()
 
+
+@pytest.mark.django_db
+def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
+    cluster_delivery_workspace,
+):
+    _, _, _, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        cluster_delivery_workspace[1],
+        cluster_delivery_workspace[2],
+        eph_node,
+        key="unsafe-pivot-simulation-result",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"},
+        },
+    }
+    deployment.save(update_fields=["plan_result", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=deployment.tenant,
+        project=deployment.project,
+        deployment=deployment,
+        node=eph_node,
+        command_type="cluster.capi.pivot.execute",
+        payload={},
+        idempotency_key="unsafe-pivot-simulation-result",
+        status=AgentCommand.Status.RUNNING,
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "pivot_executed": False,
+            "pivot_simulated": True,
+            "dry_run_passed": True,
+            "source_namespace_scope_verified": True,
+            "target_management_plane_verified": True,
+            "cluster_name": deployment.cluster_name,
+            "namespace": "default",
+            "ownership_transferred": False,
+            "target_agent_acknowledgement_required": True,
+            "postflight_required": True,
+            "side_effects": True,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
+    assert deployment.plan_result["dual_agent"].get("target_agent_owns_cluster") is not True
 
 @pytest.mark.django_db
 def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory(
