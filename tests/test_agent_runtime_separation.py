@@ -26,6 +26,18 @@ def test_cloud_agent_has_a_dedicated_image_and_worker_entrypoint():
     assert worker["image"] == "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
 
 
+def test_local_compose_uses_dedicated_cloud_and_node_agent_images():
+    compose = yaml.safe_load(
+        (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    )
+    services = compose["services"]
+    assert services["worker"]["build"]["dockerfile"] == "Dockerfile.cloud-agent"
+    assert services["worker"]["image"] == "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
+    for name in ("eph-node-agent", "target-cluster-agent"):
+        assert services[name]["image"] == "${AI_AGENT_NODE_AGENT_IMAGE:-ai-agent-node-agent:local}"
+        assert "build" not in services[name]
+
+
 def test_node_agent_image_contains_only_cluster_runtime_and_minimal_dependency():
     dockerfile = (ROOT / "Dockerfile.node-agent").read_text(encoding="utf-8")
     assert 'RUN pip install --no-cache-dir "PyYAML>=6.0,<7.0"' in dockerfile
