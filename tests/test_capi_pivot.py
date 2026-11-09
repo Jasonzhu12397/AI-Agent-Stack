@@ -40,7 +40,7 @@ class SuccessfulPivotRunner:
         return CommandResult(1, stderr="Error from server (NotFound): clusters not found")
 
 
-def test_pivot_requires_dry_run_and_verifies_target_uid_and_source_absence():
+def test_pivot_runs_only_dry_run_and_returns_simulation_result():
     runner = SuccessfulPivotRunner()
 
     result = pivot_cluster_api(
@@ -49,21 +49,24 @@ def test_pivot_requires_dry_run_and_verifies_target_uid_and_source_absence():
         "metal3-system",
         INVENTORY,
         runner=runner,
-        verification_timeout=10,
-        poll_interval=0.1,
-        monotonic=lambda: 0,
-        sleep=lambda seconds: None,
     )
 
     assert result == {
-        "state": "verified",
-        "pivot_executed": True,
-        "verified_objects": 1,
-        "verification": "target_uid_matches_and_source_objects_absent",
+        "state": "simulation_ready",
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": True,
+        "inventory_objects": 1,
+        "ownership_transferred": False,
+        "side_effects": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
     }
+    assert len(runner.commands) == 1
+    assert runner.commands[0][0:2] == ["clusterctl", "move"]
     assert runner.commands[0][-1] == "--dry-run"
-    assert runner.commands[1][0:2] == ["clusterctl", "move"]
-    assert len(runner.commands) == 4
 
 
 def test_dry_run_failure_never_executes_real_pivot():
