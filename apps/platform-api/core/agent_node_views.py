@@ -306,9 +306,9 @@ class FleetMachineInventoryView(APIView):
             }:
                 return Response({"detail": "Unknown machine status."}, status=400)
             if requested_status == "stale":
-                nodes = nodes.filter(
-                    status=AgentNode.Status.ONLINE,
-                    last_seen_at__lt=timezone.now() - datetime.timedelta(seconds=60),
+                stale_before = timezone.now() - datetime.timedelta(seconds=60)
+                nodes = nodes.filter(status=AgentNode.Status.ONLINE).filter(
+                    Q(last_seen_at__isnull=True) | Q(last_seen_at__lt=stale_before)
                 )
             else:
                 nodes = nodes.filter(status=requested_status)
