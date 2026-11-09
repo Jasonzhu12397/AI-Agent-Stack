@@ -207,33 +207,17 @@ def pivot_cluster_api(
         command_timeout,
         "clusterctl move dry-run",
     )
-    _run(runner, base_command, command_timeout, "clusterctl move")
 
-    deadline = monotonic() + verification_timeout
-    last_error = None
-    while monotonic() < deadline:
-        try:
-            if verify_pivot_inventory(
-                runner,
-                source_kubeconfig,
-                target_kubeconfig,
-                objects,
-                timeout=min(command_timeout, 30),
-            ):
-                return {
-                    "state": "verified",
-                    "pivot_executed": True,
-                    "verified_objects": len(objects),
-                    "verification": "target_uid_matches_and_source_objects_absent",
-                }
-        except PivotVerificationError as exc:
-            last_error = exc
-            raise
-        sleep(min(poll_interval, max(deadline - monotonic(), 0)))
-
-    detail = f": {last_error}" if last_error else ""
-    raise PivotVerificationError(
-        "clusterctl move returned success but post-pivot ownership verification "
-        f"did not complete before the deadline{detail}; do not rerun clusterctl move",
-        retry_safe=False,
-    )
+    return {
+        "state": "simulation_ready",
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": True,
+        "inventory_objects": len(objects),
+        "ownership_transferred": False,
+        "side_effects": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
+    }
