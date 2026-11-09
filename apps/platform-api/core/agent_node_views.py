@@ -656,6 +656,7 @@ class FleetMachineBMCConfigView(APIView):
             and (
                 getattr(settings, "BMC_VAULT_TOKEN", "")
                 or getattr(settings, "BMC_VAULT_TOKEN_RESOLVER", "")
+                or getattr(settings, "BMC_VAULT_JWT_PATH", "")
             )
         ):
             resolver_path = "core.bmc_credentials.resolve_bmc_credentials"

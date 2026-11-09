@@ -486,3 +486,115 @@ def test_invalid_trust_bundle_reference_does_not_request_scoped_token(
             project_id="project-id",
         )
     assert calls == []
+
+
+
+def _test_jwt(claims):
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return "header." + payload + ".signature"
+
+
+def test_vault_jwt_login_exchanges_scope_bound_workload_identity(
+    settings, monkeypatch, tmp_path
+):
+    import core.bmc_credentials as vault_module
+    import json
+
+    requests = []
+    jwt_file = tmp_path / "workload.jwt"
+    jwt_file.write_text(
+        _test_jwt({"tenant_id": "tenant-id", "project_id": "project-id"}),
+        encoding="utf-8",
+    )
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/v1/auth/kubernetes/login":
+            return httpx.Response(
+                200,
+                json={"auth": {"client_token": "scoped-vault-token"}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "data": {
+                        "username": "redfish-user",
+                        "password": "redfish-pass",
+                    }
+                }
+            },
+        )
+
+    original_client = httpx.Client
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    settings.BMC_VAULT_JWT_PATH = str(jwt_file)
+    settings.BMC_VAULT_JWT_ROLE = "bmc-reader"
+    settings.BMC_VAULT_JWT_AUTH_MOUNT = "kubernetes"
+    settings.BMC_VAULT_TOKEN = "global-fallback-token"
+    monkeypatch.setattr(
+        vault_module.httpx,
+        "Client",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+    )
+    result = resolve_bmc_credentials(
+        "vault://secret/bmc/rack-a",
+        tenant_id="tenant-id",
+        project_id="project-id",
+    )
+    assert result["username"] == "redfish-user"
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/v1/auth/kubernetes/login"
+    assert json.loads(requests[0].content)["role"] == "bmc-reader"
+    assert requests[1].headers["X-Vault-Token"] == "scoped-vault-token"
+
+
+def test_vault_jwt_scope_mismatch_fails_before_network(
+    settings, monkeypatch, tmp_path
+):
+    import core.bmc_credentials as vault_module
+
+    jwt_file = tmp_path / "workload.jwt"
+    jwt_file.write_text(
+        _test_jwt({"tenant_id": "another-tenant", "project_id": "project-id"}),
+        encoding="utf-8",
+    )
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    settings.BMC_VAULT_JWT_PATH = str(jwt_file)
+    settings.BMC_VAULT_JWT_ROLE = "bmc-reader"
+    monkeypatch.setattr(
+        vault_module.httpx,
+        "Client",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Vault must not be contacted for a mismatched JWT scope.")
+        ),
+    )
+    with pytest.raises(PermissionError, match="scope"):
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
+
+
+def test_vault_jwt_auth_fails_closed_without_role(settings, tmp_path):
+    jwt_file = tmp_path / "workload.jwt"
+    jwt_file.write_text(
+        _test_jwt({"tenant_id": "tenant-id", "project_id": "project-id"}),
+        encoding="utf-8",
+    )
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    settings.BMC_VAULT_JWT_PATH = str(jwt_file)
+    settings.BMC_VAULT_JWT_ROLE = ""
+    with pytest.raises(RuntimeError, match="not configured"):
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )

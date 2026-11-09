@@ -56,3 +56,10 @@ For production, use a dedicated Vault policy/token per control-plane trust bound
 The optional policy template at `deploy/vault/policies/bmc-credentials.hcl` grants read-only access to the BMC credential and Redfish trust-bundle prefixes derived from Vault identity entity metadata. Bind `tenant_id` and `project_id` metadata to the authenticated workload identity through a trusted administrator-controlled auth role or entity; never accept those metadata values from an untrusted Agent request. Attach the policy only to a token whose identity has those verified metadata values. Review the KV v2 mount name and secret layout before deployment. The template is not installed automatically and is not evidence of a deployed Vault policy.
 
 The resolver now validates the Vault HTTPS origin, credential reference, tenant/project scope, and optional trust-bundle reference before invoking the scoped token resolver. Invalid configuration therefore cannot trigger a token-exchange side effect.
+
+
+## Built-in Vault JWT workload identity
+
+The built-in JWT login flow is enabled by `BMC_VAULT_JWT_PATH` and `BMC_VAULT_JWT_ROLE`. The token file must contain a short-lived workload JWT whose configured tenant and project claims match the request. The API performs a Vault JWT auth login against `/v1/auth/{BMC_VAULT_JWT_AUTH_MOUNT}/login`, then uses the returned short-lived Vault client token for KV v2 reads. The JWT signature and issuer/audience validation are performed by Vault's JWT auth role; the local claim check is only an additional scope mismatch guard and is not cryptographic verification.
+
+Configure the Vault JWT auth role with a trusted issuer, explicit audience, bound subject/claims, short token TTL, and a policy restricted to the corresponding tenant/project secret paths. The JWT claims must be minted by a trusted identity provider, not copied from Agent request fields. A custom `BMC_VAULT_TOKEN_RESOLVER` takes precedence; the built-in JWT flow is used when no custom resolver is configured and a JWT path is present. Static `BMC_VAULT_TOKEN` is the final compatibility fallback and must not be used as a multi-tenant authorization boundary.

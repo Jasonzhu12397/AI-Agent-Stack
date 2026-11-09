@@ -1,5 +1,7 @@
 # ruff: noqa: I001
+import base64
 import json
+from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
@@ -92,6 +94,104 @@ def _tenant_scoped_path(path, tenant_id, project_id):
     return f"tenants/{tenant}/projects/{project}/{path}"
 
 
+
+def _jwt_claim(payload, claim_path):
+    value = payload
+    for part in claim_path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def resolve_vault_jwt_token(tenant_id, project_id):
+    _tenant_scoped_path("validation", tenant_id, project_id)
+    jwt_path = getattr(settings, "BMC_VAULT_JWT_PATH", "")
+    role = getattr(settings, "BMC_VAULT_JWT_ROLE", "")
+    auth_mount = getattr(settings, "BMC_VAULT_JWT_AUTH_MOUNT", "jwt")
+    if not jwt_path or not role:
+        raise RuntimeError("Vault JWT auth is not configured.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", role):
+        raise ValueError("Vault JWT role is invalid.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", auth_mount):
+        raise ValueError("Vault JWT auth mount is invalid.")
+    try:
+        jwt = Path(jwt_path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("Vault workload identity token is unavailable.") from exc
+    if len(jwt) > 16384 or len(jwt) < 32:
+        raise ValueError("Vault workload identity token has an invalid size.")
+    segments = jwt.split(".")
+    if len(segments) != 3 or any(not segment for segment in segments):
+        raise ValueError("Vault workload identity token is not a JWT.")
+    try:
+        payload_segment = segments[1]
+        payload_bytes = base64.urlsafe_b64decode(
+            payload_segment + "=" * (-len(payload_segment) % 4)
+        )
+        claims = json.loads(payload_bytes)
+    except (ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise ValueError("Vault workload identity token has invalid claims.") from exc
+    tenant_claim = getattr(settings, "BMC_VAULT_JWT_TENANT_CLAIM", "tenant_id")
+    project_claim = getattr(settings, "BMC_VAULT_JWT_PROJECT_CLAIM", "project_id")
+    if (
+        not isinstance(claims, dict)
+        or _jwt_claim(claims, tenant_claim) != str(tenant_id)
+        or _jwt_claim(claims, project_claim) != str(project_id)
+    ):
+        raise PermissionError("Vault workload identity scope does not match the request.")
+    address = _vault_url()
+    namespace = getattr(settings, "BMC_VAULT_NAMESPACE", "")
+    headers = {}
+    if namespace:
+        headers["X-Vault-Namespace"] = namespace
+    ca_bundle = getattr(settings, "BMC_VAULT_CA_BUNDLE", "")
+    verify = ca_bundle if ca_bundle else True
+    timeout_value = float(getattr(settings, "BMC_VAULT_TIMEOUT_SECONDS", 5))
+    timeout = httpx.Timeout(timeout_value, connect=min(3.0, timeout_value))
+    with httpx.Client(
+        verify=verify,
+        timeout=timeout,
+        follow_redirects=False,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+    ) as client:
+        with client.stream(
+            "POST",
+            f"{address}/v1/auth/{auth_mount}/login",
+            headers=headers,
+            json={"role": role, "jwt": jwt},
+        ) as response:
+            if response.status_code != 200:
+                raise RuntimeError("Vault workload identity login failed.")
+            content_type = (
+                response.headers.get("content-type", "")
+                .split(";", 1)[0]
+                .strip()
+                .lower()
+            )
+            if content_type != "application/json":
+                raise ValueError("Vault JWT login returned a non-JSON response.")
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > 65536:
+                    raise ValueError("Vault JWT login response exceeded the size limit.")
+    try:
+        result = json.loads(body)
+        token = result.get("auth", {}).get("client_token")
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Vault JWT login returned invalid token data.") from exc
+    if (
+        not isinstance(token, str)
+        or not token
+        or token.strip() != token
+        or any(character.isspace() for character in token)
+    ):
+        raise RuntimeError("Vault JWT login did not return a valid client token.")
+    return token
+
+
 def resolve_bmc_credentials(
     credential_ref,
     trust_bundle_ref="",
@@ -110,17 +210,17 @@ def resolve_bmc_credentials(
     if resolver_path:
         token_resolver = import_string(resolver_path)
         token = token_resolver(tenant_id=str(tenant_id), project_id=str(project_id))
-        if (
-            not isinstance(token, str)
-            or not token
-            or token.strip() != token
-            or any(character.isspace() for character in token)
-        ):
-            raise RuntimeError("Scoped Vault token resolver returned an invalid token.")
+    elif getattr(settings, "BMC_VAULT_JWT_PATH", ""):
+        token = resolve_vault_jwt_token(tenant_id, project_id)
     else:
         token = getattr(settings, "BMC_VAULT_TOKEN", "")
-        if not isinstance(token, str) or not token:
-            raise RuntimeError("Vault authentication is not configured.")
+    if (
+        not isinstance(token, str)
+        or not token
+        or token.strip() != token
+        or any(character.isspace() for character in token)
+    ):
+        raise RuntimeError("Vault authentication returned an invalid token.")
     headers = {"X-Vault-Token": token}
     namespace = getattr(settings, "BMC_VAULT_NAMESPACE", "")
     if namespace:
