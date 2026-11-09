@@ -83,6 +83,26 @@ The supplied target Role/RoleBinding grants read access to pods, events and serv
 
 The Target Agent's CAPI worker executor has a separate least-privilege grant in `rbac.yaml`: a ClusterRole containing read access to Cluster/Machine/template/Metal3Data resources, `get` on Secrets, and `get/list/create` on MachineDeployments. Its RoleBindings scope these permissions to the `default` and `metal3` namespaces only; the Secret grant is `get` only (no Secret list/watch/write). Because a namespaced `get` permission can read any Secret by name in that namespace, use dedicated CAPI/Metal3 namespaces without unrelated application credentials, or design a narrower external Secret-inspection service before production use. A separate Metal3 inventory ClusterRole is bound only in `metal3-system` and `metal3`. The Agent receives no patch, update, delete, BMH mutation, or cluster-admin permission. If the target CAPI namespace or BMH namespace differs, add a RoleBinding to the corresponding ClusterRole in that exact namespace; do not bind these roles cluster-wide. The CAPI API Server-Side Dry-Run remains the final RBAC/schema gate before creation.
 
+## Mandatory Agent mTLS credentials
+
+Both EPH and Target Agent Deployments now require a client certificate. Before running `deploy.sh`, create a separate `agent-control-plane-mtls` Secret in **each** cluster (the certificate may be unique per Agent/node; do not reuse a private key across physical hosts). The Secret must contain `ca.crt` (the CA that verifies the cloud ingress server), `tls.crt` (the node client certificate) and `tls.key` (the matching private key):
+
+```sh
+kubectl --context "$EPH_CONTEXT" -n ai-agent-system create secret generic agent-control-plane-mtls \
+  --from-file=ca.crt=/secure/path/control-plane-ca.crt \
+  --from-file=tls.crt=/secure/path/eph-agent-client.crt \
+  --from-file=tls.key=/secure/path/eph-agent-client.key
+
+kubectl --context "$TARGET_CONTEXT" -n ai-agent-system create secret generic agent-control-plane-mtls \
+  --from-file=ca.crt=/secure/path/control-plane-ca.crt \
+  --from-file=tls.crt=/secure/path/target-agent-client.crt \
+  --from-file=tls.key=/secure/path/target-agent-client.key
+```
+
+Use a client certificate signed by the CA configured on the cloud HAProxy ingress. Bind the SHA-256 fingerprint of each certificate's DER encoding to its enrolled Agent node through the tenant-admin client-certificate API before starting the Agent. The cloud ingress verifies the certificate during the TLS handshake and forwards only its computed SHA-256 fingerprint to Django; the API also checks that the request came from the dedicated ingress IP and that the fingerprint matches the node binding. The Agent sets `AGENT_TLS_CLIENT_CERT_REQUIRED=true` and fails at startup if its certificate/key pair is absent or incomplete. TLS server verification remains enabled; do not use self-signed untrusted leaf certificates, disable hostname verification, or route around the dedicated mTLS ingress.
+
+For certificate rotation, issue a new certificate, update the Secret, bind the new DER SHA-256 fingerprint to the node, and restart/roll out the Agent. The old certificate is rejected immediately after the binding changes. Revoke the node binding when retiring an Agent. Keep CA private keys and client private keys in an external secret manager; only the public CA certificate and node-specific client credentials belong in the Kubernetes Secret. Restrict Secret read access to cluster operators and the Agent Pod's volume mount.
+
 ## Security and operation
 
 - The Deployment runs as UID/GID 10001, drops all Linux capabilities, disallows privilege escalation, uses a read-only root filesystem and the RuntimeDefault seccomp profile.
