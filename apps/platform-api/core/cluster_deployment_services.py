@@ -665,6 +665,8 @@ def handle_deployment_command_result(
             and command.node_id == deployment.eph_node_id
             and result.get("pivot_simulated") is True
             and result.get("pivot_executed") is False
+            and result.get("execution_mode") == "preflight_verified_simulation"
+            and result.get("simulation_status") == "ready_for_target_agent_acknowledgement"
             and result.get("dry_run_passed") is True
             and result.get("source_namespace_scope_verified") is True
             and result.get("target_management_plane_verified") is True
