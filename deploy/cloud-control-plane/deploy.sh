@@ -62,8 +62,11 @@ for key in ("CSRF_TRUSTED_ORIGINS", "CORS_ALLOWED_ORIGINS"):
         raise SystemExit("HTTPS_ORIGINS_REQUIRED:" + key)
     if any("example.com" in origin for origin in origins):
         raise SystemExit("HTTPS_ORIGIN_PLACEHOLDER:" + key)
-if values.get("AGENT_MTLS_REQUIRED", "false").lower() == "true":
-    profiles = [item.strip() for item in values.get("COMPOSE_PROFILES", "").split(",")]
+profiles = [item.strip() for item in values.get("COMPOSE_PROFILES", "").split(",")]
+mtls_required = values.get("AGENT_MTLS_REQUIRED", "false").lower() == "true"
+if "agent-mtls" in profiles and not mtls_required:
+    raise SystemExit("AGENT_MTLS_REQUIRED_FOR_INGRESS_PROFILE")
+if mtls_required:
     if "agent-mtls" not in profiles:
         raise SystemExit("AGENT_MTLS_PROFILE_REQUIRED")
     subnet = values.get("AGENT_MTLS_NETWORK_SUBNET", "172.30.250.0/24")
