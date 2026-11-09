@@ -8,6 +8,12 @@ SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
 AGENT_MTLS_TRUSTED_PROXY_IP = os.getenv("AGENT_MTLS_TRUSTED_PROXY_IP", "").strip()
+AGENT_MTLS_TRUSTED_PROXY_CIDRS = [
+    value.strip()
+    for value in os.getenv("AGENT_MTLS_TRUSTED_PROXY_CIDRS", "").split(",")
+    if value.strip()
+]
+AGENT_MTLS_REQUIRED = os.getenv("AGENT_MTLS_REQUIRED", "false").lower() == "true"
 if APP_ENV == "production" and (
     DEBUG
     or SECRET_KEY == "local-only-change-before-production"
