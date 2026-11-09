@@ -477,6 +477,26 @@ def _verify_source_metal3_handoff(
         status = host.get("status", {})
         if not isinstance(status, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_STATUS_INVALID")
+        move_labels = {
+            "clusterctl.cluster.x-k8s.io/move",
+            "clusterctl.cluster.x-k8s.io/move-hierarchy",
+        }
+        if not isinstance(labels, dict) or not move_labels.intersection(labels):
+            blockers.append("bmh_clusterctl_move_label_missing:" + name)
+        if "baremetalhost.metal3.io/paused" not in annotations:
+            blockers.append("bmh_pause_annotation_missing:" + name)
+        status_annotation = annotations.get("baremetalhost.metal3.io/status")
+        if not isinstance(status_annotation, str) or not status_annotation:
+            blockers.append("bmh_status_annotation_missing:" + name)
+        else:
+            try:
+                annotated_status = json.loads(status_annotation)
+            except (TypeError, ValueError):
+                annotated_status = None
+            expected_status = dict(status)
+            expected_status.pop("hardware", None)
+            if not isinstance(annotated_status, dict) or annotated_status != expected_status:
+                blockers.append("bmh_status_annotation_mismatch:" + name)
         provisioning = status.get("provisioning", {})
         state = provisioning.get("state") if isinstance(provisioning, dict) else None
         operational_status = status.get("operationalStatus") if isinstance(status, dict) else None
