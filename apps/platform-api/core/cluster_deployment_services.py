@@ -1012,6 +1012,8 @@ def handle_deployment_command_result(
         deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.capi.worker.provision":
         expected = command.payload
+        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+        source_identity = source.get("source_cluster_identity", {})
         approved_payload = dict(expected) if isinstance(expected, dict) else {}
         approved_provisioning_hash = approved_payload.pop(
             "provisioning_plan_hash", None
