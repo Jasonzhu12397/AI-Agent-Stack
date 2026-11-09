@@ -4045,3 +4045,72 @@ def test_control_plane_client_reports_host_inventory(monkeypatch):
     assert calls[0][0] == "https://control.example/api/v1/agent-runtime/inventory/"
     assert calls[0][2] == "POST"
     assert b'"product_uuid": "uuid"' in calls[0][1]
+
+
+
+def test_control_plane_client_uses_verified_tls_and_optional_client_certificate(monkeypatch):
+    captured = {}
+
+    class FakeSSLContext:
+        check_hostname = False
+        verify_mode = None
+
+        def load_cert_chain(self, certfile, keyfile):
+            captured["certfile"] = certfile
+            captured["keyfile"] = keyfile
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    def fake_create_default_context(cafile=None):
+        captured["cafile"] = cafile
+        return FakeSSLContext()
+
+    def fake_urlopen(request, timeout, context=None):
+        captured["context"] = context
+        return FakeResponse()
+
+    monkeypatch.setenv("AGENT_TLS_CA_FILE", "/run/secrets/control-ca.pem")
+    monkeypatch.setenv("AGENT_TLS_CERT_FILE", "/run/secrets/node.crt")
+    monkeypatch.setenv("AGENT_TLS_KEY_FILE", "/run/secrets/node.key")
+    monkeypatch.setattr(agent.ssl, "create_default_context", fake_create_default_context)
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+
+    client = agent.ControlPlaneClient("https://control.example", "node-1", "node-token")
+    result = client.request("/api/v1/agent-runtime/heartbeat/", {"node_id": "node-1"})
+
+    assert result == {"ok": True}
+    assert captured["cafile"] == "/run/secrets/control-ca.pem"
+    assert captured["certfile"] == "/run/secrets/node.crt"
+    assert captured["keyfile"] == "/run/secrets/node.key"
+    assert captured["context"] is client.tls_context
+    assert client.tls_context.check_hostname is True
+    assert client.tls_context.verify_mode == agent.ssl.CERT_REQUIRED
+
+
+def test_control_plane_client_rejects_partial_client_certificate_configuration(monkeypatch):
+    monkeypatch.delenv("AGENT_TLS_CERT_FILE", raising=False)
+    monkeypatch.setenv("AGENT_TLS_KEY_FILE", "/run/secrets/node.key")
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="AGENT_TLS_CLIENT_CERT_AND_KEY_MUST_BE_CONFIGURED_TOGETHER",
+    ):
+        agent.ControlPlaneClient("https://control.example", "node-1", "node-token")
+
+
+def test_control_plane_client_requires_https_when_custom_tls_is_configured(monkeypatch):
+    monkeypatch.setenv("AGENT_TLS_CA_FILE", "/run/secrets/control-ca.pem")
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS",
+    ):
+        agent.ControlPlaneClient("http://control.example", "node-1", "node-token")

@@ -4271,12 +4271,34 @@ def kubernetes_api_create_machine_deployment(
     return result
 
 
+def build_control_plane_tls_context() -> ssl.SSLContext | None:
+    ca_file = os.environ.get("AGENT_TLS_CA_FILE", "").strip()
+    cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
+    key_file = os.environ.get("AGENT_TLS_KEY_FILE", "").strip()
+    if bool(cert_file) != bool(key_file):
+        raise NodeAgentError("AGENT_TLS_CLIENT_CERT_AND_KEY_MUST_BE_CONFIGURED_TOGETHER")
+    if not any((ca_file, cert_file, key_file)):
+        return None
+    try:
+        context = ssl.create_default_context(cafile=ca_file or None)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        if cert_file:
+            context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        return context
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        raise NodeAgentError("AGENT_TLS_CONFIGURATION_INVALID") from exc
+
+
 class ControlPlaneClient:
     def __init__(self, base_url: str, node_id: str, token: str, timeout: int = 20):
         self.base_url = base_url.rstrip("/")
         self.node_id = node_id
         self.token = token
         self.timeout = timeout
+        self.tls_context = build_control_plane_tls_context()
+        if self.tls_context is not None and not self.base_url.startswith("https://"):
+            raise NodeAgentError("AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS")
         self.deployment_checkpoints: dict[str, dict[str, Any]] = {}
 
     def request(
@@ -4309,7 +4331,15 @@ class ControlPlaneClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            if self.tls_context is None:
+                response_context = urllib.request.urlopen(request, timeout=self.timeout)
+            else:
+                response_context = urllib.request.urlopen(
+                    request,
+                    timeout=self.timeout,
+                    context=self.tls_context,
+                )
+            with response_context as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise NodeAgentError(f"CONTROL_PLANE_HTTP_{exc.code}") from exc
