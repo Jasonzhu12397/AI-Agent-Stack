@@ -10,15 +10,15 @@ Runs on the temporary EPH management node. Its responsibilities are:
 - Report host health and validate the temporary management environment.
 - Inspect the source Kubernetes, Cluster API, Metal3 and Ironic inventory.
 - Produce a validated deployment plan and source-side Pivot preflight.
-- Execute an explicitly approved cluster.capi.pivot.execute command.
-- Never declare ownership transferred merely because clusterctl move returned success.
+- Execute an explicitly approved `cluster.capi.pivot.execute` simulation after read-only source/target preflight.
+- Never transfer ownership from the EPH Agent; a successful simulation is not a real Pivot.
 
 ### Target Agent (AGENT_NODE_TYPE=target_cluster)
 
 Runs inside the target Kubernetes cluster. Its responsibilities are:
 - Report target cluster health and Kubernetes identity.
 - Validate the target CAPI/Metal3 APIs and controller readiness before handoff.
-- After the source Pivot command completes, verify that the expected Cluster object exists and retains the source Cluster UID.
+- After a separately executed Pivot in a controlled integration environment, verify that the expected Cluster object exists and retains the source Cluster UID.
 - Report Machine inventory and Ready counts to the control plane.
 - Persist and restore deployment checkpoints across agent restarts.
 
@@ -31,13 +31,16 @@ The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run
 3. The control plane compares the five required provider API versions and fails closed on mismatch.
 4. The control plane creates a source-side Pivot command in waiting_approval.
 5. A different tenant administrator approves the immutable command payload hash.
-6. The EPH Agent receives a 90-second command lease, renews it while executing, runs dry-run and then clusterctl move.
-7. The control plane validates the source command result and queues cluster.capi.pivot.target.verify.
-8. The Target Agent verifies the Cluster UID and Machine inventory. Only then is target_agent_owns_cluster recorded as true.
+6. The EPH Agent receives a 90-second command lease, renews it while executing, and runs `clusterctl move --dry-run` plus source/target read-only checks. The execute command returns a simulation result and never runs a mutating `clusterctl move`.
+7. The control plane records the simulation result and queues target-side verification only for an explicitly configured test workflow.
+8. The Target Agent verifies the Cluster UID and Machine inventory against an independently executed test fixture or controlled integration cluster. A simulation result alone never records `target_agent_owns_cluster=true`.
 
-A Pivot timeout or expired running lease has an unknown outcome and is never automatically retried. Reconcile the source and target API inventories before creating another Pivot attempt.
+A dry-run timeout or expired running lease fails the preflight and is not treated as a successful Pivot. Because the execute path is simulation-only and has no write side effects, the preflight can be safely repeated after the underlying issue is corrected.
 
 
+## CAPI Pivot execution safety
+
+The current `cluster.capi.pivot.execute` command is deliberately simulation-only. It performs the source `clusterctl move --dry-run`, validates target CAPI/Metal3 API discovery and controller readiness, and checks the source Metal3/Ironic handoff prerequisites. It then returns `pivot_simulated=true`, `pivot_executed=false`, `ownership_transferred=false`, and `side_effects=false`. It never invokes `clusterctl move` without `--dry-run`, never writes Kubernetes resources, and never changes Agent ownership. The dry-run is an upstream command-line compatibility check, not a real object migration. Postflight verification remains a separate read-only operation and must not be interpreted as proof that a simulated Pivot moved resources.
 ## Dual-network inspection
 
 Both Agent roles expose the read-only `cluster.network.inspect` command. It discovers Kubernetes node allocatable extended resources (including advertised SR-IOV resources and hugepages), Multus NetworkAttachmentDefinitions and plugin type names, and likely Calico/Multus/OVS/SR-IOV component Pods in `kube-system`. It also reports the Agent Pod's own network namespace interfaces and default routes.
