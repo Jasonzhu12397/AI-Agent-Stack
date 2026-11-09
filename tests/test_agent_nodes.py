@@ -838,7 +838,7 @@ def test_fleet_inventory_returns_project_scoped_agent_machines_and_hardware(node
     assert machine["name"] == "rack-a-node-01"
     assert machine["identity"]["agent_node_id"] == enrolled.data["id"]
     assert machine["hardware_inventory"]["cpu"]["logical_cpus"] == 64
-    assert machine["inventory_source"] == "agent_report"
+    assert machine["inventory_source"] == "legacy_agent_label"
     assert response.data["capabilities"]["stable_hardware_identity"] == "not_yet_attested"
 
 
