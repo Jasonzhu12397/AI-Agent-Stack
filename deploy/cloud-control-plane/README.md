@@ -19,7 +19,7 @@ cp .env.cloud.example .env.cloud
 chmod 600 .env.cloud
 ~~~
 
-Do not commit .env.cloud. Use a secret manager to provision the file on the VM. Set ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS and CORS_ALLOWED_ORIGINS to the actual public hostname. The web image uses a same-origin API base path and Nginx proxies /api, /health and /ws to the private Django ASGI service.
+Do not commit .env.cloud. Use a secret manager to provision the file on the VM. Set ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS and CORS_ALLOWED_ORIGINS to the actual public hostname. The web image uses a same-origin API base path and Nginx proxies /api, /health and /ws to the private Django ASGI service. Agent runtime mTLS is not yet enabled end to end; see [Agent mutual TLS deployment contract](agent-mtls-deployment.md) before exposing Agent runtime traffic.
 
 ## Deploy
 
