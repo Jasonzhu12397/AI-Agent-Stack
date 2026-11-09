@@ -1702,3 +1702,85 @@ def test_bmc_api_automatically_uses_builtin_vault_resolver(
         "path": f"tenants/{tenant.id}/projects/{project.id}/bmc/rack-a",
         "token": "vault-test-token",
     }
+
+
+
+@pytest.mark.django_db
+def test_heartbeat_rejects_oversized_payload_without_updating_node(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "heartbeat-size", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    node_token = enrolled.data["enrollment_token"]
+    agent_client = APIClient()
+
+    response = agent_client.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": node_id, "capabilities": ["x" * 1000 for _ in range(20)]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {node_token}",
+    )
+
+    assert response.status_code == 413
+    node = AgentNode.objects.get(pk=node_id)
+    assert node.status == AgentNode.Status.OFFLINE
+    assert node.last_seen_at is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        ["node.health", "node.health"],
+        ["node.health", ""],
+        ["x" * 97],
+        ["node.health", 7],
+        ["node.health\nforged"],
+    ],
+)
+def test_heartbeat_rejects_invalid_capability_identifiers(node_workspace, capabilities):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "heartbeat-capabilities", "node_type": "eph_node"},
+        format="json",
+    )
+    agent_client = APIClient()
+
+    response = agent_client.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": enrolled.data["id"], "capabilities": capabilities},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+
+    assert response.status_code == 400
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    assert node.status == AgentNode.Status.OFFLINE
+    assert node.capabilities == []
+
+
+@pytest.mark.django_db
+def test_heartbeat_rejects_invalid_agent_version_without_mutation(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "heartbeat-version", "node_type": "target_cluster"},
+        format="json",
+    )
+    agent_client = APIClient()
+
+    response = agent_client.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": enrolled.data["id"], "agent_version": {"version": "0.1"}},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+
+    assert response.status_code == 400
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    assert node.status == AgentNode.Status.OFFLINE
+    assert node.agent_version == ""

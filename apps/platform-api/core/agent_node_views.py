@@ -1491,18 +1491,49 @@ class AgentRuntimeHeartbeatView(APIView):
         node = _authenticate_node(request, node_id)
         if node is None:
             return Response({"detail": "Invalid or revoked node credential."}, status=401)
+        if _json_size_bytes(request.data) > 16384:
+            return Response(
+                {"detail": "heartbeat payload must not exceed 16 KiB."},
+                status=413,
+            )
         capabilities = request.data.get("capabilities", node.capabilities)
-        if not isinstance(capabilities, list) or not all(
-            isinstance(item, str) for item in capabilities
+        if (
+            not isinstance(capabilities, list)
+            or len(capabilities) > 64
+            or not all(
+                isinstance(item, str)
+                and 1 <= len(item) <= 96
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*", item)
+                for item in capabilities
+            )
+            or len(set(capabilities)) != len(capabilities)
         ):
-            return Response({"detail": "capabilities must be a list of strings."}, status=400)
+            return Response(
+                {
+                    "detail": (
+                        "capabilities must contain at most 64 unique "
+                        "identifier strings of 1–96 characters."
+                    )
+                },
+                status=400,
+            )
+        agent_version = request.data.get("agent_version", node.agent_version)
+        if (
+            not isinstance(agent_version, str)
+            or len(agent_version) > 40
+            or (agent_version and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]*", agent_version))
+        ):
+            return Response({"detail": "agent_version is invalid."}, status=400)
+        cluster_name = request.data.get("cluster_name", node.cluster_name)
+        if not isinstance(cluster_name, str) or len(cluster_name) > 120:
+            return Response({"detail": "cluster_name is invalid."}, status=400)
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
                 return Response({"detail": "Invalid or revoked node credential."}, status=401)
-            node.agent_version = str(request.data.get("agent_version", node.agent_version))[:40]
+            node.agent_version = agent_version
             node.capabilities = capabilities
-            node.cluster_name = str(request.data.get("cluster_name", node.cluster_name))[:120]
+            node.cluster_name = cluster_name
             node.status = AgentNode.Status.ONLINE
             node.last_seen_at = timezone.now()
             node.last_seen_ip = request.META.get("REMOTE_ADDR")
