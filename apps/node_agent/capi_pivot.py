@@ -857,7 +857,11 @@ def run_capi_pivot_postflight(
         if not isinstance(machine, dict):
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
         metadata = machine.get("metadata", {})
-        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_METADATA_INVALID")
+        labels = metadata.get("labels", {})
+        if not isinstance(labels, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_LABELS_INVALID")
         if labels.get("cluster.x-k8s.io/cluster-name") != cluster_name:
             continue
         name = metadata.get("name")
@@ -883,7 +887,11 @@ def run_capi_pivot_postflight(
         if not isinstance(m3m, dict):
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
         metadata = m3m.get("metadata", {})
-        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_METADATA_INVALID")
+        labels = metadata.get("labels", {})
+        if not isinstance(labels, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_METAL3MACHINE_LABELS_INVALID")
         if labels.get("cluster.x-k8s.io/cluster-name") == cluster_name:
             name = metadata.get("name")
             uid = metadata.get("uid")
@@ -932,13 +940,26 @@ def run_capi_pivot_postflight(
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_ORPHAN_METAL3MACHINE")
 
     bmh_by_name = {}
+    bmh_uids = set()
     for host in hosts:
         if not isinstance(host, dict):
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_INVENTORY_INVALID")
         metadata = host.get("metadata", {})
-        name = metadata.get("name") if isinstance(metadata, dict) else None
-        if isinstance(name, str) and name:
-            bmh_by_name[name] = host
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_BMH_METADATA_INVALID")
+        name = metadata.get("name")
+        uid = metadata.get("uid")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(uid, str)
+            or not uid
+            or name in bmh_by_name
+            or uid in bmh_uids
+        ):
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_BMH_IDENTITY_INVALID")
+        bmh_by_name[name] = host
+        bmh_uids.add(uid)
 
     verified = []
     for m3m_name, m3m in sorted(m3m_by_name.items()):
