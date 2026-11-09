@@ -1673,7 +1673,7 @@ def test_long_running_command_renews_its_lease(monkeypatch):
             renewals.append((command_id, lease_token))
             return {"id": command_id}
 
-    def slow_command(command, node_type):
+    def slow_command(command, node_type, cancellation_event=None):
         time.sleep(0.06)
         return {"ready": True}
 
@@ -1695,7 +1695,7 @@ def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatc
         def renew_lease(self, command_id, lease_token):
             raise agent.NodeAgentError("CONTROL_PLANE_UNAVAILABLE")
 
-    def slow_command(command, node_type):
+    def slow_command(command, node_type, cancellation_event=None):
         time.sleep(0.04)
         return {"ready": True}
 
