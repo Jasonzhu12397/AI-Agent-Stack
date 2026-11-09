@@ -2,17 +2,17 @@
 
 ## Status
 
-**Not enabled end to end.** The Agent process can be configured with a CA bundle and client certificate/key. The Django runtime API now compares a trusted ingress-provided SHA-256 fingerprint header with the unique AgentNode binding for certificate-bound nodes. However, the current cloud deployment does not yet configure and isolate the trusted mTLS ingress path, so this application check alone does not make production mTLS active.
+**Ingress implementation added; production activation remains operator-controlled and requires deployment validation.** The Agent process can be configured with a CA bundle and client certificate/key. The cloud Compose profile now includes an isolated HAProxy listener that requires client certificates, derives the SHA-256 fingerprint from the TLS peer certificate, strips client-supplied identity headers, and forwards only Agent runtime routes. Django checks both the fingerprint and the source IP against the dedicated internal network CIDR. `AGENT_MTLS_REQUIRED=true` rejects every unbound Agent, preventing Bearer-only fallback. The profile is opt-in until real certificates, network reachability, and live Agent handshakes are validated.
 
 Do not describe this deployment as mTLS-protected until every requirement in this document is implemented and tested against the deployed ingress.
 
 ## Current repository topology
 
-- The cloud Compose profile publishes the web/Nginx service and keeps the Daphne API on the Compose network.
+- The cloud Compose profile publishes the web/Nginx service and keeps the Daphne API on the Compose network. The API also joins a dedicated internal `agent_mtls` network shared only with the optional HAProxy Agent ingress.
 - Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne. The web listener explicitly clears `X-Verified-Client-Cert-SHA256` before proxying, so a browser or ordinary HTTP client cannot smuggle a certificate fingerprint through that route.
 - The cloud deployment guide expects an external cloud load balancer or host reverse proxy to terminate HTTPS.
 - The Agent runtime routes are under `/api/v1/agent-runtime/`.
-- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address exactly matching `AGENT_MTLS_TRUSTED_PROXY_IP`. The address check is fail-closed when unset or invalid. The configured address must be the dedicated mTLS ingress peer as observed by Daphne, never the public web proxy or an untrusted load-balancer hop. The header is trustworthy only when that ingress strips any client-supplied copy and injects its own value.
+- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address inside `AGENT_MTLS_TRUSTED_PROXY_CIDRS`. The check is fail-closed when the CIDR list is empty or invalid. When `AGENT_MTLS_REQUIRED=true`, unbound nodes are also rejected, so Bearer-only fallback is disabled.
 
 ## Required trust boundary
 
@@ -27,6 +27,18 @@ The production ingress must enforce all of the following before the application 
 7. Keep browser/user API traffic separate from the Agent mTLS listener so browser sessions are not required to present Agent certificates.
 
 A cloud load balancer may perform the TLS verification, but its verified identity must be conveyed over a private, authenticated backend channel with spoofed client headers stripped. If the chosen load balancer cannot provide that guarantee, use a dedicated TLS proxy under the deployment team's control.
+
+
+## Enable the cloud mTLS ingress profile
+
+1. Provision an ingress server certificate and private key as a single PEM file at the path configured by `AGENT_MTLS_SERVER_PEM`. Its SAN must include the DNS name used by EPH and Target Agents. Provision the issuing client CA certificate at `AGENT_MTLS_CLIENT_CA_PEM`. Keep the private key readable only by the deployment administrator and the ingress container.
+2. Configure `AGENT_MTLS_NETWORK_SUBNET` and set `AGENT_MTLS_TRUSTED_PROXY_CIDRS` to that same dedicated subnet. The API validates the TCP peer against this CIDR; do not include the ordinary Compose network or public networks.
+3. Set `COMPOSE_PROFILES=agent-mtls` and `AGENT_MTLS_REQUIRED=true`. Keep `AGENT_MTLS_BIND_ADDRESS=127.0.0.1` when a host-level TLS passthrough proxy connects locally. If Agents connect directly to the VM, bind the port to the required interface and restrict the cloud security group to the Agent source ranges.
+4. Run the cloud deployment script. The HAProxy listener exposes only `/api/v1/agent-runtime/`, requires a valid client certificate, and forwards the SHA-256 digest of the TLS peer certificate. All other paths receive 404.
+5. Bind each Agent's certificate fingerprint through the authenticated Studio certificate-binding endpoint before runtime communication. With mandatory enforcement enabled, an Agent without a binding cannot heartbeat or poll commands.
+6. Verify valid and invalid certificate handshakes from actual Agent hosts, then test heartbeat, inventory, command poll, lease renewal, checkpoint and result submission. Do not consider Compose validation or a proxy configuration check equivalent to a live mTLS acceptance test.
+
+The profile is intentionally opt-in. If `AGENT_MTLS_REQUIRED=true` is set without starting the `agent-mtls` profile, Agent runtime authentication fails closed.
 
 ## Certificate lifecycle
 
@@ -52,4 +64,4 @@ A cloud load balancer may perform the TLS verification, but its verified identit
 
 ## Release gate
 
-Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, and negative integration tests are all deployed together. Until then, report the state accurately as **Agent TLS client configuration, certificate fingerprint binding, and trusted-proxy peer pinning available; dedicated mandatory-client-certificate ingress and end-to-end mTLS deployment pending**.
+Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, negative integration tests, and real Agent handshake tests are deployed together. The repository now contains the optional HAProxy ingress profile and mandatory application policy; actual production mTLS remains unverified until deployed with operator-provisioned certificates and tested from EPH/Target Agent hosts.
