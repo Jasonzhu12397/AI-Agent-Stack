@@ -4271,6 +4271,15 @@ def kubernetes_api_create_machine_deployment(
     return result
 
 
+def client_certificate_fingerprint(cert_file: str) -> str:
+    try:
+        certificate_pem = Path(cert_file).read_text(encoding="ascii")
+        certificate_der = bytes.fromhex(ssl.PEM_cert_to_DER_cert(certificate_pem))
+    except (OSError, UnicodeError, ValueError, ssl.SSLError) as exc:
+        raise NodeAgentError("AGENT_TLS_CLIENT_CERTIFICATE_INVALID") from exc
+    return hashlib.sha256(certificate_der).hexdigest()
+
+
 def build_control_plane_tls_context() -> ssl.SSLContext | None:
     ca_file = os.environ.get("AGENT_TLS_CA_FILE", "").strip()
     cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
@@ -4674,8 +4683,15 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--healthcheck", action="store_true")
     parser.add_argument("--readiness-check", action="store_true")
+    parser.add_argument("--print-client-cert-fingerprint", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=5)
     args = parser.parse_args()
+    if args.print_client_cert_fingerprint:
+        cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
+        if not cert_file:
+            raise SystemExit("AGENT_TLS_CERT_FILE is required.")
+        print(client_certificate_fingerprint(cert_file))
+        return
     if args.healthcheck:
         raise SystemExit(0 if health_file_is_fresh("AGENT_LIVENESS_FILE") else 1)
     if args.readiness_check:
