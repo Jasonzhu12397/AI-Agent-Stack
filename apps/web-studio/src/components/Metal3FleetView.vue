@@ -171,6 +171,32 @@ function statusType(status: string): "success" | "warning" | "danger" | "info" {
   return "info";
 }
 
+function deploymentDualAgent(deployment: ClusterDeployment): Record<string, unknown> {
+  const dualAgent = deployment.plan_result?.dual_agent;
+  return dualAgent && typeof dualAgent === "object" && !Array.isArray(dualAgent)
+    ? (dualAgent as Record<string, unknown>)
+    : {};
+}
+
+function deploymentPhaseLabel(deployment: ClusterDeployment): string {
+  const phase = deploymentDualAgent(deployment).phase;
+  if (phase === "pivot_simulation_ready") return "Pivot simulation ready";
+  if (phase === "pivot_waiting_approval") return "Awaiting Pivot approval";
+  if (phase === "target_agent_verification_pending") return "Target Agent verification pending";
+  if (phase === "target_agent_adopted") return "Target Agent adopted cluster";
+  if (phase === "pivot_metal3_ironic_postflight_pending") return "Metal3/Ironic postflight pending";
+  if (phase === "pivot_postflight_verified") return "Pivot postflight verified";
+  if (typeof phase === "string" && phase) return phase.replaceAll("_", " ");
+  return "Handoff phase not reported";
+}
+
+function deploymentOwnershipLabel(deployment: ClusterDeployment): string {
+  const dualAgent = deploymentDualAgent(deployment);
+  if (dualAgent.target_agent_owns_cluster === true) return "Target Agent owns cluster";
+  if (dualAgent.pivot_simulated === true) return "Simulation only · ownership unchanged";
+  return "Ownership not transferred";
+}
+
 function identityStatusType(status: string): "success" | "warning" | "danger" | "info" {
   if (status === "verified") return "success";
   if (status === "conflict") return "danger";
@@ -266,8 +292,17 @@ onUnmounted(() => {
         <section class="fleet-panel">
           <div class="fleet-panel-heading"><h3>Deployment pipeline</h3><span>{{ deployments.length }} CLUSTERS</span></div>
           <div v-for="deployment in deployments.slice(0, 6)" :key="deployment.id" class="fleet-deployment-row">
-            <div><strong>{{ deployment.cluster_name }}</strong><small>{{ deployment.kubernetes_version }} · {{ formatTime(deployment.updated_at) }}</small></div>
-            <el-tag :type="statusType(deployment.status)" size="small">{{ deployment.status }}</el-tag>
+            <div>
+              <strong>{{ deployment.cluster_name }}</strong>
+              <small>{{ deployment.kubernetes_version }} · {{ formatTime(deployment.updated_at) }}</small>
+              <small>{{ deploymentPhaseLabel(deployment) }}</small>
+            </div>
+            <el-tag
+              :type="deploymentDualAgent(deployment).pivot_simulated === true ? 'info' : statusType(deployment.status)"
+              size="small"
+            >
+              {{ deploymentDualAgent(deployment).pivot_simulated === true ? 'SIMULATION' : deployment.status }}
+            </el-tag>
           </div>
           <el-empty v-if="!loading && !deployments.length" description="No cluster delivery workflows yet" :image-size="56" />
         </section>
@@ -364,8 +399,16 @@ onUnmounted(() => {
         <el-table :data="deployments" size="small" class="task-table">
           <el-table-column prop="cluster_name" label="Cluster" min-width="150" />
           <el-table-column prop="kubernetes_version" label="Kubernetes" min-width="120" />
-          <el-table-column prop="status" label="Workflow Status" min-width="160">
+          <el-table-column prop="status" label="Workflow Status" min-width="130">
             <template #default="scope"><el-tag :type="statusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag></template>
+          </el-table-column>
+          <el-table-column label="CAPI Pivot / Ownership" min-width="260">
+            <template #default="scope">
+              <div class="fleet-node-main">
+                <strong>{{ deploymentPhaseLabel(scope.row) }}</strong>
+                <small>{{ deploymentOwnershipLabel(scope.row) }}</small>
+              </div>
+            </template>
           </el-table-column>
           <el-table-column label="EPH Agent" min-width="140">
             <template #default="scope">{{ nodeLabel(scope.row.eph_node_id) }}</template>
