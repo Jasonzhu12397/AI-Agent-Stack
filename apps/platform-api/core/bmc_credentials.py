@@ -98,7 +98,14 @@ def resolve_bmc_credentials(
     tenant_id="",
     project_id="",
 ):
-    _tenant_scoped_path("validation", tenant_id, project_id)
+    address = _vault_url()
+    mount, path = _parse_vault_reference(credential_ref)
+    path = _tenant_scoped_path(path, tenant_id, project_id)
+    trust_reference = None
+    if trust_bundle_ref:
+        trust_mount, trust_path = _parse_vault_reference(trust_bundle_ref)
+        trust_path = _tenant_scoped_path(trust_path, tenant_id, project_id)
+        trust_reference = (trust_mount, trust_path)
     resolver_path = getattr(settings, "BMC_VAULT_TOKEN_RESOLVER", "")
     if resolver_path:
         token_resolver = import_string(resolver_path)
@@ -114,9 +121,6 @@ def resolve_bmc_credentials(
         token = getattr(settings, "BMC_VAULT_TOKEN", "")
         if not isinstance(token, str) or not token:
             raise RuntimeError("Vault authentication is not configured.")
-    address = _vault_url()
-    mount, path = _parse_vault_reference(credential_ref)
-    path = _tenant_scoped_path(path, tenant_id, project_id)
     headers = {"X-Vault-Token": token}
     namespace = getattr(settings, "BMC_VAULT_NAMESPACE", "")
     if namespace:
@@ -143,9 +147,8 @@ def resolve_bmc_credentials(
         ):
             raise ValueError("Vault BMC secret must contain username and password.")
         result = {"username": username, "password": password}
-        if trust_bundle_ref:
-            trust_mount, trust_path = _parse_vault_reference(trust_bundle_ref)
-            trust_path = _tenant_scoped_path(trust_path, tenant_id, project_id)
+        if trust_reference:
+            trust_mount, trust_path = trust_reference
             trust_secret = _read_kv_v2(
                 client, address, trust_mount, trust_path, headers
             )

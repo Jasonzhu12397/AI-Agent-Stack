@@ -429,3 +429,60 @@ def test_vault_static_token_is_fallback_when_scoped_resolver_unset(
         project_id="project-id",
     )
     assert observed_tokens == ["single-scope-static-token"]
+
+
+
+@pytest.mark.parametrize(
+    "credential_ref,vault_address",
+    [
+        ("https://not-a-vault-reference", "https://vault.example.net"),
+        ("vault://secret/bmc/rack-a", "http://vault.example.net"),
+    ],
+)
+def test_invalid_vault_input_does_not_request_scoped_token(
+    settings, monkeypatch, credential_ref, vault_address
+):
+    import core.bmc_credentials as vault_module
+
+    calls = []
+
+    def token_resolver(*, tenant_id, project_id):
+        calls.append((tenant_id, project_id))
+        return "scoped-token"
+
+    settings.BMC_VAULT_TOKEN_RESOLVER = "tests.token_resolver"
+    settings.BMC_VAULT_ADDR = vault_address
+    monkeypatch.setattr(vault_module, "import_string", lambda path: token_resolver)
+
+    with pytest.raises(ValueError):
+        resolve_bmc_credentials(
+            credential_ref,
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
+    assert calls == []
+
+
+def test_invalid_trust_bundle_reference_does_not_request_scoped_token(
+    settings, monkeypatch
+):
+    import core.bmc_credentials as vault_module
+
+    calls = []
+
+    def token_resolver(*, tenant_id, project_id):
+        calls.append((tenant_id, project_id))
+        return "scoped-token"
+
+    settings.BMC_VAULT_TOKEN_RESOLVER = "tests.token_resolver"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(vault_module, "import_string", lambda path: token_resolver)
+
+    with pytest.raises(ValueError):
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            trust_bundle_ref="https://invalid-reference",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
+    assert calls == []

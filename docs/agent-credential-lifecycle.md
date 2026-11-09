@@ -49,3 +49,10 @@ The current verifier intentionally accepts literal private BMC IP addresses only
 Identity is marked verified only when the BMC reports exactly one System and both its UUID and serial match the Agent's previously collected DMI UUID and serial. Missing evidence remains candidate; mismatches and duplicate identities become conflict. This is a read-only identity check, not a hardware attestation or a provisioning authorization.
 
 For production, use a dedicated Vault policy/token per control-plane trust boundary and grant only required tenant/project secret prefixes. The built-in resolver fails closed when Vault configuration or tenant/project scope is missing.
+
+
+## Vault policy template for tenant/project isolation
+
+The optional policy template at `deploy/vault/policies/bmc-credentials.hcl` grants read-only access to the BMC credential and Redfish trust-bundle prefixes derived from Vault identity entity metadata. Bind `tenant_id` and `project_id` metadata to the authenticated workload identity through a trusted administrator-controlled auth role or entity; never accept those metadata values from an untrusted Agent request. Attach the policy only to a token whose identity has those verified metadata values. Review the KV v2 mount name and secret layout before deployment. The template is not installed automatically and is not evidence of a deployed Vault policy.
+
+The resolver now validates the Vault HTTPS origin, credential reference, tenant/project scope, and optional trust-bundle reference before invoking the scoped token resolver. Invalid configuration therefore cannot trigger a token-exchange side effect.
