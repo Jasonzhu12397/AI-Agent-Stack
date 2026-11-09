@@ -1,10 +1,13 @@
 # ruff: noqa: I001
 import datetime
+import ipaddress
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import uuid
+from urllib.parse import urlsplit
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -385,6 +388,52 @@ def _identity_value(value):
     return normalized[:256]
 
 
+
+def _validate_bmc_endpoint(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 500:
+        return None
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in ("", "/")
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        return None
+    normalized_host = hostname.rstrip(".").lower()
+    if normalized_host in {"localhost"} or normalized_host.endswith(
+        (".localhost", ".local", ".internal")
+    ):
+        return None
+    try:
+        address = ipaddress.ip_address(normalized_host)
+    except ValueError:
+        if not re.fullmatch(
+            r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            normalized_host,
+        ):
+            return None
+    else:
+        if (
+            address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        ):
+            return None
+    return parsed, normalized_host
+
+
 def _machine_identity_material(system_identity):
     fields = {
         "product_uuid": 128,
@@ -421,6 +470,115 @@ def _machine_conflicts(node, material, machine):
                 "matching_fields": shared,
             })
     return conflicts
+
+
+
+class FleetMachineBMCConfigView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, tenant_id, project_id, machine_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        allowed = {"endpoint", "credential_ref", "trust_bundle_ref"}
+        if set(request.data) - allowed:
+            return Response(
+                {"detail": "Only endpoint and credential references are accepted."},
+                status=400,
+            )
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request,
+            tenant_id,
+            project_id,
+        )
+        project_editor = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+        if not is_tenant_admin and not project_editor:
+            return Response(
+                {"detail": "Project editor or administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        endpoint = _validate_bmc_endpoint(request.data.get("endpoint"))
+        credential_ref = request.data.get("credential_ref")
+        trust_bundle_ref = request.data.get("trust_bundle_ref", "")
+        reference_pattern = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}"
+        if endpoint is None:
+            return Response(
+                {"detail": "endpoint must be an HTTPS origin with a valid host."},
+                status=400,
+            )
+        if (
+            not isinstance(credential_ref, str)
+            or not re.fullmatch(reference_pattern, credential_ref)
+        ):
+            return Response(
+                {"detail": "credential_ref must be a vault reference, not a secret."},
+                status=400,
+            )
+        if trust_bundle_ref and (
+            not isinstance(trust_bundle_ref, str)
+            or not re.fullmatch(reference_pattern, trust_bundle_ref)
+        ):
+            return Response({"detail": "Invalid trust_bundle_ref."}, status=400)
+        parsed, hostname = endpoint
+        with transaction.atomic():
+            machine = AgentMachine.objects.select_for_update().filter(
+                pk=machine_id,
+                tenant=tenant,
+                project=project,
+            ).first()
+            if machine is None:
+                return Response({"detail": "Machine not found."}, status=404)
+            machine.bmc_endpoint = f"https://{parsed.netloc}"
+            machine.bmc_credential_ref = credential_ref
+            machine.bmc_trust_bundle_ref = trust_bundle_ref
+            machine.bmc_tls_verify = True
+            machine.bmc_configured_at = timezone.now()
+            machine.bmc_identity_evidence = {
+                "status": "not_checked",
+                "source": "redfish",
+                "configured_host": hostname,
+            }
+            machine.save(
+                update_fields=[
+                    "bmc_endpoint",
+                    "bmc_credential_ref",
+                    "bmc_trust_bundle_ref",
+                    "bmc_tls_verify",
+                    "bmc_configured_at",
+                    "bmc_identity_evidence",
+                    "updated_at",
+                ]
+            )
+            record_audit_event(
+                request,
+                tenant,
+                "fleet.machine.bmc_configured",
+                "agent_machine",
+                machine.id,
+                project=project,
+                metadata={
+                    "configured_host": hostname,
+                    "tls_verify": True,
+                    "credential_reference_configured": True,
+                    "trust_bundle_reference_configured": bool(trust_bundle_ref),
+                },
+            )
+        return Response(
+            {
+                "machine_id": str(machine.id),
+                "bmc_configured": True,
+                "endpoint": machine.bmc_endpoint,
+                "credential_configured": bool(machine.bmc_credential_ref),
+                "trust_bundle_configured": bool(machine.bmc_trust_bundle_ref),
+                "tls_verify": machine.bmc_tls_verify,
+                "verification_status": machine.bmc_identity_evidence["status"],
+                "network_check_performed": False,
+            },
+            status=200,
+        )
 
 
 class FleetMachineLifecycleReviewView(APIView):

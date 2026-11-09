@@ -1124,6 +1124,123 @@ def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_re
     assert rejected.status_code == 401
 
 
+
+@pytest.mark.django_db
+def test_fleet_machine_bmc_config_stores_references_and_keeps_tls_verification(node_workspace):
+    from core.models import AuditEvent
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "bmc-config-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+    )
+    response = client.put(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {
+            "endpoint": "https://192.168.10.20",
+            "credential_ref": "vault://lab/bmc/rack-a-01",
+            "trust_bundle_ref": "vault://lab/ca/redfish",
+        },
+        format="json",
+    )
+    assert response.status_code == 200
+    assert response.data["network_check_performed"] is False
+    machine.refresh_from_db()
+    assert machine.bmc_endpoint == "https://192.168.10.20"
+    assert machine.bmc_credential_ref == "vault://lab/bmc/rack-a-01"
+    assert machine.bmc_trust_bundle_ref == "vault://lab/ca/redfish"
+    assert machine.bmc_tls_verify is True
+    assert machine.bmc_identity_evidence["status"] == "not_checked"
+    assert "password" not in str(response.data).lower()
+    event = AuditEvent.objects.get(
+        event_type="fleet.machine.bmc_configured",
+        resource_id=str(machine.id),
+    )
+    assert event.metadata["tls_verify"] is True
+    assert "credential_ref" not in event.metadata
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://192.168.10.20",
+        "https://127.0.0.1",
+        "https://localhost",
+        "https://169.254.169.254",
+        "https://user:pass@192.168.10.20",
+        "https://192.168.10.20/redfish/v1",
+        "https://192.168.10.20?next=http://127.0.0.1",
+    ],
+)
+def test_fleet_machine_bmc_config_rejects_unsafe_endpoint(node_workspace, endpoint):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "bmc-invalid-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+    )
+    response = client.put(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {
+            "endpoint": endpoint,
+            "credential_ref": "vault://lab/bmc/host",
+        },
+        format="json",
+    )
+    assert response.status_code == 400
+    machine.refresh_from_db()
+    assert machine.bmc_endpoint == ""
+
+
+@pytest.mark.django_db
+def test_fleet_machine_bmc_config_rejects_inline_secrets(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "bmc-secret-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+    )
+    response = client.put(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {
+            "endpoint": "https://192.168.10.21",
+            "credential_ref": "admin-password",
+            "password": "not-a-vault-reference",
+        },
+        format="json",
+    )
+    assert response.status_code == 400
+    machine.refresh_from_db()
+    assert machine.bmc_credential_ref == ""
+
+
+
 @pytest.mark.django_db
 def test_fleet_machine_lifecycle_review_is_audited_and_uses_compare_and_set(node_workspace):
     from core.models import AuditEvent
