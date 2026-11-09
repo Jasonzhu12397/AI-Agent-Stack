@@ -961,6 +961,7 @@ def run_capi_pivot_postflight(
     if len(m3m_by_name) != len(machine_by_name):
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_INFRASTRUCTURE_COUNT_MISMATCH")
     machine_infrastructure = {}
+    infrastructure_api_versions = {}
     for machine_name in machine_by_name:
         infrastructure_ref = machine_by_name[machine_name].get("spec", {}).get("infrastructureRef")
         if (
@@ -985,6 +986,7 @@ def run_capi_pivot_postflight(
                 + m3m_name
             )
         machine_infrastructure[m3m_name] = machine_name
+        infrastructure_api_versions[m3m_name] = infrastructure_ref["apiVersion"]
     if set(machine_infrastructure) != set(m3m_by_name):
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_ORPHAN_METAL3MACHINE")
 
@@ -1031,8 +1033,10 @@ def run_capi_pivot_postflight(
         consumer_ref = host.get("spec", {}).get("consumerRef")
         if (
             not isinstance(consumer_ref, dict)
+            or consumer_ref.get("apiVersion") != infrastructure_api_versions[m3m_name]
             or consumer_ref.get("kind") != "Metal3Machine"
             or consumer_ref.get("name") != m3m_name
+            or consumer_ref.get("namespace") != namespace
             or consumer_ref.get("uid") != m3m_uid
         ):
             raise CapiPivotError(
