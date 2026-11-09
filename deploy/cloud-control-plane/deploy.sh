@@ -20,6 +20,7 @@ command -v python3 >/dev/null 2>&1 || fail "PYTHON3_NOT_INSTALLED"
 command -v curl >/dev/null 2>&1 || fail "CURL_NOT_INSTALLED"
 
 python3 - "$ENV_FILE" <<'PY'
+import os
 import sys
 
 values = {}
@@ -61,6 +62,22 @@ for key in ("CSRF_TRUSTED_ORIGINS", "CORS_ALLOWED_ORIGINS"):
         raise SystemExit("HTTPS_ORIGINS_REQUIRED:" + key)
     if any("example.com" in origin for origin in origins):
         raise SystemExit("HTTPS_ORIGIN_PLACEHOLDER:" + key)
+if values.get("AGENT_MTLS_REQUIRED", "false").lower() == "true":
+    profiles = [item.strip() for item in values.get("COMPOSE_PROFILES", "").split(",")]
+    if "agent-mtls" not in profiles:
+        raise SystemExit("AGENT_MTLS_PROFILE_REQUIRED")
+    subnet = values.get("AGENT_MTLS_NETWORK_SUBNET", "172.30.250.0/24")
+    trusted = [
+        item.strip()
+        for item in values.get("AGENT_MTLS_TRUSTED_PROXY_CIDRS", "").split(",")
+        if item.strip()
+    ]
+    if subnet not in trusted:
+        raise SystemExit("AGENT_MTLS_TRUSTED_PROXY_CIDR_MUST_INCLUDE_NETWORK_SUBNET")
+    for key in ("AGENT_MTLS_SERVER_PEM", "AGENT_MTLS_CLIENT_CA_PEM"):
+        path = values.get(key, "")
+        if not path or not os.path.isfile(path):
+            raise SystemExit("AGENT_MTLS_CERTIFICATE_FILE_REQUIRED:" + key)
 PY
 
 cd "$ROOT_DIR"
