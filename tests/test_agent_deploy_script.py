@@ -25,3 +25,20 @@ def test_dual_agent_deploy_script_requires_pivot_and_ironic_secrets():
     assert "ironic-api-credentials api-url token" in script
     assert "eph-node-agent-credentials control-url node-id token" in script
     assert "target-cluster-agent-credentials control-url node-id token" in script
+
+
+
+def test_both_agent_deployments_require_mtls_and_mount_node_credentials():
+    for filename in ("eph-node-agent.yaml", "target-cluster-agent.yaml"):
+        manifest = (ROOT / "deploy/agents" / filename).read_text(encoding="utf-8")
+
+        assert "AGENT_TLS_CLIENT_CERT_REQUIRED" in manifest
+        assert 'value: "true"' in manifest
+        assert "AGENT_TLS_CA_FILE" in manifest
+        assert "AGENT_TLS_CERT_FILE" in manifest
+        assert "AGENT_TLS_KEY_FILE" in manifest
+        assert "secretName: agent-control-plane-mtls" in manifest
+        assert "key: ca.crt" in manifest
+        assert "key: tls.crt" in manifest
+        assert "key: tls.key" in manifest
+        assert "mountPath: /var/run/secrets/ai-agent/control-plane-tls" in manifest
