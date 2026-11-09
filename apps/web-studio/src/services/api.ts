@@ -431,6 +431,40 @@ export type AgentNode = {
   created_at: string;
 };
 
+export type FleetMachine = AgentNode & {
+  observed_status: "offline" | "online" | "revoked" | "stale";
+  identity: {
+    agent_node_id: string;
+    name: string;
+    cluster_name: string;
+  };
+  hardware_inventory: Record<string, unknown>;
+  inventory_source: string;
+};
+
+export function getFleetMachines(
+  tenantId: string,
+  projectId: string,
+  options: { limit?: number; offset?: number; search?: string; status?: string; nodeType?: string } = {},
+): Promise<{
+  count: number;
+  limit: number;
+  offset: number;
+  results: FleetMachine[];
+  capabilities: { hardware_inventory: string; stable_hardware_identity: string };
+}> {
+  const query = new URLSearchParams({
+    limit: String(options.limit ?? 100),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.search) query.set("search", options.search);
+  if (options.status) query.set("status", options.status);
+  if (options.nodeType) query.set("node_type", options.nodeType);
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/?" + query.toString(),
+  );
+}
+
 export type EnrolledAgentNode = AgentNode & {
   enrollment_token: string;
   token_warning: string;

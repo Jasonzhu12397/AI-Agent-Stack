@@ -2,12 +2,14 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   getAgentNodes,
+  getFleetMachines,
   getProjectAgentCommands,
   getClusterDeployments,
   getProjects,
   getTenants,
   type AgentCommand,
   type AgentNode,
+  type FleetMachine,
   type ClusterDeployment,
   type Project,
   type Tenant,
@@ -29,6 +31,11 @@ const activeTab = ref<FleetTab>("dashboard");
 const tenants = ref<Tenant[]>([]);
 const projects = ref<Project[]>([]);
 const nodes = ref<AgentNode[]>([]);
+const inventory = ref<FleetMachine[]>([]);
+const inventoryCount = ref(0);
+const inventorySearch = ref("");
+const inventoryStatus = ref("");
+const inventoryNodeType = ref("");
 const deployments = ref<ClusterDeployment[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const commandCount = ref(0);
@@ -98,6 +105,8 @@ async function refreshData(): Promise<void> {
   const generation = ++refreshGeneration;
   if (!selectedTenantId.value || !selectedProjectId.value) {
     nodes.value = [];
+    inventory.value = [];
+    inventoryCount.value = 0;
     deployments.value = [];
     commands.value = [];
     commandCount.value = 0;
@@ -107,9 +116,15 @@ async function refreshData(): Promise<void> {
   refreshing.value = true;
   error.value = "";
   try {
-    const [nodePage, deploymentPage] = await Promise.all([
+    const [nodePage, deploymentPage, inventoryPage] = await Promise.all([
       getAgentNodes(selectedTenantId.value, selectedProjectId.value),
       getClusterDeployments(selectedTenantId.value, selectedProjectId.value),
+      getFleetMachines(selectedTenantId.value, selectedProjectId.value, {
+        limit: 200,
+        search: inventorySearch.value,
+        status: inventoryStatus.value,
+        nodeType: inventoryNodeType.value,
+      }),
     ]);
     if (generation !== refreshGeneration) return;
     const commandPage = await getProjectAgentCommands(
@@ -123,6 +138,8 @@ async function refreshData(): Promise<void> {
     );
     if (generation !== refreshGeneration) return;
     nodes.value = nodePage.results;
+    inventory.value = inventoryPage.results;
+    inventoryCount.value = inventoryPage.count;
     deployments.value = deploymentPage.results;
     commands.value = commandPage.results;
     commandCount.value = commandPage.count;
@@ -229,7 +246,8 @@ onUnmounted(() => {
             </div>
             <el-tag :type="statusType(node.status)" size="small">{{ node.status }}</el-tag>
           </div>
-          <el-empty v-if="!loading && !nodes.length" description="No Agent nodes enrolled in this project" :image-size="56" />
+          <el-empty v-if="!loading && !inventory.length" description="No machine inventory records match this project and filter" :image-size="56" />
+        <p class="fleet-footnote">Inventory is sourced from enrolled Agent records and Agent-reported hardware labels. Hardware identity attestation (system UUID, serial, BMC and PCI cross-check) is not implemented yet.</p>
         </section>
         <section class="fleet-panel">
           <div class="fleet-panel-heading"><h3>Deployment pipeline</h3><span>{{ deployments.length }} CLUSTERS</span></div>
@@ -245,21 +263,41 @@ onUnmounted(() => {
 
     <template v-else-if="activeTab === 'fleet'">
       <section class="fleet-panel">
-        <div class="fleet-panel-heading"><h3>Bare-metal Agent Inventory</h3><span>{{ nodes.length }} REGISTERED</span></div>
-        <el-table :data="nodes" size="small" class="task-table">
+        <div class="fleet-panel-heading"><h3>Bare-metal Machine Inventory</h3><span>{{ inventoryCount }} REGISTERED</span></div>
+        <div class="fleet-inventory-controls">
+          <el-input v-model="inventorySearch" clearable size="small" placeholder="Search machine, cluster or agent version" @keyup.enter="refreshData" />
+          <el-select v-model="inventoryNodeType" clearable size="small" placeholder="All roles">
+            <el-option label="EPH Bootstrap" value="eph_node" />
+            <el-option label="Target Cluster" value="target_cluster" />
+          </el-select>
+          <el-select v-model="inventoryStatus" clearable size="small" placeholder="All statuses">
+            <el-option label="Online" value="online" />
+            <el-option label="Stale heartbeat" value="stale" />
+            <el-option label="Offline" value="offline" />
+            <el-option label="Revoked" value="revoked" />
+          </el-select>
+          <el-button size="small" type="primary" plain :loading="refreshing" @click="refreshData">Apply filters</el-button>
+        </div>
+        <el-table :data="inventory" size="small" class="task-table">
           <el-table-column prop="name" label="Agent / Node" min-width="160" />
           <el-table-column label="Role" min-width="140">
             <template #default="scope">{{ scope.row.node_type === "eph_node" ? "EPH Bootstrap" : "Target Cluster" }}</template>
           </el-table-column>
           <el-table-column prop="cluster_name" label="Cluster" min-width="150" />
           <el-table-column label="Status" min-width="110">
-            <template #default="scope"><el-tag :type="statusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag></template>
+            <template #default="scope"><el-tag :type="statusType(scope.row.observed_status)" size="small">{{ scope.row.observed_status }}</el-tag></template>
           </el-table-column>
           <el-table-column prop="agent_version" label="Agent Version" min-width="130" />
           <el-table-column label="Last Heartbeat" min-width="170">
             <template #default="scope">{{ formatTime(scope.row.last_seen_at) }}</template>
           </el-table-column>
           <el-table-column prop="last_seen_ip" label="Source IP" min-width="140" />
+          <el-table-column label="Hardware" min-width="180">
+            <template #default="scope">
+              <span v-if="scope.row.hardware_inventory.cpu">CPU {{ String((scope.row.hardware_inventory.cpu as Record<string, unknown>).logical_cpus ?? "reported") }}</span>
+              <span v-else>Not reported</span>
+            </template>
+          </el-table-column>
           <el-table-column label="Capabilities" min-width="180">
             <template #default="scope">{{ scope.row.capabilities.join(", ") || "—" }}</template>
           </el-table-column>
@@ -372,6 +410,9 @@ onUnmounted(() => {
 .fleet-metrics article small { color: #637f99; font-size: 10px; }
 .fleet-two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .fleet-panel { padding: 16px; min-width: 0; }
+.fleet-inventory-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fleet-inventory-controls .el-input { width: min(320px, 100%); }
+.fleet-inventory-controls .el-select { width: 160px; }
 .fleet-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .fleet-panel-heading h3 { margin: 0; color: #e4effa; font-size: 14px; }
 .fleet-panel-heading span { color: #6f8ba5; font-size: 9px; letter-spacing: .12em; }
