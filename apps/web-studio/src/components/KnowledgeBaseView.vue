@@ -216,7 +216,7 @@ onUnmounted(() => {
         <el-table-column label="Actions" width="190" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="row.status === "failed""
+              v-if="row.status === 'failed'"
               type="warning"
               text
               :disabled="Boolean(deletingDocumentId) || busy"
