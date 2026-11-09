@@ -5,6 +5,7 @@ import hashlib
 import pytest
 from core.models import (
     AgentCommand,
+    AgentMachine,
     AgentNode,
     Project,
     ProjectMembership,
@@ -902,3 +903,117 @@ def test_fleet_inventory_rejects_invalid_filters_and_pagination(node_workspace):
 
     assert invalid_status.status_code == 400
     assert invalid_page.status_code == 400
+
+
+
+@pytest.mark.django_db
+def test_agent_inventory_report_persists_machine_and_keeps_identity_unverified(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "inventory-agent", "node_type": "eph_node"},
+        format="json",
+    )
+    runtime = APIClient()
+    report = {
+        "status": "observed",
+        "scope": "host_sysfs_read_only",
+        "system_identity": {
+            "sys_vendor": "Acme",
+            "product_name": "Rack Server",
+            "product_uuid": "ABCDEF00-1111-2222-3333-444455556666",
+            "product_serial": "SERIAL-001",
+            "source": "host_sysfs_dmi_read_only",
+            "attestation": "unverified_agent_report",
+        },
+        "interfaces": [{"name": "ens1f0", "speed_mbps": 100000}],
+    }
+    response = runtime.post(
+        "/api/v1/agent-runtime/inventory/",
+        {"node_id": enrolled.data["id"], "hardware_inventory": report},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+
+    assert response.status_code == 200
+    machine = AgentMachine.objects.get(agent_node_id=enrolled.data["id"])
+    assert machine.tenant == tenant
+    assert machine.project == project
+    assert machine.vendor == "Acme"
+    assert machine.system_uuid == "abcdef00-1111-2222-3333-444455556666"
+    assert machine.identity_status == AgentMachine.IdentityStatus.CANDIDATE
+    assert machine.inventory_source == "host_sysfs_dmi_read_only"
+    assert response.data["attestation"] == "unverified_agent_report"
+
+
+@pytest.mark.django_db
+def test_agent_inventory_detects_duplicate_hardware_identity_without_merging(node_workspace):
+    _, tenant, project, client = node_workspace
+    token_by_name = {}
+    for name in ("machine-a", "machine-b"):
+        enrolled = client.post(
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+            {"name": name, "node_type": "target_cluster"},
+            format="json",
+        )
+        token_by_name[name] = (enrolled.data["id"], enrolled.data["enrollment_token"])
+    runtime = APIClient()
+    payload = {
+        "status": "observed",
+        "system_identity": {
+            "product_uuid": "same-system-uuid",
+            "product_serial": "same-serial",
+        },
+        "interfaces": [],
+    }
+    first_id, first_token = token_by_name["machine-a"]
+    second_id, second_token = token_by_name["machine-b"]
+    for node_id, token in ((first_id, first_token), (second_id, second_token)):
+        response = runtime.post(
+            "/api/v1/agent-runtime/inventory/",
+            {"node_id": node_id, "hardware_inventory": payload},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        assert response.status_code == 200
+    first = AgentMachine.objects.get(agent_node_id=first_id)
+    second = AgentMachine.objects.get(agent_node_id=second_id)
+    assert first.identity_status == AgentMachine.IdentityStatus.CANDIDATE
+    assert second.identity_status == AgentMachine.IdentityStatus.CONFLICT
+    assert second.identity_conflicts[0]["agent_node_id"] == first_id
+    assert AgentMachine.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_report(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "inventory-secure", "node_type": "eph_node"},
+        format="json",
+    )
+    runtime = APIClient()
+    url = "/api/v1/agent-runtime/inventory/"
+    invalid = runtime.post(
+        url,
+        {"node_id": enrolled.data["id"], "hardware_inventory": {"status": "observed"}},
+        format="json",
+        HTTP_AUTHORIZATION="Bearer invalid",
+    )
+    oversized = runtime.post(
+        url,
+        {"node_id": enrolled.data["id"], "hardware_inventory": {"status": "observed", "blob": "x" * 270000}},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+    assert invalid.status_code == 401
+    assert oversized.status_code == 413
+    revoked = client.post(f"/api/v1/agent-nodes/{enrolled.data['id']}/revoke/", {}, format="json")
+    assert revoked.status_code == 200
+    rejected = runtime.post(
+        url,
+        {"node_id": enrolled.data["id"], "hardware_inventory": {"status": "observed"}},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+    assert rejected.status_code == 401

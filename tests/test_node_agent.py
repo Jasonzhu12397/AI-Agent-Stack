@@ -4015,3 +4015,31 @@ def test_capi_pivot_postflight_fails_when_metal3_chain_is_not_resolved(monkeypat
             },
             "target_cluster",
         )
+
+
+
+def test_control_plane_client_reports_host_inventory(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return b'{"identity_status":"candidate"}'
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.data, request.get_method()))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = ControlPlaneClient("https://control.example", "node-1", "secret")
+    result = client.report_inventory({"status": "observed", "system_identity": {"product_uuid": "uuid"}})
+
+    assert result["identity_status"] == "candidate"
+    assert calls[0][0] == "https://control.example/api/v1/agent-runtime/inventory/"
+    assert calls[0][2] == "POST"
+    assert b'"product_uuid": "uuid"' in calls[0][1]

@@ -13,6 +13,7 @@ from core.agent_node_views import (
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
+    AgentRuntimeInventoryReportView,
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
     AgentRuntimeResultView,
@@ -206,6 +207,11 @@ urlpatterns = [
         "api/v1/agent-commands/<uuid:command_id>/approve/",
         AgentCommandApproveView.as_view(),
         name="agent-command-approve",
+    ),
+    path(
+        "api/v1/agent-runtime/inventory/",
+        AgentRuntimeInventoryReportView.as_view(),
+        name="agent-runtime-inventory",
     ),
     path(
         "api/v1/agent-runtime/heartbeat/",

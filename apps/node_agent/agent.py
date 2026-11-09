@@ -4435,6 +4435,12 @@ class ControlPlaneClient:
             },
         )
 
+    def report_inventory(self, inventory: dict[str, Any]) -> dict[str, Any]:
+        return self.request(
+            "/api/v1/agent-runtime/inventory/",
+            {"node_id": self.node_id, "hardware_inventory": inventory},
+        )
+
     def poll(self) -> dict[str, Any]:
         return self.request(
             "/api/v1/agent-runtime/commands/poll/",
@@ -4535,6 +4541,9 @@ def execute_command_with_lease(
 
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     heartbeat = client.heartbeat(node_type)
+    inventory = inspect_host_network_hardware()
+    if inventory.get("status") == "observed":
+        client.report_inventory(inventory)
     if node_type == "target_cluster":
         for deployment in heartbeat.get("active_deployments", []):
             deployment_id = deployment.get("deployment_id")

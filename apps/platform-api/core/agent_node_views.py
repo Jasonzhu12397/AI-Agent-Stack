@@ -19,6 +19,7 @@ from core.audit import record_audit_event
 from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
+    AgentMachine,
     AgentNode,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
@@ -338,8 +339,24 @@ class FleetMachineInventoryView(APIView):
                 "name": node.name,
                 "cluster_name": node.cluster_name,
             }
-            data["hardware_inventory"] = node.labels.get("hardware_inventory", {})
-            data["inventory_source"] = "agent_report"
+            machine = getattr(node, "machine", None)
+            data["hardware_inventory"] = (
+                machine.hardware_inventory if machine else node.labels.get("hardware_inventory", {})
+            )
+            data["inventory_source"] = (
+                machine.inventory_source if machine else "legacy_agent_label"
+            )
+            data["identity"]["system_uuid"] = machine.system_uuid if machine else ""
+            data["identity"]["identity_status"] = (
+                machine.identity_status if machine else "unverified"
+            )
+            data["identity"]["identity_fingerprint"] = (
+                machine.identity_fingerprint or None if machine else None
+            )
+            data["identity"]["identity_conflicts"] = (
+                machine.identity_conflicts if machine else []
+            )
+            data["observed_at"] = machine.observed_at if machine else node.last_seen_at
             results.append(data)
 
         return Response(
@@ -354,6 +371,127 @@ class FleetMachineInventoryView(APIView):
                 },
             }
         )
+
+
+def _identity_value(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if normalized in {
+        "", "none", "unknown", "default string", "to be filled by o.e.m.",
+        "not specified", "not applicable", "00000000-0000-0000-0000-000000000000",
+    }:
+        return ""
+    return normalized[:256]
+
+
+def _machine_identity_material(system_identity):
+    fields = {
+        "product_uuid": 128,
+        "product_serial": 128,
+        "board_serial": 128,
+        "chassis_serial": 128,
+    }
+    material = {}
+    for key, max_length in fields.items():
+        value = _identity_value(system_identity.get(key))
+        if value:
+            material[key] = value[:max_length]
+    return material
+
+
+def _machine_conflicts(node, material, machine):
+    if not material:
+        return []
+    conflicts = []
+    candidates = AgentMachine.objects.filter(
+        tenant=node.tenant,
+        project=node.project,
+    ).exclude(agent_node=node).only("id", "agent_node_id", "identity_material")
+    for candidate in candidates.iterator():
+        other = candidate.identity_material or {}
+        shared = sorted(
+            key for key, value in material.items()
+            if value and other.get(key) == value
+        )
+        if shared:
+            conflicts.append({
+                "machine_id": str(candidate.id),
+                "agent_node_id": str(candidate.agent_node_id),
+                "matching_fields": shared,
+            })
+    return conflicts
+
+
+class AgentRuntimeInventoryReportView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        node = _authenticate_node(request, request.data.get("node_id"))
+        if node is None:
+            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+        inventory = request.data.get("hardware_inventory")
+        if not isinstance(inventory, dict):
+            return Response({"detail": "hardware_inventory must be a JSON object."}, status=400)
+        if _json_size_bytes(inventory) > 262144:
+            return Response({"detail": "hardware_inventory must not exceed 256 KiB."}, status=413)
+        if inventory.get("status") != "observed":
+            return Response({"detail": "Only observed hardware inventory can be ingested."}, status=400)
+        system_identity = inventory.get("system_identity", {})
+        if not isinstance(system_identity, dict):
+            return Response({"detail": "system_identity must be a JSON object."}, status=400)
+        for key in ("sys_vendor", "product_name", "product_uuid", "product_serial", "board_serial", "chassis_serial"):
+            value = system_identity.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > 256):
+                return Response({"detail": "Invalid system identity field."}, status=400)
+        material = _machine_identity_material(system_identity)
+        fingerprint_payload = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest() if material else ""
+        observed_at = timezone.now()
+        try:
+            with transaction.atomic():
+                locked_node = AgentNode.objects.select_for_update().get(pk=node.pk)
+                if locked_node.status == AgentNode.Status.REVOKED:
+                    return Response({"detail": "Invalid or revoked node credential."}, status=401)
+                machine, _ = AgentMachine.objects.select_for_update().get_or_create(
+                    agent_node=locked_node,
+                    defaults={
+                        "tenant": locked_node.tenant,
+                        "project": locked_node.project,
+                    },
+                )
+                conflicts = _machine_conflicts(locked_node, material, machine)
+                machine.vendor = str(system_identity.get("sys_vendor") or "")[:256]
+                machine.product_name = str(system_identity.get("product_name") or "")[:256]
+                machine.system_uuid = material.get("product_uuid", "")
+                machine.identity_material = material
+                machine.identity_fingerprint = fingerprint
+                machine.identity_conflicts = conflicts
+                machine.identity_status = (
+                    AgentMachine.IdentityStatus.CONFLICT
+                    if conflicts
+                    else AgentMachine.IdentityStatus.CANDIDATE
+                    if material
+                    else AgentMachine.IdentityStatus.UNVERIFIED
+                )
+                machine.hardware_inventory = inventory
+                machine.inventory_source = "host_sysfs_dmi_read_only"
+                machine.observed_at = observed_at
+                machine.save()
+        except IntegrityError:
+            return Response({"detail": "Machine inventory update conflicted; retry the report."}, status=409)
+        return Response({
+            "machine_id": str(machine.id),
+            "agent_node_id": str(locked_node.id),
+            "identity_status": machine.identity_status,
+            "identity_fingerprint": machine.identity_fingerprint or None,
+            "identity_conflicts": machine.identity_conflicts,
+            "observed_at": machine.observed_at,
+            "attestation": "unverified_agent_report",
+        })
 
 
 class AgentNodeRevokeView(APIView):

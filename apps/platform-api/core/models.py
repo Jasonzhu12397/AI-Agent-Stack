@@ -450,6 +450,51 @@ class AgentNode(models.Model):
         ]
 
 
+class AgentMachine(models.Model):
+    class IdentityStatus(models.TextChoices):
+        UNVERIFIED = "unverified", "Unverified"
+        CANDIDATE = "candidate", "Candidate"
+        VERIFIED = "verified", "Verified"
+        CONFLICT = "conflict", "Conflict"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="machines")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="machines")
+    agent_node = models.OneToOneField(
+        AgentNode,
+        on_delete=models.CASCADE,
+        related_name="machine",
+    )
+    vendor = models.CharField(max_length=256, blank=True)
+    product_name = models.CharField(max_length=256, blank=True)
+    system_uuid = models.CharField(max_length=128, blank=True)
+    identity_material = models.JSONField(default=dict)
+    identity_fingerprint = models.CharField(max_length=64, blank=True)
+    identity_status = models.CharField(
+        max_length=16,
+        choices=IdentityStatus.choices,
+        default=IdentityStatus.UNVERIFIED,
+    )
+    identity_conflicts = models.JSONField(default=list)
+    hardware_inventory = models.JSONField(default=dict)
+    inventory_source = models.CharField(max_length=48, default="agent_report")
+    observed_at = models.DateTimeField(null=True, blank=True)
+    bmc_credential_ref = models.CharField(max_length=160, blank=True)
+    bmh_name = models.CharField(max_length=253, blank=True)
+    capi_machine_name = models.CharField(max_length=253, blank=True)
+    kubernetes_node_name = models.CharField(max_length=253, blank=True)
+    lifecycle_state = models.CharField(max_length=32, default="discovered")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["agent_node__name"]
+        indexes = [
+            models.Index(fields=["tenant", "project", "identity_status"], name="machine_identity_idx"),
+            models.Index(fields=["tenant", "project", "observed_at"], name="machine_observed_idx"),
+        ]
+
+
 class AgentCommand(models.Model):
     class Status(models.TextChoices):
         WAITING_APPROVAL = "waiting_approval", "Waiting approval"
