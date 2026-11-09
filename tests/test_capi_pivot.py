@@ -122,13 +122,11 @@ def test_source_object_still_present_means_pivot_is_not_verified():
     )
 
 
-def test_move_timeout_is_never_automatically_retried():
+def test_dry_run_timeout_does_not_attempt_mutating_move():
     calls = []
 
     def runner(command, timeout):
         calls.append(list(command))
-        if command[0] == "clusterctl" and "--dry-run" in command:
-            return CommandResult(0)
         raise subprocess.TimeoutExpired(command, timeout)
 
     with pytest.raises(PivotError, match="inspect both clusters"):
@@ -140,9 +138,8 @@ def test_move_timeout_is_never_automatically_retried():
             runner=runner,
         )
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0][-1] == "--dry-run"
-    assert "--dry-run" not in calls[1]
 
 
 def test_pivot_rejects_same_kubeconfig_and_duplicate_inventory():
