@@ -208,8 +208,23 @@ def _authenticate_node(request, node_id):
     except (TypeError, ValueError, AttributeError):
         return None
     node = AgentNode.objects.filter(pk=node_id).first()
-    if node is None or node.status == AgentNode.Status.REVOKED:
+    if (
+        node is None
+        or node.status == AgentNode.Status.REVOKED
+        or node.client_certificate_revoked_at is not None
+    ):
         return None
+    expected_fingerprint = node.client_certificate_fingerprint
+    if expected_fingerprint:
+        verified_fingerprint = request.headers.get(
+            "X-Verified-Client-Cert-SHA256",
+            "",
+        ).strip().lower()
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", verified_fingerprint)
+            or not hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+        ):
+            return None
     supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     if not hmac.compare_digest(supplied_hash, node.credential_hash):
         return None
