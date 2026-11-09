@@ -726,3 +726,45 @@ def test_pivot_postflight_rejects_stale_bmh_consumer_identity(tmp_path):
             executable_lookup=lambda name: f"/usr/bin/{name}",
             process_runner=runner,
         )
+
+
+def test_pivot_postflight_matches_each_machine_to_its_own_infrastructure_ref(tmp_path):
+    _, base_runner = _postflight_runner()
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        resource = command[command.index("get") + 1]
+        document = json.loads(completed.stdout)
+        if resource == "machines.cluster.x-k8s.io":
+            second = json.loads(json.dumps(document["items"][0]))
+            second["metadata"]["name"] = "worker-02"
+            second["metadata"]["uid"] = "machine-uid-02"
+            second["spec"]["infrastructureRef"]["name"] = "worker-02"
+            document["items"].append(second)
+        elif resource == "metal3machines.infrastructure.cluster.x-k8s.io":
+            second = json.loads(json.dumps(document["items"][0]))
+            second["metadata"]["name"] = "worker-02"
+            second["metadata"]["uid"] = "metal3machine-uid-02"
+            second["metadata"]["annotations"]["metal3.io/BareMetalHost"] = "worker-02"
+            document["items"].append(second)
+        elif resource == "baremetalhosts.metal3.io":
+            second = json.loads(json.dumps(document["items"][0]))
+            second["metadata"]["name"] = "worker-02"
+            second["spec"]["consumerRef"]["name"] = "worker-02"
+            second["spec"]["consumerRef"]["uid"] = "metal3machine-uid-02"
+            document["items"].append(second)
+        return subprocess.CompletedProcess(
+            command, completed.returncode, json.dumps(document), completed.stderr
+        )
+
+    result = run_capi_pivot_postflight(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert result["postflight_passed"] is True
+    assert result["verified_machine_count"] == 2
+    assert result["metal3machine_count"] == 2
+    assert result["verified_bmh_count"] == 2
