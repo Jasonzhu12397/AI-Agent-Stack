@@ -548,10 +548,10 @@ def _verify_source_metal3_handoff(
         observed = status.get("observedGeneration") if isinstance(status, dict) else None
         replicas = spec.get("replicas") if isinstance(spec, dict) else None
         running_counts = (
-            status.get("replicas"),
+            status.get("replicas", 0),
             status.get("readyReplicas", 0),
             status.get("updatedReplicas", 0),
-            status.get("availableReplicas"),
+            status.get("availableReplicas", 0),
         ) if isinstance(status, dict) else None
         if (
             not isinstance(generation, int)
