@@ -35,3 +35,16 @@ The migration slice introduces the Django ASGI application, DRF API root, health
 ## Deployment boundaries
 
 API and Worker are separate processes built from the same Python package image. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager.
+
+
+## Dual-agent infrastructure control extension
+
+The general Studio runtime remains independent of infrastructure-specific execution. For bare-metal Kubernetes delivery it coordinates a Remote Control Plane Agent and two enrolled node-agent roles:
+
+- EPH Node Agent: runs on the temporary management/EPH node, performs preflight and plan validation, discovers management-cluster CAPI/Metal3 API groups and later coordinates provisioning through a version-verified adapter.
+- Target Cluster Agent: is installed only after the target Kubernetes API is reachable; it reports health and performs scoped read-only inspection before any separately authorized day-2 mutations are considered.
+- CAPI, Metal3 and Ironic remain the infrastructure control chain. The platform submits declarative resources through adapters and verifies controller Conditions/Events and target-side postconditions.
+
+Both agents initiate outbound HTTPS communication. Enrollment tokens are one-time and stored as hashes; command dispatch is PostgreSQL-backed, idempotent, lease-protected and bound to a node identity. Provisioning/bootstrap commands require a second administrator to approve the canonical plan hash. No arbitrary shell, Python, raw manifest or kubeconfig is accepted by the remote command API.
+
+The first implementation supports node enrollment, heartbeat, command polling/results, revocation, hash-bound approval, EPH host preflight, validated cluster-plan dry runs and read-only in-cluster Kubernetes API inspection. It does not yet create CAPI/Metal3 resources or perform Ironic/BMC operations. Those writes remain disabled until the target Kubernetes/CAPI/Metal3/Ironic/IPA version matrix, schemas, templates, credentials and postcondition checks are verified. See \`docs/dual-agent-infrastructure-architecture.md\`.

@@ -5,18 +5,28 @@ import {
   createAgentRun,
   getAgentRuns,
   getAgents,
+  getKnowledgeBases,
+  getPluginCatalog,
+  getPluginInstallations,
   getModelConfigs,
   getModelProviders,
   publishAgent,
   type AgentDraft,
   type AgentRun,
+  type KnowledgeBase,
   type ModelConfig,
+  type PluginTool,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 const agents = ref<AgentDraft[]>([]);
 const models = ref<ModelConfig[]>([]);
 const runs = ref<AgentRun[]>([]);
+type SelectableTool = PluginTool & { plugin_name: string; plugin_key: string };
+const knowledgeBases = ref<KnowledgeBase[]>([]);
+const availableTools = ref<SelectableTool[]>([]);
+const selectedKnowledgeBaseIds = ref<string[]>([]);
+const selectedToolIds = ref<string[]>([]);
 const selectedAgentId = ref("");
 const selectedModelId = ref("");
 const agentName = ref("New assistant");
@@ -38,6 +48,10 @@ async function loadWorkspace(): Promise<void> {
   agents.value = [];
   models.value = [];
   runs.value = [];
+  knowledgeBases.value = [];
+  availableTools.value = [];
+  selectedKnowledgeBaseIds.value = [];
+  selectedToolIds.value = [];
   selectedAgentId.value = "";
   selectedModelId.value = "";
   if (!props.tenantId || !props.projectId) return;
@@ -52,8 +66,30 @@ async function loadWorkspace(): Promise<void> {
     const modelPages = await Promise.all(
       providers.map((provider) => getModelConfigs(props.tenantId, provider.id)),
     );
-    models.value = modelPages.flat();
+    models.value = modelPages.flat().filter((model) => model.capabilities.includes("chat"));
     if (models.value.length > 0) selectedModelId.value = models.value[0].id;
+    const [basePage, catalogPage, installationPage] = await Promise.all([
+      getKnowledgeBases(props.tenantId, props.projectId),
+      getPluginCatalog(props.tenantId),
+      getPluginInstallations(props.tenantId, props.projectId),
+    ]);
+    knowledgeBases.value = basePage.results;
+    const installedPluginIds = new Set(
+      installationPage.results
+        .filter((installation) => installation.status === "installed")
+        .map((installation) => installation.plugin_id),
+    );
+    availableTools.value = catalogPage.results
+      .filter((plugin) => installedPluginIds.has(plugin.id) && plugin.enabled)
+      .flatMap((plugin) =>
+        plugin.tools
+          .filter((tool) => tool.enabled)
+          .map((tool) => ({
+            ...tool,
+            plugin_name: plugin.name,
+            plugin_key: plugin.plugin_key,
+          })),
+      );
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load Agent Studio data.";
   }
@@ -83,9 +119,9 @@ async function createDraft(): Promise<void> {
       draft_config: {
         model_config_id: selectedModel.value.id,
         system_prompt: systemPrompt.value,
-        tool_allowlist: [],
-        knowledge_base_ids: [],
-        max_iterations: 1,
+        tool_allowlist: selectedToolIds.value,
+        knowledge_base_ids: selectedKnowledgeBaseIds.value,
+        max_iterations: selectedToolIds.value.length > 0 ? 4 : 1,
         timeout_seconds: 60,
         max_tokens: Math.min(2048, selectedModel.value.max_output_tokens),
       },
@@ -168,7 +204,43 @@ onUnmounted(() => {
             />
           </el-select>
           <el-input v-model="systemPrompt" type="textarea" :rows="4" placeholder="System prompt" />
-          <el-button type="primary" :disabled="!selectedModel" :loading="busy" @click="createDraft">Create draft</el-button>
+          <el-select
+            v-model="selectedKnowledgeBaseIds"
+            multiple
+            collapse-tags
+            placeholder="Attach project knowledge bases (optional)"
+            class="full-width"
+          >
+            <el-option
+              v-for="item in knowledgeBases"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+          <el-select
+            v-model="selectedToolIds"
+            multiple
+            collapse-tags
+            placeholder="Allow installed connector tools (optional)"
+            class="full-width"
+          >
+            <el-option
+              v-for="tool in availableTools"
+              :key="tool.id"
+              :label="tool.plugin_name + ' / ' + tool.name + ' · ' + tool.risk_level"
+              :value="tool.id"
+            />
+          </el-select>
+          <p class="task-note">
+            Function calling is bounded to 4 turns. Tools without a registered trusted handler fail closed.
+          </p>
+          <el-button
+            type="primary"
+            :disabled="!selectedModel || (selectedToolIds.length > 0 && !selectedModel.capabilities.includes('tools'))"
+            :loading="busy"
+            @click="createDraft"
+          >Create draft</el-button>
         </div>
         <div class="agent-builder-form">
           <h4>Publish and run</h4>
@@ -200,7 +272,7 @@ onUnmounted(() => {
             :loading="busy"
             @click="runCurrent"
           >Run published agent</el-button>
-          <p class="task-note">This first runtime executes one text-only model call. Tools, RAG, memory and multi-step planning are intentionally not enabled yet.</p>
+          <p class="task-note">Published Agents can use pinned Knowledge Bases and project-installed tools. Retrieved text is untrusted context; high-risk tool approvals and connector transports remain pending.</p>
         </div>
       </div>
       <div v-if="runs.length" class="agent-run-list">

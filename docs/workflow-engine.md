@@ -39,6 +39,8 @@ The model UUID is illustrative. A real enabled chat model belonging to the same 
 | `start` | `{}` | Emits the run input object |
 | `llm` | `model_config_id`, `prompt_template`, optional `system_prompt`, `max_tokens`, `timeout_seconds`, `input_from` | Calls the configured model through ModelGateway |
 | `condition` | `equals`, optional `input_key` or `source_node` | Compares one input/state value and emits `matched` |
+| `knowledge_search` | `knowledge_base_ids` (1–8), optional `query_template`, `limit`, `input_from` | Retrieves tenant/project-scoped chunks from pinned Knowledge Bases and returns source IDs, scores and text as untrusted reference data |
+| `tool` | `tool_id`, optional `arguments` or `arguments_from` | Executes an installed project connector tool through the trusted ToolRouter |
 | `end` | optional `source_node` | Returns the referenced node output, or the accumulated state |
 
 Edges from a condition node must declare boolean `when` values and include both `true` and `false` branches. The first implementation treats an incoming active predecessor as sufficient to activate a downstream node; it does not yet provide a configurable AND-join.
@@ -51,6 +53,8 @@ The server checks:
 - one start node, at least one end node, no self/duplicate edges, no cycles and no unreachable nodes;
 - valid condition branches and source references that point to earlier nodes;
 - valid UUID model references, enabled chat model, tenant ownership, token ceiling and timeout range;
+- Knowledge Base IDs that belong to the same tenant/project, with an enabled embedding model;
+- Tool IDs that belong to an approved, enabled plugin and an installed project-scoped version, with the required permissions granted; high/critical-risk tools are rejected until a Workflow Human Approval node exists;
 - no credential-like keys in node configuration.
 
 Publishing stores an immutable `WorkflowVersion.definition_snapshot`. Editing a draft does not mutate a previously published version. A new publish creates the next version number.
@@ -75,13 +79,14 @@ Run creation requires `Idempotency-Key` and a JSON object in `input`. Reusing th
 - Worker claims tasks atomically using row locking and a lease token.
 - Each node has a unique `WorkflowStepRun` row with status, attempt count, input reference, output and error summary.
 - Completed node outputs are written to the run state after each step. A subsequent attempt reuses successful steps and retries an interrupted/failed step.
+- Tool nodes run through ToolRouter, but WorkflowStepRun does not yet provide a durable external-call receipt or exactly-once guarantee. A crash after a connector side effect but before the step is persisted as successful can cause a retry; connector handlers must be idempotent until a persisted execution ledger is added.
 - A lease expiry at the maximum attempt count marks the task and WorkflowRun terminal.
 - Cancellation is cooperative. It cannot roll back a model call already completed.
 
 ## Vue Studio
 
-The current Workflow Studio can create a draft, edit its JSON definition, save, publish, enqueue runs, poll execution history and display step statuses. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
+The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search` and `tool` nodes, save, publish, enqueue runs, poll execution history and display step statuses. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
 
 ## Not implemented in this milestone
 
-Loop/Iterator, Parallel/Join, HTTP Request, Code sandbox, Agent node, Tool node, Knowledge Retrieval, Human Approval, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. No external write connector is called by this workflow engine.
+Loop/Iterator, Parallel/Join, standalone HTTP Request node, Code sandbox, Agent node, Human Approval, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. The `tool` node is available only through the trusted ToolRouter; high/critical-risk tools are blocked, and execution fails closed when no trusted handler is registered. This does not provide exactly-once delivery for external connector side effects.

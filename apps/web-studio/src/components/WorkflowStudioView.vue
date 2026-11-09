@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createWorkflow,
   createWorkflowRun,
   getWorkflowRuns,
   getWorkflows,
   publishWorkflow,
+  validateWorkflow,
   updateWorkflow,
   type WorkflowDraft,
   type WorkflowRun,
@@ -26,6 +27,106 @@ const publishing = ref(false);
 const running = ref(false);
 const error = ref("");
 const notice = ref("");
+const validating = ref(false);
+const validationResult = ref<{
+  is_valid: boolean;
+  errors: string[];
+  execution_layers: string[][];
+  node_count: number;
+  edge_count: number;
+} | null>(null);
+
+const previewGraph = computed(() => {
+  try {
+    const parsed = JSON.parse(definitionText.value) as Record<string, unknown>;
+    return {
+      nodes: Array.isArray(parsed.nodes) ? parsed.nodes as Record<string, unknown>[] : [],
+      edges: Array.isArray(parsed.edges) ? parsed.edges as Record<string, unknown>[] : [],
+      parseError: "",
+    };
+  } catch {
+    return { nodes: [], edges: [], parseError: "The draft is not valid JSON yet." };
+  }
+});
+
+function nodeLabel(node: Record<string, unknown>): string {
+  return String(node.name ?? node.id ?? "Unnamed node");
+}
+
+function nodeType(node: Record<string, unknown>): string {
+  return String(node.type ?? "unknown").toUpperCase();
+}
+
+function nodeDetail(node: Record<string, unknown>): string {
+  if (!node.config || typeof node.config !== "object" || Array.isArray(node.config)) return "";
+  const config = node.config as Record<string, unknown>;
+  return String(config.tool_id ?? config.model_config_id ?? config.arguments_from ?? "");
+}
+
+function edgeLabel(edge: Record<string, unknown>): string {
+  return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
+}
+
+type InsertableNodeType = "llm" | "knowledge_search" | "tool";
+
+function addWorkflowNode(type: InsertableNodeType): void {
+  const definition = parseDefinition();
+  if (!definition) return;
+  const nodes = Array.isArray(definition.nodes)
+    ? [...definition.nodes as Record<string, unknown>[]]
+    : [];
+  const edges = Array.isArray(definition.edges)
+    ? [...definition.edges as Record<string, unknown>[]]
+    : [];
+  const endNodes = nodes.filter((node) => node.type === "end");
+  if (endNodes.length !== 1) {
+    error.value = "Add a processing node only when the draft has exactly one end node.";
+    return;
+  }
+  const endNode = endNodes[0];
+  const incoming = edges.filter((edge) => edge.target === endNode.id);
+  if (incoming.length !== 1) {
+    error.value = "The end node must have exactly one incoming edge before inserting a node.";
+    return;
+  }
+  const previousEdge = incoming[0];
+  const nodeId = type + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  const config: Record<string, unknown> = type === "llm"
+    ? { model_config_id: "", prompt_template: "{{input}}" }
+    : type === "knowledge_search"
+      ? { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 }
+      : { tool_id: "", arguments: {} };
+  const node = { id: nodeId, type, config };
+  const edgeIndex = edges.indexOf(previousEdge);
+  edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
+  edges.push({ source: nodeId, target: endNode.id });
+  nodes.splice(nodes.indexOf(endNode), 0, node);
+  definition.nodes = nodes;
+  definition.edges = edges;
+  definitionText.value = JSON.stringify(definition, null, 2);
+  validationResult.value = null;
+  notice.value = type.toUpperCase() + " node inserted. Configure its IDs and settings in the definition before validation.";
+  error.value = "";
+}
+
+async function validateDraft(): Promise<void> {
+  if (!selectedWorkflowId.value) return;
+  validating.value = true;
+  error.value = "";
+  validationResult.value = null;
+  try {
+    validationResult.value = await validateWorkflow(selectedWorkflowId.value);
+    if (validationResult.value.is_valid) {
+      notice.value = "DAG validation passed. " + validationResult.value.node_count + " nodes and " + validationResult.value.edge_count + " edges.";
+    } else {
+      error.value = validationResult.value.errors.join("; ");
+    }
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Workflow validation failed.";
+  } finally {
+    validating.value = false;
+  }
+}
 let refreshTimer: number | undefined;
 
 function initialDefinition(): Record<string, unknown> {
@@ -54,6 +155,7 @@ function selectWorkflow(workflowId: string): void {
     definitionText.value = "";
   }
   runs.value = [];
+  validationResult.value = null;
   if (workflowId) void loadRuns();
 }
 
@@ -147,6 +249,7 @@ async function saveDraft(): Promise<void> {
       item.id === updated.id ? updated : item,
     );
     selectedWorkflow.value = updated;
+    validationResult.value = null;
     notice.value = "Draft saved. Published versions remain immutable.";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to save workflow.";
@@ -204,6 +307,10 @@ async function runWorkflow(): Promise<void> {
   }
 }
 
+watch(definitionText, () => {
+  validationResult.value = null;
+});
+
 watch(
   () => [props.tenantId, props.projectId],
   () => void loadWorkflows(),
@@ -247,6 +354,55 @@ onUnmounted(() => {
           {{ selectedWorkflow.is_archived ? "ARCHIVED" : selectedWorkflow.current_version ? "PUBLISHED v" + selectedWorkflow.current_version : "DRAFT ONLY" }}
         </el-tag>
       </div>
+      <section class="workflow-pipeline">
+        <div class="workflow-run-heading">
+          <div>
+            <h4>Workflow DAG</h4>
+            <p class="task-note">Live visual preview of the editable draft. Server validation remains authoritative.</p>
+          </div>
+          <el-tag type="info" effect="plain">{{ previewGraph.nodes.length }} nodes · {{ previewGraph.edges.length }} edges</el-tag>
+        </div>
+        <div class="workflow-node-toolbar">
+          <span class="task-note">Insert node before the single end node:</span>
+          <el-button size="small" @click="addWorkflowNode('llm')">＋ LLM</el-button>
+          <el-button size="small" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
+          <el-button size="small" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
+        </div>
+        <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
+        <div v-else class="workflow-pipeline-row">
+          <template v-for="(node, index) in previewGraph.nodes" :key="String(node.id ?? index)">
+            <article class="workflow-node-card">
+              <el-tag size="small" effect="plain">{{ nodeType(node) }}</el-tag>
+              <strong>{{ nodeLabel(node) }}</strong>
+              <code>{{ String(node.id ?? "no-id") }}</code>
+              <small v-if="node.config && typeof node.config === 'object'">
+                {{ nodeDetail(node) }}
+              </small>
+            </article>
+            <span v-if="index < previewGraph.nodes.length - 1" class="workflow-node-arrow">→</span>
+          </template>
+        </div>
+        <div v-if="previewGraph.edges.length" class="workflow-edge-list">
+          <span v-for="(edge, index) in previewGraph.edges" :key="index">{{ edgeLabel(edge) }}</span>
+        </div>
+        <div v-if="validationResult" class="workflow-validation-result">
+          <div class="workflow-run-heading">
+            <strong>Server validation</strong>
+            <el-tag :type="validationResult.is_valid ? 'success' : 'danger'">
+              {{ validationResult.is_valid ? "VALID" : "INVALID" }}
+            </el-tag>
+          </div>
+          <div v-if="validationResult.is_valid" class="workflow-edge-list">
+            <span v-for="(layer, index) in validationResult.execution_layers" :key="index">
+              Layer {{ index + 1 }}: {{ layer.join(", ") }}
+            </span>
+          </div>
+          <el-alert v-for="(item, index) in validationResult.errors" :key="index" :title="item" type="error" :closable="false" />
+        </div>
+        <div class="workflow-actions">
+          <el-button :loading="validating" :disabled="!selectedWorkflowId" @click="validateDraft">Validate DAG</el-button>
+        </div>
+      </section>
       <div class="workflow-editor-grid">
         <div class="workflow-editor-form">
           <h4>Definition</h4>
@@ -254,8 +410,8 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes in this milestone: start, llm, condition and end.
-            The server validates graph connectivity, cycles, model scope and credential fields before publishing.
+            Supported execution nodes: start, llm, knowledge_search, tool, condition and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
+            The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
           </p>
           <div class="workflow-actions">
             <el-button :loading="saving" @click="saveDraft">Save draft</el-button>

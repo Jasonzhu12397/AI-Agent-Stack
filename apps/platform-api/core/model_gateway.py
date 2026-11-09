@@ -1,11 +1,15 @@
 import json
+import math
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from core.models import ModelConfig, ModelProvider
+from django.conf import settings
+
+from core.models import ModelProvider
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -25,6 +29,18 @@ class ModelResponse:
     content: str
     input_tokens: int
     output_tokens: int
+    provider: str
+    model: str
+    latency_ms: int
+    tool_calls: list[dict] = field(default_factory=list)
+
+    def as_dict(self):
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class EmbeddingResponse:
+    vectors: list[list[float]]
     provider: str
     model: str
     latency_ms: int
@@ -49,26 +65,81 @@ def resolve_credential(credential_ref):
     return secret
 
 
+def _is_local_http_provider(provider):
+    parsed = urlsplit(provider.base_url)
+    allowed_hosts = {
+        host.strip().lower()
+        for host in getattr(settings, "LOCAL_MODEL_ALLOWED_HOSTS", [])
+        if host.strip()
+    }
+    return (
+        parsed.scheme == "http"
+        and bool(parsed.hostname)
+        and parsed.hostname.lower() in allowed_hosts
+    )
+
+
 class ModelGateway:
     def complete(
         self,
-        model_config: ModelConfig,
+        model_config,
         messages,
         max_tokens=None,
         timeout_seconds=30,
+        tools=None,
+        tool_choice=None,
     ):
         if not isinstance(messages, list) or not messages:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
         for message in messages:
-            if (
-                not isinstance(message, dict)
-                or message.get("role") not in {"system", "user", "assistant"}
-                or not isinstance(message.get("content"), str)
-            ):
+            if not isinstance(message, dict) or message.get("role") not in {
+                "system", "user", "assistant", "tool"
+            }:
                 raise ModelGatewayError(
                     "INVALID_MESSAGES",
-                    "Messages must contain a supported role and string content.",
+                    "Messages must contain a supported role.",
                 )
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                if (
+                    message.get("content") is not None
+                    and not isinstance(message.get("content"), str)
+                ) or not isinstance(message.get("tool_calls"), list):
+                    raise ModelGatewayError(
+                        "INVALID_MESSAGES",
+                        "Assistant tool-call messages must contain a tool_calls array.",
+                    )
+            elif not isinstance(message.get("content"), str):
+                raise ModelGatewayError(
+                    "INVALID_MESSAGES",
+                    "Message content must be a string unless the assistant requests tools.",
+                )
+        if tools is not None:
+            if not isinstance(tools, list) or len(tools) > 64:
+                raise ModelGatewayError(
+                    "INVALID_TOOLS",
+                    "Tools must be a list of at most 64 items.",
+                )
+            if tools and "tools" not in (model_config.capabilities or []):
+                raise ModelGatewayError(
+                    "MODEL_CAPABILITY_MISSING",
+                    "The selected model is not configured for tool calling.",
+                )
+            if tool_choice not in (None, "auto", "none", "required"):
+                raise ModelGatewayError("INVALID_TOOL_CHOICE", "Unsupported tool_choice value.")
+        elif tool_choice is not None:
+            raise ModelGatewayError("INVALID_TOOL_CHOICE", "tool_choice requires a tools list.")
+        if max_tokens is not None and (
+            not isinstance(max_tokens, int)
+            or isinstance(max_tokens, bool)
+            or max_tokens < 1
+        ):
+            raise ModelGatewayError("INVALID_MAX_TOKENS", "max_tokens must be a positive integer.")
+        if (
+            not isinstance(timeout_seconds, (int, float))
+            or isinstance(timeout_seconds, bool)
+            or timeout_seconds <= 0
+        ):
+            raise ModelGatewayError("INVALID_TIMEOUT", "timeout_seconds must be positive.")
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
@@ -80,37 +151,24 @@ class ModelGateway:
                     "INVALID_FAKE_RESPONSE",
                     "Fake provider response must be a string.",
                 )
-            elapsed = int((time.monotonic() - started) * 1000)
             return ModelResponse(
                 content=content,
                 input_tokens=0,
                 output_tokens=0,
                 provider=provider.name,
                 model=model_config.model_name,
-                latency_ms=elapsed,
+                latency_ms=int((time.monotonic() - started) * 1000),
             )
         if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
             raise ModelGatewayError("PROVIDER_UNSUPPORTED", "The provider type is not supported.")
-        return self._openai_compatible(
-            model_config,
-            messages,
-            started,
-            max_tokens,
-            timeout_seconds,
-        )
-
-    def _openai_compatible(
-        self,
-        model_config,
-        messages,
-        started,
-        max_tokens,
-        timeout_seconds,
-    ):
-        provider = model_config.provider
-        credential = resolve_credential(provider.credential_ref)
-        url = provider.base_url.rstrip("/") + "/chat/completions"
-        body = json.dumps(
+        if urlsplit(provider.base_url).scheme == "http" and not _is_local_http_provider(provider):
+            raise ModelGatewayError(
+                "LOCAL_MODEL_HOST_NOT_ALLOWED",
+                "HTTP model endpoints must use an explicitly allowlisted local model host.",
+            )
+        payload = self._post_json(
+            provider,
+            "chat/completions",
             {
                 "model": model_config.model_name,
                 "messages": messages,
@@ -118,22 +176,141 @@ class ModelGateway:
                     max_tokens or model_config.max_output_tokens,
                     model_config.max_output_tokens,
                 ),
-            }
-        ).encode("utf-8")
+                **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
+            },
+            timeout_seconds,
+        )
+        try:
+            message = payload["choices"][0]["message"]
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+            usage = payload.get("usage") or {}
+            if (
+                not isinstance(content, str)
+                or not isinstance(tool_calls, list)
+                or len(tool_calls) > 16
+            ):
+                raise TypeError("message content or tool_calls has an invalid type")
+            if tool_calls and not tools:
+                raise TypeError("provider returned tool calls when no tools were offered")
+            input_tokens = int(usage.get("prompt_tokens", 0))
+            output_tokens = int(usage.get("completion_tokens", 0))
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ModelGatewayError(
+                "MODEL_PROVIDER_INVALID_RESPONSE",
+                "The model provider returned an invalid chat completion.",
+            ) from exc
+        return ModelResponse(
+            content=content,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            provider=provider.name,
+            model=model_config.model_name,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            tool_calls=tool_calls,
+        )
+
+    def embed(self, model_config, inputs, timeout_seconds=45):
+        if not isinstance(inputs, list) or not inputs or any(
+            not isinstance(item, str) or not item.strip() for item in inputs
+        ):
+            raise ModelGatewayError(
+                "INVALID_EMBEDDING_INPUT",
+                "Embedding input must be a non-empty list of non-empty strings.",
+            )
+        if len(inputs) > 128 or any(len(item) > 20000 for item in inputs):
+            raise ModelGatewayError(
+                "EMBEDDING_INPUT_LIMIT",
+                "Embedding requests are limited to 128 texts of at most 20,000 characters each.",
+            )
+        provider = model_config.provider
+        if not provider.enabled or not model_config.enabled:
+            raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
+        if "embeddings" not in (model_config.capabilities or []):
+            raise ModelGatewayError(
+                "MODEL_CAPABILITY_MISSING",
+                "The selected model is not configured for embeddings.",
+            )
+        if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
+            raise ModelGatewayError(
+                "PROVIDER_UNSUPPORTED",
+                "The selected provider does not support embeddings.",
+            )
+        if urlsplit(provider.base_url).scheme == "http" and not _is_local_http_provider(provider):
+            raise ModelGatewayError(
+                "LOCAL_MODEL_HOST_NOT_ALLOWED",
+                "HTTP model endpoints must use an explicitly allowlisted local model host.",
+            )
+        started = time.monotonic()
+        payload = self._post_json(
+            provider,
+            "embeddings",
+            {"model": model_config.model_name, "input": inputs},
+            timeout_seconds,
+        )
+        try:
+            rows = payload["data"]
+            rows = sorted(rows, key=lambda row: int(row["index"]))
+            vectors = [row["embedding"] for row in rows]
+            if len(vectors) != len(inputs):
+                raise ValueError("embedding count mismatch")
+            dimensions = {len(vector) for vector in vectors}
+            if len(dimensions) != 1 or not dimensions or next(iter(dimensions)) <= 0:
+                raise ValueError("embedding dimensions mismatch")
+            normalized = []
+            for vector in vectors:
+                if not isinstance(vector, list):
+                    raise TypeError("embedding must be an array")
+                values = [float(value) for value in vector]
+                if any(not math.isfinite(value) for value in values):
+                    raise ValueError("embedding contains non-finite values")
+                normalized.append(values)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ModelGatewayError(
+                "MODEL_PROVIDER_INVALID_EMBEDDING",
+                "The model provider returned invalid embeddings.",
+            ) from exc
+        return EmbeddingResponse(
+            vectors=normalized,
+            provider=provider.name,
+            model=model_config.model_name,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    def _post_json(self, provider, endpoint, body, timeout_seconds):
+        parsed = urlsplit(provider.base_url)
+        is_local_http = parsed.scheme == "http" and _is_local_http_provider(provider)
+        if parsed.scheme != "https" and not is_local_http:
+            raise ModelGatewayError(
+                "MODEL_ENDPOINT_SCHEME_INVALID",
+                "Model endpoints must use HTTPS or an allowlisted local HTTP endpoint.",
+            )
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if provider.credential_ref:
+            credential = resolve_credential(provider.credential_ref)
+            headers["Authorization"] = f"Bearer {credential}"
+        elif not is_local_http:
+            raise ModelGatewayError(
+                "MODEL_CREDENTIAL_MISSING",
+                "Remote model providers require an environment-backed credential reference.",
+            )
+        url = provider.base_url.rstrip("/") + "/" + endpoint.lstrip("/")
         request = Request(
             url,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {credential}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
             method="POST",
         )
         try:
             opener = build_opener(NoRedirectHandler())
             with opener.open(request, timeout=timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                raw_payload = response.read(16 * 1024 * 1024 + 1)
+            if len(raw_payload) > 16 * 1024 * 1024:
+                raise ModelGatewayError(
+                    "MODEL_PROVIDER_RESPONSE_TOO_LARGE",
+                    "The model provider response exceeded the 16 MiB limit.",
+                )
+            payload = json.loads(raw_payload.decode("utf-8"))
         except HTTPError as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_HTTP_ERROR",
@@ -151,23 +328,9 @@ class ModelGateway:
                 "MODEL_PROVIDER_INVALID_RESPONSE",
                 "The model provider returned an invalid response.",
             ) from exc
-        try:
-            content = payload["choices"][0]["message"]["content"]
-            usage = payload.get("usage") or {}
-            if not isinstance(content, str):
-                raise TypeError("content must be a string")
-            input_tokens = int(usage.get("prompt_tokens", 0))
-            output_tokens = int(usage.get("completion_tokens", 0))
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
+        if not isinstance(payload, dict):
             raise ModelGatewayError(
                 "MODEL_PROVIDER_INVALID_RESPONSE",
-                "The model provider returned an invalid chat completion.",
-            ) from exc
-        return ModelResponse(
-            content=content,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            provider=provider.name,
-            model=model_config.model_name,
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
+                "The model provider returned an invalid response.",
+            )
+        return payload

@@ -7,7 +7,19 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
-if APP_ENV == "production" and (DEBUG or SECRET_KEY == "local-only-change-before-production"):
+AGENT_MTLS_TRUSTED_PROXY_IP = os.getenv("AGENT_MTLS_TRUSTED_PROXY_IP", "").strip()
+AGENT_MTLS_TRUSTED_PROXY_CIDRS = [
+    value.strip()
+    for value in os.getenv("AGENT_MTLS_TRUSTED_PROXY_CIDRS", "").split(",")
+    if value.strip()
+]
+AGENT_MTLS_REQUIRED = os.getenv("AGENT_MTLS_REQUIRED", "false").lower() == "true"
+if APP_ENV == "production" and (
+    DEBUG
+    or SECRET_KEY == "local-only-change-before-production"
+    or SECRET_KEY.startswith("replace-")
+    or len(SECRET_KEY) < 32
+):
     raise RuntimeError("Production requires DEBUG=false and a non-default SECRET_KEY")
 
 ALLOWED_HOSTS = [
@@ -86,6 +98,13 @@ LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = APP_ENV == "production"
+CSRF_COOKIE_SECURE = APP_ENV == "production"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
@@ -95,3 +114,28 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
     ],
 }
+
+LOCAL_MODEL_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("LOCAL_MODEL_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+
+PLUGIN_HTTP_ALLOWED_HOSTS = [
+    value.strip().lower()
+    for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+PLUGIN_CREDENTIAL_RESOLVER = os.getenv("PLUGIN_CREDENTIAL_RESOLVER", "").strip()
+BMC_CREDENTIAL_RESOLVER = os.getenv("BMC_CREDENTIAL_RESOLVER", "").strip()
+BMC_VAULT_ADDR = os.getenv("BMC_VAULT_ADDR", "").strip()
+BMC_VAULT_TOKEN = os.getenv("BMC_VAULT_TOKEN", "").strip()
+BMC_VAULT_TOKEN_RESOLVER = os.getenv("BMC_VAULT_TOKEN_RESOLVER", "").strip()
+BMC_VAULT_JWT_PATH = os.getenv("BMC_VAULT_JWT_PATH", "").strip()
+BMC_VAULT_JWT_ROLE = os.getenv("BMC_VAULT_JWT_ROLE", "").strip()
+BMC_VAULT_JWT_AUTH_MOUNT = os.getenv("BMC_VAULT_JWT_AUTH_MOUNT", "jwt").strip()
+BMC_VAULT_JWT_TENANT_CLAIM = os.getenv("BMC_VAULT_JWT_TENANT_CLAIM", "tenant_id").strip()
+BMC_VAULT_JWT_PROJECT_CLAIM = os.getenv("BMC_VAULT_JWT_PROJECT_CLAIM", "project_id").strip()
+BMC_VAULT_NAMESPACE = os.getenv("BMC_VAULT_NAMESPACE", "").strip()
+BMC_VAULT_CA_BUNDLE = os.getenv("BMC_VAULT_CA_BUNDLE", "").strip()
+BMC_VAULT_TIMEOUT_SECONDS = float(os.getenv("BMC_VAULT_TIMEOUT_SECONDS", "5"))

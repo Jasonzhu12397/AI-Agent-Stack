@@ -138,6 +138,58 @@ class WorkflowDetailView(APIView):
         return Response(serializer.data)
 
 
+
+class WorkflowValidateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, workflow_id):
+        workflow = get_workflow(request, workflow_id)
+        if not can_edit_workflow(request, workflow):
+            return Response(
+                {"detail": "Project editor permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        definition = workflow.draft_definition
+        node_values = definition.get("nodes") if isinstance(definition, dict) else None
+        edge_values = definition.get("edges") if isinstance(definition, dict) else None
+        node_count = len(node_values) if isinstance(node_values, list) else 0
+        edge_count = len(edge_values) if isinstance(edge_values, list) else 0
+        try:
+            graph = validate_workflow_definition(definition)
+            validate_model_references(graph, workflow.tenant, workflow.project)
+        except WorkflowValidationError as exc:
+            return Response(
+                {
+                    "is_valid": False,
+                    "errors": [str(exc)],
+                    "execution_layers": [],
+                    "node_count": node_count,
+                    "edge_count": edge_count,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        depths = {}
+        layers = {}
+        for node_id in graph["order"]:
+            incoming = graph["incoming"][node_id]
+            depth = max(
+                (depths[edge["source"]] + 1 for edge in incoming),
+                default=0,
+            )
+            depths[node_id] = depth
+            layers.setdefault(depth, []).append(node_id)
+        return Response(
+            {
+                "is_valid": True,
+                "errors": [],
+                "execution_layers": [layers[index] for index in sorted(layers)],
+                "node_count": node_count,
+                "edge_count": edge_count,
+            }
+        )
+
+
 class WorkflowPublishView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -157,7 +209,7 @@ class WorkflowPublishView(APIView):
                 )
             try:
                 graph = validate_workflow_definition(workflow.draft_definition)
-                validate_model_references(graph, workflow.tenant)
+                validate_model_references(graph, workflow.tenant, workflow.project)
             except WorkflowValidationError as exc:
                 return Response(
                     {"detail": str(exc)},

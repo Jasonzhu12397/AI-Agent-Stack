@@ -130,7 +130,7 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
         def __exit__(self, exc_type, exc, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return json.dumps(
                 {
                     "choices": [{"message": {"content": "provider answer"}}],

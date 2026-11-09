@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-cluster-agent
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: target-cluster-agent
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: target-cluster-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: target-cluster-agent
+    spec:
+      serviceAccountName: target-cluster-agent
+      automountServiceAccountToken: true
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+          env:
+            - name: APP_ENV
+              value: production
+            - name: AGENT_TLS_CLIENT_CERT_REQUIRED
+              value: "true"
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
+            - name: AGENT_NODE_TYPE
+              value: target_cluster
+            - name: AGENT_HOST_SYSFS_PATH
+              value: /host/sys
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: target-cluster-agent-credentials
+                  key: control-url
+            - name: AGENT_NODE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-cluster-agent-credentials
+                  key: node-id
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: target-cluster-agent-credentials
+                  key: token
+            - name: IRONIC_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ironic-api-credentials
+                  key: api-url
+                  optional: true
+            - name: IRONIC_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ironic-api-credentials
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: agent-health
+              mountPath: /tmp
+            - name: control-plane-tls
+              mountPath: /var/run/secrets/ai-agent/control-plane-tls
+              readOnly: true
+            - name: host-sysfs
+              mountPath: /host/sys
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: host-sysfs
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: agent-health
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: control-plane-tls
+          secret:
+            secretName: agent-control-plane-mtls
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+            defaultMode: 0440

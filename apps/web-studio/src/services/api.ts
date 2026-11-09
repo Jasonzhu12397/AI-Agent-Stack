@@ -220,6 +220,7 @@ export function createModelConfig(
   providerId: string,
   modelName: string,
   displayName: string,
+  capabilities: string[] = ["chat", "tools"],
 ): Promise<ModelConfig> {
   return request<ModelConfig>(
     `/api/v1/tenants/${tenantId}/model-providers/${providerId}/models/`,
@@ -228,7 +229,7 @@ export function createModelConfig(
       body: JSON.stringify({
         model_name: modelName,
         display_name: displayName,
-        capabilities: ["chat", "tools"],
+        capabilities,
         context_window: 32768,
         max_output_tokens: 4096,
       }),
@@ -332,6 +333,14 @@ export type WorkflowRun = {
   finished_at: string | null;
 };
 
+export type WorkflowValidationResult = {
+  is_valid: boolean;
+  errors: string[];
+  execution_layers: string[][];
+  node_count: number;
+  edge_count: number;
+};
+
 export type WorkflowVersion = {
   id: string;
   workflow_id: string;
@@ -376,6 +385,13 @@ export function updateWorkflow(
   });
 }
 
+export function validateWorkflow(workflowId: string): Promise<WorkflowValidationResult> {
+  return request<WorkflowValidationResult>("/api/v1/workflows/" + workflowId + "/validate/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function publishWorkflow(workflowId: string): Promise<WorkflowVersion> {
   return request<WorkflowVersion>("/api/v1/workflows/" + workflowId + "/publish/", {
     method: "POST",
@@ -395,5 +411,628 @@ export function createWorkflowRun(
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ input }),
+  });
+}
+
+
+export type AgentNode = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  node_type: "eph_node" | "target_cluster";
+  cluster_name: string;
+  agent_version: string;
+  capabilities: string[];
+  labels: Record<string, string>;
+  status: "offline" | "online" | "revoked";
+  last_seen_at: string | null;
+  last_seen_ip: string | null;
+  created_at: string;
+};
+
+export type FleetMachine = AgentNode & {
+  observed_status: "offline" | "online" | "revoked" | "stale";
+  identity: {
+    agent_node_id: string;
+    name: string;
+    cluster_name: string;
+    system_uuid: string;
+    identity_status: "unverified" | "candidate" | "verified" | "conflict";
+    identity_fingerprint: string | null;
+    identity_conflicts: Array<{
+      machine_id: string;
+      agent_node_id: string;
+      matching_fields: string[];
+    }>;
+  };
+  hardware_inventory: Record<string, unknown>;
+  inventory_source: string;
+  observed_at: string | null;
+};
+
+export function getFleetMachines(
+  tenantId: string,
+  projectId: string,
+  options: { limit?: number; offset?: number; search?: string; status?: string; nodeType?: string } = {},
+): Promise<{
+  count: number;
+  limit: number;
+  offset: number;
+  results: FleetMachine[];
+  capabilities: { hardware_inventory: string; stable_hardware_identity: string };
+}> {
+  const query = new URLSearchParams({
+    limit: String(options.limit ?? 100),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.search) query.set("search", options.search);
+  if (options.status) query.set("status", options.status);
+  if (options.nodeType) query.set("node_type", options.nodeType);
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/?" + query.toString(),
+  );
+}
+
+export type EnrolledAgentNode = AgentNode & {
+  enrollment_token: string;
+  token_warning: string;
+};
+
+export type AgentCommand = {
+  id: string;
+  node_id: string;
+  deployment_id: string | null;
+  command_type: string;
+  payload: Record<string, unknown>;
+  status: "waiting_approval" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  plan_hash: string;
+  approved_at: string | null;
+  attempts: number;
+  result: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export function getAgentNodes(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: AgentNode[] }> {
+  return request("/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-nodes/");
+}
+
+export function enrollAgentNode(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    node_type: AgentNode["node_type"];
+    cluster_name?: string;
+    capabilities?: string[];
+    labels?: Record<string, string>;
+  },
+): Promise<EnrolledAgentNode> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-nodes/",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function revokeAgentNode(nodeId: string): Promise<AgentNode> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/revoke/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getAgentCommands(
+  nodeId: string,
+): Promise<{ count: number; results: AgentCommand[] }> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/commands/");
+}
+
+export function getProjectAgentCommands(
+  tenantId: string,
+  projectId: string,
+  options: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    nodeId?: string;
+    commandType?: string;
+  } = {},
+): Promise<{ count: number; limit: number; offset: number; results: AgentCommand[] }> {
+  const query = new URLSearchParams({
+    limit: String(options.limit ?? 100),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.status) query.set("status", options.status);
+  if (options.nodeId) query.set("node_id", options.nodeId);
+  if (options.commandType) query.set("command_type", options.commandType);
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-commands/?" + query.toString(),
+  );
+}
+
+export function createAgentCommand(
+  nodeId: string,
+  commandType: string,
+  payload: Record<string, unknown>,
+): Promise<AgentCommand> {
+  return request("/api/v1/agent-nodes/" + nodeId + "/commands/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ command_type: commandType, payload }),
+  });
+}
+
+export function approveAgentCommand(
+  commandId: string,
+  planHash: string,
+): Promise<AgentCommand> {
+  return request("/api/v1/agent-commands/" + commandId + "/approve/", {
+    method: "POST",
+    body: JSON.stringify({ plan_hash: planHash }),
+  });
+}
+
+
+export type ClusterDeployment = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  cluster_name: string;
+  kubernetes_version: string;
+  eph_node_id: string;
+  target_node_id: string | null;
+  status: string;
+  spec: Record<string, unknown>;
+  plan_hash: string;
+  preflight_result: Record<string, unknown> | null;
+  plan_result: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export function getClusterDeployments(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: ClusterDeployment[] }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/",
+  );
+}
+
+export function createClusterDeployment(
+  tenantId: string,
+  projectId: string,
+  ephNodeId: string,
+  clusterSpec: Record<string, unknown>,
+): Promise<ClusterDeployment> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        eph_node_id: ephNodeId,
+        cluster_spec: clusterSpec,
+      }),
+    },
+  );
+}
+
+export function cancelClusterDeployment(deploymentId: string): Promise<ClusterDeployment> {
+  return request("/api/v1/cluster-deployments/" + deploymentId + "/cancel/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+
+export type PluginTool = {
+  id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  required_permissions: string[];
+  risk_level: "low" | "medium" | "high" | "critical";
+  timeout_seconds: number;
+  retry_policy: Record<string, unknown>;
+  idempotency_mode: "none" | "read_only" | "idempotent";
+  enabled: boolean;
+};
+
+export type PluginDefinition = {
+  id: string;
+  plugin_key: string;
+  name: string;
+  description: string;
+  version: string;
+  connector_type: "native" | "mcp" | "http" | "openapi" | "custom";
+  maintainer: string;
+  license: string;
+  source_url: string;
+  manifest: Record<string, unknown>;
+  review_status: "draft" | "approved" | "rejected";
+  enabled: boolean;
+  tools: PluginTool[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PluginConnection = {
+  id: string;
+  name: string;
+  auth_type: "none" | "credential_ref" | "oauth_ref";
+  credential_configured: boolean;
+  status: "pending" | "healthy" | "error" | "disabled";
+  last_health_check_at: string | null;
+};
+
+export type PluginInstallation = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  plugin_id: string;
+  plugin_name: string;
+  plugin_key: string;
+  plugin_version: string;
+  status: "installed" | "disabled" | "uninstalled";
+  granted_permissions: string[];
+  config: Record<string, unknown>;
+  connections: PluginConnection[];
+  created_at: string;
+  updated_at: string;
+};
+
+export function getPluginCatalog(
+  tenantId: string,
+): Promise<{ count: number; results: PluginDefinition[] }> {
+  return request("/api/v1/connectors/?tenant_id=" + encodeURIComponent(tenantId));
+}
+
+export function registerPlugin(payload: Record<string, unknown>): Promise<PluginDefinition> {
+  return request("/api/v1/connectors/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approvePlugin(pluginId: string): Promise<PluginDefinition> {
+  return request("/api/v1/connectors/" + pluginId + "/approve/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getPluginInstallations(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: PluginInstallation[] }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/plugin-installations/",
+  );
+}
+
+export function installPlugin(
+  tenantId: string,
+  projectId: string,
+  pluginId: string,
+  grantedPermissions: string[],
+): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/plugin-installations/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        plugin_id: pluginId,
+        granted_permissions: grantedPermissions,
+        config: {},
+      }),
+    },
+  );
+}
+
+export function setPluginInstallationStatus(
+  installationId: string,
+  status: "installed" | "disabled" | "uninstalled",
+): Promise<PluginInstallation> {
+  return request("/api/v1/plugin-installations/" + installationId + "/status/", {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function createPluginConnection(
+  installationId: string,
+  payload: {
+    name: string;
+    auth_type: "none" | "credential_ref" | "oauth_ref";
+    credential_ref?: string;
+  },
+): Promise<PluginConnection> {
+  return request("/api/v1/plugin-installations/" + installationId + "/connections/", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, config: {} }),
+  });
+}
+
+export function testPluginConnection(connectionId: string): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/plugin-connections/" + connectionId + "/test/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function setPluginConnectionStatus(
+  connectionId: string,
+  status: "pending" | "disabled",
+): Promise<PluginInstallation> {
+  return request(
+    "/api/v1/plugin-connections/" + connectionId + "/status/",
+    { method: "POST", body: JSON.stringify({ status }) },
+  );
+}
+
+
+export type KnowledgeBase = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  embedding_model_id: string;
+  chunk_size: number;
+  chunk_overlap: number;
+  is_archived: boolean;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  checksum: string;
+  status: "pending" | "ingesting" | "ready" | "failed";
+  chunk_count: number;
+  error: Record<string, unknown> | null;
+  ingested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function getKnowledgeBases(
+  tenantId: string,
+  projectId: string,
+): Promise<Page<KnowledgeBase>> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/knowledge-bases/",
+  );
+}
+
+export function createKnowledgeBase(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    slug: string;
+    description: string;
+    embedding_model_id: string;
+    chunk_size: number;
+    chunk_overlap: number;
+  },
+): Promise<KnowledgeBase> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/knowledge-bases/",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function getKnowledgeDocuments(
+  knowledgeBaseId: string,
+): Promise<Page<KnowledgeDocument>> {
+  return request("/api/v1/knowledge-bases/" + knowledgeBaseId + "/documents/");
+}
+
+export function createKnowledgeDocument(
+  knowledgeBaseId: string,
+  title: string,
+  content: string,
+  metadata: Record<string, unknown> = {},
+): Promise<KnowledgeDocument> {
+  return request("/api/v1/knowledge-bases/" + knowledgeBaseId + "/documents/", {
+    method: "POST",
+    body: JSON.stringify({ title, content, metadata }),
+  });
+}
+
+export function deleteKnowledgeDocument(documentId: string): Promise<void> {
+  return request("/api/v1/knowledge-documents/" + documentId + "/", {
+    method: "DELETE",
+  });
+}
+
+
+export function createOpenAICompatibleProvider(
+  tenantId: string,
+  name: string,
+  baseUrl: string,
+  credentialRef: string,
+): Promise<ModelProvider> {
+  return request<ModelProvider>(`/api/v1/tenants/${tenantId}/model-providers/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      provider_type: "openai_compatible",
+      base_url: baseUrl,
+      credential_ref: credentialRef,
+      config: {},
+    }),
+  });
+}
+
+
+export function runClusterDeploymentPostflight(deploymentId: string, targetNodeId: string) {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/target-postflight/",
+    { method: "POST", body: JSON.stringify({ target_node_id: targetNodeId, confirmation: "cluster_provisioned" }) },
+  );
+}
+
+export type TenantMember = {
+  id: string;
+  user_id: number;
+  username: string;
+  email: string;
+  role: "owner" | "admin" | "member" | "viewer";
+};
+
+export function getTenantMembers(tenantId: string): Promise<TenantMember[]> {
+  return request("/api/v1/tenants/" + tenantId + "/members/");
+}
+
+export function addTenantMember(
+  tenantId: string,
+  username: string,
+  role: TenantMember["role"],
+): Promise<TenantMember> {
+  return request("/api/v1/tenants/" + tenantId + "/members/", {
+    method: "POST",
+    body: JSON.stringify({ username, role }),
+  });
+}
+
+export function updateTenantMember(
+  tenantId: string,
+  membershipId: string,
+  role: TenantMember["role"],
+): Promise<TenantMember> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/members/" + membershipId + "/",
+    { method: "PATCH", body: JSON.stringify({ role }) },
+  );
+}
+
+export function removeTenantMember(tenantId: string, membershipId: string): Promise<void> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/members/" + membershipId + "/",
+    { method: "DELETE" },
+  );
+}
+
+export type AuditEvent = {
+  id: string;
+  tenant_id: string;
+  project_id: string | null;
+  actor_id: number | null;
+  actor_username: string | null;
+  event_type: string;
+  resource_type: string;
+  resource_id: string;
+  outcome: "success" | "denied" | "failure";
+  request_id: string;
+  remote_addr: string | null;
+  user_agent: string;
+  metadata: Record<string, unknown>;
+  previous_hash: string;
+  event_hash: string;
+  created_at: string;
+};
+
+export type AuditChainVerification = {
+  valid: boolean;
+  verified_count: number;
+  invalid_event_id?: string | null;
+  expected_previous_hash?: string;
+  stored_previous_hash?: string;
+  head_hash?: string;
+};
+
+export function getAuditEvents(
+  tenantId: string,
+  projectId?: string,
+): Promise<{ count: number; limit: number; offset: number; results: AuditEvent[] }> {
+  const query = new URLSearchParams({ limit: "100", offset: "0" });
+  if (projectId) query.set("project_id", projectId);
+  return request(
+    "/api/v1/tenants/" + tenantId + "/audit-events/?" + query.toString(),
+  );
+}
+
+export function verifyAuditChain(tenantId: string): Promise<AuditChainVerification> {
+  return request("/api/v1/tenants/" + tenantId + "/audit-events/verify/");
+}
+
+
+export type ToolApprovalRequest = {
+  id: string;
+  task_id: string;
+  tenant_id: string;
+  project_id: string;
+  tool: string;
+  plugin: string;
+  plugin_version: string;
+  installation_id: string;
+  connection_id: string | null;
+  call_id: string;
+  arguments: Record<string, unknown>;
+  arguments_hash: string;
+  status: string;
+  requested_at: string;
+  expires_at: string;
+  approved_at: string | null;
+  consumed_at: string | null;
+  approved_by_id: number | null;
+  rejected_by_id: number | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+};
+
+export function getToolApprovals(
+  tenantId: string,
+  projectId: string,
+): Promise<{ items: ToolApprovalRequest[]; count: number }> {
+  return request<{ items: ToolApprovalRequest[]; count: number }>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/?status=pending`,
+  );
+}
+
+export function approveToolApproval(
+  tenantId: string,
+  projectId: string,
+  approvalId: string,
+): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
+  return request<{ approval: ToolApprovalRequest; task_status: string }>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/approve/`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function rejectToolApproval(
+  tenantId: string,
+  projectId: string,
+  approvalId: string,
+  reason: string,
+): Promise<{ approval: ToolApprovalRequest; task_status: string }> {
+  return request<{ approval: ToolApprovalRequest; task_status: string }>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/tool-approvals/${approvalId}/reject/`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
+export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDocument> {
+  return request("/api/v1/knowledge-documents/" + documentId + "/retry/", {
+    method: "POST",
   });
 }

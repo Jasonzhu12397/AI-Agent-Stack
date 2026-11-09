@@ -20,6 +20,20 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    ports: ["6333:6333", "6334:6334"]
+    volumes: [qdrant_data:/qdrant/storage]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "timeout 2 bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  ollama:
+    profiles: ["local-models"]
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: [ollama_data:/root/.ollama]
   api:
     build:
       context: ..
@@ -28,11 +42,14 @@ services:
     environment:
       DATABASE_URL: postgresql://agent:agent_dev_password@postgres:5432/agent_stack
       REDIS_URL: redis://redis:6379/0
+      LOCAL_MODEL_ALLOWED_HOSTS: ${LOCAL_MODEL_ALLOWED_HOSTS:-ollama}
+      QDRANT_URL: http://qdrant:6333
     command: ["sh", "-c", "python apps/platform-api/manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 platform_api.asgi:application"]
     ports: ["8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
   worker:
     build:
       context: ..
@@ -41,10 +58,13 @@ services:
     environment:
       DATABASE_URL: postgresql://agent:agent_dev_password@postgres:5432/agent_stack
       REDIS_URL: redis://redis:6379/0
+      LOCAL_MODEL_ALLOWED_HOSTS: ${LOCAL_MODEL_ALLOWED_HOSTS:-ollama}
+      QDRANT_URL: http://qdrant:6333
     command: ["python", "-m", "worker_app.main"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      qdrant: {condition: service_healthy}
   web:
     build:
       context: ..
@@ -53,5 +73,33 @@ services:
       VITE_API_BASE_URL: http://localhost:8000
     ports: ["5173:5173"]
     depends_on: [api]
+  eph-node-agent:
+    profiles: ["node-agents"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: [../.env]
+    environment:
+      AGENT_CONTROL_URL: http://api:8000
+      AGENT_NODE_ID: ${EPH_AGENT_NODE_ID:-}
+      AGENT_TOKEN: ${EPH_AGENT_TOKEN:-}
+      AGENT_NODE_TYPE: eph_node
+    command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+    depends_on: [api]
+  target-cluster-agent:
+    profiles: ["node-agents"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: [../.env]
+    environment:
+      AGENT_CONTROL_URL: http://api:8000
+      AGENT_NODE_ID: ${TARGET_AGENT_NODE_ID:-}
+      AGENT_TOKEN: ${TARGET_AGENT_TOKEN:-}
+      AGENT_NODE_TYPE: target_cluster
+    command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+    depends_on: [api]
 volumes:
   postgres_data:
+  qdrant_data:
+  ollama_data:
