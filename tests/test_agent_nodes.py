@@ -16,6 +16,10 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 
+def redfish_test_resolver(**kwargs):
+    return {"username": "admin", "password": "secret"}
+
+
 @pytest.fixture
 def node_workspace(db):
     user = get_user_model().objects.create_user(
@@ -1394,9 +1398,7 @@ def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
         bmc_endpoint="https://bmc01.example.net",
         bmc_credential_ref="vault://lab/bmc/host",
     )
-    def resolver(**kwargs):
-        return {"username": "admin", "password": "secret"}
-    settings.BMC_CREDENTIAL_RESOLVER = "tests.test_agent_nodes.resolver_for_redfish_test"
+    settings.BMC_CREDENTIAL_RESOLVER = "tests.test_agent_nodes.redfish_test_resolver"
     response = client.post(
         (
             f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
