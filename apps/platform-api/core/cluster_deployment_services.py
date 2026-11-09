@@ -888,6 +888,8 @@ def handle_deployment_command_result(
             and command.payload.get("worker_provisioning") == config
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
+            and isinstance(expected_uid, str)
+            and bool(expected_uid)
             and result.get("expected_worker_replicas") == expected_workers
             and isinstance(expected_workers, int)
             and not isinstance(expected_workers, bool)
