@@ -1429,7 +1429,6 @@ def test_bmc_redfish_api_persists_failure_evidence_and_audit(
     node_workspace, settings, monkeypatch, exception, expected_status, reason
 ):
     from core.models import AuditEvent
-    from core.agent_node_views import _redfish_systems
 
     _, tenant, project, client = node_workspace
     enrolled = client.post(
