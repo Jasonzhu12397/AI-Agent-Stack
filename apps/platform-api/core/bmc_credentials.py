@@ -215,6 +215,8 @@ def resolve_bmc_credentials(
         token = resolve_vault_jwt_token(tenant_id, project_id)
     else:
         token = getattr(settings, "BMC_VAULT_TOKEN", "")
+        if not token:
+            raise RuntimeError("Vault authentication is not configured.")
     if (
         not isinstance(token, str)
         or not token
