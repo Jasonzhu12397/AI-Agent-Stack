@@ -12,6 +12,7 @@ import {
   type KnowledgeDocument,
   type ModelConfig,
 } from "../services/api";
+import { getKnowledgeDocumentError, getKnowledgeDocumentStatus } from "../domain/knowledgeDocument";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 const bases = ref<KnowledgeBase[]>([]);
@@ -180,8 +181,22 @@ onUnmounted(() => {
       <h4>Documents</h4>
       <el-table v-if="docs.length" :data="docs" size="small">
         <el-table-column prop="title" label="Document" min-width="180" />
-        <el-table-column prop="status" label="Status" width="120" />
+        <el-table-column label="Status" width="120">
+          <template #default="{ row }">
+            <el-tag :type="getKnowledgeDocumentStatus(row.status).type" effect="light">
+              {{ getKnowledgeDocumentStatus(row.status).label }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="chunk_count" label="Chunks" width="90" />
+        <el-table-column label="Failure reason" min-width="220">
+          <template #default="{ row }">
+            <el-text v-if="getKnowledgeDocumentError(row.error)" type="danger" size="small">
+              {{ getKnowledgeDocumentError(row.error) }}
+            </el-text>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="Actions" width="120" fixed="right">
           <template #default="{ row }">
             <el-button
