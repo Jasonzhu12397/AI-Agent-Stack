@@ -1410,3 +1410,82 @@ def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
     assert response.status_code == 400
     machine.refresh_from_db()
     assert machine.identity_status == AgentMachine.IdentityStatus.UNVERIFIED
+
+
+@pytest.mark.django_db
+def test_redfish_identity_review_requires_matching_dmi_uuid_and_serial(node_workspace):
+    from core.agent_node_views import _redfish_identity_review
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-match", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        system_uuid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        identity_material={
+            "product_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "product_serial": "SERIAL-RED-02",
+        },
+    )
+    result = _redfish_identity_review(
+        machine,
+        [{
+            "uuid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "serial": "serial-red-02",
+            "manufacturer": "Acme",
+            "model": "Rack Server",
+        }],
+    )
+    assert result == ("verified", [], "dmi_redfish_match")
+
+
+@pytest.mark.django_db
+def test_redfish_identity_review_rejects_duplicate_machine_identity(node_workspace):
+    from core.agent_node_views import _redfish_identity_review
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-duplicate-a", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        system_uuid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        identity_material={
+            "product_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "product_serial": "SERIAL-RED-03",
+        },
+    )
+    other = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-duplicate-b", "node_type": "target_cluster"},
+        format="json",
+    )
+    AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=other.data["id"],
+        identity_material={"product_serial": "SERIAL-RED-03"},
+    )
+    result = _redfish_identity_review(
+        machine,
+        [{
+            "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "serial": "SERIAL-RED-03",
+            "manufacturer": "Acme",
+            "model": "Rack Server",
+        }],
+    )
+    assert result == (
+        "conflict",
+        ["system_uuid", "product_serial"],
+        "duplicate_machine_identity",
+    )

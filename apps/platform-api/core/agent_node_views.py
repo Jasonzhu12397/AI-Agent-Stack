@@ -822,7 +822,7 @@ def _redfish_identity_review(machine, systems):
         project=machine.project,
     ).exclude(pk=machine.pk).filter(
         Q(system_uuid__iexact=system["uuid"])
-        | Q(identity_material__product_serial__iexact=system["serial"])
+        | Q(identity_material__product_serial__iexact=system["serial"])\n        | Q(identity_material__product_uuid__iexact=system["uuid"])
     )
     if duplicates.exists():
         return "conflict", ["system_uuid", "product_serial"], "duplicate_machine_identity"
