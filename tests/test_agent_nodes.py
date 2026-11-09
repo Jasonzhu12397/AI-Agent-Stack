@@ -1858,6 +1858,81 @@ def test_agent_client_certificate_can_be_revoked_and_node_goes_offline(node_work
     assert node.status == AgentNode.Status.OFFLINE
     assert node.client_certificate_revoked_at is not None
 
+    runtime = APIClient()
+    rejected = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": enrolled.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+    assert rejected.status_code == 401
+
+
+@pytest.mark.django_db
+def test_bound_agent_requires_matching_verified_client_certificate(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "cert-auth-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    endpoint = f"/api/v1/agent-nodes/{enrolled.data['id']}/client-certificate/"
+    first_fingerprint = "a" * 64
+    rotated_fingerprint = "b" * 64
+    assert client.put(
+        endpoint,
+        {"fingerprint_sha256": first_fingerprint},
+        format="json",
+    ).status_code == 200
+
+    runtime = APIClient()
+    heartbeat_url = "/api/v1/agent-runtime/heartbeat/"
+    payload = {"node_id": enrolled.data["id"]}
+    token_header = {"HTTP_AUTHORIZATION": f"Bearer {enrolled.data['enrollment_token']}"}
+
+    missing = runtime.post(heartbeat_url, payload, format="json", **token_header)
+    assert missing.status_code == 401
+    mismatched = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        HTTP_X_VERIFIED_CLIENT_CERT_SHA256="c" * 64,
+        **token_header,
+    )
+    assert mismatched.status_code == 401
+
+    accepted = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
+        **token_header,
+    )
+    assert accepted.status_code == 200
+
+    rotated = client.put(
+        endpoint,
+        {"fingerprint_sha256": rotated_fingerprint},
+        format="json",
+    )
+    assert rotated.status_code == 200
+    old_certificate = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
+        **token_header,
+    )
+    assert old_certificate.status_code == 401
+    new_certificate = runtime.post(
+        heartbeat_url,
+        payload,
+        format="json",
+        HTTP_X_VERIFIED_CLIENT_CERT_SHA256=rotated_fingerprint,
+        **token_header,
+    )
+    assert new_certificate.status_code == 200
+
 
 @pytest.mark.django_db
 def test_agent_client_certificate_binding_is_tenant_admin_only(node_workspace):
