@@ -1871,8 +1871,8 @@ def test_agent_client_certificate_can_be_revoked_and_node_goes_offline(node_work
 
 @pytest.mark.django_db
 @override_settings(
-    AGENT_MTLS_TRUSTED_PROXY_IP="",
-    AGENT_MTLS_TRUSTED_PROXY_CIDRS=["192.0.2.0/24"],
+    AGENT_MTLS_TRUSTED_PROXY_IP="192.0.2.10",
+    AGENT_MTLS_TRUSTED_PROXY_CIDRS=[],
     AGENT_MTLS_REQUIRED=True,
 )
 def test_bound_agent_requires_matching_verified_client_certificate(node_workspace):
