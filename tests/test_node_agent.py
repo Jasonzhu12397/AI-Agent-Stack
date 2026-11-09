@@ -4145,3 +4145,32 @@ def test_control_plane_tls_rejects_ambiguous_client_certificate_requirement(
         match="AGENT_TLS_CLIENT_CERT_REQUIRED_INVALID",
     ):
         agent.build_control_plane_tls_context()
+
+
+
+def test_client_certificate_fingerprint_uses_sha256_of_der_certificate(
+    monkeypatch,
+    tmp_path,
+):
+    certificate_file = tmp_path / "client.crt"
+    certificate_file.write_text(
+        "-----BEGIN CERTIFICATE-----\\nZmFrZQ==\\n-----END CERTIFICATE-----\\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        agent.ssl,
+        "PEM_cert_to_DER_cert",
+        lambda certificate_pem: b"certificate-der",
+    )
+
+    fingerprint = agent.client_certificate_fingerprint(str(certificate_file))
+
+    assert fingerprint == hashlib.sha256(b"certificate-der").hexdigest()
+
+
+def test_client_certificate_fingerprint_rejects_missing_file(tmp_path):
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="AGENT_TLS_CLIENT_CERTIFICATE_INVALID",
+    ):
+        agent.client_certificate_fingerprint(str(tmp_path / "missing.crt"))
