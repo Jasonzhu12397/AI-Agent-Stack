@@ -1345,7 +1345,9 @@ def test_fleet_machine_lifecycle_review_rejects_unverified_provisioning(node_wor
 
 
 @pytest.mark.django_db
-def test_bmc_redfish_verification_fails_closed_without_credential_resolver(node_workspace, settings):
+def test_bmc_redfish_verification_fails_closed_without_credential_resolver(
+    node_workspace, settings
+):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
