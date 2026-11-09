@@ -1465,6 +1465,7 @@ def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
         project=deployment.project,
         deployment=deployment,
         node=eph_node,
+        requested_by=deployment.requested_by,
         command_type="cluster.capi.pivot.execute",
         payload={},
         idempotency_key="unsafe-pivot-simulation-result",
