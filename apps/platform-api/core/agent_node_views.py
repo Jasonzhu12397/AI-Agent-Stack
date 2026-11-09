@@ -2170,6 +2170,29 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
                 deployment=deployment,
             ).first()
+            if checkpoint is not None:
+                if checkpoint.agent_node_id != node.id or checkpoint.generation != generation:
+                    return Response(
+                        {"detail": "Checkpoint generation or agent identity mismatch."},
+                        status=409,
+                    )
+                if sequence == checkpoint.sequence:
+                    if checkpoint.phase == phase and checkpoint.data == checkpoint_data:
+                        return Response(
+                            {
+                                "deployment_id": str(deployment.id),
+                                "generation": checkpoint.generation,
+                                "sequence": checkpoint.sequence,
+                                "phase": checkpoint.phase,
+                                "idempotent": True,
+                            }
+                        )
+                    return Response({"detail": "Checkpoint sequence was already used."}, status=409)
+                if sequence < checkpoint.sequence:
+                    return Response(
+                        {"detail": "Checkpoint sequence must increase monotonically."},
+                        status=409,
+                    )
             if phase in {"eph_reclaim_pending", "completed"}:
                 return Response(
                     {
@@ -2262,28 +2285,6 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                         status=409,
                     )
             if checkpoint is not None:
-                if checkpoint.agent_node_id != node.id or checkpoint.generation != generation:
-                    return Response(
-                        {"detail": "Checkpoint generation or agent identity mismatch."},
-                        status=409,
-                    )
-                if sequence < checkpoint.sequence:
-                    return Response(
-                        {"detail": "Checkpoint sequence must increase monotonically."},
-                        status=409,
-                    )
-                if sequence == checkpoint.sequence:
-                    if checkpoint.phase == phase and checkpoint.data == checkpoint_data:
-                        return Response(
-                            {
-                                "deployment_id": str(deployment.id),
-                                "generation": checkpoint.generation,
-                                "sequence": checkpoint.sequence,
-                                "phase": checkpoint.phase,
-                                "idempotent": True,
-                            }
-                        )
-                    return Response({"detail": "Checkpoint sequence was already used."}, status=409)
                 checkpoint.sequence = sequence
                 checkpoint.phase = phase
                 checkpoint.data = checkpoint_data
