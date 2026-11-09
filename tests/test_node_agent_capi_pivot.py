@@ -66,6 +66,7 @@ def _pivot_runner_for(
     source_ironic_status_replicas=0,
     source_ironic_ready_replicas=0,
     source_ironic_updated_replicas=0,
+    source_ironic_terminating_replicas=0,
 ):
     calls = []
     groups = [
@@ -130,6 +131,7 @@ def _pivot_runner_for(
                                 "readyReplicas": source_ironic_ready_replicas,
                                 "updatedReplicas": source_ironic_updated_replicas,
                                 "availableReplicas": source_ironic_replicas,
+                                "terminatingReplicas": source_ironic_terminating_replicas,
                             },
                         }),
                         "",
@@ -684,6 +686,10 @@ def test_pivot_execution_rejects_source_ironic_still_running(tmp_path):
         ),
         (
             {"source_ironic_updated_replicas": 1},
+            "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
+        ),
+        (
+            {"source_ironic_terminating_replicas": 1},
             "CAPI_PIVOT_SOURCE_IRONIC_MUST_BE_STOPPED",
         ),
     ],
