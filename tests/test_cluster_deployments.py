@@ -872,7 +872,21 @@ def test_target_agent_checkpoint_rejects_replay_and_credentials(
     assert repeated.status_code == 200
     assert repeated.data["idempotent"] is True
 
-    replay = dict(payload)
+    advanced_payload = {
+        **payload,
+        "sequence": 2,
+        "phase": "capi_pivot_preflight",
+        "data": {"completed_steps": ["target_agent_bootstrap"]},
+    }
+    advanced = agent_client.post(url, advanced_payload, format="json", **headers)
+    assert advanced.status_code == 201
+    repeated_advanced = agent_client.post(
+        url, advanced_payload, format="json", **headers
+    )
+    assert repeated_advanced.status_code == 200
+    assert repeated_advanced.data["idempotent"] is True
+
+    replay = dict(advanced_payload)
     replay["data"] = {"completed_steps": ["forged"]}
     rejected_replay = agent_client.post(url, replay, format="json", **headers)
     assert rejected_replay.status_code == 409
