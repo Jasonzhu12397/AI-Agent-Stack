@@ -596,10 +596,20 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_TARGET_EXTERNAL_IRONIC_NOT_CONFIRMED")
         target_ironic_state = "external_endpoint_readiness_attested"
     else:
+        metadata = target_ironic.get("metadata", {})
         spec = target_ironic.get("spec", {})
         status = target_ironic.get("status", {})
-        pod_spec = spec.get("template", {}).get("spec", {})
-        containers = pod_spec.get("containers", []) if isinstance(pod_spec, dict) else []
+        template = spec.get("template", {}) if isinstance(spec, dict) else None
+        pod_spec = template.get("spec", {}) if isinstance(template, dict) else None
+        containers = pod_spec.get("containers", []) if isinstance(pod_spec, dict) else None
+        if (
+            not isinstance(metadata, dict)
+            or not isinstance(spec, dict)
+            or not isinstance(status, dict)
+            or not isinstance(pod_spec, dict)
+            or not isinstance(containers, list)
+        ):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_IRONIC_STATE_INVALID")
         container_names = {
             item.get("name")
             for item in containers
@@ -608,7 +618,7 @@ def _verify_source_metal3_handoff(
         desired = spec.get("replicas", 1)
         available = status.get("availableReplicas", 0)
         observed = status.get("observedGeneration", 0)
-        generation = target_ironic.get("metadata", {}).get("generation", 1)
+        generation = metadata.get("generation")
         if (
             not isinstance(desired, int)
             or isinstance(desired, bool)
@@ -617,7 +627,10 @@ def _verify_source_metal3_handoff(
             or isinstance(available, bool)
             or available < desired
             or not isinstance(observed, int)
+            or isinstance(observed, bool)
             or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 1
             or observed < generation
         ):
             raise CapiPivotError("CAPI_PIVOT_TARGET_IRONIC_NOT_READY")
