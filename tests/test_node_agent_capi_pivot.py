@@ -489,6 +489,7 @@ def test_pivot_execution_stops_when_target_controller_is_not_ready(tmp_path):
     [
         ("missing_move_label", "bmh_clusterctl_move_label_missing"),
         ("missing_pause_annotation", "bmh_pause_annotation_missing"),
+        ("invalid_pause_annotation", "bmh_pause_annotation_value_invalid"),
         ("missing_status_annotation", "bmh_status_annotation_missing"),
         ("mismatched_status_annotation", "bmh_status_annotation_mismatch"),
         ("block_move", "bmh_block_move_annotation_present"),
@@ -510,6 +511,8 @@ def test_pivot_execution_requires_metal3_bmh_handoff_metadata(
     labels = {"clusterctl.cluster.x-k8s.io/move": ""}
     if mutation == "missing_pause_annotation":
         annotations.pop("baremetalhost.metal3.io/paused")
+    elif mutation == "invalid_pause_annotation":
+        annotations["baremetalhost.metal3.io/paused"] = "true"
     elif mutation == "missing_status_annotation":
         annotations.pop("baremetalhost.metal3.io/status")
     elif mutation == "mismatched_status_annotation":
@@ -558,6 +561,10 @@ def test_pivot_execution_accepts_fully_prepared_metal3_bmh(tmp_path):
     status = {
         "operationalStatus": "OK",
         "provisioning": {"state": "provisioned"},
+        "hardware": {
+            "cpu": {"arch": "x86_64", "count": 32},
+            "ramMebibytes": 262144,
+        },
     }
     bmh = {
         "metadata": {
