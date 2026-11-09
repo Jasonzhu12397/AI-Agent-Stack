@@ -1013,13 +1013,19 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.capi.worker.provision":
         expected = command.payload
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
-        source_identity = source.get("source_cluster_identity", {})
+        source_identity = (
+            source.get("source_cluster_identity", {})
+            if isinstance(source, dict)
+            else {}
+        )
         approved_payload = dict(expected) if isinstance(expected, dict) else {}
         approved_provisioning_hash = approved_payload.pop(
             "provisioning_plan_hash", None
         )
         valid_result = (
-            command.status == AgentCommand.Status.SUCCEEDED
+            isinstance(expected, dict)
+            and isinstance(source_identity, dict)
+            and command.status == AgentCommand.Status.SUCCEEDED
             and command.approved_at is not None
             and command.approved_by_id is not None
             and command.approved_by_id != command.requested_by_id
