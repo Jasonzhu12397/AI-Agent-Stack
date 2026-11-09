@@ -4036,7 +4036,7 @@ def test_control_plane_client_reports_host_inventory(monkeypatch):
         return FakeResponse()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    client = ControlPlaneClient("https://control.example", "node-1", "secret")
+    client = agent.ControlPlaneClient("https://control.example", "node-1", "secret")
     result = client.report_inventory({"status": "observed", "system_identity": {"product_uuid": "uuid"}})
 
     assert result["identity_status"] == "candidate"

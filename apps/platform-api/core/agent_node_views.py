@@ -339,7 +339,7 @@ class FleetMachineInventoryView(APIView):
                 "name": node.name,
                 "cluster_name": node.cluster_name,
             }
-            machine = getattr(node, "machine", None)
+            machine = AgentMachine.objects.filter(agent_node=node).first()
             data["hardware_inventory"] = (
                 machine.hardware_inventory if machine else node.labels.get("hardware_inventory", {})
             )
