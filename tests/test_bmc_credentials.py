@@ -1,5 +1,6 @@
-import httpx
 import pytest
+
+import httpx
 
 from core.bmc_credentials import (
     _parse_vault_reference,
