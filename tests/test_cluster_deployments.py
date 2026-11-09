@@ -1973,6 +1973,34 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
 
 
 @pytest.mark.django_db
+def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
+    cluster_delivery_workspace,
+):
+    deployment, command, result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-preflight-missing-source-uid",
+    )
+    deployment.plan_result = {
+        **deployment.plan_result,
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": None}
+        },
+    }
+    deployment.save(update_fields=["plan_result"])
+    result["cluster_uid"] = None
+
+    handle_deployment_command_result(command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_PREFLIGHT_FAILED"
+    assert deployment.plan_result.get("dual_agent", {}).get("target_agent_owns_cluster") is True
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    ).exists()
+
+@pytest.mark.django_db
 def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_gate(
     cluster_delivery_workspace,
 ):
