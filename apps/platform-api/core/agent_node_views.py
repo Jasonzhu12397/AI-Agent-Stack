@@ -90,9 +90,11 @@ FORBIDDEN_PAYLOAD_KEYS = {
 def _command_is_fenced_by_cluster_ownership(command, node):
     if node.node_type != AgentNode.NodeType.EPH_NODE or command.deployment_id is None:
         return False
-    plan_result = ClusterDeployment.objects.filter(
+    plan_result = ClusterDeployment.objects.select_for_update().filter(
         pk=command.deployment_id,
     ).values_list("plan_result", flat=True).first()
+    if plan_result is None:
+        return True
     if not isinstance(plan_result, dict):
         return False
     dual_agent = plan_result.get("dual_agent", {})
