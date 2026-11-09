@@ -2260,3 +2260,52 @@ def test_eph_agent_cannot_submit_result_after_target_ownership_fence(
     assert command.status == AgentCommand.Status.FAILED
     assert command.lease_token is None
     assert command.result is None
+
+
+@pytest.mark.django_db
+def test_eph_agent_cannot_renew_command_lease_after_target_ownership_fence(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="eph-command-fencing-renew",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    lease_token = uuid.uuid4()
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+        payload={},
+        status=AgentCommand.Status.RUNNING,
+        lease_token=lease_token,
+        lease_expires_at=timezone.now() + datetime.timedelta(seconds=60),
+        idempotency_key=f"eph-fenced-renew:{deployment.id}",
+    )
+    deployment.plan_result = {
+        **(deployment.plan_result or {}),
+        "dual_agent": {"target_agent_owns_cluster": True},
+    }
+    deployment.save(update_fields=["plan_result"])
+
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/commands/{command.id}/lease/renew/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=str(lease_token),
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "AGENT_CONTROL_OWNERSHIP_FENCED"
+    command.refresh_from_db()
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
