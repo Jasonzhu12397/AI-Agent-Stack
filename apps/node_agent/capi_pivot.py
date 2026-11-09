@@ -603,11 +603,23 @@ def run_capi_pivot(
     lookup = executable_lookup or shutil.which
     runner = process_runner or subprocess.run
 
+    def preflight_runner(*args, **kwargs):
+        _raise_if_cancelled(
+            cancellation_event,
+            "CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT",
+        )
+        completed = runner(*args, **kwargs)
+        _raise_if_cancelled(
+            cancellation_event,
+            "CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT",
+        )
+        return completed
+
     dry_run = run_capi_pivot_dry_run(
         payload,
         environ=env,
         executable_lookup=lookup,
-        process_runner=runner,
+        process_runner=preflight_runner,
     )
     secret_root = Path(
         env.get("CAPI_PIVOT_SECRET_DIR", "/var/run/secrets/ai-agent/capi-pivot")
@@ -631,7 +643,7 @@ def run_capi_pivot(
         "HOME": env.get("HOME", "/tmp"),
     }
     target_preflight = _verify_target_management_plane(
-        runner,
+        preflight_runner,
         kubectl,
         target_kubeconfig,
         namespace,
@@ -644,7 +656,7 @@ def run_capi_pivot(
         secret_root,
     )
     metal3_handoff = _verify_source_metal3_handoff(
-        runner,
+        preflight_runner,
         kubectl,
         source_kubeconfig,
         target_kubeconfig,
