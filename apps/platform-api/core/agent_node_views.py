@@ -439,17 +439,32 @@ class AgentRuntimeInventoryReportView(APIView):
         if _json_size_bytes(inventory) > 262144:
             return Response({"detail": "hardware_inventory must not exceed 256 KiB."}, status=413)
         if inventory.get("status") != "observed":
-            return Response({"detail": "Only observed hardware inventory can be ingested."}, status=400)
+            return Response(
+                {"detail": "Only observed hardware inventory can be ingested."},
+                status=400,
+            )
         system_identity = inventory.get("system_identity", {})
         if not isinstance(system_identity, dict):
             return Response({"detail": "system_identity must be a JSON object."}, status=400)
-        for key in ("sys_vendor", "product_name", "product_uuid", "product_serial", "board_serial", "chassis_serial"):
+        identity_fields = (
+            "sys_vendor",
+            "product_name",
+            "product_uuid",
+            "product_serial",
+            "board_serial",
+            "chassis_serial",
+        )
+        for key in identity_fields:
             value = system_identity.get(key)
             if value is not None and (not isinstance(value, str) or len(value) > 256):
                 return Response({"detail": "Invalid system identity field."}, status=400)
         material = _machine_identity_material(system_identity)
         fingerprint_payload = json.dumps(material, sort_keys=True, separators=(",", ":"))
-        fingerprint = hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest() if material else ""
+        fingerprint = ""
+        if material:
+            fingerprint = hashlib.sha256(
+                fingerprint_payload.encode("utf-8")
+            ).hexdigest()
         observed_at = timezone.now()
         try:
             with transaction.atomic():
