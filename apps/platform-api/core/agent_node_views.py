@@ -620,10 +620,39 @@ class FleetMachineBMCConfigView(APIView):
             )
         resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
         if not resolver_path:
+            observed = timezone.now().isoformat()
+            with transaction.atomic():
+                machine = AgentMachine.objects.select_for_update().get(
+                    pk=machine_id,
+                    tenant=tenant,
+                    project=project,
+                )
+                machine.bmc_identity_evidence = {
+                    "status": "not_checked",
+                    "source": "redfish",
+                    "observed_at": observed,
+                    "reason": "credential_resolver_not_configured",
+                }
+                machine.save(
+                    update_fields=["bmc_identity_evidence", "updated_at"]
+                )
+                record_audit_event(
+                    request,
+                    tenant,
+                    "fleet.machine.bmc_identity_check_skipped",
+                    "agent_machine",
+                    machine.id,
+                    project=project,
+                    metadata={
+                        "verification_status": "not_checked",
+                        "reason": "credential_resolver_not_configured",
+                    },
+                )
             return Response(
                 {
                     "detail": "BMC credential resolver is not configured.",
                     "verification_status": "not_checked",
+                    "reason": "credential_resolver_not_configured",
                 },
                 status=503,
             )
