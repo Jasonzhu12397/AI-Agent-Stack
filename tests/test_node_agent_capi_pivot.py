@@ -836,7 +836,7 @@ def test_pivot_execution_cancellation_before_mutation_stops_clusterctl_move(tmp_
 
     with pytest.raises(
         CapiPivotError,
-        match="CAPI_PIVOT_CANCELLED_BEFORE_MUTATION",
+        match="CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT",
     ):
         run_capi_pivot(
             {"cluster_name": "target-cluster", "namespace": "metal3"},
@@ -850,6 +850,33 @@ def test_pivot_execution_cancellation_before_mutation_stops_clusterctl_move(tmp_
         item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
         for item in calls
     )
+
+
+def test_pivot_preflight_stops_after_lease_loss_during_source_inspection(tmp_path):
+    import threading
+
+    cancellation_event = threading.Event()
+    calls, base_runner = _pivot_runner_for()
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        if command[0].endswith("kubectl"):
+            cancellation_event.set()
+        return completed
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+            cancellation_event=cancellation_event,
+        )
+
+    assert not any(item[0][0].endswith("clusterctl") for item in calls)
 
 
 def test_pivot_execution_reports_unknown_outcome_if_lease_lost_during_move(tmp_path):
