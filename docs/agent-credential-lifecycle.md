@@ -63,3 +63,41 @@ The resolver now validates the Vault HTTPS origin, credential reference, tenant/
 The built-in JWT login flow is enabled by `BMC_VAULT_JWT_PATH` and `BMC_VAULT_JWT_ROLE`. The token file must contain a short-lived workload JWT whose configured tenant and project claims match the request. The API performs a Vault JWT auth login against `/v1/auth/{BMC_VAULT_JWT_AUTH_MOUNT}/login`, then uses the returned short-lived Vault client token for KV v2 reads. The JWT signature and issuer/audience validation are performed by Vault's JWT auth role; the local claim check is only an additional scope mismatch guard and is not cryptographic verification.
 
 Configure the Vault JWT auth role with a trusted issuer, explicit audience, bound subject/claims, short token TTL, and a policy restricted to the corresponding tenant/project secret paths. The JWT claims must be minted by a trusted identity provider, not copied from Agent request fields. A custom `BMC_VAULT_TOKEN_RESOLVER` takes precedence; the built-in JWT flow is used when no custom resolver is configured and a JWT path is present. Static `BMC_VAULT_TOKEN` is the final compatibility fallback and must not be used as a multi-tenant authorization boundary.
+
+
+### Vault JWT auth role and ACL deployment example
+
+The following is an operator-run example, not an automatic deployment. Replace the issuer, audience, tenant and project values with values issued by the trusted identity provider. Create a separate Vault JWT role for each tenant/project scope, or use an equivalent trusted auth broker that issues scope-bound Vault tokens.
+
+1. Enable the JWT auth method and configure its trusted issuer/JWKS source:
+
+```sh
+vault auth enable -path=jwt jwt
+vault write auth/jwt/config \
+  oidc_discovery_url="https://identity.example.com" \
+  bound_issuer="https://identity.example.com"
+```
+
+2. Install the policy after reviewing the KV v2 mount names. This example assumes BMC credentials are in the `secret` KV v2 mount and Redfish CA bundles are in the `pki` KV v2 mount:
+
+```sh
+vault policy write bmc-credentials deploy/vault/policies/bmc-credentials.hcl
+```
+
+3. Create a role whose JWT claims are validated by Vault and copied into entity metadata for the policy template:
+
+```sh
+vault write auth/jwt/role/bmc-reader-tenant-a-project-a \
+  role_type=jwt \
+  user_claim=sub \
+  bound_audiences="ai-agent-studio" \
+  bound_claims='{"tenant_id":"tenant-a","project_id":"project-a"}' \
+  claim_mappings='{"tenant_id":"tenant_id","project_id":"project_id"}' \
+  token_policies="bmc-credentials" \
+  token_ttl="5m" \
+  token_max_ttl="10m"
+```
+
+4. Configure the API with `BMC_VAULT_ADDR`, `BMC_VAULT_JWT_PATH`, `BMC_VAULT_JWT_ROLE`, and the claim names. Mount the short-lived JWT file from the trusted workload identity provider as read-only. Do not put a long-lived JWT or Vault token in the image, source control, or Agent command payloads.
+
+The JWT auth role's issuer, audience, signature algorithm, bound claims, and TTL are the security boundary. The API's local claim comparison is defense in depth only. Test that a JWT for tenant A/project A cannot read tenant B/project B secrets, that missing claims fail login, and that token expiry is enforced. The policy template relies on Vault entity metadata populated by `claim_mappings`; if those metadata keys are absent, the policy must not be treated as tenant isolation. Use the actual KV v2 mount names in the policy and credential references. This example has not been applied to a live Vault server.
