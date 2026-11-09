@@ -477,6 +477,37 @@ def _machine_conflicts(node, material, machine):
 
 
 
+def _record_bmc_verification_failure(request, tenant, project, machine_id, reason):
+    observed = timezone.now().isoformat()
+    with transaction.atomic():
+        machine = AgentMachine.objects.select_for_update().get(
+            pk=machine_id,
+            tenant=tenant,
+            project=project,
+        )
+        machine.bmc_identity_evidence = {
+            "status": "error",
+            "source": "redfish",
+            "observed_at": observed,
+            "reason": reason,
+        }
+        machine.save(
+            update_fields=["bmc_identity_evidence", "updated_at"]
+        )
+        record_audit_event(
+            request,
+            tenant,
+            "fleet.machine.bmc_identity_check_failed",
+            "agent_machine",
+            machine.id,
+            project=project,
+            metadata={
+                "verification_status": "error",
+                "reason": reason,
+            },
+        )
+
+
 class FleetMachineBMCConfigView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -675,14 +706,29 @@ class FleetMachineBMCConfigView(APIView):
                 raise ValueError("BMC trust bundle resolver returned an invalid value.")
             systems = _redfish_systems(machine.bmc_endpoint, credential, trust_bundle_pem)
         except PermissionError:
+            _record_bmc_verification_failure(
+                request, tenant, project, machine_id, "authentication_failed"
+            )
             return Response({"detail": "BMC authentication failed."}, status=502)
         except (ValueError, ImportError, AttributeError):
+            _record_bmc_verification_failure(
+                request, tenant, project, machine_id, "invalid_response_or_configuration"
+            )
             return Response({"detail": "BMC verification configuration is invalid."}, status=400)
         except httpx.TimeoutException:
+            _record_bmc_verification_failure(
+                request, tenant, project, machine_id, "request_timeout"
+            )
             return Response({"detail": "BMC verification timed out."}, status=504)
         except httpx.HTTPError:
+            _record_bmc_verification_failure(
+                request, tenant, project, machine_id, "connection_or_tls_failure"
+            )
             return Response({"detail": "BMC connection or TLS verification failed."}, status=502)
         except RuntimeError:
+            _record_bmc_verification_failure(
+                request, tenant, project, machine_id, "redfish_request_failed"
+            )
             return Response({"detail": "Redfish request failed."}, status=502)
         verification_status, conflicts, reason = _redfish_identity_review(machine, systems)
         observed = timezone.now().isoformat()

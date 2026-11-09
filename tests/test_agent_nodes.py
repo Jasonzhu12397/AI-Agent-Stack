@@ -1415,6 +1415,71 @@ def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("exception", "expected_status", "reason"),
+    [
+        (PermissionError("credentials rejected"), 502, "authentication_failed"),
+        (ValueError("unsafe response"), 400, "invalid_response_or_configuration"),
+        (httpx.ReadTimeout("BMC timed out"), 504, "request_timeout"),
+        (httpx.ConnectError("TLS handshake failed"), 502, "connection_or_tls_failure"),
+        (RuntimeError("Redfish request failed"), 502, "redfish_request_failed"),
+    ],
+)
+def test_bmc_redfish_api_persists_failure_evidence_and_audit(
+    node_workspace, settings, monkeypatch, exception, expected_status, reason
+):
+    from core.models import AuditEvent
+    from core.agent_node_views import _redfish_systems
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-failure-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        identity_status=AgentMachine.IdentityStatus.CANDIDATE,
+        bmc_endpoint="https://192.168.10.31",
+        bmc_credential_ref="vault://lab/bmc/failure-test",
+    )
+    settings.BMC_CREDENTIAL_RESOLVER = "test_agent_nodes.redfish_test_resolver"
+
+    def fail_verification(*args, **kwargs):
+        raise exception
+
+    monkeypatch.setattr("core.agent_node_views._redfish_systems", fail_verification)
+    response = client.post(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {},
+        format="json",
+    )
+
+    assert response.status_code == expected_status
+    machine.refresh_from_db()
+    assert machine.identity_status == AgentMachine.IdentityStatus.CANDIDATE
+    assert machine.bmc_identity_evidence["status"] == "error"
+    assert machine.bmc_identity_evidence["source"] == "redfish"
+    assert machine.bmc_identity_evidence["reason"] == reason
+    assert "password" not in str(machine.bmc_identity_evidence).lower()
+    event = AuditEvent.objects.get(
+        event_type="fleet.machine.bmc_identity_check_failed",
+        resource_id=str(machine.id),
+    )
+    assert event.metadata == {
+        "verification_status": "error",
+        "reason": reason,
+    }
+    assert "credential_ref" not in str(event.metadata)
+    assert "secret" not in str(event.metadata).lower()
+
+
+@pytest.mark.django_db
 def test_redfish_identity_review_requires_matching_dmi_uuid_and_serial(node_workspace):
     from core.agent_node_views import _redfish_identity_review
 
