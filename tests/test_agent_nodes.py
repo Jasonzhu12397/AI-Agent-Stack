@@ -1870,7 +1870,10 @@ def test_agent_client_certificate_can_be_revoked_and_node_goes_offline(node_work
 
 
 @pytest.mark.django_db
-@override_settings(AGENT_MTLS_TRUSTED_PROXY_IP="192.0.2.10")
+@override_settings(
+    AGENT_MTLS_TRUSTED_PROXY_IP="192.0.2.10",
+    AGENT_MTLS_REQUIRED=True,
+)
 def test_bound_agent_requires_matching_verified_client_certificate(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
@@ -1966,6 +1969,26 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
         **token_header,
     )
     assert new_certificate.status_code == 200
+
+
+@pytest.mark.django_db
+@override_settings(AGENT_MTLS_REQUIRED=True)
+def test_mtls_required_rejects_unbound_agent_even_with_valid_bearer_token(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "unbound-mtls-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    runtime = APIClient()
+    response = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": enrolled.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+        REMOTE_ADDR="192.0.2.10",
+    )
+    assert response.status_code == 401
 
 
 @pytest.mark.django_db
