@@ -1,5 +1,11 @@
+import httpx
 import pytest
-from core.bmc_credentials import _parse_vault_reference, resolve_bmc_credentials
+
+from core.bmc_credentials import (
+    _parse_vault_reference,
+    _tenant_scoped_path,
+    resolve_bmc_credentials,
+)
 
 
 def test_parse_vault_reference_requires_mount_and_safe_path():
@@ -26,32 +32,77 @@ def test_parse_vault_reference_rejects_unsafe_values(reference):
         _parse_vault_reference(reference)
 
 
+@pytest.mark.parametrize(
+    ("tenant_id", "project_id"),
+    [
+        ("", "project-id"),
+        ("tenant-id", ""),
+        ("../tenant", "project-id"),
+        ("tenant-id", "project/other"),
+    ],
+)
+def test_vault_resolver_requires_valid_scope_before_network(
+    settings, monkeypatch, tenant_id, project_id
+):
+    def unexpected_client(**kwargs):
+        raise AssertionError("Vault must not be contacted without a valid scope.")
+
+    settings.BMC_VAULT_TOKEN = "vault-test-token"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(httpx, "Client", unexpected_client)
+
+    with pytest.raises(ValueError, match="scope"):
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+
+
+def test_vault_paths_are_isolated_by_tenant_and_project():
+    path_a = _tenant_scoped_path("bmc/rack-a", "tenant-a", "project-a")
+    path_b = _tenant_scoped_path("bmc/rack-a", "tenant-b", "project-a")
+    path_c = _tenant_scoped_path("bmc/rack-a", "tenant-a", "project-b")
+
+    assert path_a == "tenants/tenant-a/projects/project-a/bmc/rack-a"
+    assert len({path_a, path_b, path_c}) == 3
+
+
 def test_vault_resolver_fails_closed_without_token(settings):
     settings.BMC_VAULT_TOKEN = ""
     settings.BMC_VAULT_ADDR = "https://vault.example.net"
     with pytest.raises(RuntimeError, match="not configured"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
 
 
 def test_vault_resolver_requires_https(settings):
     settings.BMC_VAULT_TOKEN = "test-token"
     settings.BMC_VAULT_ADDR = "http://vault.example.net"
     with pytest.raises(ValueError, match="HTTPS"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
 
 
 def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
     settings, monkeypatch
 ):
     import core.bmc_credentials as vault_module
-    import httpx
 
     requests = []
     original_client = httpx.Client
 
     def handler(request):
         requests.append(request)
-        if request.url.path == "/v1/secret/data/tenants/tenant-id/projects/project-id/bmc/rack-a":
+        if request.url.path == (
+            "/v1/secret/data/tenants/tenant-id/projects/project-id/bmc/rack-a"
+        ):
             payload = {
                 "data": {
                     "data": {
@@ -60,7 +111,9 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
                     }
                 }
             }
-        elif request.url.path == "/v1/pki/data/tenants/tenant-id/projects/project-id/redfish/ca":
+        elif request.url.path == (
+            "/v1/pki/data/tenants/tenant-id/projects/project-id/redfish/ca"
+        ):
             payload = {
                 "data": {
                     "data": {
@@ -110,7 +163,6 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
 
 def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
     import core.bmc_credentials as vault_module
-    import httpx
 
     original_client = httpx.Client
 
@@ -133,7 +185,11 @@ def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
         ),
     )
     with pytest.raises(ValueError, match="username and password"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
 
 
 @pytest.mark.parametrize("status_code", [302, 403, 404, 500])
@@ -141,7 +197,6 @@ def test_vault_resolver_rejects_http_errors_without_leaking_response(
     settings, monkeypatch, status_code
 ):
     import core.bmc_credentials as vault_module
-    import httpx
 
     original_client = httpx.Client
 
@@ -164,22 +219,25 @@ def test_vault_resolver_rejects_http_errors_without_leaking_response(
     )
 
     with pytest.raises(RuntimeError, match="lookup failed"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
 
 
 @pytest.mark.parametrize(
     "error",
     [
-        __import__("httpx").ReadTimeout("read timeout"),
-        __import__("httpx").ConnectError("connection failed"),
-        __import__("httpx").ConnectError("TLS handshake failed"),
+        httpx.ReadTimeout("read timeout"),
+        httpx.ConnectError("connection failed"),
+        httpx.ConnectError("TLS handshake failed"),
     ],
 )
 def test_vault_resolver_propagates_transport_errors_without_secret_values(
     settings, monkeypatch, error
 ):
     import core.bmc_credentials as vault_module
-    import httpx
 
     original_client = httpx.Client
 
@@ -198,12 +256,15 @@ def test_vault_resolver_propagates_transport_errors_without_secret_values(
     )
 
     with pytest.raises(type(error)):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
 
 
 def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
     import core.bmc_credentials as vault_module
-    import httpx
 
     original_client = httpx.Client
 
@@ -226,4 +287,8 @@ def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
     )
 
     with pytest.raises(ValueError, match="non-JSON"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
