@@ -484,6 +484,76 @@ def test_pivot_execution_stops_when_target_controller_is_not_ready(tmp_path):
     assert len([item for item in calls if item[0][0].endswith("clusterctl")]) == 1
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_blocker"),
+    [
+        ("missing_move_label", "bmh_clusterctl_move_label_missing"),
+        ("missing_pause_annotation", "bmh_pause_annotation_missing"),
+        ("missing_status_annotation", "bmh_status_annotation_missing"),
+        ("mismatched_status_annotation", "bmh_status_annotation_mismatch"),
+        ("block_move", "bmh_block_move_annotation_present"),
+    ],
+)
+def test_pivot_execution_requires_metal3_bmh_handoff_metadata(
+    tmp_path,
+    mutation,
+    expected_blocker,
+):
+    status = {
+        "operationalStatus": "OK",
+        "provisioning": {"state": "provisioned"},
+    }
+    annotations = {
+        "baremetalhost.metal3.io/paused": "metal3.io/capm3",
+        "baremetalhost.metal3.io/status": json.dumps(status),
+    }
+    labels = {"clusterctl.cluster.x-k8s.io/move": ""}
+    if mutation == "missing_pause_annotation":
+        annotations.pop("baremetalhost.metal3.io/paused")
+    elif mutation == "missing_status_annotation":
+        annotations.pop("baremetalhost.metal3.io/status")
+    elif mutation == "mismatched_status_annotation":
+        annotations["baremetalhost.metal3.io/status"] = "{"
+    elif mutation == "block_move":
+        annotations["clusterctl.cluster.x-k8s.io/block-move"] = ""
+    elif mutation == "missing_move_label":
+        labels = {}
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": annotations,
+            "labels": labels,
+        },
+        "spec": {
+            "consumerRef": {
+                "kind": "Metal3Machine",
+                "name": "worker-01",
+            },
+        },
+        "status": status,
+    }
+    calls, runner = _pivot_runner_for(bmh_items=[bmh])
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_SOURCE_BMH_NOT_SAFE",
+    ) as error:
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert expected_blocker in str(error.value)
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
 def test_pivot_execution_rejects_bmh_in_transient_provisioning_state(tmp_path):
     bmh = {
         "metadata": {
