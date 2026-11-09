@@ -20,7 +20,8 @@ services:
       PLUGIN_HTTP_ALLOWED_HOSTS: ${PLUGIN_HTTP_ALLOWED_HOSTS:-}
       PLUGIN_CREDENTIAL_RESOLVER: ${PLUGIN_CREDENTIAL_RESOLVER:-}
       AGENT_MTLS_REQUIRED: ${AGENT_MTLS_REQUIRED:-false}
-      AGENT_MTLS_TRUSTED_PROXY_CIDRS: ${AGENT_MTLS_TRUSTED_PROXY_CIDRS:-172.30.250.0/24}
+      AGENT_MTLS_TRUSTED_PROXY_IP: ${AGENT_MTLS_INGRESS_IP:-172.30.250.2}
+      AGENT_MTLS_TRUSTED_PROXY_CIDRS: ${AGENT_MTLS_TRUSTED_PROXY_CIDRS:-}
     command:
       - sh
       - -c
@@ -96,7 +97,8 @@ services:
       api:
         condition: service_healthy
     networks:
-      - agent_mtls
+      agent_mtls:
+        ipv4_address: ${AGENT_MTLS_INGRESS_IP:-172.30.250.2}
     restart: unless-stopped
     read_only: true
     tmpfs:
