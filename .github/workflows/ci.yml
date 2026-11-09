@@ -91,7 +91,7 @@ jobs:
           openssl req -newkey rsa:2048 -nodes -keyout "$tmp_dir/server.key" -out "$tmp_dir/server.csr" -subj "/CN=agent-ingress.test"
           openssl x509 -req -in "$tmp_dir/server.csr" -CA "$tmp_dir/ca.crt" -CAkey "$tmp_dir/ca.key" -CAcreateserial -out "$tmp_dir/server.crt" -days 1
           cat "$tmp_dir/server.crt" "$tmp_dir/server.key" > "$tmp_dir/agent-ingress.pem"
-          docker run --rm \
+          docker run --rm --add-host api:127.0.0.1 \
             -v "$PWD/deploy/cloud-control-plane/agent-mtls/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
             -v "$tmp_dir/agent-ingress.pem:/run/secrets/agent-ingress.pem:ro" \
             -v "$tmp_dir/ca.crt:/run/secrets/agent-client-ca.pem:ro" \
