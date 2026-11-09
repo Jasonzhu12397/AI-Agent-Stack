@@ -2166,3 +2166,102 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
         deployment=deployment,
         command_type="cluster.capi.worker.preflight",
     ).exists()
+
+
+@pytest.mark.django_db
+def test_eph_agent_cannot_poll_deployment_commands_after_target_ownership(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="eph-command-fencing-poll",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+        payload={},
+        idempotency_key=f"eph-fenced-poll:{deployment.id}",
+    )
+    deployment.plan_result = {
+        **(deployment.plan_result or {}),
+        "dual_agent": {"target_agent_owns_cluster": True},
+    }
+    deployment.save(update_fields=["plan_result"])
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"command": None}
+    command.refresh_from_db()
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == "AGENT_CONTROL_OWNERSHIP_FENCED"
+    assert command.lease_token is None
+
+
+@pytest.mark.django_db
+def test_eph_agent_cannot_submit_result_after_target_ownership_fence(
+    cluster_delivery_workspace,
+):
+    import uuid
+
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="eph-command-fencing-result",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    lease_token = uuid.uuid4()
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+        payload={},
+        status=AgentCommand.Status.RUNNING,
+        lease_token=lease_token,
+        lease_expires_at=timezone.now() + datetime.timedelta(seconds=60),
+        idempotency_key=f"eph-fenced-result:{deployment.id}",
+    )
+    deployment.plan_result = {
+        **(deployment.plan_result or {}),
+        "dual_agent": {"target_agent_owns_cluster": True},
+    }
+    deployment.save(update_fields=["plan_result"])
+
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/commands/{command.id}/result/",
+        {
+            "node_id": str(eph_node.id),
+            "outcome": "succeeded",
+            "result": {"source_management_plane_ready": True},
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=str(lease_token),
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "AGENT_CONTROL_OWNERSHIP_FENCED"
+    command.refresh_from_db()
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.lease_token is None
+    assert command.result is None
