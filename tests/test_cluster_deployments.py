@@ -2143,6 +2143,15 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
     assert postflight.node_id == deployment.target_node_id
     assert postflight.payload["expected_worker_replicas"] == 4
 
+    handle_deployment_command_result(provision_command, "succeeded", result, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.POSTFLIGHT
+    assert AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    ).count() == 1
+
 
 @pytest.mark.django_db
 def test_worker_provisioning_rejects_payload_mutation_after_approval(
