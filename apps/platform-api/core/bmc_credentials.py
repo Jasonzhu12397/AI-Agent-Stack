@@ -80,6 +80,16 @@ def _read_kv_v2(client, address, mount, path, headers):
     return data["data"]
 
 
+def _tenant_scoped_path(path, tenant_id, project_id):
+    tenant = str(tenant_id or "")
+    project = str(project_id or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", tenant):
+        raise ValueError("Vault tenant scope is required.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", project):
+        raise ValueError("Vault project scope is required.")
+    return f"tenants/{tenant}/projects/{project}/{path}"
+
+
 def resolve_bmc_credentials(
     credential_ref,
     trust_bundle_ref="",
@@ -91,6 +101,7 @@ def resolve_bmc_credentials(
         raise RuntimeError("Vault authentication is not configured.")
     address = _vault_url()
     mount, path = _parse_vault_reference(credential_ref)
+    path = _tenant_scoped_path(path, tenant_id, project_id)
     headers = {"X-Vault-Token": token}
     namespace = getattr(settings, "BMC_VAULT_NAMESPACE", "")
     if namespace:
@@ -119,6 +130,7 @@ def resolve_bmc_credentials(
         result = {"username": username, "password": password}
         if trust_bundle_ref:
             trust_mount, trust_path = _parse_vault_reference(trust_bundle_ref)
+            trust_path = _tenant_scoped_path(trust_path, tenant_id, project_id)
             trust_secret = _read_kv_v2(
                 client, address, trust_mount, trust_path, headers
             )

@@ -30,14 +30,14 @@ def test_vault_resolver_fails_closed_without_token(settings):
     settings.BMC_VAULT_TOKEN = ""
     settings.BMC_VAULT_ADDR = "https://vault.example.net"
     with pytest.raises(RuntimeError, match="not configured"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
 
 
 def test_vault_resolver_requires_https(settings):
     settings.BMC_VAULT_TOKEN = "test-token"
     settings.BMC_VAULT_ADDR = "http://vault.example.net"
     with pytest.raises(ValueError, match="HTTPS"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
 
 
 def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
@@ -51,7 +51,7 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
 
     def handler(request):
         requests.append(request)
-        if request.url.path == "/v1/secret/data/bmc/rack-a":
+        if request.url.path == "/v1/secret/data/tenants/tenant-id/projects/project-id/bmc/rack-a":
             payload = {
                 "data": {
                     "data": {
@@ -60,7 +60,7 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
                     }
                 }
             }
-        elif request.url.path == "/v1/pki/data/redfish/ca":
+        elif request.url.path == "/v1/pki/data/tenants/tenant-id/projects/project-id/redfish/ca":
             payload = {
                 "data": {
                     "data": {
@@ -133,7 +133,7 @@ def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
         ),
     )
     with pytest.raises(ValueError, match="username and password"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
 
 
 @pytest.mark.parametrize("status_code", [302, 403, 404, 500])
@@ -164,7 +164,7 @@ def test_vault_resolver_rejects_http_errors_without_leaking_response(
     )
 
     with pytest.raises(RuntimeError, match="lookup failed"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
 
 
 @pytest.mark.parametrize(
@@ -198,7 +198,7 @@ def test_vault_resolver_propagates_transport_errors_without_secret_values(
     )
 
     with pytest.raises(type(error)):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
 
 
 def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
@@ -226,4 +226,4 @@ def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
     )
 
     with pytest.raises(ValueError, match="non-JSON"):
-        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")

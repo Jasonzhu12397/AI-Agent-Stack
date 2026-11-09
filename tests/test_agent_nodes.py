@@ -1699,6 +1699,6 @@ def test_bmc_api_automatically_uses_builtin_vault_resolver(
     assert resolved == {
         "address": "https://vault.example.net",
         "mount": "secret",
-        "path": "bmc/rack-a",
+        "path": f"tenants/{tenant.id}/projects/{project.id}/bmc/rack-a",
         "token": "vault-test-token",
     }
