@@ -44,6 +44,7 @@ def _vault_url():
         or parsed.password
         or parsed.query
         or parsed.fragment
+        or parsed.path not in ("", "/")
     ):
         raise ValueError("Vault address must be an HTTPS origin.")
     return address
