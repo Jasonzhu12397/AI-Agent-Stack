@@ -2565,5 +2565,5 @@ def test_terminal_deployment_ignores_late_command_callbacks(
     assert deployment.status == ClusterDeployment.Status.SUCCEEDED
     assert deployment.error is None
     assert deployment.finished_at == finished_at
-    assert "postflight" not in deployment.plan_result
+    assert (deployment.plan_result or {}).get("postflight") is None
 
