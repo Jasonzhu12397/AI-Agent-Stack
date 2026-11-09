@@ -723,64 +723,31 @@ def run_capi_pivot(
     )
     _raise_if_cancelled(
         cancellation_event,
-        "CAPI_PIVOT_CANCELLED_BEFORE_MUTATION",
+        "CAPI_PIVOT_CANCELLED_BEFORE_SIMULATION",
     )
-    command = [
-        clusterctl,
-        "move",
-        "--to-kubeconfig",
-        str(target_kubeconfig),
-        "--namespace",
-        namespace,
-        "-v",
-        "5",
-    ]
-    process_env = {
-        "PATH": env.get("PATH", ""),
-        "HOME": env.get("HOME", "/tmp"),
-        "KUBECONFIG": env["CAPI_PIVOT_SOURCE_KUBECONFIG"],
-    }
-    try:
-        completed = runner(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            stdin=subprocess.DEVNULL,
-            env=process_env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise CapiPivotError("CAPI_PIVOT_EXECUTION_TIMEOUT_OUTCOME_UNKNOWN") from exc
-    except OSError as exc:
-        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
-
-    if cancellation_event is not None and cancellation_event.is_set():
-        raise CapiPivotError(
-            "CAPI_PIVOT_EXECUTION_OUTCOME_UNKNOWN_LEASE_LOST"
-        )
-    stdout = _safe_output(completed.stdout or "")
-    stderr = _safe_output(completed.stderr or "")
-    if completed.returncode != 0:
-        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED")
 
     return {
         "cluster_name": cluster_name,
         "namespace": namespace,
-        "pivot_executed": True,
-        "execution_mode": "clusterctl_move",
-        "dry_run_passed": True,
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": dry_run["dry_run_passed"],
         "source_namespace_scope_verified": True,
         "target_management_plane_verified": True,
         "target_provider_versions": target_preflight["provider_versions"],
         "target_controllers_ready": target_preflight["controllers_ready"],
         "target_cluster_name_available": target_preflight["target_cluster_name_available"],
         "metal3_handoff": metal3_handoff,
-        "side_effects": True,
-        "automatic_retry_allowed": False,
-        "exit_code": completed.returncode,
-        "stdout_summary": stdout,
-        "stderr_summary": stderr,
+        "ownership_transferred": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
+        "side_effects": False,
+        "automatic_retry_allowed": True,
+        "exit_code": dry_run["exit_code"],
+        "stdout_summary": dry_run["stdout_summary"],
+        "stderr_summary": dry_run["stderr_summary"],
     }
 
 
