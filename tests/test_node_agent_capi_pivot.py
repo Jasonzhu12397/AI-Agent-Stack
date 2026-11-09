@@ -554,6 +554,47 @@ def test_pivot_execution_requires_metal3_bmh_handoff_metadata(
     )
 
 
+def test_pivot_execution_accepts_fully_prepared_metal3_bmh(tmp_path):
+    status = {
+        "operationalStatus": "OK",
+        "provisioning": {"state": "provisioned"},
+    }
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": {
+                "baremetalhost.metal3.io/paused": "metal3.io/capm3",
+                "baremetalhost.metal3.io/status": json.dumps(status),
+            },
+            "labels": {"clusterctl.cluster.x-k8s.io/move": ""},
+        },
+        "spec": {
+            "consumerRef": {
+                "kind": "Metal3Machine",
+                "name": "worker-01",
+            },
+        },
+        "status": status,
+    }
+    calls, runner = _pivot_runner_for(bmh_items=[bmh])
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert result["pivot_executed"] is True
+    assert result["metal3_handoff"]["associated_bmh_count"] == 1
+    assert result["metal3_handoff"]["all_associated_bmhs_stable"] is True
+    assert any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
 def test_pivot_execution_rejects_bmh_in_transient_provisioning_state(tmp_path):
     bmh = {
         "metadata": {
