@@ -1681,7 +1681,7 @@ def test_bmc_api_automatically_uses_builtin_vault_resolver(
             "password": "vault-password",
         }
         assert trust_bundle_pem == ""
-        return []
+        return [{"uuid": "", "serial": "", "manufacturer": "", "model": ""}]
 
     monkeypatch.setattr("core.bmc_credentials._read_kv_v2", read_secret)
     monkeypatch.setattr("core.agent_node_views._redfish_systems", redfish_systems)
