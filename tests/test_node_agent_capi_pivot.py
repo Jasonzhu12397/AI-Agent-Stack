@@ -440,7 +440,7 @@ def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
     assert result["target_management_plane_verified"] is True
     assert result["target_controllers_ready"] is True
     assert result["metal3_handoff"]["all_associated_bmhs_stable"] is True
-    assert result["metal3_handoff"]["source_ironic_handoff"] == "deployment_scaled_to_zero"
+    assert result["metal3_handoff"]["source_ironic_handoff"] == "deployment_scaled_to_zero_and_observed"
     assert (
         result["metal3_handoff"]["target_ironic_handoff"]
         == "deployment_ready_with_keepalived"
