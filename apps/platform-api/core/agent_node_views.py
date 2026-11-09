@@ -87,6 +87,39 @@ FORBIDDEN_PAYLOAD_KEYS = {
 }
 
 
+def _command_is_fenced_by_cluster_ownership(command, node):
+    if node.node_type != AgentNode.NodeType.EPH_NODE or command.deployment_id is None:
+        return False
+    plan_result = ClusterDeployment.objects.filter(
+        pk=command.deployment_id,
+    ).values_list("plan_result", flat=True).first()
+    if not isinstance(plan_result, dict):
+        return False
+    dual_agent = plan_result.get("dual_agent", {})
+    return isinstance(dual_agent, dict) and dual_agent.get("target_agent_owns_cluster") is True
+
+
+def _fail_fenced_command(command, now):
+    command.status = AgentCommand.Status.FAILED
+    command.error = {
+        "code": "AGENT_CONTROL_OWNERSHIP_FENCED",
+        "retryable": False,
+    }
+    command.finished_at = now
+    command.lease_token = None
+    command.lease_expires_at = None
+    command.save(
+        update_fields=[
+            "status",
+            "error",
+            "finished_at",
+            "lease_token",
+            "lease_expires_at",
+            "updated_at",
+        ],
+    )
+
+
 def _tenant_and_project(request, tenant_id, project_id):
     tenant = get_object_or_404(
         Tenant.objects.filter(memberships__user=request.user).distinct(),
@@ -1773,6 +1806,9 @@ class AgentRuntimePollView(APIView):
             )
             if command is None:
                 return Response({"command": None})
+            if _command_is_fenced_by_cluster_ownership(command, node):
+                _fail_fenced_command(command, now)
+                return Response({"command": None})
             allowed_commands = (
                 EPH_COMMANDS
                 if node.node_type == AgentNode.NodeType.EPH_NODE
@@ -1901,6 +1937,13 @@ class AgentRuntimeLeaseRenewView(APIView):
                 lease_token=lease_token,
                 lease_expires_at__gte=now,
             )
+            if _command_is_fenced_by_cluster_ownership(command, node):
+                _fail_fenced_command(command, now)
+                return Response(
+                    {"detail": "EPH Agent no longer owns this cluster command.",
+                     "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
+                    status=409,
+                )
             command.lease_expires_at = now + datetime.timedelta(seconds=90)
             command.save(update_fields=["lease_expires_at", "updated_at"])
         return Response(
@@ -1948,6 +1991,13 @@ class AgentRuntimeResultView(APIView):
                 lease_token=lease_token,
                 lease_expires_at__gte=timezone.now(),
             )
+            if _command_is_fenced_by_cluster_ownership(command, node):
+                _fail_fenced_command(command, timezone.now())
+                return Response(
+                    {"detail": "EPH Agent no longer owns this cluster command.",
+                     "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
+                    status=409,
+                )
             command.status = (
                 AgentCommand.Status.SUCCEEDED
                 if outcome == "succeeded"
