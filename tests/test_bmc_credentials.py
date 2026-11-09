@@ -140,8 +140,8 @@ def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
 def test_vault_resolver_rejects_http_errors_without_leaking_response(
     settings, monkeypatch, status_code
 ):
-    import httpx
     import core.bmc_credentials as vault_module
+    import httpx
 
     original_client = httpx.Client
 
@@ -178,8 +178,8 @@ def test_vault_resolver_rejects_http_errors_without_leaking_response(
 def test_vault_resolver_propagates_transport_errors_without_secret_values(
     settings, monkeypatch, error
 ):
-    import httpx
     import core.bmc_credentials as vault_module
+    import httpx
 
     original_client = httpx.Client
 
@@ -202,8 +202,8 @@ def test_vault_resolver_propagates_transport_errors_without_secret_values(
 
 
 def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
-    import httpx
     import core.bmc_credentials as vault_module
+    import httpx
 
     original_client = httpx.Client
 
