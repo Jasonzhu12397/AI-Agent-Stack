@@ -1921,6 +1921,17 @@ def test_bound_agent_requires_matching_verified_client_certificate(node_workspac
     )
     assert mismatched.status_code == 401
 
+    with override_settings(AGENT_MTLS_TRUSTED_PROXY_IP=""):
+        unconfigured_proxy = runtime.post(
+            heartbeat_url,
+            payload,
+            format="json",
+            REMOTE_ADDR=trusted_proxy,
+            HTTP_X_VERIFIED_CLIENT_CERT_SHA256=first_fingerprint,
+            **token_header,
+        )
+    assert unconfigured_proxy.status_code == 401
+
     accepted = runtime.post(
         heartbeat_url,
         payload,
