@@ -4296,9 +4296,20 @@ class ControlPlaneClient:
         self.node_id = node_id
         self.token = token
         self.timeout = timeout
-        self.tls_context = build_control_plane_tls_context()
-        if self.tls_context is not None and not self.base_url.startswith("https://"):
+        tls_configured = any(
+            os.environ.get(name, "").strip()
+            for name in (
+                "AGENT_TLS_CA_FILE",
+                "AGENT_TLS_CERT_FILE",
+                "AGENT_TLS_KEY_FILE",
+            )
+        )
+        parsed_url = urllib.parse.urlsplit(self.base_url)
+        if tls_configured and (
+            parsed_url.scheme.lower() != "https" or not parsed_url.netloc
+        ):
             raise NodeAgentError("AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS")
+        self.tls_context = build_control_plane_tls_context()
         self.deployment_checkpoints: dict[str, dict[str, Any]] = {}
 
     def request(
