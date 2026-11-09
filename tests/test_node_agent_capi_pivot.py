@@ -681,6 +681,8 @@ def _postflight_runner(
     include_bmh=True,
     controller_ready=True,
     consumer_ref_valid=True,
+    consumer_ref_api_version_valid=True,
+    consumer_ref_namespace_valid=True,
 ):
     calls = []
 
@@ -741,8 +743,18 @@ def _postflight_runner(
                     },
                     "spec": {
                         "consumerRef": {
+                            "apiVersion": (
+                                "infrastructure.cluster.x-k8s.io/v1beta1"
+                                if consumer_ref_api_version_valid
+                                else "infrastructure.cluster.x-k8s.io/v1beta2"
+                            ),
                             "kind": "Metal3Machine",
                             "name": "worker-01",
+                            "namespace": (
+                                "metal3"
+                                if consumer_ref_namespace_valid
+                                else "wrong-namespace"
+                            ),
                             "uid": (
                                 "metal3machine-uid"
                                 if consumer_ref_valid
@@ -839,6 +851,33 @@ def test_pivot_postflight_rejects_stale_bmh_consumer_identity(tmp_path):
         CapiPivotError,
         match="CAPI_PIVOT_POSTFLIGHT_BMH_CONSUMER_REFERENCE_MISMATCH",
     ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "error_code"),
+    [
+        (
+            {"consumer_ref_api_version_valid": False},
+            "CAPI_PIVOT_POSTFLIGHT_BMH_CONSUMER_REFERENCE_MISMATCH",
+        ),
+        (
+            {"consumer_ref_namespace_valid": False},
+            "CAPI_PIVOT_POSTFLIGHT_BMH_CONSUMER_REFERENCE_MISMATCH",
+        ),
+    ],
+)
+def test_pivot_postflight_rejects_bmh_consumer_reference_scope_mismatch(
+    tmp_path, override, error_code
+):
+    _, runner = _postflight_runner(**override)
+
+    with pytest.raises(CapiPivotError, match=error_code):
         run_capi_pivot_postflight(
             {"cluster_name": "target-cluster", "namespace": "metal3"},
             environ=_environment(tmp_path),
