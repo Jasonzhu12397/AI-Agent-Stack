@@ -2145,6 +2145,56 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
 
 
 @pytest.mark.django_db
+def test_worker_provisioning_rejects_payload_mutation_after_approval(
+    cluster_delivery_workspace,
+):
+    deployment, preflight_command, preflight_result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-provisioning-payload-mutated-after-approval",
+    )
+    handle_deployment_command_result(
+        preflight_command, "succeeded", preflight_result, None
+    )
+    provision_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    )
+    approver = get_user_model().objects.create_user(
+        username="worker-payload-tamper-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=deployment.tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    provision_command.status = AgentCommand.Status.SUCCEEDED
+    provision_command.approved_by = approver
+    provision_command.approved_at = timezone.now()
+    provision_command.approved_plan_hash = provision_command.plan_hash
+    provision_command.payload = {
+        **provision_command.payload,
+        "expected_cluster_uid": "tampered-cluster-uid",
+    }
+    provision_command.save(
+        update_fields=[
+            "status",
+            "approved_by",
+            "approved_at",
+            "approved_plan_hash",
+            "payload",
+        ]
+    )
+
+    handle_deployment_command_result(provision_command, "succeeded", {}, None)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
+    assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
+
+
+@pytest.mark.django_db
 def test_worker_provisioning_result_without_independent_approval_is_rejected(
     cluster_delivery_workspace,
 ):
