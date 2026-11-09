@@ -2,6 +2,10 @@
 
 An extensible, policy-governed AI Agent platform with separate frontend and backend technology stacks.
 
+## Product direction
+
+The long-term infrastructure product scope is documented in [Omni-Inspired Infrastructure Platform Roadmap](docs/omni-parity-roadmap.md). Omni is a capability benchmark; this project uses CAPI + Metal3 + Ironic and the dual-Agent EPH/Target lifecycle rather than copying Talos-specific implementation.
+
 ## Current architecture
 
 - **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
