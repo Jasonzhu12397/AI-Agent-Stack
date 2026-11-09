@@ -295,3 +295,81 @@ def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
             tenant_id="tenant-id",
             project_id="project-id",
         )
+
+ 
+def test_vault_scoped_token_resolver_receives_tenant_and_project(settings, monkeypatch):
+    import core.bmc_credentials as vault_module
+
+    calls = []
+    original_client = httpx.Client
+
+    def token_resolver(*, tenant_id, project_id):
+        calls.append((tenant_id, project_id))
+        return "scoped-vault-token"
+
+    def handler(request):
+        return httpx.Response(200, json={"data": {"data": {"username": "redfish-user", "password": "redfish-pass"}}})
+
+    settings.BMC_VAULT_TOKEN = "global-fallback-token"
+    settings.BMC_VAULT_TOKEN_RESOLVER = "tests.token_resolver"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(vault_module, "import_string", lambda path: token_resolver)
+    monkeypatch.setattr(vault_module.httpx, "Client", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    result = resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-42", project_id="project-9")
+    assert result["username"] == "redfish-user"
+    assert calls == [("tenant-42", "project-9")]
+
+
+@pytest.mark.parametrize("invalid_token", ["", " token", "token ", "two words", None, 123])
+def test_vault_scoped_token_resolver_rejects_invalid_token_before_network(settings, monkeypatch, invalid_token):
+    import core.bmc_credentials as vault_module
+
+    def token_resolver(*, tenant_id, project_id):
+        return invalid_token
+
+    def unexpected_client(**kwargs):
+        raise AssertionError("Vault must not be contacted with an invalid token.")
+
+    settings.BMC_VAULT_TOKEN = "global-fallback-token"
+    settings.BMC_VAULT_TOKEN_RESOLVER = "tests.token_resolver"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(vault_module, "import_string", lambda path: token_resolver)
+    monkeypatch.setattr(vault_module.httpx, "Client", unexpected_client)
+    with pytest.raises(RuntimeError, match="invalid token"):
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+
+
+def test_invalid_scope_does_not_call_scoped_token_resolver(settings, monkeypatch):
+    import core.bmc_credentials as vault_module
+
+    calls = []
+
+    def token_resolver(*, tenant_id, project_id):
+        calls.append((tenant_id, project_id))
+        return "scoped-token"
+
+    settings.BMC_VAULT_TOKEN_RESOLVER = "tests.token_resolver"
+    settings.BMC_VAULT_TOKEN = "global-fallback-token"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(vault_module, "import_string", lambda path: token_resolver)
+    with pytest.raises(ValueError, match="scope"):
+        resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="../tenant", project_id="project-id")
+    assert calls == []
+
+
+def test_vault_static_token_is_fallback_when_scoped_resolver_unset(settings, monkeypatch):
+    import core.bmc_credentials as vault_module
+
+    original_client = httpx.Client
+    observed_tokens = []
+
+    def handler(request):
+        observed_tokens.append(request.headers["X-Vault-Token"])
+        return httpx.Response(200, json={"data": {"data": {"username": "redfish-user", "password": "redfish-pass"}}})
+
+    settings.BMC_VAULT_TOKEN = "single-scope-static-token"
+    settings.BMC_VAULT_TOKEN_RESOLVER = ""
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(vault_module.httpx, "Client", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    resolve_bmc_credentials("vault://secret/bmc/rack-a", tenant_id="tenant-id", project_id="project-id")
+    assert observed_tokens == ["single-scope-static-token"]
