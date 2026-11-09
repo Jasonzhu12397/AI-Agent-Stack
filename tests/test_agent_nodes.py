@@ -978,9 +978,11 @@ def test_agent_inventory_detects_duplicate_hardware_identity_without_merging(nod
         assert response.status_code == 200
     first = AgentMachine.objects.get(agent_node_id=first_id)
     second = AgentMachine.objects.get(agent_node_id=second_id)
-    assert first.identity_status == AgentMachine.IdentityStatus.CANDIDATE
+    assert first.identity_status == AgentMachine.IdentityStatus.CONFLICT
     assert second.identity_status == AgentMachine.IdentityStatus.CONFLICT
     assert second.identity_conflicts[0]["agent_node_id"] == first_id
+    assert first.identity_conflicts[0]["agent_node_id"] == second_id
+    assert first.identity_conflicts[0]["matching_fields"] == ["product_serial", "product_uuid"]
     assert AgentMachine.objects.count() == 2
 
 

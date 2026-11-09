@@ -479,6 +479,29 @@ class AgentRuntimeInventoryReportView(APIView):
                     },
                 )
                 conflicts = _machine_conflicts(locked_node, material, machine)
+                for conflict in conflicts:
+                    candidate = AgentMachine.objects.select_for_update().get(
+                        pk=conflict["machine_id"]
+                    )
+                    reverse_conflict = {
+                        "machine_id": str(machine.id),
+                        "agent_node_id": str(locked_node.id),
+                        "matching_fields": conflict["matching_fields"],
+                    }
+                    existing_conflicts = candidate.identity_conflicts or []
+                    if reverse_conflict not in existing_conflicts:
+                        candidate.identity_conflicts = [
+                            *existing_conflicts,
+                            reverse_conflict,
+                        ]
+                    candidate.identity_status = AgentMachine.IdentityStatus.CONFLICT
+                    candidate.save(
+                        update_fields=[
+                            "identity_conflicts",
+                            "identity_status",
+                            "updated_at",
+                        ]
+                    )
                 machine.vendor = str(system_identity.get("sys_vendor") or "")[:256]
                 machine.product_name = str(system_identity.get("product_name") or "")[:256]
                 machine.system_uuid = material.get("product_uuid", "")
