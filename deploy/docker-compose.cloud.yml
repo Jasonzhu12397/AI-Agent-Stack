@@ -51,8 +51,8 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: Dockerfile
-    image: ${AI_AGENT_API_IMAGE:-ai-agent-api:local}
+      dockerfile: Dockerfile.cloud-agent
+    image: ${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}
     env_file:
       - ../.env.cloud
     environment:
