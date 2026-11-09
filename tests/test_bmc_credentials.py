@@ -134,3 +134,96 @@ def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
     )
     with pytest.raises(ValueError, match="username and password"):
         resolve_bmc_credentials("vault://secret/bmc/rack-a")
+
+
+@pytest.mark.parametrize("status_code", [302, 403, 404, 500])
+def test_vault_resolver_rejects_http_errors_without_leaking_response(
+    settings, monkeypatch, status_code
+):
+    import httpx
+    import core.bmc_credentials as vault_module
+
+    original_client = httpx.Client
+
+    def handler(request):
+        return httpx.Response(
+            status_code,
+            headers={"location": "https://attacker.example/steal"},
+            text="sensitive upstream response",
+        )
+
+    settings.BMC_VAULT_TOKEN = "vault-test-token"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(
+        vault_module.httpx,
+        "Client",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="lookup failed"):
+        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        __import__("httpx").ReadTimeout("read timeout"),
+        __import__("httpx").ConnectError("connection failed"),
+        __import__("httpx").ConnectError("TLS handshake failed"),
+    ],
+)
+def test_vault_resolver_propagates_transport_errors_without_secret_values(
+    settings, monkeypatch, error
+):
+    import httpx
+    import core.bmc_credentials as vault_module
+
+    original_client = httpx.Client
+
+    def handler(request):
+        raise error
+
+    settings.BMC_VAULT_TOKEN = "vault-test-token"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(
+        vault_module.httpx,
+        "Client",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+    )
+
+    with pytest.raises(type(error)):
+        resolve_bmc_credentials("vault://secret/bmc/rack-a")
+
+
+def test_vault_resolver_rejects_non_json_response(settings, monkeypatch):
+    import httpx
+    import core.bmc_credentials as vault_module
+
+    original_client = httpx.Client
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<html>upstream error</html>",
+        )
+
+    settings.BMC_VAULT_TOKEN = "vault-test-token"
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    monkeypatch.setattr(
+        vault_module.httpx,
+        "Client",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="non-JSON"):
+        resolve_bmc_credentials("vault://secret/bmc/rack-a")
