@@ -418,7 +418,7 @@ def test_target_agent_cannot_execute_source_pivot_dry_run():
 
 
 
-def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
+def test_pivot_execution_runs_read_only_preflight_and_simulates_handoff(tmp_path):
     calls, runner = _pivot_runner_for()
     result = run_capi_pivot(
         {"cluster_name": "target-cluster", "namespace": "metal3"},
@@ -427,16 +427,19 @@ def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
         process_runner=runner,
     )
 
-    assert calls[1][0][1:3] == ["move", "--dry-run"]
     move_calls = [item for item in calls if item[0][0].endswith("clusterctl")]
-    assert len(move_calls) == 2
+    assert len(move_calls) == 1
     assert "--dry-run" in move_calls[0][0]
-    assert "--dry-run" not in move_calls[1][0]
-    assert move_calls[1][1]["timeout"] == 1800
-    assert result["pivot_executed"] is True
+    assert result["pivot_executed"] is False
+    assert result["pivot_simulated"] is True
+    assert result["execution_mode"] == "preflight_verified_simulation"
+    assert result["simulation_status"] == "ready_for_target_agent_acknowledgement"
     assert result["dry_run_passed"] is True
-    assert result["side_effects"] is True
-    assert result["automatic_retry_allowed"] is False
+    assert result["side_effects"] is False
+    assert result["ownership_transferred"] is False
+    assert result["target_agent_acknowledgement_required"] is True
+    assert result["postflight_required"] is True
+    assert result["automatic_retry_allowed"] is True
     assert result["target_management_plane_verified"] is True
     assert result["target_controllers_ready"] is True
     assert result["metal3_handoff"]["all_associated_bmhs_stable"] is True
@@ -448,7 +451,6 @@ def test_pivot_execution_runs_dry_run_before_mutating_move(tmp_path):
         result["metal3_handoff"]["target_ironic_handoff"]
         == "deployment_ready_with_keepalived"
     )
-
 
 def test_pivot_execution_does_not_mutate_when_dry_run_fails(tmp_path):
     calls, runner = _runner_for(move_returncode=1)
@@ -464,29 +466,20 @@ def test_pivot_execution_does_not_mutate_when_dry_run_fails(tmp_path):
     assert len(calls) == 2
 
 
-def test_pivot_execution_timeout_reports_unknown_outcome_without_retry(tmp_path):
-    calls, base_runner = _pivot_runner_for()
+def test_pivot_execution_never_starts_mutating_move_after_dry_run(tmp_path):
+    calls, runner = _pivot_runner_for()
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
 
-    def runner(command, **kwargs):
-        if command[0].endswith("clusterctl") and "--dry-run" not in command:
-            calls.append((command, kwargs))
-            raise subprocess.TimeoutExpired(command, 1800)
-        return base_runner(command, **kwargs)
-
-    with pytest.raises(
-        CapiPivotError,
-        match="CAPI_PIVOT_EXECUTION_TIMEOUT_OUTCOME_UNKNOWN",
-    ):
-        run_capi_pivot(
-            {"cluster_name": "target-cluster", "namespace": "metal3"},
-            environ=_environment(tmp_path),
-            executable_lookup=lambda name: f"/usr/bin/{name}",
-            process_runner=runner,
-        )
-
-    assert len([item for item in calls if item[0][0].endswith("clusterctl")]) == 2
-
-
+    clusterctl_calls = [item for item in calls if item[0][0].endswith("clusterctl")]
+    assert len(clusterctl_calls) == 1
+    assert clusterctl_calls[0][0][1:3] == ["move", "--dry-run"]
+    assert result["pivot_simulated"] is True
+    assert result["side_effects"] is False
 
 def test_pivot_execution_stops_when_target_controller_is_not_ready(tmp_path):
     calls, runner = _pivot_runner_for(target_controller_ready=False)
@@ -614,12 +607,15 @@ def test_pivot_execution_accepts_fully_prepared_metal3_bmh(tmp_path):
         process_runner=runner,
     )
 
-    assert result["pivot_executed"] is True
+    assert result["pivot_executed"] is False
+    assert result["pivot_simulated"] is True
+    assert result["side_effects"] is False
     assert result["metal3_handoff"]["associated_bmh_count"] == 1
     assert result["metal3_handoff"]["all_associated_bmhs_stable"] is True
-    assert any(
-        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+    assert all(
+        "--dry-run" in item[0]
         for item in calls
+        if item[0][0].endswith("clusterctl")
     )
 
 
@@ -1122,6 +1118,21 @@ def test_pivot_preflight_stops_after_lease_loss_during_source_inspection(tmp_pat
 
     assert not any(item[0][0].endswith("clusterctl") for item in calls)
 
+
+def test_pivot_execution_never_invokes_clusterctl_move_without_dry_run(tmp_path):
+    calls, runner = _pivot_runner_for()
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    clusterctl_calls = [item for item in calls if item[0][0].endswith("clusterctl")]
+    assert len(clusterctl_calls) == 1
+    assert all("--dry-run" in item[0] for item in clusterctl_calls)
+    assert result["pivot_simulated"] is True
+    assert result["side_effects"] is False
 
 def test_pivot_execution_reports_unknown_outcome_if_lease_lost_during_move(tmp_path):
     import threading
