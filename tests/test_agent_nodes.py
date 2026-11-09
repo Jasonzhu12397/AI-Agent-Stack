@@ -946,6 +946,104 @@ def test_agent_inventory_report_persists_machine_and_keeps_identity_unverified(n
     assert response.data["attestation"] == "unverified_agent_report"
 
 
+
+@pytest.mark.django_db
+def test_agent_inventory_preserves_verified_identity_and_detects_material_change(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "verified-inventory-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    token = enrolled.data["enrollment_token"]
+    node_id = enrolled.data["id"]
+    runtime = APIClient()
+    url = "/api/v1/agent-runtime/inventory/"
+    original = {
+        "status": "observed",
+        "system_identity": {
+            "product_uuid": "verified-system-uuid",
+            "product_serial": "verified-serial",
+        },
+    }
+    first = runtime.post(
+        url,
+        {"node_id": node_id, "hardware_inventory": original},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert first.status_code == 200
+    machine = AgentMachine.objects.get(agent_node_id=node_id)
+    machine.identity_status = AgentMachine.IdentityStatus.VERIFIED
+    machine.save(update_fields=["identity_status"])
+
+    unchanged = runtime.post(
+        url,
+        {"node_id": node_id, "hardware_inventory": original},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    machine.refresh_from_db()
+    assert unchanged.status_code == 200
+    assert machine.identity_status == AgentMachine.IdentityStatus.VERIFIED
+
+    changed = {
+        "status": "observed",
+        "system_identity": {
+            "product_uuid": "different-system-uuid",
+            "product_serial": "different-serial",
+        },
+    }
+    mismatch = runtime.post(
+        url,
+        {"node_id": node_id, "hardware_inventory": changed},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    machine.refresh_from_db()
+    assert mismatch.status_code == 200
+    assert machine.identity_status == AgentMachine.IdentityStatus.CONFLICT
+    assert machine.identity_fingerprint != ""
+    assert any(
+        item["type"] == "verified_identity_material_changed"
+        for item in machine.identity_conflicts
+    )
+
+
+@pytest.mark.django_db
+def test_agent_inventory_cannot_erase_verified_identity_material(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "verified-empty-report-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    token = enrolled.data["enrollment_token"]
+    node_id = enrolled.data["id"]
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=node_id,
+        system_uuid="verified-system-uuid",
+        identity_material={"product_uuid": "verified-system-uuid"},
+        identity_fingerprint="a" * 64,
+        identity_status=AgentMachine.IdentityStatus.VERIFIED,
+    )
+    response = APIClient().post(
+        "/api/v1/agent-runtime/inventory/",
+        {
+            "node_id": node_id,
+            "hardware_inventory": {"status": "observed", "system_identity": {}},
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    machine.refresh_from_db()
+    assert response.status_code == 409
+    assert machine.identity_status == AgentMachine.IdentityStatus.VERIFIED
+    assert machine.system_uuid == "verified-system-uuid"
+
+
 @pytest.mark.django_db
 def test_agent_inventory_detects_duplicate_hardware_identity_without_merging(node_workspace):
     _, tenant, project, client = node_workspace

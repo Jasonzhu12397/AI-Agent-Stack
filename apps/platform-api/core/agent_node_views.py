@@ -588,23 +588,49 @@ class AgentRuntimeInventoryReportView(APIView):
                             "updated_at",
                         ]
                     )
+                if machine.identity_status == AgentMachine.IdentityStatus.VERIFIED:
+                    if not material:
+                        return Response(
+                            {
+                                "detail": (
+                                    "Verified machine identity cannot be replaced by "
+                                    "an inventory report without identity material."
+                                )
+                            },
+                            status=409,
+                        )
+                    if fingerprint != machine.identity_fingerprint:
+                        conflicts.append(
+                            {
+                                "type": "verified_identity_material_changed",
+                                "previous_fingerprint": machine.identity_fingerprint,
+                                "observed_fingerprint": fingerprint,
+                                "observed_at": observed_at.isoformat(),
+                            }
+                        )
                 machine.vendor = str(system_identity.get("sys_vendor") or "")[:256]
                 machine.product_name = str(system_identity.get("product_name") or "")[:256]
-                machine.system_uuid = material.get("product_uuid", "")
-                machine.identity_material = material
-                machine.identity_fingerprint = fingerprint
-                machine.identity_conflicts = conflicts
-                machine.identity_status = (
-                    AgentMachine.IdentityStatus.CONFLICT
-                    if conflicts
-                    else AgentMachine.IdentityStatus.CANDIDATE
-                    if material
-                    else AgentMachine.IdentityStatus.UNVERIFIED
-                )
                 machine.hardware_inventory = inventory
                 machine.inventory_source = "host_sysfs_dmi_read_only"
                 machine.observed_at = observed_at
-                machine.save()
+                if machine.identity_status == AgentMachine.IdentityStatus.VERIFIED:
+                    machine.identity_conflicts = conflicts
+                    if conflicts:
+                        machine.identity_status = AgentMachine.IdentityStatus.CONFLICT
+                    machine.save()
+                else:
+                    machine.system_uuid = material.get("product_uuid", "")
+                    machine.identity_material = material
+                    machine.identity_fingerprint = fingerprint
+                    machine.identity_conflicts = conflicts
+                    machine.identity_status = (
+                        AgentMachine.IdentityStatus.CONFLICT
+                        if conflicts
+                        else AgentMachine.IdentityStatus.CANDIDATE
+                        if material
+                        else AgentMachine.IdentityStatus.UNVERIFIED
+                    )
+                    machine.save()
         except IntegrityError:
             return Response(
                 {"detail": "Machine inventory update conflicted; retry the report."},
