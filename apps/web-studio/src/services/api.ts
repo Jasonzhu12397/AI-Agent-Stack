@@ -437,9 +437,18 @@ export type FleetMachine = AgentNode & {
     agent_node_id: string;
     name: string;
     cluster_name: string;
+    system_uuid: string;
+    identity_status: "unverified" | "candidate" | "verified" | "conflict";
+    identity_fingerprint: string | null;
+    identity_conflicts: Array<{
+      machine_id: string;
+      agent_node_id: string;
+      matching_fields: string[];
+    }>;
   };
   hardware_inventory: Record<string, unknown>;
   inventory_source: string;
+  observed_at: string | null;
 };
 
 export function getFleetMachines(

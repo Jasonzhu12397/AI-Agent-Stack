@@ -171,6 +171,20 @@ function statusType(status: string): "success" | "warning" | "danger" | "info" {
   return "info";
 }
 
+function identityStatusType(status: string): "success" | "warning" | "danger" | "info" {
+  if (status === "verified") return "success";
+  if (status === "conflict") return "danger";
+  if (status === "candidate") return "warning";
+  return "info";
+}
+
+function identityStatusLabel(status: string): string {
+  if (status === "verified") return "Verified";
+  if (status === "conflict") return "Conflict";
+  if (status === "candidate") return "Candidate";
+  return "Unverified";
+}
+
 function formatTime(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "—";
 }
@@ -247,7 +261,7 @@ onUnmounted(() => {
             <el-tag :type="statusType(node.status)" size="small">{{ node.status }}</el-tag>
           </div>
           <el-empty v-if="!loading && !inventory.length" description="No machine inventory records match this project and filter" :image-size="56" />
-        <p class="fleet-footnote">Inventory is sourced from enrolled Agent records and Agent-reported hardware labels. Hardware identity attestation (system UUID, serial, BMC and PCI cross-check) is not implemented yet.</p>
+        <p class="fleet-footnote">Hardware identity reported by an Agent remains unverified until an independent BMC or hardware-backed attestation workflow is completed.</p>
         </section>
         <section class="fleet-panel">
           <div class="fleet-panel-heading"><h3>Deployment pipeline</h3><span>{{ deployments.length }} CLUSTERS</span></div>
@@ -287,7 +301,25 @@ onUnmounted(() => {
           <el-table-column label="Status" min-width="110">
             <template #default="scope"><el-tag :type="statusType(scope.row.observed_status)" size="small">{{ scope.row.observed_status }}</el-tag></template>
           </el-table-column>
+          <el-table-column label="Vendor / Product" min-width="190">
+            <template #default="scope">
+              <span>{{ scope.row.hardware_inventory.system_identity?.sys_vendor || "—" }} / {{ scope.row.hardware_inventory.system_identity?.product_name || "—" }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Hardware Identity" min-width="150">
+            <template #default="scope">
+              <el-tag :type="identityStatusType(scope.row.identity.identity_status)" size="small">
+                {{ identityStatusLabel(scope.row.identity.identity_status) }}
+              </el-tag>
+              <small v-if="scope.row.identity.identity_conflicts.length" class="identity-conflict-count">
+                {{ scope.row.identity.identity_conflicts.length }} conflict(s)
+              </small>
+            </template>
+          </el-table-column>
           <el-table-column prop="agent_version" label="Agent Version" min-width="130" />
+          <el-table-column label="Inventory Observed" min-width="170">
+            <template #default="scope">{{ formatTime(scope.row.observed_at) }}</template>
+          </el-table-column>
           <el-table-column label="Last Heartbeat" min-width="170">
             <template #default="scope">{{ formatTime(scope.row.last_seen_at) }}</template>
           </el-table-column>
@@ -422,6 +454,7 @@ onUnmounted(() => {
 .fleet-node-main, .fleet-deployment-row > div { min-width: 0; display: grid; gap: 4px; flex: 1; }
 .fleet-node-main strong, .fleet-deployment-row strong { color: #dce9f6; font-size: 12px; }
 .fleet-node-main small, .fleet-deployment-row small { color: #7791aa; font-size: 10px; }
+.identity-conflict-count { display: block; margin-top: 4px; color: var(--el-color-danger); font-size: 11px; }
 .fleet-footnote { color: #708aa2; font-size: 10px; line-height: 1.6; }
 .eph-node-card { padding: 18px; margin-bottom: 12px; }
 .eph-node-header { display: flex; justify-content: space-between; align-items: flex-start; }
