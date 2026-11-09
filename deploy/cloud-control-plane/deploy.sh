@@ -20,6 +20,7 @@ command -v python3 >/dev/null 2>&1 || fail "PYTHON3_NOT_INSTALLED"
 command -v curl >/dev/null 2>&1 || fail "CURL_NOT_INSTALLED"
 
 python3 - "$ENV_FILE" <<'PY'
+import ipaddress
 import os
 import sys
 
@@ -69,14 +70,18 @@ if "agent-mtls" in profiles and not mtls_required:
 if mtls_required:
     if "agent-mtls" not in profiles:
         raise SystemExit("AGENT_MTLS_PROFILE_REQUIRED")
-    subnet = values.get("AGENT_MTLS_NETWORK_SUBNET", "172.30.250.0/24")
-    trusted = [
-        item.strip()
-        for item in values.get("AGENT_MTLS_TRUSTED_PROXY_CIDRS", "").split(",")
-        if item.strip()
-    ]
-    if subnet not in trusted:
-        raise SystemExit("AGENT_MTLS_TRUSTED_PROXY_CIDR_MUST_INCLUDE_NETWORK_SUBNET")
+    subnet = ipaddress.ip_network(
+        values.get("AGENT_MTLS_NETWORK_SUBNET", "172.30.250.0/24"),
+        strict=True,
+    )
+    ingress_ip = ipaddress.ip_address(
+        values.get("AGENT_MTLS_INGRESS_IP", "172.30.250.2")
+    )
+    if ingress_ip not in subnet or ingress_ip in {
+        subnet.network_address,
+        subnet.broadcast_address,
+    }:
+        raise SystemExit("AGENT_MTLS_INGRESS_IP_MUST_BE_USABLE_IN_NETWORK_SUBNET")
     for key in ("AGENT_MTLS_SERVER_PEM", "AGENT_MTLS_CLIENT_CA_PEM"):
         path = values.get(key, "")
         if not path or not os.path.isfile(path):
