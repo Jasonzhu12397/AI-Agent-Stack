@@ -41,6 +41,14 @@ spec:
           env:
             - name: APP_ENV
               value: production
+            - name: AGENT_TLS_CLIENT_CERT_REQUIRED
+              value: "true"
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
             - name: AGENT_NODE_TYPE
               value: target_cluster
             - name: AGENT_HOST_SYSFS_PATH
@@ -87,6 +95,9 @@ spec:
           volumeMounts:
             - name: agent-health
               mountPath: /tmp
+            - name: control-plane-tls
+              mountPath: /var/run/secrets/ai-agent/control-plane-tls
+              readOnly: true
             - name: host-sysfs
               mountPath: /host/sys
               readOnly: true
@@ -110,3 +121,14 @@ spec:
         - name: agent-health
           emptyDir:
             sizeLimit: 1Mi
+        - name: control-plane-tls
+          secret:
+            secretName: agent-control-plane-mtls
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+            defaultMode: 0440
