@@ -116,6 +116,19 @@ def _node_data(node):
         "capabilities": node.capabilities,
         "labels": node.labels,
         "status": node.status,
+        "client_certificate": {
+            "fingerprint_sha256": node.client_certificate_fingerprint or None,
+            "bound_at": node.client_certificate_bound_at,
+            "revoked_at": node.client_certificate_revoked_at,
+            "status": (
+                "active"
+                if node.client_certificate_fingerprint
+                and node.client_certificate_revoked_at is None
+                else "revoked"
+                if node.client_certificate_revoked_at is not None
+                else "unbound"
+            ),
+        },
         "last_seen_at": node.last_seen_at,
         "last_seen_ip": node.last_seen_ip,
         "created_at": node.created_at,
@@ -1282,6 +1295,112 @@ class AgentNodeCredentialRotateView(APIView):
             "it is shown only once. The agent remains offline until restarted with it."
         )
         return Response(data)
+
+
+class AgentNodeClientCertificateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _get_admin_node(self, request, node_id):
+        node = get_object_or_404(
+            AgentNode.objects.filter(tenant__memberships__user=request.user),
+            pk=node_id,
+        )
+        is_admin = TenantMembership.objects.filter(
+            tenant=node.tenant,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        if not is_admin:
+            return None, Response(
+                {"detail": "Tenant owner or admin role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return node, None
+
+    def put(self, request, node_id):
+        if not isinstance(request.data, dict) or set(request.data) != {"fingerprint_sha256"}:
+            return Response(
+                {"detail": "Only fingerprint_sha256 is accepted; certificate and key material are forbidden."},
+                status=400,
+            )
+        fingerprint = request.data.get("fingerprint_sha256")
+        if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint):
+            return Response(
+                {"detail": "fingerprint_sha256 must be exactly 64 hexadecimal characters."},
+                status=400,
+            )
+        node, error = self._get_admin_node(request, node_id)
+        if error:
+            return error
+        fingerprint = fingerprint.lower()
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if node.status == AgentNode.Status.REVOKED:
+                return Response({"detail": "A revoked node cannot bind a client certificate."}, status=409)
+            previous = node.client_certificate_fingerprint
+            node.client_certificate_fingerprint = fingerprint
+            node.client_certificate_bound_at = timezone.now()
+            node.client_certificate_revoked_at = None
+            try:
+                node.save(update_fields=[
+                    "client_certificate_fingerprint",
+                    "client_certificate_bound_at",
+                    "client_certificate_revoked_at",
+                    "updated_at",
+                ])
+            except IntegrityError:
+                return Response(
+                    {"detail": "This client certificate is already bound to another agent node."},
+                    status=409,
+                )
+        record_audit_event(
+            request,
+            node.tenant,
+            "agent.node.client_certificate_bound",
+            "agent_node",
+            node.id,
+            project=node.project,
+            metadata={
+                "previous_fingerprint_sha256": previous or None,
+                "fingerprint_sha256": fingerprint,
+            },
+        )
+        return Response(_node_data(node))
+
+    def delete(self, request, node_id):
+        if request.data not in ({}, None):
+            return Response({"detail": "A request body is not accepted."}, status=400)
+        node, error = self._get_admin_node(request, node_id)
+        if error:
+            return error
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
+            if not node.client_certificate_fingerprint:
+                return Response({"detail": "No client certificate is bound."}, status=409)
+            previous = node.client_certificate_fingerprint
+            node.client_certificate_fingerprint = ""
+            node.client_certificate_revoked_at = timezone.now()
+            node.status = AgentNode.Status.OFFLINE
+            node.last_seen_at = None
+            node.last_seen_ip = None
+            node.save(update_fields=[
+                "client_certificate_fingerprint",
+                "client_certificate_revoked_at",
+                "status",
+                "last_seen_at",
+                "last_seen_ip",
+                "updated_at",
+            ])
+        record_audit_event(
+            request,
+            node.tenant,
+            "agent.node.client_certificate_revoked",
+            "agent_node",
+            node.id,
+            project=node.project,
+            metadata={"fingerprint_sha256": previous},
+        )
+        return Response(_node_data(node))
 
 
 class AgentNodeCommandListCreateView(APIView):

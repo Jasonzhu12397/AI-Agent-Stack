@@ -1784,3 +1784,100 @@ def test_heartbeat_rejects_invalid_agent_version_without_mutation(node_workspace
     node = AgentNode.objects.get(pk=enrolled.data["id"])
     assert node.status == AgentNode.Status.OFFLINE
     assert node.agent_version == ""
+
+
+@pytest.mark.django_db
+def test_agent_client_certificate_can_be_bound_and_rotated_by_tenant_admin(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "cert-bound-agent", "node_type": "eph_node"},
+        format="json",
+    )
+    endpoint = f"/api/v1/agent-nodes/{enrolled.data['id']}/client-certificate/"
+    first = "a" * 64
+    second = "b" * 64
+
+    bound = client.put(endpoint, {"fingerprint_sha256": first}, format="json")
+    assert bound.status_code == 200
+    assert bound.data["client_certificate"]["fingerprint_sha256"] == first
+    assert bound.data["client_certificate"]["status"] == "active"
+
+    rotated = client.put(endpoint, {"fingerprint_sha256": second}, format="json")
+    assert rotated.status_code == 200
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    assert node.client_certificate_fingerprint == second
+    assert node.client_certificate_revoked_at is None
+
+
+@pytest.mark.django_db
+def test_agent_client_certificate_rejects_invalid_and_duplicate_fingerprints(node_workspace):
+    _, tenant, project, client = node_workspace
+    ids = []
+    for name in ("cert-agent-one", "cert-agent-two"):
+        response = client.post(
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+            {"name": name, "node_type": "target_cluster"},
+            format="json",
+        )
+        ids.append(response.data["id"])
+    endpoint = f"/api/v1/agent-nodes/{ids[0]}/client-certificate/"
+    invalid = client.put(endpoint, {"fingerprint_sha256": "not-a-fingerprint"}, format="json")
+    assert invalid.status_code == 400
+
+    fingerprint = "c" * 64
+    assert client.put(endpoint, {"fingerprint_sha256": fingerprint}, format="json").status_code == 200
+    duplicate = client.put(
+        f"/api/v1/agent-nodes/{ids[1]}/client-certificate/",
+        {"fingerprint_sha256": fingerprint},
+        format="json",
+    )
+    assert duplicate.status_code == 409
+    assert AgentNode.objects.get(pk=ids[1]).client_certificate_fingerprint == ""
+
+
+@pytest.mark.django_db
+def test_agent_client_certificate_can_be_revoked_and_node_goes_offline(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "cert-revoke-agent", "node_type": "target_cluster"},
+        format="json",
+    )
+    endpoint = f"/api/v1/agent-nodes/{enrolled.data['id']}/client-certificate/"
+    bound = client.put(
+        endpoint, {"fingerprint_sha256": "d" * 64}, format="json"
+    )
+    assert bound.status_code == 200
+    revoked = client.delete(endpoint)
+    assert revoked.status_code == 200
+    assert revoked.data["client_certificate"]["fingerprint_sha256"] is None
+    assert revoked.data["client_certificate"]["status"] == "revoked"
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    assert node.status == AgentNode.Status.OFFLINE
+    assert node.client_certificate_revoked_at is not None
+
+
+@pytest.mark.django_db
+def test_agent_client_certificate_binding_is_tenant_admin_only(node_workspace):
+    _, tenant, project, _ = node_workspace
+    owner = get_user_model().objects.create_user(username="cert-owner", password="test-password")
+    TenantMembership.objects.create(tenant=tenant, user=owner, role=TenantMembership.Role.OWNER)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    created = owner_client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "cert-admin-only", "node_type": "eph_node"},
+        format="json",
+    )
+    member = get_user_model().objects.create_user(username="cert-member", password="test-password")
+    TenantMembership.objects.create(tenant=tenant, user=member, role=TenantMembership.Role.MEMBER)
+    member_client = APIClient()
+    member_client.force_authenticate(user=member)
+    response = member_client.put(
+        f"/api/v1/agent-nodes/{created.data['id']}/client-certificate/",
+        {"fingerprint_sha256": "e" * 64},
+        format="json",
+    )
+    assert response.status_code == 403
+    assert AgentNode.objects.get(pk=created.data["id"]).client_certificate_fingerprint == ""

@@ -429,6 +429,9 @@ class AgentNode(models.Model):
     capabilities = models.JSONField(default=list)
     labels = models.JSONField(default=dict)
     credential_hash = models.CharField(max_length=64)
+    client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
+    client_certificate_bound_at = models.DateTimeField(null=True, blank=True)
+    client_certificate_revoked_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.OFFLINE)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_seen_ip = models.GenericIPAddressField(null=True, blank=True)
@@ -442,7 +445,12 @@ class AgentNode(models.Model):
             models.UniqueConstraint(
                 fields=["project", "name"],
                 name="uniq_agent_node_name_per_project",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["client_certificate_fingerprint"],
+                condition=~models.Q(client_certificate_fingerprint=""),
+                name="uniq_agent_client_cert_fingerprint",
+            ),
         ]
         indexes = [
             models.Index(fields=["tenant", "project", "node_type"], name="agent_node_scope_idx"),

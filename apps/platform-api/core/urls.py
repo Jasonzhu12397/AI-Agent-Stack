@@ -7,6 +7,7 @@ from core.agent_node_views import (
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
     AgentNodeCredentialRotateView,
+    AgentNodeClientCertificateView,
     AgentProjectCommandListView,
     AgentNodeListCreateView,
     FleetMachineInventoryView,
@@ -196,6 +197,11 @@ urlpatterns = [
         "fleet/machines/<uuid:machine_id>/lifecycle-review/",
         FleetMachineLifecycleReviewView.as_view(),
         name="fleet-machine-lifecycle-review",
+    ),
+    path(
+        "api/v1/agent-nodes/<uuid:node_id>/client-certificate/",
+        AgentNodeClientCertificateView.as_view(),
+        name="agent-node-client-certificate",
     ),
     path(
         "api/v1/agent-nodes/<uuid:node_id>/credentials/rotate/",
