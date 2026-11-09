@@ -60,8 +60,10 @@ require_context "$TARGET_CONTEXT"
 kubectl --context "$EPH_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
 kubectl --context "$TARGET_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
 require_secret_keys "$EPH_CONTEXT" eph-node-agent-credentials control-url node-id token
+require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$EPH_CONTEXT" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-cluster-agent-credentials control-url node-id token
+require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$TARGET_CONTEXT" ironic-api-credentials api-url token
 
 apply_common_resources "$EPH_CONTEXT"
