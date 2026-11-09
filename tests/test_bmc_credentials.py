@@ -127,7 +127,7 @@ def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
     monkeypatch.setattr(
         vault_module.httpx,
         "Client",
-        lambda **kwargs: httpx.Client(
+        lambda **kwargs: original_client(
             transport=httpx.MockTransport(handler),
             **kwargs,
         ),
