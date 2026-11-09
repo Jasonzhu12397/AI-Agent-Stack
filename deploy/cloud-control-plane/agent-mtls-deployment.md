@@ -12,7 +12,7 @@ Do not describe this deployment as mTLS-protected until every requirement in thi
 - Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne. The web listener explicitly clears `X-Verified-Client-Cert-SHA256` before proxying, so a browser or ordinary HTTP client cannot smuggle a certificate fingerprint through that route.
 - The cloud deployment guide expects an external cloud load balancer or host reverse proxy to terminate HTTPS.
 - The Agent runtime routes are under `/api/v1/agent-runtime/`.
-- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address inside `AGENT_MTLS_TRUSTED_PROXY_CIDRS`. The check is fail-closed when the CIDR list is empty or invalid. When `AGENT_MTLS_REQUIRED=true`, unbound nodes are also rejected, so Bearer-only fallback is disabled.
+- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address exactly matching `AGENT_MTLS_TRUSTED_PROXY_IP`. The exact peer address takes precedence over the optional CIDR fallback, and the check is fail-closed when neither is configured or the value is invalid. When `AGENT_MTLS_REQUIRED=true`, unbound nodes are also rejected, so Bearer-only fallback is disabled.
 
 ## Required trust boundary
 
@@ -32,7 +32,7 @@ A cloud load balancer may perform the TLS verification, but its verified identit
 ## Enable the cloud mTLS ingress profile
 
 1. Provision an ingress server certificate and private key as a single PEM file at the path configured by `AGENT_MTLS_SERVER_PEM`. Its SAN must include the DNS name used by EPH and Target Agents. Provision the issuing client CA certificate at `AGENT_MTLS_CLIENT_CA_PEM`. Keep the private key readable only by the deployment administrator and the ingress container.
-2. Configure `AGENT_MTLS_NETWORK_SUBNET` and set `AGENT_MTLS_TRUSTED_PROXY_CIDRS` to that same dedicated subnet. The API validates the TCP peer against this CIDR; do not include the ordinary Compose network or public networks.
+2. Configure `AGENT_MTLS_NETWORK_SUBNET` and `AGENT_MTLS_INGRESS_IP`. Compose assigns that exact static IP to HAProxy and sets `AGENT_MTLS_TRUSTED_PROXY_IP` to the same value in Django. The API compares the TCP peer for exact equality; do not widen this to the whole Docker subnet. The optional CIDR setting is only a fallback for non-Compose deployments.
 3. Set `COMPOSE_PROFILES=agent-mtls` and `AGENT_MTLS_REQUIRED=true`. Keep `AGENT_MTLS_BIND_ADDRESS=127.0.0.1` when a host-level TLS passthrough proxy connects locally. If Agents connect directly to the VM, bind the port to the required interface and restrict the cloud security group to the Agent source ranges.
 4. Run the cloud deployment script. The HAProxy listener exposes only `/api/v1/agent-runtime/`, requires a valid client certificate, and forwards the SHA-256 digest of the TLS peer certificate. All other paths receive 404.
 5. Bind each Agent's certificate fingerprint through the authenticated Studio certificate-binding endpoint before runtime communication. With mandatory enforcement enabled, an Agent without a binding cannot heartbeat or poll commands.
