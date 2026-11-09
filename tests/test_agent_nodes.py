@@ -2,6 +2,7 @@
 import datetime
 import hashlib
 
+import httpx
 import pytest
 from core.models import (
     AgentCommand,
