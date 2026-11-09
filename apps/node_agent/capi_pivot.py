@@ -905,7 +905,7 @@ def run_capi_pivot_postflight(
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_MACHINE_INFRASTRUCTURE_COUNT_MISMATCH")
     machine_infrastructure = {}
     for machine_name in machine_by_name:
-        infrastructure_ref = machine.get("spec", {}).get("infrastructureRef")
+        infrastructure_ref = machine_by_name[machine_name].get("spec", {}).get("infrastructureRef")
         if (
             not isinstance(infrastructure_ref, dict)
             or infrastructure_ref.get("kind") != "Metal3Machine"
