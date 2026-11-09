@@ -2521,3 +2521,49 @@ def test_eph_agent_cannot_renew_command_lease_after_target_ownership_fence(
     assert command.status == AgentCommand.Status.FAILED
     assert command.lease_token is None
     assert command.lease_expires_at is None
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("outcome", ["failed", "succeeded"])
+def test_terminal_deployment_ignores_late_command_callbacks(
+    cluster_delivery_workspace,
+    outcome,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="terminal-late-callback-" + outcome,
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    finished_at = timezone.now()
+    deployment.status = ClusterDeployment.Status.SUCCEEDED
+    deployment.error = None
+    deployment.finished_at = finished_at
+    deployment.save(update_fields=["status", "error", "finished_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.postflight",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="terminal-late-callback-command-" + outcome,
+    )
+
+    handle_deployment_command_result(
+        command,
+        outcome,
+        {"ready": False},
+        {"code": "LATE_CALLBACK"} if outcome == "failed" else None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.SUCCEEDED
+    assert deployment.error is None
+    assert deployment.finished_at == finished_at
+    assert "postflight" not in deployment.plan_result
+
