@@ -4274,7 +4274,7 @@ def kubernetes_api_create_machine_deployment(
 def client_certificate_fingerprint(cert_file: str) -> str:
     try:
         certificate_pem = Path(cert_file).read_text(encoding="ascii")
-        certificate_der = bytes.fromhex(ssl.PEM_cert_to_DER_cert(certificate_pem))
+        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
     except (OSError, UnicodeError, ValueError, ssl.SSLError) as exc:
         raise NodeAgentError("AGENT_TLS_CLIENT_CERTIFICATE_INVALID") from exc
     return hashlib.sha256(certificate_der).hexdigest()
