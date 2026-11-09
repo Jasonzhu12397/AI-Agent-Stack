@@ -2061,7 +2061,11 @@ def inspect_network_environment(
     }
 
 
-def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
+def execute_command(
+    command: dict[str, Any],
+    node_type: str,
+    cancellation_event: threading.Event | None = None,
+) -> dict[str, Any]:
     command_type = command.get("command_type")
     payload = command.get("payload", {})
     if not isinstance(payload, dict):
@@ -3933,7 +3937,7 @@ def execute_command(command: dict[str, Any], node_type: str) -> dict[str, Any]:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.capi.pivot.execute":
         try:
-            return run_capi_pivot(payload)
+            return run_capi_pivot(payload, cancellation_event=cancellation_event)
         except CapiPivotError as exc:
             raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.capi.pivot.postflight":
@@ -4585,7 +4589,7 @@ def execute_command_with_lease(
     )
     renewer.start()
     try:
-        result = execute_command(command, node_type)
+        result = execute_command(command, node_type, cancellation_event=stop_event)
     finally:
         stop_event.set()
         renewer.join()
