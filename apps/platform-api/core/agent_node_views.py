@@ -6,13 +6,17 @@ import hmac
 import json
 import re
 import secrets
+import ssl
 import uuid
 from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.module_loading import import_string
+import httpx
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -576,6 +580,243 @@ class FleetMachineBMCConfigView(APIView):
                 "tls_verify": machine.bmc_tls_verify,
                 "verification_status": machine.bmc_identity_evidence["status"],
                 "network_check_performed": False,
+            },
+            status=200,
+        )
+
+
+def _redfish_read_json(client, url, auth):
+    with client.stream("GET", url, auth=auth) as response:
+        if response.is_redirect or response.is_redirection:
+            raise ValueError("Redfish redirects are not allowed.")
+        if response.status_code == 401 or response.status_code == 403:
+            raise PermissionError("BMC authentication failed.")
+        if response.status_code != 200:
+            raise RuntimeError("Redfish endpoint returned an unsuccessful status.")
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type not in {"application/json", "application/ json"}:
+            raise ValueError("Redfish endpoint did not return JSON.")
+        chunks = []
+        size = 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > 1048576:
+                raise ValueError("Redfish response exceeded the size limit.")
+            chunks.append(chunk)
+        try:
+            payload = json.loads(b"".join(chunks))
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("Redfish endpoint returned invalid JSON.") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Redfish response must be a JSON object.")
+        return payload
+
+
+def _redfish_systems(endpoint, credential, trust_bundle_pem):
+    parsed = urlsplit(endpoint)
+    hostname = parsed.hostname or ""
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError as exc:
+        raise ValueError("Redfish verification currently requires a literal BMC IP address.") from exc
+    if not address.is_private or address.is_loopback or address.is_link_local:
+        raise ValueError("Redfish verification only permits private BMC IP addresses.")
+    if not isinstance(credential, dict):
+        raise ValueError("BMC credential resolver returned an invalid value.")
+    username = credential.get("username")
+    password = credential.get("password")
+    if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
+        raise ValueError("BMC credential resolver did not return username and password.")
+    context = ssl.create_default_context(cadata=trust_bundle_pem or None)
+    auth = httpx.BasicAuth(username, password)
+    base_url = f"https://{parsed.netloc}"
+    systems_url = f"{base_url}/redfish/v1/Systems"
+    results = []
+    with httpx.Client(
+        verify=context,
+        timeout=httpx.Timeout(5.0, connect=3.0),
+        follow_redirects=False,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+    ) as client:
+        collection = _redfish_read_json(client, systems_url, auth)
+        members = collection.get("Members")
+        if not isinstance(members, list) or not members:
+            raise ValueError("Redfish Systems collection contains no members.")
+        if len(members) > 8:
+            raise ValueError("Redfish Systems collection exceeds the supported member limit.")
+        for member in members:
+            if not isinstance(member, dict):
+                raise ValueError("Redfish Systems collection contains an invalid member.")
+            member_path = member.get("@odata.id")
+            if not isinstance(member_path, str) or not re.fullmatch(
+                r"/redfish/v1/Systems/[A-Za-z0-9_.-]{1,64}", member_path
+            ):
+                raise ValueError("Redfish Systems member path is invalid.")
+            system = _redfish_read_json(client, f"{base_url}{member_path}", auth)
+            results.append(
+                {
+                    "uuid": _identity_value(system.get("UUID")),
+                    "serial": _identity_value(system.get("SerialNumber")),
+                    "manufacturer": _identity_value(system.get("Manufacturer")),
+                    "model": _identity_value(system.get("Model")),
+                }
+            )
+    return results
+
+
+def _redfish_identity_review(machine, systems):
+    material = machine.identity_material or {}
+    dmi_uuid = _identity_value(machine.system_uuid or material.get("product_uuid"))
+    dmi_serial = _identity_value(material.get("product_serial"))
+    if len(systems) != 1:
+        return "conflict", [], "expected_exactly_one_system"
+    system = systems[0]
+    conflicts = []
+    if dmi_uuid and system["uuid"] and dmi_uuid.lower() != system["uuid"].lower():
+        conflicts.append("system_uuid")
+    if dmi_serial and system["serial"] and dmi_serial.lower() != system["serial"].lower():
+        conflicts.append("product_serial")
+    if conflicts:
+        return "conflict", conflicts, "dmi_redfish_mismatch"
+    if not dmi_uuid or not dmi_serial or not system["uuid"] or not system["serial"]:
+        return "candidate", [], "insufficient_identity_material"
+    if dmi_uuid.lower() != system["uuid"].lower() or dmi_serial.lower() != system["serial"].lower():
+        return "conflict", ["system_uuid", "product_serial"], "dmi_redfish_mismatch"
+    duplicates = AgentMachine.objects.filter(
+        tenant=machine.tenant,
+        project=machine.project,
+    ).exclude(pk=machine.pk).filter(
+        Q(system_uuid__iexact=system["uuid"])
+        | Q(identity_material__product_serial__iexact=system["serial"])
+    )
+    if duplicates.exists():
+        return "conflict", ["system_uuid", "product_serial"], "duplicate_machine_identity"
+    return "verified", [], "dmi_redfish_match"
+
+
+    def post(self, request, tenant_id, project_id, machine_id):
+        if request.data not in ({}, None):
+            return Response({"detail": "This endpoint does not accept a request body."}, status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request,
+            tenant_id,
+            project_id,
+        )
+        project_editor = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+        if not is_tenant_admin and not project_editor:
+            return Response(
+                {"detail": "Project editor or administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        machine = AgentMachine.objects.filter(
+            pk=machine_id,
+            tenant=tenant,
+            project=project,
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        if not machine.bmc_endpoint or not machine.bmc_credential_ref:
+            return Response({"detail": "BMC endpoint and credential reference must be configured."}, status=409)
+        resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
+        if not resolver_path:
+            return Response(
+                {
+                    "detail": "BMC credential resolver is not configured.",
+                    "verification_status": "not_checked",
+                },
+                status=503,
+            )
+        try:
+            resolver = import_string(resolver_path)
+            resolved = resolver(
+                credential_ref=machine.bmc_credential_ref,
+                trust_bundle_ref=machine.bmc_trust_bundle_ref,
+                tenant_id=str(tenant.id),
+                project_id=str(project.id),
+            )
+            if not isinstance(resolved, dict):
+                raise ValueError("BMC credential resolver returned an invalid value.")
+            credential = {
+                "username": resolved.get("username"),
+                "password": resolved.get("password"),
+            }
+            trust_bundle_pem = resolved.get("trust_bundle_pem", "")
+            if trust_bundle_pem and not isinstance(trust_bundle_pem, str):
+                raise ValueError("BMC trust bundle resolver returned an invalid value.")
+            systems = _redfish_systems(machine.bmc_endpoint, credential, trust_bundle_pem)
+        except PermissionError:
+            return Response({"detail": "BMC authentication failed."}, status=502)
+        except (ValueError, ImportError, AttributeError):
+            return Response({"detail": "BMC verification configuration is invalid."}, status=400)
+        except httpx.TimeoutException:
+            return Response({"detail": "BMC verification timed out."}, status=504)
+        except httpx.HTTPError:
+            return Response({"detail": "BMC connection or TLS verification failed."}, status=502)
+        except RuntimeError:
+            return Response({"detail": "Redfish request failed."}, status=502)
+        verification_status, conflicts, reason = _redfish_identity_review(machine, systems)
+        observed = timezone.now().isoformat()
+        system = systems[0] if len(systems) == 1 else {}
+        with transaction.atomic():
+            machine = AgentMachine.objects.select_for_update().get(
+                pk=machine_id,
+                tenant=tenant,
+                project=project,
+            )
+            machine.bmc_identity_evidence = {
+                "status": verification_status,
+                "source": "redfish_tls_verified",
+                "observed_at": observed,
+                "reason": reason,
+                "system": system,
+                "conflicts": conflicts,
+            }
+            if verification_status == "verified":
+                machine.identity_status = AgentMachine.IdentityStatus.VERIFIED
+            elif verification_status == "conflict":
+                machine.identity_status = AgentMachine.IdentityStatus.CONFLICT
+                machine.identity_conflicts = list(machine.identity_conflicts or []) + [
+                    {
+                        "type": "bmc_identity_conflict",
+                        "source": "redfish",
+                        "fields": conflicts,
+                        "observed_at": observed,
+                    }
+                ]
+            machine.save(
+                update_fields=[
+                    "bmc_identity_evidence",
+                    "identity_status",
+                    "identity_conflicts",
+                    "updated_at",
+                ]
+            )
+            record_audit_event(
+                request,
+                tenant,
+                "fleet.machine.bmc_identity_checked",
+                "agent_machine",
+                machine.id,
+                project=project,
+                metadata={
+                    "verification_status": verification_status,
+                    "reason": reason,
+                    "conflict_fields": conflicts,
+                },
+            )
+        return Response(
+            {
+                "machine_id": str(machine.id),
+                "verification_status": verification_status,
+                "identity_status": machine.identity_status,
+                "reason": reason,
+                "conflicts": conflicts,
+                "system": system,
             },
             status=200,
         )

@@ -1338,3 +1338,73 @@ def test_fleet_machine_lifecycle_review_rejects_unverified_provisioning(node_wor
     assert response.data["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
     machine.refresh_from_db()
     assert machine.lifecycle_state == "discovered"
+
+
+@pytest.mark.django_db
+def test_bmc_redfish_verification_fails_closed_without_credential_resolver(node_workspace, settings):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-no-resolver", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        system_uuid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        identity_material={
+            "product_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "product_serial": "SERIAL-RED-01",
+        },
+        identity_status=AgentMachine.IdentityStatus.CANDIDATE,
+        bmc_endpoint="https://192.168.10.30",
+        bmc_credential_ref="vault://lab/bmc/host",
+    )
+    settings.BMC_CREDENTIAL_RESOLVER = ""
+    response = client.post(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {},
+        format="json",
+    )
+    machine.refresh_from_db()
+    assert response.status_code == 503
+    assert response.data["verification_status"] == "not_checked"
+    assert machine.identity_status == AgentMachine.IdentityStatus.CANDIDATE
+    assert machine.bmc_identity_evidence["status"] == "not_checked"
+
+
+@pytest.mark.django_db
+def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
+    node_workspace, settings
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "redfish-hostname", "node_type": "target_cluster"},
+        format="json",
+    )
+    machine = AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node_id=enrolled.data["id"],
+        bmc_endpoint="https://bmc01.example.net",
+        bmc_credential_ref="vault://lab/bmc/host",
+    )
+    def resolver(**kwargs):
+        return {"username": "admin", "password": "secret"}
+    settings.BMC_CREDENTIAL_RESOLVER = "tests.test_agent_nodes.resolver_for_redfish_test"
+    response = client.post(
+        (
+            f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/"
+            f"machines/{machine.id}/bmc-config/"
+        ),
+        {},
+        format="json",
+    )
+    assert response.status_code == 400
+    machine.refresh_from_db()
+    assert machine.identity_status == AgentMachine.IdentityStatus.UNVERIFIED
