@@ -7,6 +7,7 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
+AGENT_MTLS_TRUSTED_PROXY_IP = os.getenv("AGENT_MTLS_TRUSTED_PROXY_IP", "").strip()
 if APP_ENV == "production" and (
     DEBUG
     or SECRET_KEY == "local-only-change-before-production"
