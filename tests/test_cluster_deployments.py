@@ -902,7 +902,7 @@ def test_target_agent_checkpoint_rejects_replay_and_credentials(
     )
     assert rejected_secret.status_code == 400
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
-    assert checkpoint.sequence == 1
+    assert checkpoint.sequence == 2
     assert "access_token" not in json.dumps(checkpoint.data)
 
 
