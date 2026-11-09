@@ -483,8 +483,11 @@ def _verify_source_metal3_handoff(
         }
         if not isinstance(labels, dict) or not move_labels.intersection(labels):
             blockers.append("bmh_clusterctl_move_label_missing:" + name)
-        if "baremetalhost.metal3.io/paused" not in annotations:
+        pause_annotation = annotations.get("baremetalhost.metal3.io/paused")
+        if pause_annotation is None:
             blockers.append("bmh_pause_annotation_missing:" + name)
+        elif pause_annotation != "metal3.io/capm3":
+            blockers.append("bmh_pause_annotation_value_invalid:" + name)
         status_annotation = annotations.get("baremetalhost.metal3.io/status")
         if not isinstance(status_annotation, str) or not status_annotation:
             blockers.append("bmh_status_annotation_missing:" + name)
@@ -494,7 +497,6 @@ def _verify_source_metal3_handoff(
             except (TypeError, ValueError):
                 annotated_status = None
             expected_status = dict(status)
-            expected_status.pop("hardware", None)
             if not isinstance(annotated_status, dict) or annotated_status != expected_status:
                 blockers.append("bmh_status_annotation_mismatch:" + name)
         provisioning = status.get("provisioning", {})
