@@ -12,7 +12,7 @@ Do not describe this deployment as mTLS-protected until every requirement in thi
 - Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne.
 - The cloud deployment guide expects an external cloud load balancer or host reverse proxy to terminate HTTPS.
 - The Agent runtime routes are under `/api/v1/agent-runtime/`.
-- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires `X-Verified-Client-Cert-SHA256` to contain the verified TLS peer fingerprint. This header is trustworthy only when the private ingress strips any client-supplied copy and injects its own value.
+- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address exactly matching `AGENT_MTLS_TRUSTED_PROXY_IP`. The address check is fail-closed when unset or invalid. The configured address must be the dedicated mTLS ingress peer as observed by Daphne, never the public web proxy or an untrusted load-balancer hop. The header is trustworthy only when that ingress strips any client-supplied copy and injects its own value.
 
 ## Required trust boundary
 
@@ -20,7 +20,7 @@ The production ingress must enforce all of the following before the application 
 
 1. Terminate TLS on a dedicated Agent ingress/listener with mandatory client-certificate verification against the configured Agent CA. A missing, expired, untrusted, or invalid client certificate must fail the TLS handshake.
 2. Derive the certificate SHA-256 fingerprint from the TLS session itself. Never accept a fingerprint, subject, issuer, serial, or verification result supplied by the Agent in an ordinary HTTP header.
-3. Remove all externally supplied certificate identity headers before proxying. Only the trusted ingress may set the internal verified-certificate metadata.
+3. Remove all externally supplied certificate identity headers before proxying. Only the trusted ingress may set the internal verified-certificate metadata. The application additionally checks the TCP peer address against the exact `AGENT_MTLS_TRUSTED_PROXY_IP` configured on the API service; an empty value rejects all certificate-bound runtime requests.
 4. Ensure the application listener receiving that metadata is reachable only from the trusted ingress network. Do not publish the Daphne port publicly or allow untrusted containers/hosts to reach it.
 5. Bind the verified fingerprint to one AgentNode record, enforce uniqueness and tenant/project scoping, and let the application compare the trusted fingerprint header on every runtime request. Revocation locks the node out of runtime authentication until an administrator binds a replacement certificate.
 6. Apply the same identity check to heartbeat, inventory, command polling, lease renewal, checkpoint, and command-result endpoints. Bearer-token authentication remains an additional credential, not a substitute for certificate verification.
@@ -52,4 +52,4 @@ A cloud load balancer may perform the TLS verification, but its verified identit
 
 ## Release gate
 
-Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, and negative integration tests are all deployed together. Until then, report the state accurately as **Agent TLS client configuration and application-side fingerprint binding available; trusted ingress enforcement and end-to-end mTLS deployment pending**.
+Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, and negative integration tests are all deployed together. Until then, report the state accurately as **Agent TLS client configuration, certificate fingerprint binding, and trusted-proxy peer pinning available; dedicated mandatory-client-certificate ingress and end-to-end mTLS deployment pending**.
