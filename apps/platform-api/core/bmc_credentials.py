@@ -116,7 +116,8 @@ def resolve_vault_jwt_token(tenant_id, project_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", auth_mount):
         raise ValueError("Vault JWT auth mount is invalid.")
     try:
-        jwt = Path(jwt_path).read_text(encoding="utf-8").strip()
+        with Path(jwt_path).open("r", encoding="utf-8") as token_file:
+            jwt = token_file.read(16385).strip()
     except OSError as exc:
         raise RuntimeError("Vault workload identity token is unavailable.") from exc
     if len(jwt) > 16384 or len(jwt) < 32:

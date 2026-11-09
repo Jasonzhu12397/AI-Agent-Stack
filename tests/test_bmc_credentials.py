@@ -598,3 +598,18 @@ def test_vault_jwt_auth_fails_closed_without_role(settings, tmp_path):
             tenant_id="tenant-id",
             project_id="project-id",
         )
+
+
+
+def test_vault_jwt_file_read_is_bounded(settings, tmp_path):
+    jwt_file = tmp_path / "oversized.jwt"
+    jwt_file.write_text("x" * 2000000, encoding="utf-8")
+    settings.BMC_VAULT_ADDR = "https://vault.example.net"
+    settings.BMC_VAULT_JWT_PATH = str(jwt_file)
+    settings.BMC_VAULT_JWT_ROLE = "bmc-reader"
+    with pytest.raises(ValueError, match="invalid size"):
+        resolve_bmc_credentials(
+            "vault://secret/bmc/rack-a",
+            tenant_id="tenant-id",
+            project_id="project-id",
+        )
