@@ -99,6 +99,22 @@ kubectl --context "$TARGET_CONTEXT" -n ai-agent-system create secret generic age
   --from-file=tls.key=/secure/path/target-agent-client.key
 ```
 
+Before binding a certificate, calculate the exact fingerprint using the same Agent runtime (this prints only the public certificate fingerprint and does not require the Agent enrollment token):
+
+```sh
+AGENT_TLS_CERT_FILE=/secure/path/eph-agent-client.crt \
+  python -m apps.node_agent.agent --print-client-cert-fingerprint
+```
+
+Run it separately for the Target Agent certificate. Bind each output to its enrolled node through the tenant-admin API:
+
+```http
+PUT /api/v1/agent-nodes/{node_id}/client-certificate/
+Content-Type: application/json
+
+{"fingerprint_sha256":"<64-character-lowercase-sha256>"}
+```
+
 Use a client certificate signed by the CA configured on the cloud HAProxy ingress. Bind the SHA-256 fingerprint of each certificate's DER encoding to its enrolled Agent node through the tenant-admin client-certificate API before starting the Agent. The cloud ingress verifies the certificate during the TLS handshake and forwards only its computed SHA-256 fingerprint to Django; the API also checks that the request came from the dedicated ingress IP and that the fingerprint matches the node binding. The Agent sets `AGENT_TLS_CLIENT_CERT_REQUIRED=true` and fails at startup if its certificate/key pair is absent or incomplete. TLS server verification remains enabled; do not use self-signed untrusted leaf certificates, disable hostname verification, or route around the dedicated mTLS ingress.
 
 For certificate rotation, issue a new certificate, update the Secret, bind the new DER SHA-256 fingerprint to the node, and restart/roll out the Agent. The old certificate is rejected immediately after the binding changes. Revoke the node binding when retiring an Agent. Keep CA private keys and client private keys in an external secret manager; only the public CA certificate and node-specific client credentials belong in the Kubernetes Secret. Restrict Secret read access to cluster operators and the Agent Pod's volume mount.
