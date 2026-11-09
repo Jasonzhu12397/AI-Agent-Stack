@@ -1985,6 +1985,7 @@ def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": None}
         },
+        "dual_agent": {"target_agent_owns_cluster": True},
     }
     deployment.save(update_fields=["plan_result"])
     result["cluster_uid"] = None
