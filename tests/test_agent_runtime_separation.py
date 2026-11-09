@@ -1,8 +1,7 @@
 import pathlib
 
-import yaml
 
-
+yaml = __import__("yaml")
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -32,9 +31,11 @@ def test_local_compose_uses_dedicated_cloud_and_node_agent_images():
     )
     services = compose["services"]
     assert services["worker"]["build"]["dockerfile"] == "Dockerfile.cloud-agent"
-    assert services["worker"]["image"] == "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
+    cloud_image = "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
+    node_image = "${AI_AGENT_NODE_AGENT_IMAGE:-ai-agent-node-agent:local}"
+    assert services["worker"]["image"] == cloud_image
     for name in ("eph-node-agent", "target-cluster-agent"):
-        assert services[name]["image"] == "${AI_AGENT_NODE_AGENT_IMAGE:-ai-agent-node-agent:local}"
+        assert services[name]["image"] == node_image
         assert "build" not in services[name]
 
 
