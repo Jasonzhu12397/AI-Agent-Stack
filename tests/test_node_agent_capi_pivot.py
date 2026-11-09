@@ -62,6 +62,8 @@ def _pivot_runner_for(
     bmh_items=None,
     source_ironic_replicas=0,
     target_keepalived=True,
+    target_generation=1,
+    target_observed_generation=1,
     source_ironic_observed_generation=1,
     source_ironic_status_replicas=0,
     source_ironic_ready_replicas=0,
@@ -147,12 +149,15 @@ def _pivot_runner_for(
                     command,
                     0,
                     json.dumps({
-                        "metadata": {"generation": 1},
+                        "metadata": {"generation": target_generation},
                         "spec": {
                             "replicas": 1,
                             "template": {"spec": {"containers": containers}},
                         },
-                        "status": {"availableReplicas": 1, "observedGeneration": 1},
+                        "status": {
+                            "availableReplicas": 1,
+                            "observedGeneration": target_observed_generation,
+                        },
                     }),
                     "",
                 )
@@ -695,6 +700,33 @@ def test_pivot_execution_rejects_source_ironic_still_running(tmp_path):
     ],
 )
 def test_pivot_execution_requires_observed_zero_replica_source_ironic(
+    tmp_path, overrides, error_code
+):
+    _, runner = _pivot_runner_for(**overrides)
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_code"),
+    [
+        (
+            {"target_observed_generation": 0},
+            "CAPI_PIVOT_TARGET_IRONIC_NOT_READY",
+        ),
+        (
+            {"target_generation": True},
+            "CAPI_PIVOT_TARGET_IRONIC_NOT_READY",
+        ),
+    ],
+)
+def test_pivot_execution_requires_current_target_ironic_deployment_status(
     tmp_path, overrides, error_code
 ):
     _, runner = _pivot_runner_for(**overrides)
