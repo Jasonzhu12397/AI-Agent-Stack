@@ -2651,6 +2651,12 @@ def test_host_sysfs_inspection_reports_nic_sriov_pci_numa_and_hugepages(
         (node_hugepages / "nr_hugepages", "512"),
         (node_hugepages / "free_hugepages", "480"),
         (root / "devices" / "system" / "cpu" / "online", "0-31"),
+        (root / "class" / "dmi" / "id" / "sys_vendor", "Example Systems"),
+        (root / "class" / "dmi" / "id" / "product_name", "Rack Server"),
+        (root / "class" / "dmi" / "id" / "product_uuid", "11111111-2222-3333-4444-555555555555"),
+        (root / "class" / "dmi" / "id" / "product_serial", "SYS-SERIAL-001"),
+        (root / "class" / "dmi" / "id" / "board_serial", "BOARD-SERIAL-001"),
+        (root / "class" / "dmi" / "id" / "chassis_serial", "CHASSIS-SERIAL-001"),
         (numa / "cpulist", "0-31"),
     ]:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2677,6 +2683,10 @@ def test_host_sysfs_inspection_reports_nic_sriov_pci_numa_and_hugepages(
 
     assert result["status"] == "observed"
     assert result["scope"] == "host_sysfs_read_only"
+    assert result["system_identity"]["product_uuid"] == "11111111-2222-3333-4444-555555555555"
+    assert result["system_identity"]["product_serial"] == "SYS-SERIAL-001"
+    assert result["system_identity"]["identity_material_present"] is True
+    assert result["system_identity"]["attestation"] == "unverified_agent_report"
     assert result["cpu_online"] == "0-31"
     assert result["interfaces"][0]["name"] == "eno1"
     assert result["interfaces"][0]["pci_address"] == "0000:03:00.0"

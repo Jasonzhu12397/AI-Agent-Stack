@@ -1514,9 +1514,33 @@ def inspect_host_network_hardware() -> dict[str, Any]:
             "cpulist": _read_sysfs_text(node / "cpulist"),
             "hugepages": node_hugepages,
         })
+    dmi_root = root / "class" / "dmi" / "id"
+    system_identity = {
+        "sys_vendor": _read_sysfs_text(dmi_root / "sys_vendor"),
+        "product_name": _read_sysfs_text(dmi_root / "product_name"),
+        "product_uuid": _read_sysfs_text(dmi_root / "product_uuid"),
+        "product_serial": _read_sysfs_text(dmi_root / "product_serial"),
+        "board_serial": _read_sysfs_text(dmi_root / "board_serial"),
+        "chassis_serial": _read_sysfs_text(dmi_root / "chassis_serial"),
+        "source": "host_sysfs_dmi_read_only",
+        "attestation": "unverified_agent_report",
+    }
+    identity_values = [
+        system_identity["product_uuid"],
+        system_identity["product_serial"],
+        system_identity["board_serial"],
+        system_identity["chassis_serial"],
+    ]
+    system_identity["identity_material_present"] = any(
+        isinstance(value, str) and value.strip() and value.strip().lower() not in {
+            "none", "unknown", "default string", "to be filled by o.e.m."
+        }
+        for value in identity_values
+    )
     return {
         "status": "observed",
         "scope": "host_sysfs_read_only",
+        "system_identity": system_identity,
         "cpu_online": _read_sysfs_text(root / "devices" / "system" / "cpu" / "online"),
         "interfaces": interfaces,
         "pci_network_devices": pci_devices,
@@ -1633,6 +1657,11 @@ def inspect_cluster_node_hardware_inventory(
             "node_uid": node_uid,
             "collected_at": collected_at,
             "cpu_online": hardware.get("cpu_online"),
+            "system_identity": (
+                hardware.get("system_identity")
+                if isinstance(hardware.get("system_identity"), dict)
+                else {"attestation": "not_reported"}
+            ),
             "interfaces": interface_items[:256],
             "pci_network_devices": pci_items[:4096],
             "hugepages": hugepage_items[:16],
