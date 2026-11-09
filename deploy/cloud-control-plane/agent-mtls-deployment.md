@@ -2,7 +2,7 @@
 
 ## Status
 
-**Not enabled end to end.** The Agent process can be configured with a CA bundle and client certificate/key, but the current cloud deployment does not verify Agent client certificates at its public TLS boundary and the Django runtime API does not bind a verified certificate identity to an AgentNode.
+**Not enabled end to end.** The Agent process can be configured with a CA bundle and client certificate/key. The Django runtime API now compares a trusted ingress-provided SHA-256 fingerprint header with the unique AgentNode binding for certificate-bound nodes. However, the current cloud deployment does not yet configure and isolate the trusted mTLS ingress path, so this application check alone does not make production mTLS active.
 
 Do not describe this deployment as mTLS-protected until every requirement in this document is implemented and tested against the deployed ingress.
 
@@ -12,7 +12,7 @@ Do not describe this deployment as mTLS-protected until every requirement in thi
 - Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne.
 - The cloud deployment guide expects an external cloud load balancer or host reverse proxy to terminate HTTPS.
 - The Agent runtime routes are under `/api/v1/agent-runtime/`.
-- Runtime API authentication currently validates a per-node Bearer token hash. The API does not receive a cryptographically verified TLS client-certificate identity.
+- Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires `X-Verified-Client-Cert-SHA256` to contain the verified TLS peer fingerprint. This header is trustworthy only when the private ingress strips any client-supplied copy and injects its own value.
 
 ## Required trust boundary
 
@@ -22,7 +22,7 @@ The production ingress must enforce all of the following before the application 
 2. Derive the certificate SHA-256 fingerprint from the TLS session itself. Never accept a fingerprint, subject, issuer, serial, or verification result supplied by the Agent in an ordinary HTTP header.
 3. Remove all externally supplied certificate identity headers before proxying. Only the trusted ingress may set the internal verified-certificate metadata.
 4. Ensure the application listener receiving that metadata is reachable only from the trusted ingress network. Do not publish the Daphne port publicly or allow untrusted containers/hosts to reach it.
-5. Bind the verified fingerprint to one AgentNode record, enforce uniqueness and tenant/project scoping, and reject revoked or rotated-out certificates.
+5. Bind the verified fingerprint to one AgentNode record, enforce uniqueness and tenant/project scoping, and let the application compare the trusted fingerprint header on every runtime request. Revocation locks the node out of runtime authentication until an administrator binds a replacement certificate.
 6. Apply the same identity check to heartbeat, inventory, command polling, lease renewal, checkpoint, and command-result endpoints. Bearer-token authentication remains an additional credential, not a substitute for certificate verification.
 7. Keep browser/user API traffic separate from the Agent mTLS listener so browser sessions are not required to present Agent certificates.
 
@@ -52,4 +52,4 @@ A cloud load balancer may perform the TLS verification, but its verified identit
 
 ## Release gate
 
-Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, and negative integration tests are all deployed together. Until then, report the state accurately as **Agent TLS client configuration available; server-side mTLS identity binding pending**.
+Do not enable production mTLS enforcement until the ingress configuration, application fingerprint binding, certificate lifecycle endpoints, and negative integration tests are all deployed together. Until then, report the state accurately as **Agent TLS client configuration and application-side fingerprint binding available; trusted ingress enforcement and end-to-end mTLS deployment pending**.
