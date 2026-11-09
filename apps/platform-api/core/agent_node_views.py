@@ -714,7 +714,7 @@ class FleetMachineBMCConfigView(APIView):
 
 def _redfish_read_json(client, url, auth):
     with client.stream("GET", url, auth=auth) as response:
-        if response.is_redirect or response.is_redirection:
+        if 300 <= response.status_code < 400:
             raise ValueError("Redfish redirects are not allowed.")
         if response.status_code == 401 or response.status_code == 403:
             raise PermissionError("BMC authentication failed.")
@@ -746,7 +746,14 @@ def _redfish_systems(endpoint, credential, trust_bundle_pem):
         address = ipaddress.ip_address(hostname)
     except ValueError as exc:
         raise ValueError("Redfish verification currently requires a literal BMC IP address.") from exc
-    if not address.is_private or address.is_loopback or address.is_link_local:
+    if (
+        not address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
         raise ValueError("Redfish verification only permits private BMC IP addresses.")
     if not isinstance(credential, dict):
         raise ValueError("BMC credential resolver returned an invalid value.")
