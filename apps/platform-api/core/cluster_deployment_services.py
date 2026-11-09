@@ -703,7 +703,9 @@ def handle_deployment_command_result(
         source_identity = source.get("source_cluster_identity", {})
         expected_uid = source_identity.get("uid")
         valid_verification = (
-            command.node.node_type == "target_cluster"
+            isinstance(expected_uid, str)
+            and bool(expected_uid)
+            and command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
