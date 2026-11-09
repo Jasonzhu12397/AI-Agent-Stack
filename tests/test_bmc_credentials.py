@@ -1,3 +1,5 @@
+# ruff: noqa: I001
+import httpx
 import pytest
 
 from core.bmc_credentials import (
