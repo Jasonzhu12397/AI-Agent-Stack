@@ -1012,12 +1012,21 @@ def handle_deployment_command_result(
         deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.capi.worker.provision":
         expected = command.payload
+        approved_payload = dict(expected) if isinstance(expected, dict) else {}
+        approved_provisioning_hash = approved_payload.pop(
+            "provisioning_plan_hash", None
+        )
         valid_result = (
             command.status == AgentCommand.Status.SUCCEEDED
             and command.approved_at is not None
             and command.approved_by_id is not None
             and command.approved_by_id != command.requested_by_id
             and command.approved_plan_hash == command.plan_hash
+            and command.plan_hash == _payload_hash(command.command_type, expected)
+            and approved_provisioning_hash == _spec_hash(approved_payload)
+            and expected.get("expected_cluster_uid") == source_identity.get("uid")
+            and expected.get("expected_worker_replicas") == deployment.spec.get("worker_replicas")
+            and expected.get("worker_provisioning") == deployment.spec.get("worker_provisioning")
             and command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("deployment_id") == str(deployment.id)
