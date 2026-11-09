@@ -552,6 +552,7 @@ def _verify_source_metal3_handoff(
             status.get("readyReplicas", 0),
             status.get("updatedReplicas", 0),
             status.get("availableReplicas", 0),
+            status.get("terminatingReplicas", 0),
         ) if isinstance(status, dict) else None
         if (
             not isinstance(generation, int)
