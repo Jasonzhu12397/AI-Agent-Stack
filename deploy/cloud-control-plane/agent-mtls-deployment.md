@@ -9,7 +9,7 @@ Do not describe this deployment as mTLS-protected until every requirement in thi
 ## Current repository topology
 
 - The cloud Compose profile publishes the web/Nginx service and keeps the Daphne API on the Compose network.
-- Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne.
+- Nginx currently listens on HTTP port 8080 and proxies `/api/` to Daphne. The web listener explicitly clears `X-Verified-Client-Cert-SHA256` before proxying, so a browser or ordinary HTTP client cannot smuggle a certificate fingerprint through that route.
 - The cloud deployment guide expects an external cloud load balancer or host reverse proxy to terminate HTTPS.
 - The Agent runtime routes are under `/api/v1/agent-runtime/`.
 - Runtime API authentication validates the per-node Bearer token hash. For a node with an active certificate binding, it additionally requires both `X-Verified-Client-Cert-SHA256` and a peer address exactly matching `AGENT_MTLS_TRUSTED_PROXY_IP`. The address check is fail-closed when unset or invalid. The configured address must be the dedicated mTLS ingress peer as observed by Daphne, never the public web proxy or an untrusted load-balancer hop. The header is trustworthy only when that ingress strips any client-supplied copy and injects its own value.
