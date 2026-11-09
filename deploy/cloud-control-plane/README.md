@@ -19,7 +19,7 @@ cp .env.cloud.example .env.cloud
 chmod 600 .env.cloud
 ~~~
 
-Do not commit .env.cloud. Use a secret manager to provision the file on the VM. Set ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS and CORS_ALLOWED_ORIGINS to the actual public hostname. The web image uses a same-origin API base path and Nginx proxies /api, /health and /ws to the private Django ASGI service. Agent runtime mTLS is not yet enabled end to end; see [Agent mutual TLS deployment contract](agent-mtls-deployment.md) before exposing Agent runtime traffic.
+Do not commit .env.cloud. Use a secret manager to provision the file on the VM. Set ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS and CORS_ALLOWED_ORIGINS to the actual public hostname. The web image uses a same-origin API base path and Nginx proxies /api, /health and /ws to the private Django ASGI service. Agent mTLS is available as an opt-in isolated Compose profile. It requires operator-provisioned server/client CA PEM files and explicit activation; see [Agent mutual TLS deployment contract](agent-mtls-deployment.md). Do not set mandatory enforcement until the ingress profile and Agent certificates are ready.
 
 ## Deploy
 
@@ -29,7 +29,7 @@ docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml exec api
 docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml logs -f api worker web
 ~~~
 
-The API container applies Django migrations before starting Daphne. The worker starts only after API readiness. Nginx serves the compiled Vue Studio on port 8080 and proxies API and WebSocket requests to the private API service. Bind the service to loopback by default and terminate TLS with the cloud load balancer or a host reverse proxy. If a load balancer connects directly to port 8080, set WEB_BIND_ADDRESS=0.0.0.0 and restrict the security group to the load balancer source ranges.
+The API container applies Django migrations before starting Daphne. The worker starts only after API readiness. Nginx serves the compiled Vue Studio on port 8080 and proxies browser API and WebSocket requests to the private API service. To enable the dedicated Agent ingress, configure the certificate paths and network CIDRs in `.env.cloud`, set `COMPOSE_PROFILES=agent-mtls` and `AGENT_MTLS_REQUIRED=true`, then redeploy. HAProxy listens on port 8443 by default and requires verified client certificates. Bind the service to loopback by default and terminate TLS with the cloud load balancer or a host reverse proxy. If a load balancer connects directly to port 8080, set WEB_BIND_ADDRESS=0.0.0.0 and restrict the security group to the load balancer source ranges.
 
 ## Verify
 
