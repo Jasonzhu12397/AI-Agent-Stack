@@ -11,6 +11,11 @@ class CapiPivotError(ValueError):
     pass
 
 
+def _raise_if_cancelled(cancellation_event, error_code: str) -> None:
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise CapiPivotError(error_code)
+
+
 def _validate_identifier(value: Any, error_code: str) -> str:
     if (
         not isinstance(value, str)
@@ -591,7 +596,9 @@ def run_capi_pivot(
     environ: dict[str, str] | None = None,
     executable_lookup=None,
     process_runner=None,
+    cancellation_event=None,
 ) -> dict[str, Any]:
+    _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_BEFORE_EXECUTION")
     env = dict(os.environ if environ is None else environ)
     lookup = executable_lookup or shutil.which
     runner = process_runner or subprocess.run
@@ -646,6 +653,10 @@ def run_capi_pivot(
         env,
         env,
     )
+    _raise_if_cancelled(
+        cancellation_event,
+        "CAPI_PIVOT_CANCELLED_BEFORE_MUTATION",
+    )
     command = [
         clusterctl,
         "move",
@@ -676,6 +687,10 @@ def run_capi_pivot(
     except OSError as exc:
         raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
 
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise CapiPivotError(
+            "CAPI_PIVOT_EXECUTION_OUTCOME_UNKNOWN_LEASE_LOST"
+        )
     stdout = _safe_output(completed.stdout or "")
     stderr = _safe_output(completed.stderr or "")
     if completed.returncode != 0:
