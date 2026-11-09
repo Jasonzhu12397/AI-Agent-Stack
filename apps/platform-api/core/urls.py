@@ -185,7 +185,8 @@ urlpatterns = [
         name="fleet-machine-inventory",
     ),
     path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/<uuid:machine_id>/lifecycle-review/",
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "fleet/machines/<uuid:machine_id>/lifecycle-review/",
         FleetMachineLifecycleReviewView.as_view(),
         name="fleet-machine-lifecycle-review",
     ),
