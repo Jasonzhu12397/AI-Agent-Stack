@@ -1320,7 +1320,12 @@ class AgentNodeClientCertificateView(APIView):
     def put(self, request, node_id):
         if not isinstance(request.data, dict) or set(request.data) != {"fingerprint_sha256"}:
             return Response(
-                {"detail": "Only fingerprint_sha256 is accepted; certificate and key material are forbidden."},
+                {
+                    "detail": (
+                        "Only fingerprint_sha256 is accepted; certificate and key "
+                        "material are forbidden."
+                    )
+                },
                 status=400,
             )
         fingerprint = request.data.get("fingerprint_sha256")
@@ -1336,7 +1341,10 @@ class AgentNodeClientCertificateView(APIView):
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response({"detail": "A revoked node cannot bind a client certificate."}, status=409)
+                return Response(
+                    {"detail": "A revoked node cannot bind a client certificate."},
+                    status=409,
+                )
             previous = node.client_certificate_fingerprint
             node.client_certificate_fingerprint = fingerprint
             node.client_certificate_bound_at = timezone.now()

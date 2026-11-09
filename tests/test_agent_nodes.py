@@ -1826,7 +1826,8 @@ def test_agent_client_certificate_rejects_invalid_and_duplicate_fingerprints(nod
     assert invalid.status_code == 400
 
     fingerprint = "c" * 64
-    assert client.put(endpoint, {"fingerprint_sha256": fingerprint}, format="json").status_code == 200
+    bound = client.put(endpoint, {"fingerprint_sha256": fingerprint}, format="json")
+    assert bound.status_code == 200
     duplicate = client.put(
         f"/api/v1/agent-nodes/{ids[1]}/client-certificate/",
         {"fingerprint_sha256": fingerprint},
