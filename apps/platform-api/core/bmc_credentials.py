@@ -2,8 +2,8 @@ import json
 import re
 from urllib.parse import urlsplit
 
-from django.conf import settings
 import httpx
+from django.conf import settings
 
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9._-]+)*$")

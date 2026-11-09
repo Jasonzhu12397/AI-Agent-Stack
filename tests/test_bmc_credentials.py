@@ -1,7 +1,5 @@
 import pytest
 
-import httpx
-
 from core.bmc_credentials import (
     _parse_vault_reference,
     _tenant_scoped_path,
@@ -95,6 +93,7 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
     settings, monkeypatch
 ):
     import core.bmc_credentials as vault_module
+    import httpx
 
     requests = []
     original_client = httpx.Client
@@ -164,6 +163,7 @@ def test_vault_resolver_reads_kv_v2_credentials_and_trust_bundle(
 
 def test_vault_resolver_rejects_missing_secret_fields(settings, monkeypatch):
     import core.bmc_credentials as vault_module
+    import httpx
 
     original_client = httpx.Client
 
@@ -230,9 +230,9 @@ def test_vault_resolver_rejects_http_errors_without_leaking_response(
 @pytest.mark.parametrize(
     "error",
     [
-        httpx.ReadTimeout("read timeout"),
-        httpx.ConnectError("connection failed"),
-        httpx.ConnectError("TLS handshake failed"),
+        __import__("httpx").ReadTimeout("read timeout"),
+        __import__("httpx").ConnectError("connection failed"),
+        __import__("httpx").ConnectError("TLS handshake failed"),
     ],
 )
 def test_vault_resolver_propagates_transport_errors_without_secret_values(
