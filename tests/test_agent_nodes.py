@@ -1418,10 +1418,22 @@ def test_bmc_redfish_verification_rejects_hostname_to_prevent_dns_rebinding(
 @pytest.mark.parametrize(
     ("exception", "expected_status", "reason"),
     [
-        (PermissionError("credentials rejected"), 502, "authentication_failed"),
-        (ValueError("unsafe response"), 400, "invalid_response_or_configuration"),
+        (
+            PermissionError("credentials rejected"),
+            502,
+            "authentication_failed",
+        ),
+        (
+            ValueError("unsafe response"),
+            400,
+            "invalid_response_or_configuration",
+        ),
         (httpx.ReadTimeout("BMC timed out"), 504, "request_timeout"),
-        (httpx.ConnectError("TLS handshake failed"), 502, "connection_or_tls_failure"),
+        (
+            httpx.ConnectError("TLS handshake failed"),
+            502,
+            "connection_or_tls_failure",
+        ),
         (RuntimeError("Redfish request failed"), 502, "redfish_request_failed"),
     ],
 )
