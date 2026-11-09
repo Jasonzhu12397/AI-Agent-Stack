@@ -1,9 +1,9 @@
-from pathlib import Path
+import pathlib
 
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_cloud_api_and_cloud_agent_images_exclude_node_agent_source():
