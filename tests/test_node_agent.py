@@ -4037,7 +4037,9 @@ def test_control_plane_client_reports_host_inventory(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     client = agent.ControlPlaneClient("https://control.example", "node-1", "secret")
-    result = client.report_inventory({"status": "observed", "system_identity": {"product_uuid": "uuid"}})
+    result = client.report_inventory(
+        {"status": "observed", "system_identity": {"product_uuid": "uuid"}}
+    )
 
     assert result["identity_status"] == "candidate"
     assert calls[0][0] == "https://control.example/api/v1/agent-runtime/inventory/"

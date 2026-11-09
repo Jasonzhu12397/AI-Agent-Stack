@@ -490,8 +490,14 @@ class AgentMachine(models.Model):
     class Meta:
         ordering = ["agent_node__name"]
         indexes = [
-            models.Index(fields=["tenant", "project", "identity_status"], name="machine_identity_idx"),
-            models.Index(fields=["tenant", "project", "observed_at"], name="machine_observed_idx"),
+            models.Index(
+                fields=["tenant", "project", "identity_status"],
+                name="machine_identity_idx",
+            ),
+            models.Index(
+                fields=["tenant", "project", "observed_at"],
+                name="machine_observed_idx",
+            ),
         ]
 
 

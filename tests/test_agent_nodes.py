@@ -985,7 +985,9 @@ def test_agent_inventory_detects_duplicate_hardware_identity_without_merging(nod
 
 
 @pytest.mark.django_db
-def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_report(node_workspace):
+def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_report(
+    node_workspace,
+):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -1002,7 +1004,10 @@ def test_agent_inventory_rejects_invalid_or_revoked_credentials_and_oversized_re
     )
     oversized = runtime.post(
         url,
-        {"node_id": enrolled.data["id"], "hardware_inventory": {"status": "observed", "blob": "x" * 270000}},
+        {
+            "node_id": enrolled.data["id"],
+            "hardware_inventory": {"status": "observed", "blob": "x" * 270000},
+        },
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
     )

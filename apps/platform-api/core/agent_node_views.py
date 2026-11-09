@@ -482,7 +482,10 @@ class AgentRuntimeInventoryReportView(APIView):
                 machine.observed_at = observed_at
                 machine.save()
         except IntegrityError:
-            return Response({"detail": "Machine inventory update conflicted; retry the report."}, status=409)
+            return Response(
+                {"detail": "Machine inventory update conflicted; retry the report."},
+                status=409,
+            )
         return Response({
             "machine_id": str(machine.id),
             "agent_node_id": str(locked_node.id),
