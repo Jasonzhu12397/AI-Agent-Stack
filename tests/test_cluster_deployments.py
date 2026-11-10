@@ -1432,8 +1432,10 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
+@pytest.mark.parametrize("approval_valid", [True, False])
+def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_transfer_ownership(
     cluster_delivery_workspace,
+    approval_valid,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
@@ -1485,6 +1487,29 @@ def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
     assert pivot_command.node_id == eph_node.id
     assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
 
+    if approval_valid:
+        approver = get_user_model().objects.create_user(
+            username="dual-agent-pivot-approver",
+            password="test-password",
+        )
+        TenantMembership.objects.create(
+            tenant=tenant,
+            user=approver,
+            role=TenantMembership.Role.ADMIN,
+        )
+        pivot_command.status = AgentCommand.Status.SUCCEEDED
+        pivot_command.approved_by = approver
+        pivot_command.approved_at = timezone.now()
+        pivot_command.approved_plan_hash = pivot_command.plan_hash
+        pivot_command.save(
+            update_fields=[
+                "status",
+                "approved_by",
+                "approved_at",
+                "approved_plan_hash",
+            ]
+        )
+
     handle_deployment_command_result(
         pivot_command,
         "succeeded",
@@ -1507,6 +1532,14 @@ def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
     )
 
     deployment.refresh_from_db()
+    if not approval_valid:
+        assert deployment.status == ClusterDeployment.Status.FAILED
+        assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
+        assert deployment.plan_result.get("dual_agent", {}).get(
+            "target_agent_owns_cluster"
+        ) is not True
+        return
+
     dual_agent = deployment.plan_result["dual_agent"]
     assert dual_agent["phase"] == "pivot_simulation_ready"
     assert dual_agent["pivot_simulated"] is True

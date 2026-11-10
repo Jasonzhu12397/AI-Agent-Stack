@@ -18,6 +18,12 @@ The response includes `count`, `limit`, `offset` and the standard Agent command 
 
 The Fleet UI refreshes persisted commands every 15 seconds and labels the terminal as a polling view. It is not a WebSocket stream. Durable command logs are available from the command result and error records; streaming log transport is a separate implementation phase.
 
+## Deployment-scoped CAPI Pivot simulation
+
+The Supervisor creates `cluster.capi.pivot.execute` only after source and target preflight plus provider-version compatibility have passed. The command remains `WAITING_APPROVAL` until a tenant owner or administrator other than the requester approves its exact immutable `plan_hash`. The result handler independently revalidates the succeeded command state, approver identity, approval timestamp, approved plan hash and recomputed command payload hash before accepting a simulation result; a callback without that approval binding is rejected.
+
+The Node Agent runs `clusterctl move --dry-run` and read-only source/target checks only. It must report `pivot_simulated=true`, `pivot_executed=false`, `ownership_transferred=false` and `side_effects=false`. A successful simulation does not mean the Target Agent owns the cluster: the deployment remains at `pivot_simulation_ready`, and target verification, worker provisioning and EPH reclaim are not automatically advanced. A real ownership transfer requires a separately designed and explicitly enabled execution adapter and approval policy.
+
 ## Deployment-scoped CAPI Worker provisioning
 
 The Target Agent accepts `cluster.capi.worker.preflight` as a read-only inventory command. After the Supervisor validates the result, it creates `cluster.capi.worker.provision` itself and exposes its UUID at `deployment.plan_result.dual_agent.worker_provisioning_command_id`. Clients must not create this mutating command through `POST /api/v1/agent-nodes/{node_id}/commands/`; that endpoint explicitly rejects it so a caller cannot bypass the deployment ownership, preflight and inventory gates.

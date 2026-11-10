@@ -734,7 +734,13 @@ def handle_deployment_command_result(
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         source_identity = source.get("source_cluster_identity", {})
         valid_simulation = (
-            command.node.node_type == "eph_node"
+            command.status == AgentCommand.Status.SUCCEEDED
+            and command.approved_at is not None
+            and command.approved_by_id is not None
+            and command.approved_by_id != command.requested_by_id
+            and command.approved_plan_hash == command.plan_hash
+            and command.plan_hash == _payload_hash(command.command_type, command.payload)
+            and command.node.node_type == "eph_node"
             and command.node_id == deployment.eph_node_id
             and result.get("pivot_simulated") is True
             and result.get("pivot_executed") is False
