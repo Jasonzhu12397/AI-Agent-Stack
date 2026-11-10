@@ -34,6 +34,17 @@ def _advance_deployment_checkpoint(
     completed_step: str,
     pending_step: str | None,
 ) -> None:
+    phase_order = {
+        "target_agent_bootstrap": 0,
+        "capi_pivot_preflight": 1,
+        "capi_pivot_verified": 2,
+        "worker_provisioning": 3,
+        "worker_pool_verified": 4,
+        "eph_reclaim_pending": 5,
+        "completed": 6,
+    }
+    if phase not in phase_order:
+        raise ValueError("DEPLOYMENT_CHECKPOINT_PHASE_INVALID")
     if deployment.target_node_id != agent_node.id:
         raise ValueError("DEPLOYMENT_CHECKPOINT_AGENT_MISMATCH")
     checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
@@ -44,6 +55,10 @@ def _advance_deployment_checkpoint(
     ):
         raise ValueError("DEPLOYMENT_CHECKPOINT_OWNERSHIP_MISMATCH")
     data = checkpoint.data if checkpoint is not None else {}
+    if checkpoint is not None:
+        current_order = phase_order.get(checkpoint.phase)
+        if current_order is None or phase_order[phase] < current_order:
+            raise ValueError("DEPLOYMENT_CHECKPOINT_PHASE_REGRESSION")
     completed_steps = data.get("completed_steps", [])
     if not isinstance(completed_steps, list) or not all(
         isinstance(item, str) for item in completed_steps
@@ -58,6 +73,8 @@ def _advance_deployment_checkpoint(
         and data.get("cluster_name") == deployment.cluster_name
     ):
         return
+    if checkpoint is not None and checkpoint.phase == phase:
+        raise ValueError("DEPLOYMENT_CHECKPOINT_SEQUENCE_CONFLICT")
     if completed_step not in completed_steps:
         completed_steps.append(completed_step)
     next_data = {
