@@ -2312,7 +2312,7 @@ def test_worker_provisioning_rejects_non_object_payload_without_crashing(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
@@ -2362,7 +2362,7 @@ def test_worker_provisioning_result_without_independent_approval_is_rejected(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
 
 
 
