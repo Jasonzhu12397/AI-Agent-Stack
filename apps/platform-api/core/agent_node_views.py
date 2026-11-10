@@ -41,12 +41,16 @@ EPH_COMMANDS = {
     "node.health",
     "host.preflight",
     "cluster.plan",
+    "cluster.health",
     "cluster.network.inspect",
-    "cluster.provision",
-    "target-agent.bootstrap",
+    "cluster.observe",
+    "cluster.diagnose",
+    "cluster.postflight",
+    "k8s.resource.read",
     "capi.cluster.observe",
     "metal3.host.inspect",
     "cluster.provider.discover",
+    "cluster.provider.compatibility",
     "cluster.manifest.validate",
     "cluster.capi.pivot.source.preflight",
     "cluster.capi.pivot.dry-run",
@@ -54,6 +58,7 @@ EPH_COMMANDS = {
 }
 TARGET_COMMANDS = {
     "node.health",
+    "cluster.provider.compatibility",
     "cluster.health",
     "cluster.network.inspect",
     "cluster.observe",
@@ -65,11 +70,10 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.postflight",
     "cluster.capi.worker.preflight",
     "cluster.capi.worker.provision",
+    "cluster.metal3.observe",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {
-    "cluster.provision",
-    "target-agent.bootstrap",
     "cluster.capi.pivot.execute",
     "cluster.capi.worker.provision",
 }
