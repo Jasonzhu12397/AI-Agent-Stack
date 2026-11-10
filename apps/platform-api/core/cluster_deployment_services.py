@@ -1132,68 +1132,51 @@ def handle_deployment_command_result(
             and result.get("cluster_uid") == expected.get("expected_cluster_uid")
             and result.get("provisioning_plan_hash")
             == expected.get("provisioning_plan_hash")
-            and isinstance(result.get("machine_deployment_uid"), str)
-            and bool(result.get("machine_deployment_uid"))
+            and result.get("machine_deployment_uid") is None
+            and isinstance(result.get("machine_deployment_manifest_hash"), str)
+            and len(result.get("machine_deployment_manifest_hash")) == 64
+            and result.get("execution_mode") == "server_side_dry_run_simulation"
+            and result.get("simulation_status") == "ready_for_manual_execution"
             and result.get("dry_run_passed") is True
-            and result.get("execution_allowed") is True
-            and result.get("side_effects") is result.get("created")
-            and isinstance(result.get("created"), bool)
-            and result.get("worker_creation_performed") is result.get("created")
-            and result.get("idempotent_reconciliation") is (not result.get("created"))
+            and result.get("execution_allowed") is False
+            and result.get("side_effects") is False
+            and result.get("created") is False
+            and result.get("worker_creation_performed") is False
+            and result.get("idempotent_reconciliation") is False
             and result.get("network_profile_hash")
             == _spec_hash(
                 deployment.spec.get("worker_provisioning", {}).get(
                     "network_profile", {}
                 )
             )
-            and result.get("worker_readiness_verified") is True
-            and result.get("worker_machine_count")
-            == deployment.spec.get("worker_replicas")
-            and result.get("ready_worker_machine_count")
-            == deployment.spec.get("worker_replicas")
+            and result.get("worker_readiness_verified") is False
+            and result.get("worker_machine_count") == 0
+            and result.get("ready_worker_machine_count") == 0
             and result.get("not_ready_worker_machine_names") == []
-            and isinstance(result.get("worker_node_names"), list)
-            and len(result.get("worker_node_names"))
-            == deployment.spec.get("worker_replicas")
-            and all(
-                isinstance(name, str) and name
-                for name in result.get("worker_node_names", [])
-            )
-            and len(set(result.get("worker_node_names", [])))
-            == deployment.spec.get("worker_replicas")
+            and result.get("worker_node_names") == []
         )
         if not valid_result:
             deployment.status = ClusterDeployment.Status.FAILED
-            deployment.error = {"code": "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"}
+            deployment.error = {"code": "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"}
             deployment.finished_at = timezone.now()
             deployment.save(
                 update_fields=["status", "error", "finished_at", "updated_at"]
             )
             return
-        _advance_deployment_checkpoint(
-            deployment,
-            deployment.target_node,
-            "worker_pool_verified",
-            "worker_provisioning",
-            "postflight",
-        )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
-            "worker_provisioning_execution": result,
+            "worker_provisioning_simulation": result,
             "dual_agent": {
                 **((deployment.plan_result or {}).get("dual_agent", {})),
-                "phase": "worker_provisioned_waiting_postflight",
-                "worker_provisioning_completed": True,
+                "phase": "worker_provisioning_simulated_manual_execution_required",
+                "worker_provisioning_completed": False,
+                "worker_provisioning_simulated": True,
                 "eph_reclaim_allowed": False,
             },
         }
-        deployment.status = ClusterDeployment.Status.POSTFLIGHT
-        deployment.save(update_fields=["plan_result", "status", "updated_at"])
-        queue_deployment_command(
-            deployment,
-            "cluster.postflight",
-            node=deployment.target_node,
-        )
+        deployment.status = ClusterDeployment.Status.PLAN_READY
+        deployment.error = None
+        deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
             **(deployment.plan_result or {}),
