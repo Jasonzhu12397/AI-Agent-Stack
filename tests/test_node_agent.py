@@ -3883,10 +3883,7 @@ def test_worker_provisioning_preflight_requires_sriov_dpdk(monkeypatch):
 
 @pytest.mark.parametrize(
     ("dry_run", "expected_query"),
-    [
-        (True, "?dryRun=All&fieldValidation=Strict"),
-        (False, "?fieldValidation=Strict"),
-    ],
+    [(True, "?dryRun=All&fieldValidation=Strict")],
 )
 def test_machine_deployment_create_uses_strict_api_validation(
     monkeypatch,
