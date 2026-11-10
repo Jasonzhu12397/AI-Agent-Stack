@@ -3154,7 +3154,7 @@ def execute_command(
             or isinstance(expected_replicas, bool)
             or not 1 <= expected_replicas <= 1000
             or not isinstance(kubernetes_version, str)
-            or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", kubernetes_version)
+            or not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+", kubernetes_version)
             or not isinstance(config, dict)
             or not isinstance(expected_cluster_uid, str)
             or not expected_cluster_uid
@@ -3443,6 +3443,8 @@ def execute_command(
             if str(exc) != "KUBERNETES_API_HTTP_404":
                 raise
             existing = None
+        if existing is not None:
+            raise NodeAgentError("MACHINE_DEPLOYMENT_ALREADY_EXISTS_SIMULATION_BLOCKED")
         labels = {
             "cluster.x-k8s.io/cluster-name": cluster_name,
             "cluster.x-k8s.io/deployment-name": deployment_name,
@@ -3481,244 +3483,53 @@ def execute_command(
                 },
             },
         }
-        def matches_expected_machine_deployment(item: dict[str, Any]) -> bool:
-            metadata = item.get("metadata", {})
-            metadata = metadata if isinstance(metadata, dict) else {}
-            annotations = metadata.get("annotations", {})
-            spec = item.get("spec", {})
-            spec = spec if isinstance(spec, dict) else {}
-            selector = spec.get("selector", {})
-            selector = selector if isinstance(selector, dict) else {}
-            template = spec.get("template", {})
-            template = template if isinstance(template, dict) else {}
-            template_metadata = template.get("metadata", {})
-            template_metadata = (
-                template_metadata if isinstance(template_metadata, dict) else {}
-            )
-            template_spec = template.get("spec", {})
-            template_spec = (
-                template_spec if isinstance(template_spec, dict) else {}
-            )
-            bootstrap = template_spec.get("bootstrap", {})
-            bootstrap = bootstrap if isinstance(bootstrap, dict) else {}
-            return (
-                item.get("apiVersion") == manifest["apiVersion"]
-                and metadata.get("name") == deployment_name
-                and metadata.get("namespace") == namespace
-                and isinstance(annotations, dict)
-                and all(
-                    annotations.get(key) == value
-                    for key, value in expected_annotations.items()
-                )
-                and spec.get("clusterName") == cluster_name
-                and spec.get("replicas") == expected_replicas
-                and selector.get("matchLabels") == labels
-                and template_metadata.get("labels") == labels
-                and template_spec.get("clusterName") == cluster_name
-                and template_spec.get("version") == kubernetes_version
-                and bootstrap.get("configRef")
-                == manifest["spec"]["template"]["spec"]["bootstrap"]["configRef"]
-                and template_spec.get("infrastructureRef")
-                == manifest["spec"]["template"]["spec"]["infrastructureRef"]
-            )
-
-        if existing is not None:
-            if not matches_expected_machine_deployment(existing):
-                raise NodeAgentError("MACHINE_DEPLOYMENT_NAME_CONFLICT")
-            created = False
-            machine_deployment = existing
-        else:
-            dry_run_result = kubernetes_api_create_machine_deployment(
-                md_version, namespace, manifest, dry_run=True
-            )
-            if (
-                dry_run_result.get("kind") != "MachineDeployment"
-                or dry_run_result.get("metadata", {}).get("name") != deployment_name
-            ):
-                raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_RESPONSE_INVALID")
-            try:
-                machine_deployment = kubernetes_api_create_machine_deployment(
-                    md_version, namespace, manifest, dry_run=False
-                )
-                created = True
-            except NodeAgentError as exc:
-                error_code = str(exc)
-                if error_code == "KUBERNETES_API_HTTP_409":
-                    machine_deployment = kubernetes_api_get(md_path)
-                    if not matches_expected_machine_deployment(machine_deployment):
-                        raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_CONFLICT") from exc
-                    created = False
-                elif error_code == "KUBERNETES_API_UNAVAILABLE":
-                    # The POST may have reached the API server before the connection
-                    # timed out. Reconcile by identity; never repeat the create.
-                    try:
-                        machine_deployment = kubernetes_api_get(md_path)
-                    except NodeAgentError as reconcile_error:
-                        if str(reconcile_error) == "KUBERNETES_API_HTTP_404":
-                            raise NodeAgentError(
-                                "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
-                            ) from exc
-                        raise NodeAgentError(
-                            "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
-                        ) from reconcile_error
-                    if not matches_expected_machine_deployment(machine_deployment):
-                        raise NodeAgentError(
-                            "MACHINE_DEPLOYMENT_CREATE_NEEDS_RECONCILIATION"
-                        ) from exc
-                    created = False
-                else:
-                    raise
-        machine_deployment_uid = machine_deployment.get("metadata", {}).get("uid")
-        if not isinstance(machine_deployment_uid, str) or not machine_deployment_uid:
-            raise NodeAgentError("MACHINE_DEPLOYMENT_UID_MISSING")
-        machine_version = versions["cluster.x-k8s.io"]
-        worker_machine_names = []
-        ready_worker_machine_names = []
-        not_ready_worker_machine_names = []
-        verified_worker_network_data = []
-        pending_worker_network_data = []
-        for _attempt in range(120):
-            machines = list_all_kubernetes_items(
-                f"/apis/cluster.x-k8s.io/{machine_version}/namespaces/"
-                f"{namespace}/machines",
-                max_items=10000,
-            )
-            nodes_document = kubernetes_api_get("/api/v1/nodes")
-            node_ready = {}
-            for node_item in nodes_document.get("items", []):
-                node_name = node_item.get("metadata", {}).get("name")
-                conditions = node_item.get("status", {}).get("conditions", [])
-                ready_condition = next(
-                    (
-                        item for item in conditions
-                        if item.get("type") == "Ready"
-                    ),
-                    {},
-                )
-                if isinstance(node_name, str) and node_name:
-                    node_ready[node_name] = ready_condition.get("status") == "True"
-            selected_machines = []
-            for machine in machines:
-                spec = machine.get("spec", {})
-                labels = machine.get("metadata", {}).get("labels", {})
-                if (
-                    spec.get("clusterName") == cluster_name
-                    and isinstance(labels, dict)
-                    and labels.get("cluster.x-k8s.io/deployment-name") == deployment_name
-                    and "cluster.x-k8s.io/control-plane" not in labels
-                ):
-                    selected_machines.append(machine)
-            worker_machine_names = [
-                item.get("metadata", {}).get("name")
-                for item in selected_machines
-            ]
-            if len(worker_machine_names) > expected_replicas:
-                raise NodeAgentError("UNEXPECTED_WORKER_MACHINE_COUNT")
-            worker_machine_uids = [
-                item.get("metadata", {}).get("uid")
-                for item in selected_machines
-            ]
-            if (
-                any(not isinstance(name, str) or not name for name in worker_machine_names)
-                or len(set(worker_machine_names)) != len(worker_machine_names)
-                or any(not isinstance(uid, str) or not uid for uid in worker_machine_uids)
-                or len(set(worker_machine_uids)) != len(worker_machine_uids)
-            ):
-                raise NodeAgentError("WORKER_MACHINE_IDENTITY_INVALID")
-            ready_worker_machine_names = []
-            not_ready_worker_machine_names = []
-            worker_node_ref_names = []
-            verified_worker_network_data = []
-            pending_worker_network_data = []
-            worker_baremetal_hosts = []
-            if selected_machines:
-                worker_baremetal_hosts = list_all_kubernetes_items(
-                    f"/apis/metal3.io/{versions['metal3.io']}/namespaces/"
-                    f"{host_namespace}/baremetalhosts",
-                    max_items=10000,
-                )
-            for machine in selected_machines:
-                metadata = machine.get("metadata", {})
-                conditions = machine.get("status", {}).get("conditions", [])
-                ready_condition = next(
-                    (
-                        item for item in conditions
-                        if item.get("type") == "Ready"
-                    ),
-                    {},
-                )
-                node_name = machine.get("status", {}).get("nodeRef", {}).get("name")
-                if isinstance(node_name, str) and node_name:
-                    worker_node_ref_names.append(node_name)
-                network_data_result = inspect_rendered_worker_network_data(
-                    machine,
-                    namespace,
-                    data_template_name,
-                    expected_infra_api_version,
-                    network_profile,
-                    host_namespace,
-                    versions["metal3.io"],
-                    worker_baremetal_hosts,
-                )
-                if network_data_result.get("ready") is True:
-                    verified_worker_network_data.append(network_data_result)
-                else:
-                    pending_worker_network_data.append(
-                        {
-                            "machine_name": metadata.get("name"),
-                            "reason": network_data_result.get("reason"),
-                        }
-                    )
-                is_ready = (
-                    ready_condition.get("status") == "True"
-                    and isinstance(node_name, str)
-                    and node_ready.get(node_name) is True
-                    and network_data_result.get("ready") is True
-                )
-                if is_ready:
-                    ready_worker_machine_names.append(metadata.get("name"))
-                else:
-                    not_ready_worker_machine_names.append(metadata.get("name"))
-            if len(set(worker_node_ref_names)) != len(worker_node_ref_names):
-                raise NodeAgentError("WORKER_NODE_REFERENCE_DUPLICATE")
-            if (
-                len(selected_machines) == expected_replicas
-                and len(ready_worker_machine_names) == expected_replicas
-                and len(verified_worker_network_data) == expected_replicas
-            ):
-                break
-            if _attempt < 119:
-                time.sleep(15)
-        else:
-            raise NodeAgentError("WORKER_POOL_READINESS_TIMEOUT")
+        dry_run_result = kubernetes_api_create_machine_deployment(
+            md_version, namespace, manifest, dry_run=True
+        )
+        if (
+            dry_run_result.get("kind") != "MachineDeployment"
+            or dry_run_result.get("metadata", {}).get("name") != deployment_name
+            or dry_run_result.get("metadata", {}).get("namespace") != namespace
+            or dry_run_result.get("apiVersion") != manifest["apiVersion"]
+        ):
+            raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_RESPONSE_INVALID")
+        manifest_hash = hashlib.sha256(
+            json.dumps(
+                manifest,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
         return {
             "deployment_id": deployment_id,
             "cluster_name": cluster_name,
             "namespace": namespace,
             "machine_deployment_name": deployment_name,
-            "machine_deployment_uid": machine_deployment_uid,
+            "machine_deployment_uid": None,
             "cluster_uid": expected_cluster_uid,
             "provisioning_plan_hash": plan_hash,
-            "created": created,
-            "idempotent_reconciliation": not created,
+            "machine_deployment_manifest_hash": manifest_hash,
+            "execution_mode": "server_side_dry_run_simulation",
+            "simulation_status": "ready_for_manual_execution",
+            "created": False,
+            "idempotent_reconciliation": False,
             "dry_run_passed": True,
-            "side_effects": created,
-            "worker_creation_performed": created,
-            "execution_allowed": True,
+            "side_effects": False,
+            "worker_creation_performed": False,
+            "execution_allowed": False,
             "network_profile_hash": network_profile.get("profile_hash"),
-            "worker_readiness_verified": True,
-            "worker_machine_count": len(worker_machine_names),
-            "ready_worker_machine_count": len(ready_worker_machine_names),
-            "not_ready_worker_machine_names": not_ready_worker_machine_names,
-            "worker_network_data_verified": True,
-            "verified_worker_network_data_count": len(verified_worker_network_data),
-            "pending_worker_network_data": pending_worker_network_data,
-            "verified_worker_network_data": verified_worker_network_data,
-            "worker_node_names": [
-                machine.get("status", {}).get("nodeRef", {}).get("name")
-                for machine in selected_machines
-            ],
+            "worker_readiness_verified": False,
+            "worker_machine_count": 0,
+            "ready_worker_machine_count": 0,
+            "not_ready_worker_machine_names": [],
+            "worker_network_data_verified": False,
+            "verified_worker_network_data_count": 0,
+            "pending_worker_network_data": [],
+            "verified_worker_network_data": [],
+            "worker_node_names": [],
         }
+
     if command_type == "cluster.postflight":
         nodes = kubernetes_api_get("/api/v1/nodes")
         items = nodes.get("items", [])
@@ -4178,6 +3989,8 @@ def kubernetes_api_create_machine_deployment(
     manifest: dict[str, Any],
     dry_run: bool,
 ) -> dict[str, Any]:
+    if dry_run is not True:
+        raise NodeAgentError("MACHINE_DEPLOYMENT_REAL_WRITES_DISABLED")
     if (
         not isinstance(version, str)
         or not re.fullmatch(r"v[0-9]+(?:alpha|beta)?[0-9]*", version)
@@ -4208,11 +4021,7 @@ def kubernetes_api_create_machine_deployment(
         f"/apis/cluster.x-k8s.io/{version}/namespaces/"
         f"{namespace}/machinedeployments"
     )
-    query = (
-        "?dryRun=All&fieldValidation=Strict"
-        if dry_run
-        else "?fieldValidation=Strict"
-    )
+    query = "?dryRun=All&fieldValidation=Strict"
     request = urllib.request.Request(
         f"https://{host}:{port}{path}{query}",
         data=json.dumps(manifest).encode("utf-8"),
