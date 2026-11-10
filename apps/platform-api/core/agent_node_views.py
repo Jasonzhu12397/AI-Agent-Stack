@@ -1842,8 +1842,8 @@ class AgentRuntimePollView(APIView):
             if (
                 command.attempts >= command.max_attempts
                 or (
-                    command.command_type == "cluster.capi.pivot.execute"
-                    and command.status == AgentCommand.Status.RUNNING
+                    command.status == AgentCommand.Status.RUNNING
+                    and command.command_type in MUTATING_COMMANDS
                 )
             ):
                 command.status = AgentCommand.Status.FAILED
@@ -1851,6 +1851,9 @@ class AgentRuntimePollView(APIView):
                     "code": (
                         "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
                         if command.command_type == "cluster.capi.pivot.execute"
+                        else "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+                        if command.command_type in MUTATING_COMMANDS
+                        and command.status == AgentCommand.Status.RUNNING
                         else "LEASE_EXPIRED"
                     ),
                     "retryable": False,
