@@ -719,14 +719,25 @@ def test_mutating_command_approval_expires_before_agent_dispatch(node_workspace)
 
 
 @pytest.mark.django_db
-def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
-    user, tenant, project, client = node_workspace
-    token = "wrong-role-poll-token"
+@pytest.mark.parametrize(
+    "command_type",
+    [
+        "cluster.control-plane.verify",
+        "cluster.provision",
+        "target-agent.bootstrap",
+    ],
+)
+def test_agent_poll_rejects_queued_commands_not_allowed_for_node_role(
+    node_workspace,
+    command_type,
+):
+    user, tenant, project, _ = node_workspace
+    token = f"wrong-role-poll-{command_type}"
     node = AgentNode.objects.create(
         tenant=tenant,
         project=project,
         created_by=user,
-        name="eph-wrong-role",
+        name=f"eph-wrong-role-{command_type}",
         node_type=AgentNode.NodeType.EPH_NODE,
         credential_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
     )
@@ -735,10 +746,10 @@ def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
         project=project,
         node=node,
         requested_by=user,
-        command_type="cluster.control-plane.verify",
+        command_type=command_type,
         payload={},
         status=AgentCommand.Status.QUEUED,
-        idempotency_key="wrong-role-command",
+        idempotency_key=f"wrong-role-command-{command_type}",
         plan_hash="d" * 64,
     )
 
@@ -754,6 +765,8 @@ def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
     assert response.data["command"] is None
     assert command.status == AgentCommand.Status.FAILED
     assert command.error["code"] == "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE"
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
 
 
 
