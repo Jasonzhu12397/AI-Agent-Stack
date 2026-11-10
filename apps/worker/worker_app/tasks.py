@@ -137,6 +137,7 @@ def renew_lease(task_id, lease_token, worker_id, lease_seconds=150):
         status=Task.Status.RUNNING,
         lease_token=lease_token,
         lease_owner=worker_id,
+        lease_expires_at__gt=now,
     ).update(
         heartbeat_at=now,
         lease_expires_at=now + timedelta(seconds=lease_seconds),
@@ -151,6 +152,7 @@ def finish_task(task_id, lease_token, result):
         task = Task.objects.select_for_update().filter(
             pk=task_id,
             lease_token=lease_token,
+            lease_expires_at__gt=now,
             status__in=[Task.Status.RUNNING, Task.Status.CANCEL_REQUESTED],
         ).first()
         if task is None:
@@ -207,6 +209,7 @@ def fail_task(task_id, lease_token, error, retryable=True):
         task = Task.objects.select_for_update().filter(
             pk=task_id,
             lease_token=lease_token,
+            lease_expires_at__gt=now,
             status__in=[Task.Status.RUNNING, Task.Status.CANCEL_REQUESTED],
         ).first()
         if task is None:
