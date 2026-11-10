@@ -4174,3 +4174,105 @@ def test_client_certificate_fingerprint_rejects_missing_file(tmp_path):
         match="AGENT_TLS_CLIENT_CERTIFICATE_INVALID",
     ):
         agent.client_certificate_fingerprint(str(tmp_path / "missing.crt"))
+
+
+def test_worker_provision_requires_matching_durable_deployment_checkpoint():
+    command = {
+        "command_type": "cluster.capi.worker.provision",
+        "payload": {
+            "deployment_id": "deployment-123",
+            "cluster_name": "edge-lab",
+        },
+    }
+    checkpoint = {
+        "deployment_id": "deployment-123",
+        "generation": 1,
+        "sequence": 4,
+        "phase": "worker_provisioning",
+        "data": {
+            "cluster_name": "edge-lab",
+            "completed_steps": ["worker_provisioning_preflight"],
+            "pending_step": "worker_provisioning",
+        },
+        "resume_available": True,
+    }
+
+    agent.validate_deployment_checkpoint_for_command(
+        command,
+        "target_cluster",
+        {"deployment-123": checkpoint},
+    )
+
+
+@pytest.mark.parametrize(
+    "checkpoint,error_code",
+    [
+        (None, "DEPLOYMENT_CHECKPOINT_REQUIRED"),
+        (
+            {
+                "deployment_id": "deployment-123",
+                "generation": 1,
+                "sequence": 3,
+                "phase": "capi_pivot_verified",
+                "data": {
+                    "cluster_name": "edge-lab",
+                    "completed_steps": [],
+                    "pending_step": "worker_provisioning",
+                },
+                "resume_available": True,
+            },
+            "DEPLOYMENT_CHECKPOINT_PHASE_MISMATCH",
+        ),
+        (
+            {
+                "deployment_id": "deployment-123",
+                "generation": 1,
+                "sequence": 5,
+                "phase": "worker_provisioning",
+                "data": {
+                    "cluster_name": "edge-lab",
+                    "completed_steps": ["worker_provisioning"],
+                    "pending_step": "postflight",
+                },
+                "resume_available": True,
+            },
+            "DEPLOYMENT_CHECKPOINT_STEP_ALREADY_COMPLETED_MANUAL_RECONCILIATION_REQUIRED",
+        ),
+    ],
+)
+def test_worker_provision_fails_closed_for_missing_or_stale_checkpoint(
+    checkpoint,
+    error_code,
+):
+    command = {
+        "command_type": "cluster.capi.worker.provision",
+        "payload": {
+            "deployment_id": "deployment-123",
+            "cluster_name": "edge-lab",
+        },
+    }
+    checkpoints = {"deployment-123": checkpoint} if checkpoint else {}
+
+    with pytest.raises(agent.NodeAgentError, match=error_code):
+        agent.validate_deployment_checkpoint_for_command(
+            command,
+            "target_cluster",
+            checkpoints,
+        )
+
+
+def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
+    command = {
+        "command_type": "cluster.capi.pivot.target.preflight",
+        "payload": {"deployment_id": "deployment-123"},
+    }
+
+    agent.validate_deployment_checkpoint_for_command(command, "target_cluster", {})
+    agent.validate_deployment_checkpoint_for_command(
+        {
+            "command_type": "cluster.capi.worker.provision",
+            "payload": {"deployment_id": "deployment-123", "cluster_name": "edge-lab"},
+        },
+        "eph_node",
+        {},
+    )
