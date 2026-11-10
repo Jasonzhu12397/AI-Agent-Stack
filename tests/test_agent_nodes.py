@@ -2121,3 +2121,63 @@ def test_agent_client_certificate_binding_is_tenant_admin_only(node_workspace):
     )
     assert response.status_code == 403
     assert AgentNode.objects.get(pk=created.data["id"]).client_certificate_fingerprint == ""
+
+
+@pytest.mark.django_db
+def test_agent_command_approval_is_single_writer_and_preserves_first_approver(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "approval-race-eph", "node_type": "eph_node"},
+        format="json",
+    )
+    created = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.provision",
+            "payload": {
+                "cluster_spec": {
+                    "cluster_name": "approval-race",
+                    "kubernetes_version": "v1.32.2",
+                    "control_plane_replicas": 3,
+                    "worker_replicas": 2,
+                }
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="approval-race-single-writer",
+    )
+    assert created.status_code == 202
+    assert created.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+
+    approvers = []
+    for username in ["approval-first", "approval-second"]:
+        user = get_user_model().objects.create_user(
+            username=username,
+            password="test-password",
+        )
+        TenantMembership.objects.create(
+            tenant=tenant,
+            user=user,
+            role=TenantMembership.Role.ADMIN,
+        )
+        approver_client = APIClient()
+        approver_client.force_authenticate(user=user)
+        approvers.append((user, approver_client))
+
+    first_user, first_client = approvers[0]
+    second_user, second_client = approvers[1]
+    endpoint = f"/api/v1/agent-commands/{created.data['id']}/approve/"
+    payload = {"plan_hash": created.data["plan_hash"]}
+
+    first = first_client.post(endpoint, payload, format="json")
+    second = second_client.post(endpoint, payload, format="json")
+
+    assert first.status_code == 200
+    assert first.data["status"] == AgentCommand.Status.QUEUED
+    assert second.status_code == 409
+    command = AgentCommand.objects.get(pk=created.data["id"])
+    assert command.status == AgentCommand.Status.QUEUED
+    assert command.approved_by_id == first_user.id
+    assert command.approved_by_id != second_user.id
+    assert command.approved_plan_hash == created.data["plan_hash"]
