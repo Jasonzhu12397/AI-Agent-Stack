@@ -53,10 +53,18 @@ Use that account to sign in to the Vue Studio; tenant membership provisioning is
 
 ### Run the two local node-agent processes
 
-1. Sign in to the Studio and create/select a tenant and project.
-2. Open **Infrastructure Agents** and enroll one `EPH Node Agent` and one `Target Cluster Agent`.
-3. Copy each one-time token and node UUID immediately. The token is never returned again.
-4. Add them to the ignored local `.env` file:
+1. Sign in to the Studio and create/select a tenant and project. The enrolling user must be a tenant owner or tenant administrator; project-only membership is not sufficient.
+2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. For the first enrollment choose **EPH Node Agent** (`eph_node`); for the second choose **Target Cluster Agent** (`target_cluster`). Give each a unique name and, for the Target Agent, its target cluster name.
+3. The Studio sends an authenticated request to the tenant/project-scoped enrollment endpoint:
+
+   `POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/`
+
+   The backend generates both values; do not generate or invent them manually:
+   - `NODE_ID` is the UUID primary key assigned when the `AgentNode` record is created.
+   - `TOKEN` is generated server-side with Python `secrets.token_urlsafe(36)`. The API returns it as `enrollment_token` exactly once. The database stores only `SHA-256(TOKEN)` in `credential_hash`, never the plaintext token.
+   - The response `id` is the node UUID to use as `*_AGENT_NODE_ID`. The response `enrollment_token` is the matching `*_AGENT_TOKEN`.
+4. Copy the UUID and one-time token from each enrollment result immediately. If the token is dismissed or lost, it cannot be read back; use the node's **Rotate credential** action to issue a new token. Rotating invalidates the previous token. Do not reuse the EPH token for Target or vice versa.
+5. Add the two independently generated credential pairs to the ignored local `.env` file:
 
 ```dotenv
 EPH_AGENT_NODE_ID=<eph-node-uuid>
