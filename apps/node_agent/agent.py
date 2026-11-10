@@ -3429,14 +3429,6 @@ def execute_command(
             f"/apis/cluster.x-k8s.io/{md_version}/namespaces/"
             f"{namespace}/machinedeployments/{deployment_name}"
         )
-        annotation_key = "ai-agent-stack.io/deployment-id"
-        plan_annotation = "ai-agent-stack.io/provisioning-plan-hash"
-        cluster_annotation = "ai-agent-stack.io/cluster-uid"
-        expected_annotations = {
-            annotation_key: deployment_id,
-            plan_annotation: plan_hash,
-            cluster_annotation: expected_cluster_uid,
-        }
         try:
             existing = kubernetes_api_get(md_path)
         except NodeAgentError as exc:
