@@ -58,6 +58,79 @@ def test_eph_node_enrollment_returns_one_time_token_and_stores_only_hash(node_wo
 
 
 @pytest.mark.django_db
+def test_eph_and_target_enrollment_credentials_are_independent_and_not_listed(
+    node_workspace,
+):
+    _, tenant, project, client = node_workspace
+    eph = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "isolated-eph", "node_type": "eph_node"},
+        format="json",
+    )
+    target = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {
+            "name": "isolated-target",
+            "node_type": "target_cluster",
+            "cluster_name": "target-lab",
+        },
+        format="json",
+    )
+
+    assert eph.status_code == 201
+    assert target.status_code == 201
+    assert eph.data["id"] != target.data["id"]
+    assert eph.data["enrollment_token"] != target.data["enrollment_token"]
+    eph_node = AgentNode.objects.get(pk=eph.data["id"])
+    target_node = AgentNode.objects.get(pk=target.data["id"])
+    assert eph_node.node_type == AgentNode.NodeType.EPH_NODE
+    assert target_node.node_type == AgentNode.NodeType.TARGET_CLUSTER
+    assert eph_node.credential_hash == hashlib.sha256(
+        eph.data["enrollment_token"].encode("utf-8")
+    ).hexdigest()
+    assert target_node.credential_hash == hashlib.sha256(
+        target.data["enrollment_token"].encode("utf-8")
+    ).hexdigest()
+
+    runtime = APIClient()
+    eph_with_target_token = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": eph.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target.data['enrollment_token']}",
+    )
+    target_with_eph_token = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": target.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph.data['enrollment_token']}",
+    )
+    eph_heartbeat = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": eph.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph.data['enrollment_token']}",
+    )
+    target_heartbeat = runtime.post(
+        "/api/v1/agent-runtime/heartbeat/",
+        {"node_id": target.data["id"]},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target.data['enrollment_token']}",
+    )
+
+    listed = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+    )
+    assert eph_with_target_token.status_code == 401
+    assert target_with_eph_token.status_code == 401
+    assert eph_heartbeat.status_code == 200
+    assert target_heartbeat.status_code == 200
+    assert len(listed.data["results"]) == 2
+    assert all("enrollment_token" not in item for item in listed.data["results"])
+    assert all("credential_hash" not in item for item in listed.data["results"])
+
+
+@pytest.mark.django_db
 def test_node_agent_enrollment_is_tenant_admin_only(node_workspace):
     user, tenant, project, _ = node_workspace
     member = get_user_model().objects.create_user(username="node-member", password="test-password")
