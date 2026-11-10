@@ -4657,24 +4657,27 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     if node_type == "target_cluster":
         for deployment in heartbeat.get("active_deployments", []):
             deployment_id = deployment.get("deployment_id")
-            if (
-                isinstance(deployment_id, str)
-                and deployment_id
-                and deployment_id not in client.deployment_checkpoints
-            ):
+            if isinstance(deployment_id, str) and deployment_id:
+                previous = client.deployment_checkpoints.get(deployment_id)
                 checkpoint = client.restore_deployment_checkpoint(deployment_id)
-                print(
-                    json.dumps(
-                        {
-                            "event": "deployment_checkpoint_restored",
-                            "deployment_id": deployment_id,
-                            "resume_available": checkpoint.get("resume_available", False),
-                            "phase": checkpoint.get("phase"),
-                            "sequence": checkpoint.get("sequence", 0),
-                        }
-                    ),
-                    flush=True,
-                )
+                if (
+                    previous is None
+                    or previous.get("phase") != checkpoint.get("phase")
+                    or previous.get("sequence") != checkpoint.get("sequence")
+                    or previous.get("resume_available") != checkpoint.get("resume_available")
+                ):
+                    print(
+                        json.dumps(
+                            {
+                                "event": "deployment_checkpoint_restored",
+                                "deployment_id": deployment_id,
+                                "resume_available": checkpoint.get("resume_available", False),
+                                "phase": checkpoint.get("phase"),
+                                "sequence": checkpoint.get("sequence", 0),
+                            }
+                        ),
+                        flush=True,
+                    )
     envelope = client.poll()
     command = envelope.get("command")
     if not command:
