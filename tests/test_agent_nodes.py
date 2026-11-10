@@ -229,19 +229,11 @@ def test_eph_capi_pivot_command_waits_for_hash_bound_approval_and_is_leased(node
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "node_type,command_type",
-    [
-        ("eph_node", "cluster.capi.pivot.execute"),
-        ("eph_node", "cluster.capi.pivot.execute"),
-        ("eph_node", "cluster.capi.pivot.execute"),
-    ],
-)
 def test_expired_mutating_agent_command_fails_closed_without_redelivery(
     node_workspace,
-    node_type,
-    command_type,
 ):
+    node_type = "eph_node"
+    command_type = "cluster.capi.pivot.execute"
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
