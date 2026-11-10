@@ -447,6 +447,77 @@ def test_agent_result_requires_current_lease_token(node_workspace):
 
 
 @pytest.mark.django_db
+def test_agent_failed_result_replay_is_idempotent(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-failed-result-replay", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "node.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="failed-result-replay",
+    )
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    command = polled.data["command"]
+    payload = {
+        "node_id": node_id,
+        "outcome": "failed",
+        "result": {},
+        "error": {"code": "NODE_HEALTH_CHECK_FAILED", "retryable": False},
+    }
+    headers = {
+        "HTTP_AUTHORIZATION": f"Bearer {token}",
+        "HTTP_X_AGENT_LEASE": command["lease_token"],
+    }
+
+    accepted = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        payload,
+        format="json",
+        **headers,
+    )
+    replay = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        payload,
+        format="json",
+        **headers,
+    )
+    conflict_payload = {
+        **payload,
+        "error": {"code": "DIFFERENT_FAILURE", "retryable": False},
+    }
+    conflict = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        conflict_payload,
+        format="json",
+        **headers,
+    )
+
+    stored = AgentCommand.objects.get(pk=command["id"])
+    assert created.status_code == 202
+    assert accepted.status_code == 200
+    assert accepted.data["status"] == AgentCommand.Status.FAILED
+    assert replay.status_code == 200
+    assert replay.data["status"] == AgentCommand.Status.FAILED
+    assert conflict.status_code == 409
+    assert stored.status == AgentCommand.Status.FAILED
+    assert stored.error == payload["error"]
+    assert stored.lease_token is None
+    assert stored.lease_expires_at is None
+
+
+@pytest.mark.django_db
 def test_agent_command_result_enforces_utf8_byte_limit(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
