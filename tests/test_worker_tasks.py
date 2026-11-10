@@ -4,7 +4,13 @@ import pytest
 from core.models import Project, Task, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from worker_app.tasks import claim_next_task, finish_task, process_once
+from worker_app.tasks import (
+    claim_next_task,
+    fail_task,
+    finish_task,
+    process_once,
+    renew_lease,
+)
 
 
 @pytest.fixture
@@ -68,3 +74,49 @@ def test_worker_fails_task_after_unsupported_type(queued_task):
     assert queued_task.status == Task.Status.FAILED
     assert queued_task.error["code"] == "TASK_VALIDATION_FAILED"
     assert queued_task.attempts == 1
+
+
+
+@pytest.mark.django_db
+def test_expired_worker_cannot_renew_or_finish_before_reclaim(queued_task):
+    first = claim_next_task("worker-expired", lease_seconds=30)
+    old_token = first.lease_token
+    Task.objects.filter(pk=queued_task.pk).update(
+        lease_expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    assert renew_lease(queued_task.id, old_token, "worker-expired") is False
+    assert finish_task(queued_task.id, old_token, {"stale": True}) is False
+
+    queued_task.refresh_from_db()
+    assert queued_task.status == Task.Status.RUNNING
+    assert queued_task.lease_token == old_token
+
+    second = claim_next_task("worker-recovered", lease_seconds=30)
+    assert second is not None
+    assert second.lease_token != old_token
+    assert finish_task(queued_task.id, second.lease_token, {"recovered": True}) is True
+
+
+@pytest.mark.django_db
+def test_expired_worker_cannot_fail_task_before_reclaim(queued_task):
+    first = claim_next_task("worker-expired-failure", lease_seconds=30)
+    old_token = first.lease_token
+    Task.objects.filter(pk=queued_task.pk).update(
+        lease_expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    assert fail_task(
+        queued_task.id,
+        old_token,
+        {"code": "STALE_WORKER_FAILURE"},
+        retryable=False,
+    ) is False
+
+    queued_task.refresh_from_db()
+    assert queued_task.status == Task.Status.RUNNING
+    assert queued_task.lease_token == old_token
+
+    second = claim_next_task("worker-recovered-failure", lease_seconds=30)
+    assert second is not None
+    assert second.lease_token != old_token
