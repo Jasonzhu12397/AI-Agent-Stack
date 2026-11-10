@@ -1622,64 +1622,67 @@ class AgentCommandApproveView(APIView):
     def post(self, request, command_id):
         if not isinstance(request.data, dict):
             return Response({"detail": "Request body must be a JSON object."}, status=400)
-        command = get_object_or_404(
-            AgentCommand.objects.filter(tenant__memberships__user=request.user),
-            pk=command_id,
-        )
-        is_admin = TenantMembership.objects.filter(
-            tenant=command.tenant,
-            user=request.user,
-            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists()
-        if not is_admin:
-            return Response(
-                {"detail": "Tenant owner or admin role is required to approve provisioning."},
-                status=403,
+        with transaction.atomic():
+            command = get_object_or_404(
+                AgentCommand.objects.select_for_update().filter(
+                    tenant__memberships__user=request.user,
+                ),
+                pk=command_id,
             )
-        if command.requested_by_id == request.user.id:
-            return Response(
-                {"detail": "A different administrator must approve this command."},
-                status=403,
+            is_admin = TenantMembership.objects.filter(
+                tenant=command.tenant,
+                user=request.user,
+                role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+            ).exists()
+            if not is_admin:
+                return Response(
+                    {"detail": "Tenant owner or admin role is required to approve provisioning."},
+                    status=403,
+                )
+            if command.requested_by_id == request.user.id:
+                return Response(
+                    {"detail": "A different administrator must approve this command."},
+                    status=403,
+                )
+            if command.status != AgentCommand.Status.WAITING_APPROVAL:
+                return Response({"detail": "Command is not waiting for approval."}, status=409)
+            supplied_hash = str(request.data.get("plan_hash", ""))
+            current_hash = _payload_hash(command.command_type, command.payload)
+            if (
+                not supplied_hash
+                or not hmac.compare_digest(supplied_hash, command.plan_hash)
+                or not hmac.compare_digest(current_hash, command.plan_hash)
+            ):
+                return Response(
+                    {"detail": "Approval plan hash does not match the immutable command payload."},
+                    status=409,
+                )
+            command.status = AgentCommand.Status.QUEUED
+            command.approved_plan_hash = current_hash
+            command.approved_by = request.user
+            command.approved_at = timezone.now()
+            command.save(
+                update_fields=[
+                    "status",
+                    "approved_plan_hash",
+                    "approved_by",
+                    "approved_at",
+                    "updated_at",
+                ]
             )
-        if command.status != AgentCommand.Status.WAITING_APPROVAL:
-            return Response({"detail": "Command is not waiting for approval."}, status=409)
-        supplied_hash = str(request.data.get("plan_hash", ""))
-        current_hash = _payload_hash(command.command_type, command.payload)
-        if (
-            not supplied_hash
-            or not hmac.compare_digest(supplied_hash, command.plan_hash)
-            or not hmac.compare_digest(current_hash, command.plan_hash)
-        ):
-            return Response(
-                {"detail": "Approval plan hash does not match the immutable command payload."},
-                status=409,
+            record_audit_event(
+                request,
+                command.tenant,
+                "agent.command.approved",
+                "agent_command",
+                command.id,
+                project=command.project,
+                metadata={
+                    "command_type": command.command_type,
+                    "plan_hash": command.approved_plan_hash,
+                },
             )
-        command.status = AgentCommand.Status.QUEUED
-        command.approved_plan_hash = current_hash
-        command.approved_by = request.user
-        command.approved_at = timezone.now()
-        command.save(
-            update_fields=[
-                "status",
-                "approved_plan_hash",
-                "approved_by",
-                "approved_at",
-                "updated_at",
-            ]
-        )
-        record_audit_event(
-            request,
-            command.tenant,
-            "agent.command.approved",
-            "agent_command",
-            command.id,
-            project=command.project,
-            metadata={
-                "command_type": command.command_type,
-                "plan_hash": command.approved_plan_hash,
-            },
-        )
-        return Response(_command_data(command))
+            return Response(_command_data(command))
 
 
 class AgentRuntimeHeartbeatView(APIView):
