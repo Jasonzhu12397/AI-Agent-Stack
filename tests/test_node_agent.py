@@ -3477,7 +3477,7 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
         )
 
 
-def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
+def test_approved_worker_provisioning_only_runs_server_side_dry_run(
     monkeypatch,
 ):
     profile = valid_dual_network_profile()
@@ -3748,9 +3748,11 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         create_modes.append(dry_run)
         created_manifests.append(manifest)
         metadata = {"name": "edge-workers", "namespace": namespace}
-        if not dry_run:
-            metadata["uid"] = "machine-deployment-uid"
-        return {"kind": "MachineDeployment", "metadata": metadata}
+        return {
+            "apiVersion": manifest["apiVersion"],
+            "kind": "MachineDeployment",
+            "metadata": metadata,
+        }
 
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
@@ -3796,7 +3798,7 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         "target_cluster",
     )
 
-    assert create_modes == [True, False]
+    assert create_modes == [True]
     manifest = created_manifests[-1]
     assert manifest["kind"] == "MachineDeployment"
     assert manifest["spec"]["replicas"] == 2
@@ -3810,38 +3812,31 @@ def test_approved_worker_provisioning_dry_runs_then_creates_machine_deployment(
         "kind": "Metal3MachineTemplate",
         "name": "worker-template",
     }
-    assert result["created"] is True
+    assert result["created"] is False
     assert result["dry_run_passed"] is True
-    assert result["worker_readiness_verified"] is True
-    assert result["worker_machine_count"] == 2
-    assert result["ready_worker_machine_count"] == 2
-    assert result["worker_network_data_verified"] is True
-    assert result["verified_worker_network_data_count"] == 2
-    assert result["pending_worker_network_data"] == []
-    assert result["side_effects"] is True
+    assert result["execution_mode"] == "server_side_dry_run_simulation"
+    assert result["simulation_status"] == "ready_for_manual_execution"
+    assert result["execution_allowed"] is False
+    assert result["worker_creation_performed"] is False
+    assert result["worker_readiness_verified"] is False
+    assert result["worker_machine_count"] == 0
+    assert result["ready_worker_machine_count"] == 0
+    assert result["worker_node_names"] == []
+    assert result["machine_deployment_uid"] is None
+    assert len(result["machine_deployment_manifest_hash"]) == 64
+    assert result["side_effects"] is False
 
 
 
-@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
-def test_machine_deployment_create_server_errors_are_ambiguous(
-    monkeypatch, tmp_path, status_code
-):
-    token_file = tmp_path / "token"
-    ca_file = tmp_path / "ca"
-    token_file.write_text("test-token", encoding="utf-8")
-    ca_file.write_text("test-ca", encoding="utf-8")
-    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", str(token_file))
-    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", str(ca_file))
-    monkeypatch.setattr(agent.ssl, "create_default_context", lambda cafile: object())
+def test_machine_deployment_create_rejects_real_writes(monkeypatch):
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("Kubernetes API must not be called")
 
-    def fail_request(request, context, timeout):
-        raise agent.urllib.error.HTTPError(
-            request.full_url, status_code, "server error", {}, None
-        )
-
-    monkeypatch.setattr(agent.urllib.request, "urlopen", fail_request)
-    with pytest.raises(agent.NodeAgentError, match="KUBERNETES_API_UNAVAILABLE"):
+    monkeypatch.setattr(agent.urllib.request, "urlopen", unexpected_request)
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="MACHINE_DEPLOYMENT_REAL_WRITES_DISABLED",
+    ):
         agent.kubernetes_api_create_machine_deployment(
             "v1beta1",
             "default",
