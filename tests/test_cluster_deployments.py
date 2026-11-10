@@ -591,6 +591,27 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     assert checkpoint.sequence == 3
     assert checkpoint.phase == "capi_pivot_verified"
 
+    checkpoint_payload["sequence"] = 5
+    skipped = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert skipped.status_code == 409
+    assert skipped.data["expected_sequence"] == 4
+    assert skipped.data["received_sequence"] == 5
+    checkpoint.refresh_from_db()
+    assert checkpoint.sequence == 3
+    assert checkpoint.phase == "capi_pivot_verified"
+
+    checkpoint_payload["sequence"] = 4
+    contiguous = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert contiguous.status_code == 201
+    checkpoint.refresh_from_db()
+    assert checkpoint.sequence == 4
+
+    checkpoint_payload["sequence"] = 3
+    stale = agent_client.post(url, checkpoint_payload, format="json", **headers)
+    assert stale.status_code == 409
+    checkpoint.refresh_from_db()
+    assert checkpoint.sequence == 4
+
 
 @pytest.mark.django_db
 def test_target_agent_checkpoint_blocks_phase_skips_and_eph_reclaim(
