@@ -73,7 +73,7 @@ TARGET_AGENT_NODE_ID=<target-node-uuid>
 TARGET_AGENT_TOKEN=<target-one-time-token>
 ```
 
-5. Start the two optional agent processes:
+6. Start the two optional agent processes:
 
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agents up --build -d eph-node-agent target-cluster-agent
