@@ -2269,6 +2269,8 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             if deployment.target_node_id != node.id or deployment.status not in {
                 ClusterDeployment.Status.CONTROL_PLANE_READY,
                 ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                ClusterDeployment.Status.PROVISIONING,
+                ClusterDeployment.Status.WAITING_APPROVAL,
                 ClusterDeployment.Status.POSTFLIGHT,
             }:
                 return Response({"detail": "Deployment handoff ownership changed."}, status=409)
