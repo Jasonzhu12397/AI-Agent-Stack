@@ -1267,8 +1267,14 @@ def test_agent_heartbeats_advertise_every_role_allowlisted_capability():
         )
         captured = {}
 
-        def fake_request(path, payload=None, lease_token="", method="POST"):
-            captured["payload"] = payload
+        def fake_request(
+            path,
+            payload=None,
+            lease_token="",
+            method="POST",
+            _captured=captured,
+        ):
+            _captured["payload"] = payload
             return {"ok": True}
 
         client.request = fake_request
