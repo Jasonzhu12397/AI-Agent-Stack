@@ -4,7 +4,7 @@ import re
 
 from django.utils import timezone
 
-from core.models import AgentCommand, ClusterDeployment
+from core.models import AgentCommand, ClusterDeployment, ClusterDeploymentCheckpoint
 
 
 def _payload_hash(command_type: str, payload: dict) -> str:
@@ -25,6 +25,54 @@ def _spec_hash(spec: dict) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _advance_deployment_checkpoint(
+    deployment: ClusterDeployment,
+    agent_node,
+    phase: str,
+    completed_step: str,
+    pending_step: str | None,
+) -> None:
+    if deployment.target_node_id != agent_node.id:
+        raise ValueError("DEPLOYMENT_CHECKPOINT_AGENT_MISMATCH")
+    checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
+        deployment=deployment,
+    ).first()
+    if checkpoint is not None and (
+        checkpoint.agent_node_id != agent_node.id or checkpoint.generation != 1
+    ):
+        raise ValueError("DEPLOYMENT_CHECKPOINT_OWNERSHIP_MISMATCH")
+    data = checkpoint.data if checkpoint is not None else {}
+    completed_steps = data.get("completed_steps", [])
+    if not isinstance(completed_steps, list) or not all(
+        isinstance(item, str) for item in completed_steps
+    ):
+        raise ValueError("DEPLOYMENT_CHECKPOINT_DATA_INVALID")
+    completed_steps = list(completed_steps)
+    if completed_step not in completed_steps:
+        completed_steps.append(completed_step)
+    next_data = {
+        "cluster_name": deployment.cluster_name,
+        "completed_steps": completed_steps,
+        "pending_step": pending_step,
+    }
+    if checkpoint is None:
+        ClusterDeploymentCheckpoint.objects.create(
+            deployment=deployment,
+            agent_node=agent_node,
+            generation=1,
+            sequence=1,
+            phase=phase,
+            data=next_data,
+        )
+        return
+    checkpoint.sequence += 1
+    checkpoint.phase = phase
+    checkpoint.data = next_data
+    checkpoint.save(
+        update_fields=["sequence", "phase", "data", "updated_at"],
+    )
 
 
 def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> None:
@@ -999,6 +1047,13 @@ def handle_deployment_command_result(
                 "eph_reclaim_allowed": False,
             },
         }
+        _advance_deployment_checkpoint(
+            deployment,
+            deployment.target_node,
+            "worker_provisioning",
+            "worker_provisioning_preflight",
+            "worker_provisioning",
+        )
         deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
         deployment.error = None
         provision_command = queue_deployment_command(
@@ -1090,6 +1145,13 @@ def handle_deployment_command_result(
                 update_fields=["status", "error", "finished_at", "updated_at"]
             )
             return
+        _advance_deployment_checkpoint(
+            deployment,
+            deployment.target_node,
+            "worker_pool_verified",
+            "worker_provisioning",
+            "postflight",
+        )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "worker_provisioning_execution": result,
@@ -1157,6 +1219,13 @@ def handle_deployment_command_result(
             and result.get("capi_worker_inventory_complete") is True
         )
         if valid_result:
+            _advance_deployment_checkpoint(
+                deployment,
+                deployment.target_node,
+                "completed",
+                "postflight",
+                None,
+            )
             deployment.status = ClusterDeployment.Status.SUCCEEDED
             deployment.error = None
         else:
