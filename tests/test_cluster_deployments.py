@@ -1988,6 +1988,13 @@ def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_
         == "worker_preflight_passed_waiting_provisioning_approval"
     )
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.agent_node_id == deployment.target_node_id
+    assert checkpoint.generation == 1
+    assert checkpoint.sequence == 1
+    assert checkpoint.phase == "worker_provisioning"
+    assert checkpoint.data["pending_step"] == "worker_provisioning"
+    assert "worker_provisioning_preflight" in checkpoint.data["completed_steps"]
 
 
 @pytest.mark.django_db
@@ -2103,6 +2110,11 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         deployment.plan_result["dual_agent"]["phase"]
         == "worker_provisioned_waiting_postflight"
     )
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "worker_pool_verified"
+    assert checkpoint.data["pending_step"] == "postflight"
+    assert "worker_provisioning" in checkpoint.data["completed_steps"]
     postflight = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.postflight",
@@ -2118,6 +2130,9 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         deployment=deployment,
         command_type="cluster.postflight",
     ).count() == 1
+    checkpoint.refresh_from_db()
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "worker_pool_verified"
 
 
 @pytest.mark.django_db

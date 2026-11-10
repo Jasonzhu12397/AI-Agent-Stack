@@ -1766,6 +1766,8 @@ class AgentRuntimeHeartbeatView(APIView):
                     status__in=[
                         ClusterDeployment.Status.CONTROL_PLANE_READY,
                         ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                        ClusterDeployment.Status.PROVISIONING,
+                        ClusterDeployment.Status.WAITING_APPROVAL,
                         ClusterDeployment.Status.POSTFLIGHT,
                     ],
                 ).order_by("created_at")
@@ -2100,6 +2102,8 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
         if deployment.status not in {
             ClusterDeployment.Status.CONTROL_PLANE_READY,
             ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            ClusterDeployment.Status.PROVISIONING,
+            ClusterDeployment.Status.WAITING_APPROVAL,
             ClusterDeployment.Status.POSTFLIGHT,
         }:
             return node, None
@@ -2152,6 +2156,8 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
         if deployment.status not in {
             ClusterDeployment.Status.CONTROL_PLANE_READY,
             ClusterDeployment.Status.TARGET_AGENT_PENDING,
+            ClusterDeployment.Status.PROVISIONING,
+            ClusterDeployment.Status.WAITING_APPROVAL,
             ClusterDeployment.Status.POSTFLIGHT,
         }:
             return Response({"detail": "Deployment is not in an agent handoff state."}, status=409)
