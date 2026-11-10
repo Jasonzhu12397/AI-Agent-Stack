@@ -50,6 +50,14 @@ def _advance_deployment_checkpoint(
     ):
         raise ValueError("DEPLOYMENT_CHECKPOINT_DATA_INVALID")
     completed_steps = list(completed_steps)
+    if (
+        checkpoint is not None
+        and completed_step in completed_steps
+        and checkpoint.phase == phase
+        and data.get("pending_step") == pending_step
+        and data.get("cluster_name") == deployment.cluster_name
+    ):
+        return
     if completed_step not in completed_steps:
         completed_steps.append(completed_step)
     next_data = {
