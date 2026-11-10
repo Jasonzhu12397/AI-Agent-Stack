@@ -1,0 +1,42 @@
+ROLE_CAPABILITIES = {
+    "eph_node": frozenset(
+        {
+            "node.health",
+            "host.preflight",
+            "cluster.plan",
+            "cluster.health",
+            "cluster.network.inspect",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "k8s.resource.read",
+            "capi.cluster.observe",
+            "metal3.host.inspect",
+            "cluster.provider.discover",
+            "cluster.provider.compatibility",
+            "cluster.manifest.validate",
+            "cluster.capi.pivot.source.preflight",
+            "cluster.capi.pivot.dry-run",
+            "cluster.capi.pivot.execute",
+        }
+    ),
+    "target_cluster": frozenset(
+        {
+            "node.health",
+            "cluster.provider.compatibility",
+            "cluster.health",
+            "cluster.network.inspect",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "cluster.control-plane.verify",
+            "cluster.capi.pivot.target.preflight",
+            "cluster.capi.pivot.target.verify",
+            "cluster.capi.pivot.postflight",
+            "cluster.capi.worker.preflight",
+            "cluster.capi.worker.provision",
+            "cluster.metal3.observe",
+            "k8s.resource.read",
+        }
+    ),
+}

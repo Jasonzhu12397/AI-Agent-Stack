@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from .capabilities import ROLE_CAPABILITIES
 from .capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
@@ -2072,45 +2073,7 @@ def execute_command(
         raise NodeAgentError("INVALID_PAYLOAD")
     if contains_forbidden_fields(payload):
         raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
-    allowed = {
-        "eph_node": {
-            "node.health",
-            "host.preflight",
-            "cluster.plan",
-            "cluster.health",
-            "cluster.network.inspect",
-            "cluster.observe",
-            "cluster.diagnose",
-            "cluster.postflight",
-            "k8s.resource.read",
-            "capi.cluster.observe",
-            "metal3.host.inspect",
-            "cluster.provider.discover",
-            "cluster.provider.compatibility",
-            "cluster.manifest.validate",
-            "cluster.capi.pivot.source.preflight",
-            "cluster.capi.pivot.dry-run",
-            "cluster.capi.pivot.execute",
-        },
-        "target_cluster": {
-            "node.health",
-            "cluster.provider.compatibility",
-            "cluster.health",
-            "cluster.network.inspect",
-            "cluster.observe",
-            "cluster.diagnose",
-            "cluster.postflight",
-            "cluster.control-plane.verify",
-            "cluster.capi.pivot.target.preflight",
-            "cluster.capi.pivot.target.verify",
-            "cluster.capi.pivot.postflight",
-            "cluster.capi.worker.preflight",
-            "cluster.capi.worker.provision",
-            "cluster.metal3.observe",
-            "k8s.resource.read",
-        },
-    }
-    if command_type not in allowed.get(node_type, set()):
+    if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
         raise NodeAgentError("CAPABILITY_NOT_CONFIGURED")
     if command_type == "node.health":
         return {
@@ -4458,45 +4421,7 @@ class ControlPlaneClient:
         return result
 
     def heartbeat(self, node_type: str) -> dict[str, Any]:
-        capabilities = (
-            [
-                "node.health",
-                "host.preflight",
-                "cluster.plan",
-                "cluster.health",
-                "cluster.network.inspect",
-                "cluster.observe",
-                "cluster.diagnose",
-                "cluster.postflight",
-                "k8s.resource.read",
-                "capi.cluster.observe",
-                "metal3.host.inspect",
-                "cluster.provider.discover",
-                "cluster.provider.compatibility",
-                "cluster.manifest.validate",
-                "cluster.capi.pivot.source.preflight",
-                "cluster.capi.pivot.dry-run",
-                "cluster.capi.pivot.execute",
-            ]
-            if node_type == "eph_node"
-            else [
-                "node.health",
-                "cluster.provider.compatibility",
-                "cluster.health",
-                "cluster.network.inspect",
-                "cluster.observe",
-                "cluster.diagnose",
-                "cluster.postflight",
-                "cluster.control-plane.verify",
-                "cluster.capi.pivot.target.preflight",
-                "cluster.capi.pivot.target.verify",
-                "cluster.capi.pivot.postflight",
-                "cluster.capi.worker.preflight",
-                "cluster.capi.worker.provision",
-                "cluster.metal3.observe",
-                "k8s.resource.read",
-            ]
-        )
+        capabilities = sorted(ROLE_CAPABILITIES.get(node_type, frozenset()))
         return self.request(
             "/api/v1/agent-runtime/heartbeat/",
             {
