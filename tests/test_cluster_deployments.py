@@ -2130,6 +2130,9 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         deployment=deployment,
         command_type="cluster.postflight",
     ).count() == 1
+    checkpoint.refresh_from_db()
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "worker_pool_verified"
 
 
 @pytest.mark.django_db
