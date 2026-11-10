@@ -1247,6 +1247,84 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_command.node_id == eph_node.id
     assert deployment.error is None
 
+    approver = get_user_model().objects.create_user(
+        username="dual-agent-e2e-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{pivot_command.id}/approve/",
+        {"plan_hash": pivot_command.plan_hash},
+        format="json",
+    )
+    assert approved.status_code == 200
+    assert approved.data["status"] == AgentCommand.Status.QUEUED
+
+    eph_agent_client = APIClient()
+    pivot_poll = eph_agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+    assert pivot_poll.status_code == 200
+    pivot_command_data = pivot_poll.data["command"]
+    assert pivot_command_data["id"] == str(pivot_command.id)
+    assert pivot_command_data["command_type"] == "cluster.capi.pivot.execute"
+
+    pivot_result = {
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": True,
+        "source_namespace_scope_verified": True,
+        "target_management_plane_verified": True,
+        "cluster_name": "edge-lab",
+        "namespace": "capi-system",
+        "ownership_transferred": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
+        "side_effects": False,
+    }
+    pivot_submitted = eph_agent_client.post(
+        f"/api/v1/agent-runtime/commands/{pivot_command_data['id']}/result/",
+        {
+            "node_id": str(eph_node.id),
+            "outcome": "succeeded",
+            "result": pivot_result,
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=pivot_command_data["lease_token"],
+    )
+
+    deployment.refresh_from_db()
+    pivot_command.refresh_from_db()
+    assert pivot_submitted.status_code == 200
+    assert pivot_command.status == AgentCommand.Status.SUCCEEDED
+    assert pivot_command.approved_by_id == approver.id
+    assert deployment.error is None
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
+    assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
+    assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+    ).exists()
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.worker.preflight",
+    ).exists()
+
 
 @pytest.mark.django_db
 def test_source_capi_pivot_preflight_rejects_malformed_inventory_counts(
