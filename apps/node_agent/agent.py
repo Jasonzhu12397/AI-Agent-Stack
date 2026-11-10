@@ -3154,7 +3154,7 @@ def execute_command(
             or isinstance(expected_replicas, bool)
             or not 1 <= expected_replicas <= 1000
             or not isinstance(kubernetes_version, str)
-            or not re.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+", kubernetes_version)
+            or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", kubernetes_version)
             or not isinstance(config, dict)
             or not isinstance(expected_cluster_uid, str)
             or not expected_cluster_uid
