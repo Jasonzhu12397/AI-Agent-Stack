@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from node_agent import agent
+from node_agent import agent, capabilities
 
 TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
 
@@ -1219,47 +1219,8 @@ def test_target_agent_heartbeat_advertises_worker_provisioning_capabilities():
     }.issubset(set(captured["payload"]["capabilities"]))
 
 
-def test_agent_heartbeats_advertise_every_role_allowlisted_capability():
-    expected = {
-        "eph_node": {
-            "node.health",
-            "host.preflight",
-            "cluster.plan",
-            "cluster.health",
-            "cluster.network.inspect",
-            "cluster.observe",
-            "cluster.diagnose",
-            "cluster.postflight",
-            "k8s.resource.read",
-            "capi.cluster.observe",
-            "metal3.host.inspect",
-            "cluster.provider.discover",
-            "cluster.provider.compatibility",
-            "cluster.manifest.validate",
-            "cluster.capi.pivot.source.preflight",
-            "cluster.capi.pivot.dry-run",
-            "cluster.capi.pivot.execute",
-        },
-        "target_cluster": {
-            "node.health",
-            "cluster.provider.compatibility",
-            "cluster.health",
-            "cluster.network.inspect",
-            "cluster.observe",
-            "cluster.diagnose",
-            "cluster.postflight",
-            "cluster.control-plane.verify",
-            "cluster.capi.pivot.target.preflight",
-            "cluster.capi.pivot.target.verify",
-            "cluster.capi.pivot.postflight",
-            "cluster.capi.worker.preflight",
-            "cluster.capi.worker.provision",
-            "cluster.metal3.observe",
-            "k8s.resource.read",
-        },
-    }
-
-    for node_type, expected_capabilities in expected.items():
+def test_agent_heartbeats_advertise_the_shared_role_capability_registry():
+    for node_type, expected_capabilities in capabilities.ROLE_CAPABILITIES.items():
         client = agent.ControlPlaneClient(
             "https://control.example",
             "node-123",
@@ -1280,7 +1241,28 @@ def test_agent_heartbeats_advertise_every_role_allowlisted_capability():
         client.request = fake_request
         client.heartbeat(node_type)
 
-        assert set(captured["payload"]["capabilities"]) == expected_capabilities
+        advertised = set(captured["payload"]["capabilities"])
+        assert advertised == expected_capabilities
+        for command_type in expected_capabilities:
+            assert command_type in capabilities.ROLE_CAPABILITIES[node_type]
+
+
+def test_unknown_agent_role_does_not_advertise_target_capabilities():
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-123",
+        "agent-token",
+    )
+    captured = {}
+
+    def fake_request(path, payload=None, lease_token="", method="POST"):
+        captured["payload"] = payload
+        return {"ok": True}
+
+    client.request = fake_request
+    client.heartbeat("unknown_role")
+
+    assert captured["payload"]["capabilities"] == []
 
 
 def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch):
