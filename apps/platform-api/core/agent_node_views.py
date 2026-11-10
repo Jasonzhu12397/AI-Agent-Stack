@@ -1997,14 +1997,48 @@ class AgentRuntimeResultView(APIView):
         if error is not None and not isinstance(error, dict):
             return Response({"detail": "error must be a JSON object."}, status=400)
         with transaction.atomic():
-            command = get_object_or_404(
-                AgentCommand.objects.select_for_update(),
+            command = AgentCommand.objects.select_for_update().filter(
                 pk=command_id,
                 node=node,
-                status=AgentCommand.Status.RUNNING,
-                lease_token=lease_token,
-                lease_expires_at__gte=timezone.now(),
-            )
+            ).first()
+            if command is None:
+                return Response({"detail": "Command not found."}, status=404)
+            if command.status in {
+                AgentCommand.Status.SUCCEEDED,
+                AgentCommand.Status.FAILED,
+            }:
+                exact_replay = (
+                    outcome == "succeeded"
+                    and command.status == AgentCommand.Status.SUCCEEDED
+                    and command.result == result
+                    and command.error is None
+                ) or (
+                    outcome == "failed"
+                    and command.status == AgentCommand.Status.FAILED
+                    and command.result is None
+                    and command.error == error
+                )
+                if exact_replay:
+                    return Response(
+                        {
+                            "id": str(command.id),
+                            "status": command.status,
+                            "deployment_id": (
+                                str(command.deployment_id) if command.deployment_id else None
+                            ),
+                        }
+                    )
+                return Response(
+                    {"detail": "Command already has a different terminal result."},
+                    status=409,
+                )
+            if (
+                command.status != AgentCommand.Status.RUNNING
+                or command.lease_token != lease_token
+                or command.lease_expires_at is None
+                or command.lease_expires_at < timezone.now()
+            ):
+                return Response({"detail": "Command lease is invalid or expired."}, status=404)
             if _command_is_fenced_by_cluster_ownership(command, node):
                 _fail_fenced_command(command, timezone.now())
                 return Response(
