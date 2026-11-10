@@ -4604,6 +4604,51 @@ def execute_command_with_lease(
     return result
 
 
+def validate_deployment_checkpoint_for_command(
+    command: dict[str, Any],
+    node_type: str,
+    checkpoints: dict[str, dict[str, Any]],
+) -> None:
+    if (
+        node_type != "target_cluster"
+        or command.get("command_type") != "cluster.capi.worker.provision"
+    ):
+        return
+    payload = command.get("payload", {})
+    deployment_id = payload.get("deployment_id") if isinstance(payload, dict) else None
+    if not isinstance(deployment_id, str) or not deployment_id:
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_REQUIRED")
+    checkpoint = checkpoints.get(deployment_id)
+    if not isinstance(checkpoint, dict) or checkpoint.get("resume_available") is not True:
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_REQUIRED")
+    if checkpoint.get("deployment_id") != deployment_id:
+        raise NodeAgentError("CHECKPOINT_DEPLOYMENT_MISMATCH")
+    data = checkpoint.get("data")
+    if (
+        checkpoint.get("generation") != 1
+        or checkpoint.get("phase") != "worker_provisioning"
+        or not isinstance(checkpoint.get("sequence"), int)
+        or isinstance(checkpoint.get("sequence"), bool)
+        or checkpoint.get("sequence") < 1
+        or not isinstance(data, dict)
+    ):
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_PHASE_MISMATCH")
+    cluster_name = payload.get("cluster_name")
+    if data.get("cluster_name") != cluster_name:
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_CLUSTER_MISMATCH")
+    completed_steps = data.get("completed_steps")
+    if not isinstance(completed_steps, list) or not all(
+        isinstance(item, str) for item in completed_steps
+    ):
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_DATA_INVALID")
+    if "worker_provisioning" in completed_steps:
+        raise NodeAgentError(
+            "DEPLOYMENT_CHECKPOINT_STEP_ALREADY_COMPLETED_MANUAL_RECONCILIATION_REQUIRED"
+        )
+    if data.get("pending_step") != "worker_provisioning":
+        raise NodeAgentError("DEPLOYMENT_CHECKPOINT_PENDING_STEP_MISMATCH")
+
+
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     heartbeat = client.heartbeat(node_type)
     inventory = inspect_host_network_hardware()
@@ -4638,6 +4683,11 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     lease_token = command.get("lease_token", "")
     command_id = command.get("id", "")
     try:
+        validate_deployment_checkpoint_for_command(
+            command,
+            node_type,
+            client.deployment_checkpoints,
+        )
         result = execute_command_with_lease(client, command, node_type)
         client.submit_result(command_id, lease_token, "succeeded", result)
     except NodeAgentError as exc:
