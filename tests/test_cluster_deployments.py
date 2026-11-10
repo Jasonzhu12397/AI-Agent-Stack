@@ -20,6 +20,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.cluster_deployment_services import (
+    _advance_deployment_checkpoint,
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
@@ -2121,6 +2122,21 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
     )
     assert postflight.node_id == deployment.target_node_id
     assert postflight.payload["expected_worker_replicas"] == 4
+
+    checkpoint_before_stale_result = ClusterDeploymentCheckpoint.objects.get(
+        deployment=deployment,
+    )
+    with pytest.raises(ValueError, match="DEPLOYMENT_CHECKPOINT_PHASE_REGRESSION"):
+        _advance_deployment_checkpoint(
+            deployment,
+            deployment.target_node,
+            "worker_provisioning",
+            "worker_provisioning_preflight",
+            "worker_provisioning",
+        )
+    checkpoint_before_stale_result.refresh_from_db()
+    assert checkpoint_before_stale_result.phase == "worker_pool_verified"
+    assert checkpoint_before_stale_result.sequence == 2
 
     handle_deployment_command_result(provision_command, "succeeded", result, None)
 
