@@ -154,6 +154,91 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "node_type,command_type",
+    [
+        ("eph_node", "cluster.provision"),
+        ("eph_node", "target-agent.bootstrap"),
+        ("eph_node", "cluster.capi.pivot.execute"),
+        ("target_cluster", "cluster.capi.worker.provision"),
+    ],
+)
+def test_expired_mutating_agent_command_fails_closed_without_redelivery(
+    node_workspace,
+    node_type,
+    command_type,
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": f"lease-{node_type}-{command_type}", "node_type": node_type},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": command_type, "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY=f"expired-{node_type}-{command_type}",
+    )
+    assert created.status_code == 202
+
+    approver = get_user_model().objects.create_user(
+        username=f"approver-{node_type}-{command_type}",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{created.data['id']}/approve/",
+        {"plan_hash": created.data["plan_hash"]},
+        format="json",
+    )
+    assert approved.status_code == 200
+
+    agent_client = APIClient()
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    first_poll = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        **headers,
+    )
+    assert first_poll.status_code == 200
+    assert first_poll.data["command"]["id"] == created.data["id"]
+
+    AgentCommand.objects.filter(pk=created.data["id"]).update(
+        lease_expires_at=timezone.now() - datetime.timedelta(seconds=1),
+    )
+    second_poll = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        **headers,
+    )
+
+    command = AgentCommand.objects.get(pk=created.data["id"])
+    assert second_poll.status_code == 200
+    assert second_poll.data["command"] is None
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+        if command_type == "cluster.capi.pivot.execute"
+        else "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert command.error["retryable"] is False
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+    assert command.attempts == 1
+
+
+@pytest.mark.django_db
 def test_target_cluster_agent_cannot_receive_eph_only_commands(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
