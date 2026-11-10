@@ -614,6 +614,68 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "deployment_status",
+    [ClusterDeployment.Status.PROVISIONING, ClusterDeployment.Status.WAITING_APPROVAL],
+)
+def test_target_agent_can_write_checkpoint_during_active_provisioning_states(
+    cluster_delivery_workspace,
+    deployment_status,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-active-checkpoint-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-active-checkpoint-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="active-checkpoint-" + deployment_status.lower(),
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(target_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+    deployment.refresh_from_db()
+    deployment.status = deployment_status
+    deployment.save(update_fields=["status"])
+
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/",
+        {
+            "node_id": str(target_node.id),
+            "generation": 1,
+            "sequence": 1,
+            "phase": "target_agent_bootstrap",
+            "data": {"pending_step": "target_agent_bootstrap"},
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+
+    assert response.status_code == 201
+    assert response.data["sequence"] == 1
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.agent_node == target_node
+    assert checkpoint.phase == "target_agent_bootstrap"
+
+
+@pytest.mark.django_db
 def test_target_agent_checkpoint_blocks_phase_skips_and_eph_reclaim(
     cluster_delivery_workspace,
 ):
