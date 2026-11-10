@@ -1988,6 +1988,13 @@ def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_
         == "worker_preflight_passed_waiting_provisioning_approval"
     )
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.agent_node_id == deployment.target_node_id
+    assert checkpoint.generation == 1
+    assert checkpoint.sequence == 1
+    assert checkpoint.phase == "worker_provisioning"
+    assert checkpoint.data["pending_step"] == "worker_provisioning"
+    assert "worker_provisioning_preflight" in checkpoint.data["completed_steps"]
 
 
 @pytest.mark.django_db
