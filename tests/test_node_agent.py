@@ -1341,6 +1341,14 @@ def test_target_agent_restores_assigned_deployment_checkpoint_before_polling(
     client.heartbeat = lambda node_type: {
         "active_deployments": [{"deployment_id": deployment_id}]
     }
+    client.deployment_checkpoints[deployment_id] = {
+        "deployment_id": deployment_id,
+        "generation": 1,
+        "sequence": 2,
+        "phase": "target_agent_bootstrap",
+        "data": {"completed_steps": []},
+        "resume_available": True,
+    }
 
     def restore(deployment):
         checkpoint = {
