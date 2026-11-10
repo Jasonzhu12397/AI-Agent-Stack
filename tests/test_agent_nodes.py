@@ -735,7 +735,7 @@ def test_agent_poll_rejects_command_not_allowed_for_node_role(node_workspace):
         project=project,
         node=node,
         requested_by=user,
-        command_type="cluster.postflight",
+        command_type="cluster.control-plane.verify",
         payload={},
         status=AgentCommand.Status.QUEUED,
         idempotency_key="wrong-role-command",
