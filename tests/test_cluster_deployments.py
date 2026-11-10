@@ -2118,10 +2118,12 @@ def test_control_plane_rejects_worker_preflight_without_healthy_provider_control
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
 @pytest.mark.django_db
-def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_workspace):
+def test_approved_worker_provisioning_result_stays_simulation_only(
+    cluster_delivery_workspace,
+):
     deployment, preflight_command, preflight_result = _worker_preflight_fixture(
         cluster_delivery_workspace,
-        "worker-provisioning-execution",
+        "worker-provisioning-simulation",
     )
     handle_deployment_command_result(
         preflight_command,
@@ -2137,7 +2139,7 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
     assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
 
     approver = get_user_model().objects.create_user(
-        username="worker-provisioning-approver",
+        username="worker-provisioning-simulation-approver",
         password="test-password",
     )
     TenantMembership.objects.create(
@@ -2162,76 +2164,59 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         "cluster_name": deployment.cluster_name,
         "namespace": "default",
         "machine_deployment_name": "edge-workers",
-        "machine_deployment_uid": "machine-deployment-uid",
+        "machine_deployment_uid": None,
         "cluster_uid": provision_command.payload["expected_cluster_uid"],
         "provisioning_plan_hash": provision_command.payload[
             "provisioning_plan_hash"
         ],
+        "machine_deployment_manifest_hash": "a" * 64,
+        "execution_mode": "server_side_dry_run_simulation",
+        "simulation_status": "ready_for_manual_execution",
         "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
-        "created": True,
+        "created": False,
         "idempotent_reconciliation": False,
         "dry_run_passed": True,
-        "side_effects": True,
-        "execution_allowed": True,
-        "worker_creation_performed": True,
-        "worker_readiness_verified": True,
-        "worker_machine_count": 4,
-        "ready_worker_machine_count": 4,
+        "side_effects": False,
+        "execution_allowed": False,
+        "worker_creation_performed": False,
+        "worker_readiness_verified": False,
+        "worker_machine_count": 0,
+        "ready_worker_machine_count": 0,
         "not_ready_worker_machine_names": [],
-        "worker_node_names": [
-            "worker-01",
-            "worker-02",
-            "worker-03",
-            "worker-04",
-        ],
+        "worker_node_names": [],
     }
 
     handle_deployment_command_result(provision_command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.POSTFLIGHT
+    assert deployment.status == ClusterDeployment.Status.PLAN_READY
+    assert deployment.error is None
     assert (
         deployment.plan_result["dual_agent"]["phase"]
-        == "worker_provisioned_waiting_postflight"
+        == "worker_provisioning_simulated_manual_execution_required"
     )
+    assert deployment.plan_result["dual_agent"]["worker_provisioning_completed"] is False
+    assert deployment.plan_result["dual_agent"]["worker_provisioning_simulated"] is True
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.plan_result["worker_provisioning_simulation"] == result
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
-    assert checkpoint.sequence == 2
-    assert checkpoint.phase == "worker_pool_verified"
-    assert checkpoint.data["pending_step"] == "postflight"
-    assert "worker_provisioning" in checkpoint.data["completed_steps"]
-    postflight = AgentCommand.objects.get(
+    assert checkpoint.sequence == 1
+    assert checkpoint.phase == "worker_provisioning"
+    assert checkpoint.data["pending_step"] == "worker_provisioning"
+    assert "worker_provisioning" not in checkpoint.data["completed_steps"]
+    assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.postflight",
-    )
-    assert postflight.node_id == deployment.target_node_id
-    assert postflight.payload["expected_worker_replicas"] == 4
-
-    checkpoint_before_stale_result = ClusterDeploymentCheckpoint.objects.get(
-        deployment=deployment,
-    )
-    with pytest.raises(ValueError, match="DEPLOYMENT_CHECKPOINT_PHASE_REGRESSION"):
-        _advance_deployment_checkpoint(
-            deployment,
-            deployment.target_node,
-            "worker_provisioning",
-            "worker_provisioning_preflight",
-            "worker_provisioning",
-        )
-    checkpoint_before_stale_result.refresh_from_db()
-    assert checkpoint_before_stale_result.phase == "worker_pool_verified"
-    assert checkpoint_before_stale_result.sequence == 2
+    ).exists()
 
     handle_deployment_command_result(provision_command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.POSTFLIGHT
-    assert AgentCommand.objects.filter(
+    assert deployment.status == ClusterDeployment.Status.PLAN_READY
+    assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.postflight",
-    ).count() == 1
-    checkpoint.refresh_from_db()
-    assert checkpoint.sequence == 2
-    assert checkpoint.phase == "worker_pool_verified"
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -2280,7 +2265,7 @@ def test_worker_provisioning_rejects_payload_mutation_after_approval(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_EXECUTION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
