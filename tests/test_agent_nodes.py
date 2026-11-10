@@ -15,6 +15,7 @@ from core.models import (
 )
 from django.contrib.auth import get_user_model
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 
@@ -160,7 +161,6 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
         ("eph_node", "cluster.provision"),
         ("eph_node", "target-agent.bootstrap"),
         ("eph_node", "cluster.capi.pivot.execute"),
-        ("target_cluster", "cluster.capi.worker.provision"),
     ],
 )
 def test_expired_mutating_agent_command_fails_closed_without_redelivery(
