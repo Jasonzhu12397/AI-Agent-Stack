@@ -20,7 +20,6 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.cluster_deployment_services import (
-    _advance_deployment_checkpoint,
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
