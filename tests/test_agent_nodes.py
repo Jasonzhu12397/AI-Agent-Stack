@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+from node_agent.capabilities import ROLE_CAPABILITIES
 import datetime
 import hashlib
 
@@ -154,7 +155,7 @@ def test_node_agent_enrollment_is_tenant_admin_only(node_workspace):
 
 
 @pytest.mark.django_db
-def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_workspace):
+def test_eph_capi_pivot_command_waits_for_hash_bound_approval_and_is_leased(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -173,7 +174,7 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
     }
     created = client.post(
         f"/api/v1/agent-nodes/{node_id}/commands/",
-        {"command_type": "cluster.provision", "payload": payload},
+        {"command_type": "cluster.capi.pivot.execute", "payload": payload},
         format="json",
         HTTP_IDEMPOTENCY_KEY="eph-provision-001",
     )
@@ -223,7 +224,7 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
     assert polled.status_code == 200
     command = polled.data["command"]
     assert command["id"] == created.data["id"]
-    assert command["command_type"] == "cluster.provision"
+    assert command["command_type"] == "cluster.capi.pivot.execute"
     assert command["lease_token"]
 
 
@@ -231,8 +232,8 @@ def test_eph_provision_command_waits_for_hash_bound_approval_and_is_leased(node_
 @pytest.mark.parametrize(
     "node_type,command_type",
     [
-        ("eph_node", "cluster.provision"),
-        ("eph_node", "target-agent.bootstrap"),
+        ("eph_node", "cluster.capi.pivot.execute"),
+        ("eph_node", "cluster.capi.pivot.execute"),
         ("eph_node", "cluster.capi.pivot.execute"),
     ],
 )
@@ -311,6 +312,36 @@ def test_expired_mutating_agent_command_fails_closed_without_redelivery(
     assert command.attempts == 1
 
 
+def test_cloud_api_command_allowlists_match_node_agent_capability_registry():
+    from core.agent_node_views import EPH_COMMANDS, TARGET_COMMANDS
+
+    assert EPH_COMMANDS == ROLE_CAPABILITIES["eph_node"]
+    assert TARGET_COMMANDS == ROLE_CAPABILITIES["target_cluster"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("command_type", ["cluster.provision", "target-agent.bootstrap"])
+def test_legacy_cloud_orchestration_commands_are_not_queued_to_node_agent(
+    node_workspace,
+    command_type,
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": f"legacy-command-{command_type}", "node_type": "eph_node"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {"command_type": command_type, "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY=f"reject-{command_type}",
+    )
+
+    assert response.status_code == 400
+    assert AgentCommand.objects.count() == 0
+
+
 @pytest.mark.django_db
 def test_target_cluster_agent_cannot_receive_eph_only_commands(node_workspace):
     user, tenant, project, client = node_workspace
@@ -321,7 +352,7 @@ def test_target_cluster_agent_cannot_receive_eph_only_commands(node_workspace):
     )
     response = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
-        {"command_type": "cluster.provision", "payload": {}},
+        {"command_type": "cluster.capi.pivot.execute", "payload": {}},
         format="json",
         HTTP_IDEMPOTENCY_KEY="target-cannot-provision",
     )
@@ -641,7 +672,7 @@ def test_agent_runtime_rejects_malformed_node_id(node_workspace):
 
 
 @pytest.mark.django_db
-def test_provisioning_command_approval_expires_before_agent_dispatch(node_workspace):
+def test_mutating_command_approval_expires_before_agent_dispatch(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -653,7 +684,7 @@ def test_provisioning_command_approval_expires_before_agent_dispatch(node_worksp
     created = client.post(
         f"/api/v1/agent-nodes/{node_id}/commands/",
         {
-            "command_type": "cluster.provision",
+            "command_type": "cluster.capi.pivot.execute",
             "payload": {"cluster_spec": {"cluster_name": "edge-lab"}},
         },
         format="json",
@@ -2278,7 +2309,7 @@ def test_agent_command_approval_is_single_writer_and_preserves_first_approver(no
     created = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
         {
-            "command_type": "cluster.provision",
+            "command_type": "cluster.capi.pivot.execute",
             "payload": {
                 "cluster_spec": {
                     "cluster_name": "approval-race",
