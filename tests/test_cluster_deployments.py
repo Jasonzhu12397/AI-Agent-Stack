@@ -2110,6 +2110,11 @@ def test_approved_worker_provisioning_result_queues_postflight(cluster_delivery_
         deployment.plan_result["dual_agent"]["phase"]
         == "worker_provisioned_waiting_postflight"
     )
+    checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert checkpoint.sequence == 2
+    assert checkpoint.phase == "worker_pool_verified"
+    assert checkpoint.data["pending_step"] == "postflight"
+    assert "worker_provisioning" in checkpoint.data["completed_steps"]
     postflight = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.postflight",
