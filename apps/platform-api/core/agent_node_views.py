@@ -2298,6 +2298,15 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                         {"detail": "Checkpoint sequence must increase monotonically."},
                         status=409,
                     )
+                if sequence != checkpoint.sequence + 1:
+                    return Response(
+                        {
+                            "detail": "Checkpoint sequence must advance by exactly one.",
+                            "expected_sequence": checkpoint.sequence + 1,
+                            "received_sequence": sequence,
+                        },
+                        status=409,
+                    )
             if phase in {"eph_reclaim_pending", "completed"}:
                 return Response(
                     {
