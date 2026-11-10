@@ -350,8 +350,26 @@ def test_agent_result_requires_current_lease_token(node_workspace):
     assert renewed.status_code == 200
     assert renewed.data["lease_expires_at"] is not None
     assert stale.status_code == 404
+    duplicate = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        {"node_id": node_id, "outcome": "succeeded", "result": {"ok": True}},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
+    conflict = agent_client.post(
+        f"/api/v1/agent-runtime/commands/{command['id']}/result/",
+        {"node_id": node_id, "outcome": "succeeded", "result": {"ok": False}},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+        HTTP_X_AGENT_LEASE=command["lease_token"],
+    )
+
     assert accepted.status_code == 200
     assert accepted.data["status"] == AgentCommand.Status.SUCCEEDED
+    assert duplicate.status_code == 200
+    assert duplicate.data["status"] == AgentCommand.Status.SUCCEEDED
+    assert conflict.status_code == 409
     assert AgentCommand.objects.get(pk=command["id"]).finished_at is not None
 
 
