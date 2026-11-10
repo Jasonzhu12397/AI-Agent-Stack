@@ -1219,6 +1219,70 @@ def test_target_agent_heartbeat_advertises_worker_provisioning_capabilities():
     }.issubset(set(captured["payload"]["capabilities"]))
 
 
+def test_agent_heartbeats_advertise_every_role_allowlisted_capability():
+    expected = {
+        "eph_node": {
+            "node.health",
+            "host.preflight",
+            "cluster.plan",
+            "cluster.health",
+            "cluster.network.inspect",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "k8s.resource.read",
+            "capi.cluster.observe",
+            "metal3.host.inspect",
+            "cluster.provider.discover",
+            "cluster.provider.compatibility",
+            "cluster.manifest.validate",
+            "cluster.capi.pivot.source.preflight",
+            "cluster.capi.pivot.dry-run",
+            "cluster.capi.pivot.execute",
+        },
+        "target_cluster": {
+            "node.health",
+            "cluster.provider.compatibility",
+            "cluster.health",
+            "cluster.network.inspect",
+            "cluster.observe",
+            "cluster.diagnose",
+            "cluster.postflight",
+            "cluster.control-plane.verify",
+            "cluster.capi.pivot.target.preflight",
+            "cluster.capi.pivot.target.verify",
+            "cluster.capi.pivot.postflight",
+            "cluster.capi.worker.preflight",
+            "cluster.capi.worker.provision",
+            "cluster.metal3.observe",
+            "k8s.resource.read",
+        },
+    }
+
+    for node_type, expected_capabilities in expected.items():
+        client = agent.ControlPlaneClient(
+            "https://control.example",
+            "node-123",
+            "agent-token",
+        )
+        captured = {}
+
+        def fake_request(
+            path,
+            payload=None,
+            lease_token="",
+            method="POST",
+            _captured=captured,
+        ):
+            _captured["payload"] = payload
+            return {"ok": True}
+
+        client.request = fake_request
+        client.heartbeat(node_type)
+
+        assert set(captured["payload"]["capabilities"]) == expected_capabilities
+
+
 def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch):
     captured = {}
 
