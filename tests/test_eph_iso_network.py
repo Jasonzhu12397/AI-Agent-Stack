@@ -6,7 +6,7 @@ MODULE_PATH = ROOT / "eph-iso/network-config.py"
 NETWORK_CONFIG = runpy.run_path(str(MODULE_PATH))
 
 
-def test_network_profile_installer_copies_only_supported_regular_files(tmp_path, monkeypatch):
+def test_network_profile_installer_copies_only_supported_regular_files(tmp_path):
     media = tmp_path / "media" / "network"
     target = tmp_path / "target"
     media.mkdir(parents=True)
@@ -19,16 +19,14 @@ def test_network_profile_installer_copies_only_supported_regular_files(tmp_path,
     outside.write_text("not copied", encoding="utf-8")
     (media / "99-link.network").symlink_to(outside)
 
-    monkeypatch.setitem(NETWORK_CONFIG, "MEDIA_ROOT", media)
-    monkeypatch.setitem(NETWORK_CONFIG, "TARGET_ROOT", target)
-    NETWORK_CONFIG["install_network_configuration"]()
+    NETWORK_CONFIG["install_network_configuration"](media, target)
 
     assert (target / "10-uplink.network").is_file()
     assert not (target / "ignore.txt").exists()
     assert not (target / "99-link.network").exists()
 
 
-def test_network_profile_installer_rejects_oversized_files(tmp_path, monkeypatch):
+def test_network_profile_installer_rejects_oversized_files(tmp_path):
     media = tmp_path / "media" / "network"
     target = tmp_path / "target"
     media.mkdir(parents=True)
