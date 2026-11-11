@@ -6,6 +6,7 @@ Requires=k3s.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/cloud-init status --wait
 ExecStart=/usr/bin/python3 /usr/local/lib/eph-bootstrap.py
 RemainAfterExit=yes
 TimeoutStartSec=15min
