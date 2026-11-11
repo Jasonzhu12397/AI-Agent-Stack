@@ -41,6 +41,23 @@ EPH PKI settings:
 - `EPH_PKI_ROLE`: signing role, default `agent-nodes`.
 - `EPH_PKI_TTL`: requested certificate lifetime, default `24h`.
 
+The role must issue a leaf certificate suitable only for TLS client
+authentication. Configure its certificate profile explicitly:
+
+- `ext_key_usage` must include `ClientAuth` (do not rely on an implicit Vault
+  default).
+- `key_usage` must include `DigitalSignature`.
+- `client_flag=true` and `server_flag=false`.
+- The leaf must have `basicConstraints CA=false`.
+- The role maximum TTL must be bounded by the platform certificate policy;
+  the API also rejects certificates that are not currently valid.
+
+The API rejects a signed leaf without the client-auth extended key usage,
+digital-signature key usage, non-CA basic constraints, the exact node-bound
+common name, or a currently valid time window. A Vault signing response that
+does not meet this profile is treated as an invalid issuance; the enrollment
+token is not consumed.
+
 The Vault PKI role must be provisioned out-of-band with a restrictive allowed
 domain such as `agents.internal`, hostname enforcement, no arbitrary names,
 no IP SANs, and a maximum TTL no greater than the organization's node-agent
