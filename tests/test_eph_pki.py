@@ -161,7 +161,7 @@ def test_vault_ca_chain_rejects_invalid_trust_bundle(tmp_path):
 
 
 def test_vault_ca_chain_rejects_untrusted_issuer(tmp_path):
-    root_key, root = _make_root_ca()
+    _, root = _make_root_ca()
     other_key = ec.generate_private_key(ec.SECP256R1())
     _, intermediate = _make_ca(
         "EPH issuing CA",
