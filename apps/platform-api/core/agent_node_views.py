@@ -23,6 +23,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.audit import record_audit_event
+from core.eph_pki import (
+    EPHCertificateError,
+    EPHCertificateSignerUnavailable,
+    sign_eph_csr,
+)
 from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
@@ -1785,6 +1790,109 @@ class AgentCommandApproveView(APIView):
                 },
             )
             return Response(_command_data(command))
+
+
+
+
+class AgentRuntimeEPHCertificateExchangeView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or set(request.data) != {"csr_pem"}:
+            return Response(
+                {"detail": "Only csr_pem is accepted for EPH certificate exchange."},
+                status=400,
+            )
+        csr_pem = request.data.get("csr_pem")
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token or len(token) > 512:
+            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+        if not isinstance(csr_pem, str) or len(csr_pem) > 16384:
+            return Response({"detail": "csr_pem must be a PEM CSR under 16 KiB."}, status=400)
+
+        try:
+            parsed_node_id = uuid.UUID(str(node_id))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "Invalid EPH node identity."}, status=400)
+
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().filter(pk=parsed_node_id).first()
+            if (
+                node is None
+                or node.node_type != AgentNode.NodeType.EPH_NODE
+                or node.status == AgentNode.Status.REVOKED
+                or node.revoked_at is not None
+            ):
+                return Response({"detail": "Invalid or revoked EPH node identity."}, status=401)
+            if node.client_certificate_fingerprint and node.client_certificate_revoked_at is None:
+                return Response(
+                    {"detail": "An active client certificate is already bound to this node."},
+                    status=409,
+                )
+            supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(supplied_hash, node.credential_hash):
+                return Response({"detail": "Invalid or revoked node credential."}, status=401)
+
+            try:
+                issued = sign_eph_csr(
+                    csr_pem=csr_pem,
+                    node_id=str(node.id),
+                    tenant_id=str(node.tenant_id),
+                    project_id=str(node.project_id),
+                )
+            except EPHCertificateSignerUnavailable:
+                return Response(
+                    {"detail": "EPH certificate signer is unavailable; enrollment remains pending."},
+                    status=503,
+                )
+            except EPHCertificateError:
+                return Response(
+                    {"detail": "EPH certificate signing response or CSR is invalid."},
+                    status=400,
+                )
+
+            node.credential_hash = hashlib.sha256(
+                secrets.token_urlsafe(48).encode("utf-8")
+            ).hexdigest()
+            node.client_certificate_fingerprint = issued["fingerprint_sha256"]
+            node.client_certificate_bound_at = timezone.now()
+            node.client_certificate_revoked_at = None
+            node.save(
+                update_fields=[
+                    "credential_hash",
+                    "client_certificate_fingerprint",
+                    "client_certificate_bound_at",
+                    "client_certificate_revoked_at",
+                    "updated_at",
+                ]
+            )
+            record_audit_event(
+                request,
+                node.tenant,
+                "agent.node.eph_certificate_issued",
+                "agent_node",
+                node.id,
+                project=node.project,
+                metadata={
+                    "fingerprint_sha256": issued["fingerprint_sha256"],
+                    "common_name": issued["common_name"],
+                    "issuer": "vault_pki",
+                },
+            )
+
+        return Response(
+            {
+                "node_id": str(node.id),
+                "client_certificate": issued["client_certificate"],
+                "ca_chain": issued["ca_chain"],
+                "fingerprint_sha256": issued["fingerprint_sha256"],
+                "token_consumed": True,
+                "private_key_returned": False,
+            },
+            status=200,
+        )
 
 
 class AgentRuntimeHeartbeatView(APIView):
