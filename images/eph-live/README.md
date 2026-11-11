@@ -32,7 +32,7 @@ The first implementation expects a NoCloud config-drive seed to provide /run/eph
 - NODE_AGENT_IMAGE (immutable @sha256: reference)
 - CONTROL_URL, NODE_ID, and short-lived NODE_TOKEN
 
-The seed must be delivered through protected virtual media or an equivalent out-of-band channel. Do not put secrets in kernel command-line parameters, ISO contents, Git, or image build arguments. The seed is volatile and should be removed after successful enrollment. The Agent credential is one-time/short-lived and should be revoked during EPH-to-Target handoff.
+Generate a per-node seed ISO with images/eph-live/create-seed.sh after installing cloud-localds (cloud-image-utils). Supply values as environment variables and mTLS file paths as CA_CERT_FILE, CLIENT_CERT_FILE, and CLIENT_KEY_FILE. Keep the seed ISO access-controlled. The seed must be delivered through protected virtual media or an equivalent out-of-band channel. Do not put secrets in kernel command-line parameters, ISO contents, Git, or image build arguments. The seed is volatile and should be removed after successful enrollment. The Agent credential is one-time/short-lived and should be revoked during EPH-to-Target handoff.
 
 The builder bundles a narrowly scoped EPH Agent ServiceAccount and read-only ClusterRole. It does not grant the EPH Agent CAPI, Metal3, Ironic, or general workload mutation permissions.
 
