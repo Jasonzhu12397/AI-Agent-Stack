@@ -1607,7 +1607,10 @@ class AgentNodeCommandListCreateView(APIView):
                 != int(payload["current_version"].split(".")[1]) + 1
                 or payload.get("execution_mode") != "simulation"
             ):
-                return Response({"detail": "Kubernetes version request is invalid or unsupported."}, status=400)
+                return Response(
+                    {"detail": "Kubernetes version request is invalid or unsupported."},
+                    status=400,
+                )
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
             return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
