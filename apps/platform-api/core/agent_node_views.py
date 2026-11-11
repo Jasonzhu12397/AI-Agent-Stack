@@ -324,7 +324,7 @@ def _validate_payload(payload):
     return None
 
 
-def _authenticate_node(request, node_id):
+def _authenticate_node(request, node_id, allow_pending_certificate=False):
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token or len(token) > 512:
@@ -341,6 +341,7 @@ def _authenticate_node(request, node_id):
     ):
         return None
     expected_fingerprint = node.client_certificate_fingerprint
+    pending_fingerprint = node.pending_client_certificate_fingerprint
     if getattr(settings, "AGENT_MTLS_REQUIRED", False) and not expected_fingerprint:
         return None
     if expected_fingerprint:
@@ -370,7 +371,14 @@ def _authenticate_node(request, node_id):
         ).strip().lower()
         if (
             not re.fullmatch(r"[0-9a-f]{64}", verified_fingerprint)
-            or not hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+            or not (
+                hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+                or (
+                    allow_pending_certificate
+                    and pending_fingerprint
+                    and hmac.compare_digest(verified_fingerprint, pending_fingerprint)
+                )
+            )
         ):
             return None
     supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -1910,6 +1918,143 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
             },
             status=200,
         )
+
+
+class AgentRuntimeEPHCertificateRenewalView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or set(request.data) != {"csr_pem"}:
+            return Response({"detail": "Only csr_pem is accepted for certificate renewal."}, status=400)
+        csr_pem = request.data.get("csr_pem")
+        if not isinstance(csr_pem, str) or len(csr_pem) > 16384:
+            return Response({"detail": "csr_pem must be a PEM CSR under 16 KiB."}, status=400)
+        node = _authenticate_node(request, node_id)
+        if node is None or node.node_type != AgentNode.NodeType.EPH_NODE:
+            return Response({"detail": "An active EPH node identity is required."}, status=401)
+        if not node.client_certificate_fingerprint:
+            return Response({"detail": "An active client certificate is required for renewal."}, status=409)
+        now = timezone.now()
+        if (
+            node.pending_client_certificate_fingerprint
+            and node.pending_client_certificate_bound_at
+            and node.pending_client_certificate_bound_at + datetime.timedelta(minutes=10) > now
+        ):
+            return Response({"detail": "A certificate renewal is already pending activation."}, status=409)
+        try:
+            issued = sign_eph_csr(
+                csr_pem=csr_pem,
+                node_id=str(node.id),
+                tenant_id=str(node.tenant_id),
+                project_id=str(node.project_id),
+            )
+        except EPHCertificateSignerUnavailable:
+            return Response({"detail": "EPH certificate signer is unavailable."}, status=503)
+        except EPHCertificateError:
+            return Response({"detail": "EPH certificate signing response or CSR is invalid."}, status=400)
+
+        with transaction.atomic():
+            locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
+            if (
+                locked is None
+                or locked.status == AgentNode.Status.REVOKED
+                or locked.revoked_at is not None
+                or locked.client_certificate_revoked_at is not None
+                or not hmac.compare_digest(
+                    locked.client_certificate_fingerprint,
+                    node.client_certificate_fingerprint,
+                )
+                or not hmac.compare_digest(locked.credential_hash, node.credential_hash)
+            ):
+                return Response({"detail": "EPH node identity changed during certificate renewal."}, status=409)
+            if (
+                locked.pending_client_certificate_fingerprint
+                and locked.pending_client_certificate_bound_at
+                and locked.pending_client_certificate_bound_at + datetime.timedelta(minutes=10) > timezone.now()
+            ):
+                return Response({"detail": "A certificate renewal is already pending activation."}, status=409)
+            locked.pending_client_certificate_fingerprint = issued["fingerprint_sha256"]
+            locked.pending_client_certificate_bound_at = timezone.now()
+            locked.save(update_fields=[
+                "pending_client_certificate_fingerprint",
+                "pending_client_certificate_bound_at",
+                "updated_at",
+            ])
+            record_audit_event(
+                request,
+                locked.tenant,
+                "agent.node.eph_certificate_renewal_staged",
+                "agent_node",
+                locked.id,
+                project=locked.project,
+                metadata={"fingerprint_sha256": issued["fingerprint_sha256"], "issuer": "vault_pki"},
+            )
+        return Response({
+            "node_id": str(node.id),
+            "client_certificate": issued["client_certificate"],
+            "ca_chain": issued["ca_chain"],
+            "fingerprint_sha256": issued["fingerprint_sha256"],
+            "activation_required": True,
+            "private_key_returned": False,
+        }, status=200)
+
+
+class AgentRuntimeEPHCertificateActivationView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or request.data:
+            return Response({"detail": "An empty JSON object is required."}, status=400)
+        node = _authenticate_node(request, node_id, allow_pending_certificate=True)
+        if node is None or node.node_type != AgentNode.NodeType.EPH_NODE:
+            return Response({"detail": "A valid EPH node identity is required."}, status=401)
+        verified_fingerprint = request.headers.get(
+            "X-Verified-Client-Cert-SHA256", ""
+        ).strip().lower()
+        with transaction.atomic():
+            locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
+            if locked is None or locked.status == AgentNode.Status.REVOKED or locked.revoked_at is not None:
+                return Response({"detail": "EPH node identity is revoked."}, status=401)
+            if (
+                verified_fingerprint
+                and locked.client_certificate_fingerprint
+                and hmac.compare_digest(verified_fingerprint, locked.client_certificate_fingerprint)
+            ):
+                return Response({"node_id": str(locked.id), "activated": True, "idempotent": True}, status=200)
+            pending_fingerprint = locked.pending_client_certificate_fingerprint
+            pending_at = locked.pending_client_certificate_bound_at
+            if (
+                not pending_fingerprint
+                or pending_at is None
+                or pending_at + datetime.timedelta(minutes=10) <= timezone.now()
+                or not hmac.compare_digest(verified_fingerprint, pending_fingerprint)
+            ):
+                return Response({"detail": "Pending certificate is missing, expired, or not presented."}, status=409)
+            locked.client_certificate_fingerprint = pending_fingerprint
+            locked.client_certificate_bound_at = pending_at
+            locked.client_certificate_revoked_at = None
+            locked.pending_client_certificate_fingerprint = ""
+            locked.pending_client_certificate_bound_at = None
+            locked.save(update_fields=[
+                "client_certificate_fingerprint",
+                "client_certificate_bound_at",
+                "client_certificate_revoked_at",
+                "pending_client_certificate_fingerprint",
+                "pending_client_certificate_bound_at",
+                "updated_at",
+            ])
+            record_audit_event(
+                request,
+                locked.tenant,
+                "agent.node.eph_certificate_activated",
+                "agent_node",
+                locked.id,
+                project=locked.project,
+                metadata={"fingerprint_sha256": pending_fingerprint},
+            )
+        return Response({"node_id": str(locked.id), "activated": True, "idempotent": False}, status=200)
 
 
 class AgentRuntimeHeartbeatView(APIView):
