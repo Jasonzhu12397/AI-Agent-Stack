@@ -222,3 +222,21 @@ The MachineDeployment carries deployment ID, provisioning plan hash and Cluster 
 The Metal3MachineTemplate must carry `ai-agent-stack.io/network-profile-hash` equal to the validated profile hash, and its `spec.template.spec.hostSelector.matchLabels` must exactly equal the preflight BMH selector. Worker provisioning rejects a profile without a Multus SR-IOV attachment marked `dpdk: true`, hugepages, NUMA policy and static CPU Manager. This is a fail-closed attestation that the referenced infrastructure template was prepared for the requested control-plane/data-plane design, not a substitute for validating the underlying host configuration. This implementation does not dynamically rewrite the Metal3MachineTemplate or create NetworkAttachmentDefinitions, SR-IOV resource pools, hugepages, CPU Manager settings or DPDK device plugins; those remain prerequisites to be provisioned and verified by the network/node preparation workflow. BMHs are not manually patched or reserved by the Agent; CAPM3 remains responsible for claiming them through its reconciliation process.
 
 A timeout after MachineDeployment creation is an ambiguous partial deployment and must be reconciled by inspecting the annotated MachineDeployment, Machines, Metal3Machines and BareMetalHosts. The Agent does not delete the MachineDeployment or retry a destructive action automatically. EPH reclamation remains disabled.
+
+
+## EPH RAM Live ISO implementation
+
+The repository now contains an initial buildable ISO subsystem under images/eph-live:
+
+- Debian Trixie Live ISO configured with toram so the live root is copied into memory before startup.
+- Version-specific Kubernetes apt repository selection for supported Kubernetes minors 1.33 through 1.36.
+- containerd configured with systemd cgroups and volatile runtime/state paths.
+- DHCP through systemd-networkd without binding to fixed NIC names or MAC addresses.
+- kubeadm initializes a one-node cluster; Flannel is applied from a build-time downloaded manifest whose SHA-256 is verified.
+- A NoCloud seed generator injects the one-time EPH enrollment credential and mTLS material through a separate protected seed ISO. Secrets are not baked into the main Live ISO or passed on the kernel command line.
+- The EPH Agent is created as a Kubernetes Deployment with an immutable image digest, mTLS, read-only root filesystem, non-root identity, memory-backed temporary storage, read-only host sysfs and a dedicated read-only CAPI/Metal3 inventory RBAC role.
+- The bootstrap refuses a Kubernetes patch version that differs from the kubeadm binary installed in the ISO.
+
+Build and seed-generation instructions are in images/eph-live/README.md. CI validates shell syntax, the ISO builder container, and the ISO/seed/RBAC contracts. This is not yet a release-qualified ISO: a complete live-build run, QEMU boot test, supported hardware NIC/firmware matrix, secure-boot signing, image registry pull test and end-to-end cloud enrollment test remain required. Do not claim the ISO is production-ready until those tests pass.
+
+The current ISO bootstrap intentionally does not partition or format the physical host disk, does not install CAPI/Metal3/Ironic controllers automatically, and does not enable real infrastructure mutations. Those components and workflows remain separately gated implementation work.
