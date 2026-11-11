@@ -9,7 +9,7 @@ ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-10m}"
 IMAGE_PATTERN='^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$'
 
 fail() {
-    printf '%s\\n' "$1" >&2
+    printf '%s\n' "$1" >&2
     exit 1
 }
 
@@ -24,9 +24,9 @@ require_secret_keys() {
     local secret="$2"
     shift 2
     local keys
-    keys="$(kubectl --context "$context" --namespace ai-agent-system get secret "$secret" -o go-template='{{range $key, $value := .data}}{{printf "%s\\n" $key}}{{end}}')" || fail "REQUIRED_SECRET_NOT_FOUND:$context:$secret"
+    keys="$(kubectl --context "$context" --namespace ai-agent-system get secret "$secret" -o go-template='{{range $key, $value := .data}}{{printf "%s\n" $key}}{{end}}')" || fail "REQUIRED_SECRET_NOT_FOUND:$context:$secret"
     for key in "$@"; do
-        printf '%s\\n' "$keys" | grep -Fxq "$key" || fail "REQUIRED_SECRET_KEY_MISSING:$context:$secret:$key"
+        printf '%s\n' "$keys" | grep -Fxq "$key" || fail "REQUIRED_SECRET_KEY_MISSING:$context:$secret:$key"
     done
 }
 
@@ -80,4 +80,4 @@ kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system rollout status depl
 kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system rollout status deployment/target-cluster-agent --timeout="$ROLLOUT_TIMEOUT"
 kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system rollout status daemonset/network-inventory-agent --timeout="$ROLLOUT_TIMEOUT"
 
-printf '%s\\n' "DUAL_AGENT_DEPLOYMENT_READY"
+printf '%s\n' "DUAL_AGENT_DEPLOYMENT_READY"
