@@ -8,7 +8,7 @@ import tempfile
 import urllib.parse
 import uuid
 
-MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap")
+MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")
 MANIFEST_ROOT = pathlib.Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 
