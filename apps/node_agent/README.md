@@ -10,6 +10,8 @@ The EPH Agent and Target Agent use the same isolated Kubernetes-side runtime ima
 
 The Node Agent image does not contain Django, the cloud worker package, the Studio API package, model-provider SDKs, PostgreSQL/Redis/Qdrant clients or cloud LLM credentials. It has no general-purpose shell command endpoint. The cloud Agent does not mount kubeconfigs, host sysfs, BMC credentials or Kubernetes ServiceAccount tokens.
 
+Kubernetes API requests from the Node Agent validate the in-cluster service endpoint, port and ServiceAccount token before use. Both read-only requests and server-side dry-run MachineDeployment validation reject HTTP redirects so the ServiceAccount bearer token is never forwarded to another origin. Configure the in-cluster API endpoint directly; redirects are treated as an error.
+
 ## Agent roles
 
 ### EPH Agent (AGENT_NODE_TYPE=eph_node)

@@ -4032,17 +4032,26 @@ def test_machine_deployment_create_uses_strict_api_validation(
                 }
             ).encode("utf-8")
 
-    def fake_urlopen(request, context, timeout):
-        assert request.method == "POST"
-        assert request.full_url.endswith(expected_query)
-        assert request.get_header("Authorization") == (
-            "Bearer test-service-account-token"
-        )
-        assert json.loads(request.data.decode("utf-8"))["kind"] == "MachineDeployment"
-        assert timeout == 30
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout):
+            assert request.method == "POST"
+            assert request.full_url.endswith(expected_query)
+            assert request.get_header("Authorization") == (
+                "Bearer test-service-account-token"
+            )
+            assert json.loads(request.data.decode("utf-8"))["kind"] == (
+                "MachineDeployment"
+            )
+            assert timeout == 30
+            return FakeResponse()
 
-    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    captured_handlers = []
+
+    def fake_build_opener(*handlers):
+        captured_handlers.extend(handlers)
+        return FakeOpener()
+
+    monkeypatch.setattr(agent.urllib.request, "build_opener", fake_build_opener)
     result = agent.kubernetes_api_create_machine_deployment(
         "v1beta1",
         "default",
@@ -4056,6 +4065,142 @@ def test_machine_deployment_create_uses_strict_api_validation(
     )
 
     assert result["kind"] == "MachineDeployment"
+    assert any(
+        isinstance(handler, agent._KubernetesNoRedirectHandler)
+        for handler in captured_handlers
+    )
+
+
+def test_kubernetes_api_get_rejects_redirects_without_forwarding_token(
+    monkeypatch, tmp_path
+):
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("test-service-account-token", encoding="utf-8")
+    ca_file.write_text("test-ca", encoding="utf-8")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", str(ca_file))
+    monkeypatch.setattr(agent.ssl, "create_default_context", lambda cafile: object())
+
+    captured = {}
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            raise agent.urllib.error.HTTPError(
+                request.full_url,
+                302,
+                "Found",
+                {"Location": "https://attacker.example/collect"},
+                None,
+            )
+
+    def fake_build_opener(*handlers):
+        captured["handlers"] = handlers
+        return FakeOpener()
+
+    monkeypatch.setattr(agent.urllib.request, "build_opener", fake_build_opener)
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="KUBERNETES_API_REDIRECT_REJECTED",
+    ):
+        agent.kubernetes_api_get("/version")
+
+    assert captured["request"].get_header("Authorization") == (
+        "Bearer test-service-account-token"
+    )
+    assert captured["request"].full_url == (
+        "https://kubernetes.default.svc:443/version"
+    )
+    assert captured["timeout"] == 15
+    assert any(
+        isinstance(handler, agent._KubernetesNoRedirectHandler)
+        for handler in captured["handlers"]
+    )
+
+
+def test_machine_deployment_dry_run_rejects_api_redirects(monkeypatch, tmp_path):
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("test-service-account-token", encoding="utf-8")
+    ca_file.write_text("test-ca", encoding="utf-8")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", str(ca_file))
+    monkeypatch.setattr(agent.ssl, "create_default_context", lambda cafile: object())
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise agent.urllib.error.HTTPError(
+                request.full_url,
+                302,
+                "Found",
+                {"Location": "https://attacker.example/collect"},
+                None,
+            )
+
+    monkeypatch.setattr(
+        agent.urllib.request,
+        "build_opener",
+        lambda *handlers: FakeOpener(),
+    )
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="KUBERNETES_API_REDIRECT_REJECTED",
+    ):
+        agent.kubernetes_api_create_machine_deployment(
+            "v1beta1",
+            "default",
+            {
+                "apiVersion": "cluster.x-k8s.io/v1beta1",
+                "kind": "MachineDeployment",
+                "metadata": {"namespace": "default"},
+            },
+            dry_run=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "host,port",
+    [
+        ("https://attacker.example", "443"),
+        ("kubernetes.default.svc/path", "443"),
+        ("kubernetes.default.svc", "0"),
+        ("kubernetes.default.svc", "65536"),
+    ],
+)
+def test_machine_deployment_dry_run_rejects_invalid_api_endpoint(
+    monkeypatch, host, port, tmp_path
+):
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("test-service-account-token", encoding="utf-8")
+    ca_file.write_text("test-ca", encoding="utf-8")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", host)
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT_HTTPS", port)
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("AGENT_SERVICE_ACCOUNT_CA_FILE", str(ca_file))
+
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="KUBERNETES_SERVICE_ENDPOINT_INVALID",
+    ):
+        agent.kubernetes_api_create_machine_deployment(
+            "v1beta1",
+            "default",
+            {
+                "apiVersion": "cluster.x-k8s.io/v1beta1",
+                "kind": "MachineDeployment",
+                "metadata": {"namespace": "default"},
+            },
+            dry_run=True,
+        )
 
 
 

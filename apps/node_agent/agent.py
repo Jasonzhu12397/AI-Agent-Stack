@@ -3966,6 +3966,57 @@ def execute_command(
     raise NodeAgentError("UNSUPPORTED_COMMAND")
 
 
+class _KubernetesNoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
+def _kubernetes_api_identity():
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "").strip()
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443").strip()
+    token_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    )
+    ca_path = os.environ.get(
+        "AGENT_SERVICE_ACCOUNT_CA_FILE",
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    )
+    if (
+        not host
+        or not re.fullmatch(r"[A-Za-z0-9.-]+", host)
+        or host.startswith(".")
+        or host.endswith(".")
+        or ".." in host
+        or not port.isdigit()
+        or not 1 <= int(port) <= 65535
+    ):
+        raise NodeAgentError("KUBERNETES_SERVICE_ENDPOINT_INVALID")
+    if not os.path.isfile(token_path) or not os.path.isfile(ca_path):
+        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
+    try:
+        with open(token_path, encoding="utf-8") as token_file:
+            token = token_file.read().strip()
+        context = ssl.create_default_context(cafile=ca_path)
+    except (OSError, ssl.SSLError) as exc:
+        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE") from exc
+    if (
+        not token
+        or len(token) > 8192
+        or any(ord(character) < 33 or ord(character) == 127 for character in token)
+    ):
+        raise NodeAgentError("KUBERNETES_SERVICE_ACCOUNT_TOKEN_INVALID")
+    return host, port, token, context
+
+
+def _open_kubernetes_api_request(request, context, timeout):
+    opener = urllib.request.build_opener(
+        _KubernetesNoRedirectHandler(),
+        urllib.request.HTTPSHandler(context=context),
+    )
+    return opener.open(request, timeout=timeout)
+
+
 def kubernetes_api_get(path: str) -> dict[str, Any]:
     parsed_path = urllib.parse.urlsplit(path)
     query = urllib.parse.parse_qs(parsed_path.query, strict_parsing=True)
@@ -3992,21 +4043,7 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         or len(query["continue"][0]) > 4096
     ):
         raise NodeAgentError("KUBERNETES_CONTINUE_TOKEN_INVALID")
-    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
-    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
-    token_path = os.environ.get(
-        "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
-        "/var/run/secrets/kubernetes.io/serviceaccount/token",
-    )
-    ca_path = os.environ.get(
-        "AGENT_SERVICE_ACCOUNT_CA_FILE",
-        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-    )
-    if not host or not os.path.isfile(token_path) or not os.path.isfile(ca_path):
-        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
-    with open(token_path, encoding="utf-8") as token_file:
-        token = token_file.read().strip()
-    context = ssl.create_default_context(cafile=ca_path)
+    host, port, token, context = _kubernetes_api_identity()
     query_string = urllib.parse.urlencode(
         {key: values[0] for key, values in query.items()}
     )
@@ -4019,9 +4056,11 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, context=context, timeout=15) as response:
+        with _open_kubernetes_api_request(request, context, timeout=15) as response:
             payload = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise NodeAgentError("KUBERNETES_API_REDIRECT_REJECTED") from exc
         if exc.code >= 500:
             # A server-side error can be returned after the create was committed.
             # Treat it as ambiguous and let the caller reconcile by resource identity.
@@ -4059,21 +4098,7 @@ def kubernetes_api_create_machine_deployment(
         or manifest.get("metadata", {}).get("namespace") != namespace
     ):
         raise NodeAgentError("MACHINE_DEPLOYMENT_CREATE_REQUEST_INVALID")
-    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
-    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
-    token_path = os.environ.get(
-        "AGENT_SERVICE_ACCOUNT_TOKEN_FILE",
-        "/var/run/secrets/kubernetes.io/serviceaccount/token",
-    )
-    ca_path = os.environ.get(
-        "AGENT_SERVICE_ACCOUNT_CA_FILE",
-        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-    )
-    if not host or not os.path.isfile(token_path) or not os.path.isfile(ca_path):
-        raise NodeAgentError("KUBERNETES_IN_CLUSTER_IDENTITY_UNAVAILABLE")
-    with open(token_path, encoding="utf-8") as token_file:
-        token = token_file.read().strip()
-    context = ssl.create_default_context(cafile=ca_path)
+    host, port, token, context = _kubernetes_api_identity()
     path = (
         f"/apis/cluster.x-k8s.io/{version}/namespaces/"
         f"{namespace}/machinedeployments"
@@ -4090,9 +4115,11 @@ def kubernetes_api_create_machine_deployment(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+        with _open_kubernetes_api_request(request, context, timeout=30) as response:
             payload = response.read(1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise NodeAgentError("KUBERNETES_API_REDIRECT_REJECTED") from exc
         if exc.code >= 500:
             raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
         raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
