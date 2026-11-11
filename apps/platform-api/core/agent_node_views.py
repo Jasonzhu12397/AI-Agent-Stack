@@ -70,13 +70,16 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.postflight",
     "cluster.capi.worker.preflight",
     "cluster.capi.worker.provision",
+    "cluster.kubernetes.version.upgrade",
     "cluster.metal3.observe",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {
     "cluster.capi.pivot.execute",
     "cluster.capi.worker.provision",
+    "cluster.kubernetes.version.upgrade",
 }
+SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.35", "v1.36"})
 
 def _cancel_agent_commands(queryset, now):
     unknown_outcomes = []
@@ -1587,6 +1590,18 @@ class AgentNodeCommandListCreateView(APIView):
         payload_error = _validate_payload(payload)
         if payload_error:
             return Response({"detail": payload_error}, status=400)
+        if command_type == "cluster.kubernetes.version.upgrade":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return Response({"detail": "Kubernetes version changes require a Target Cluster Agent."}, status=400)
+            if (
+                set(payload) != {"cluster_name", "current_version", "target_version", "execution_mode"}
+                or payload.get("cluster_name") != node.cluster_name
+                or not isinstance(payload.get("current_version"), str)
+                or not re.fullmatch(r"v1\\.\\d+(?:\\.\\d+)?", payload["current_version"])
+                or payload.get("target_version") not in SUPPORTED_KUBERNETES_MINOR_VERSIONS
+                or payload.get("execution_mode") != "simulation"
+            ):
+                return Response({"detail": "Kubernetes version request is invalid or unsupported."}, status=400)
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
             return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
