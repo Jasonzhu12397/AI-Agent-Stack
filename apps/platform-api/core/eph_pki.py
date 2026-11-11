@@ -61,13 +61,14 @@ def _vault_headers(token):
 
 
 def _validate_ca_chain(ca_chain, issuing_ca):
-    values = []
-    if isinstance(ca_chain, list):
-        values.extend(ca_chain)
-    elif ca_chain not in (None, ""):
+    if not isinstance(ca_chain, list) and ca_chain not in (None, ""):
         raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
+    values = []
     if issuing_ca:
         values.append(issuing_ca)
+    for certificate in ca_chain or []:
+        if certificate not in values:
+            values.append(certificate)
     if not values or len(values) > 8:
         raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
     normalized = []
