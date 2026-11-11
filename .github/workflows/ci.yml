@@ -97,17 +97,17 @@ jobs:
             bash eph-iso/build.sh
           ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
           test -n "$ISO_FILE"
-          sha256sum --check "$ISO_FILE.sha256"
+          (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
       - name: Boot ISO and verify single-node Kubernetes API
         run: |
           mkdir -p "$RUNNER_TEMP/ephboot/network"
-          printf '[Match]\\nName=en*\\nType=ether\\n\\n[Network]\\nDHCP=ipv4\\n' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
+          printf '%s\n' '[Match]' 'Name=en*' 'Type=ether' '' '[Network]' 'DHCP=ipv4' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
           dd if=/dev/zero of="$RUNNER_TEMP/ephboot.img" bs=1M count=64
           mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/ephboot.img"
           mmd -i "$RUNNER_TEMP/ephboot.img" ::/network
-          mcopy -i "$RUNNER_TEMP/ephboot.img" "$RUNNER_TEMP/ephboot/network/10-qemu.network" ::/network/10-qemu.network
+          printf '%s\n' '[Match]' 'Name=en*' 'Type=ether' '' '[Network]' 'DHCP=ipv4' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
           qemu-system-x86_64 \
             -machine accel=tcg,usb=off \
             -cpu max -m 4096 -smp 2 \
