@@ -23,7 +23,7 @@ RUN test -n "$CLUSTERCTL_VERSION" && test -n "$KUBECTL_VERSION" && \
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HOME=/tmp PYTHONPATH=/workspace
 WORKDIR /workspace
-RUN pip install --no-cache-dir "PyYAML>=6.0,<7.0"
+RUN pip install --no-cache-dir "PyYAML>=6.0,<7.0" "cryptography>=44,<47"
 COPY apps/node_agent ./apps/node_agent
 COPY --from=clusterctl /usr/local/bin/clusterctl /usr/local/bin/clusterctl
 COPY --from=clusterctl /usr/local/bin/kubectl /usr/local/bin/kubectl
