@@ -19,8 +19,8 @@ def test_network_profile_installer_copies_only_supported_regular_files(tmp_path,
     outside.write_text("not copied", encoding="utf-8")
     (media / "99-link.network").symlink_to(outside)
 
-    monkeypatch.setattr(NETWORK_CONFIG, "MEDIA_ROOT", media)
-    monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
+    monkeypatch.setitem(NETWORK_CONFIG, "MEDIA_ROOT", media)
+    monkeypatch.setitem(NETWORK_CONFIG, "TARGET_ROOT", target)
     NETWORK_CONFIG["install_network_configuration"]()
 
     assert (target / "10-uplink.network").is_file()
@@ -38,7 +38,7 @@ def test_network_profile_installer_rejects_oversized_files(tmp_path, monkeypatch
     monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
 
     try:
-        NETWORK_CONFIG.install_network_configuration()
+        NETWORK_CONFIG["install_network_configuration"]()
     except ValueError as error:
         assert "EPH_NETWORK_CONFIG_INVALID" in str(error)
     else:
