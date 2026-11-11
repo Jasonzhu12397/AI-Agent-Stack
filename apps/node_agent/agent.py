@@ -2075,6 +2075,32 @@ def execute_command(
         raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
     if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
         raise NodeAgentError("CAPABILITY_NOT_CONFIGURED")
+    if command_type == "cluster.kubernetes.version.upgrade":
+        supported_versions = {"v1.33", "v1.35", "v1.36"}
+        if (
+            node_type != "target_cluster"
+            or set(payload)
+            != {"cluster_name", "current_version", "target_version", "execution_mode"}
+            or not isinstance(payload.get("cluster_name"), str)
+            or not payload["cluster_name"]
+            or not isinstance(payload.get("current_version"), str)
+            or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
+            or not isinstance(payload.get("target_version"), str)
+            or payload.get("target_version") not in supported_versions
+            or int(payload["target_version"].split(".")[1])
+            != int(payload["current_version"].split(".")[1]) + 1
+            or payload.get("execution_mode") != "simulation"
+        ):
+            raise NodeAgentError("KUBERNETES_VERSION_UPGRADE_REQUEST_INVALID")
+        return {
+            "cluster_name": payload["cluster_name"],
+            "current_version": payload["current_version"],
+            "target_version": payload["target_version"],
+            "upgrade_simulated": True,
+            "upgrade_performed": False,
+            "side_effects": False,
+            "requires_manual_execution": True,
+        }
     if command_type == "node.health":
         return {
             "node_type": node_type,
