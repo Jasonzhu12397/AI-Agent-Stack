@@ -51,6 +51,14 @@ For DHCP, copy and adapt `eph-iso/examples/network/10-uplink-dhcp.network` to `E
 
 The example profiles are not automatically installed into the ISO. A boot volume without a usable network profile may boot Kubernetes but cannot enroll the EPH Agent with the Cloud Control Plane.
 
+## Per-node network configuration
+
+The ISO mounts the separate `EPHBOOT` volume before systemd-networkd starts. Put site-specific networkd files in its `network/` directory. The bootstrap service stages regular `.network`, `.netdev`, and `.link` files into `/etc/systemd/network` before the network service starts. Filenames are restricted and each file is limited to 32 KiB.
+
+For DHCP, adapt `eph-iso/examples/network/10-uplink-dhcp.network` and copy it to `EPHBOOT/network/10-uplink.network`. For static addressing, adapt `eph-iso/examples/network/10-uplink-static.network`. Replace the example interface name and documentation-only IP addresses with values from the site network plan. Do not assume a fixed interface name or MAC address. Bond, VLAN, bridge, and link settings can be supplied as additional networkd `.netdev`, `.network`, and `.link` files.
+
+The example profiles are not automatically installed into the ISO. A boot volume without a usable network profile may boot Kubernetes but cannot enroll the EPH Agent with the Cloud Control Plane.
+
 ## Runtime layout
 
 - Debian Live root filesystem: booted with `toram`; no disk installation.
