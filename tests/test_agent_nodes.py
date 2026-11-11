@@ -651,6 +651,47 @@ def test_revoking_node_cancels_running_command_and_clears_lease(node_workspace):
 
 
 @pytest.mark.django_db
+def test_revoking_node_marks_running_mutating_command_outcome_unknown(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-mutating-revoke", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "node.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="revoke-running-mutating-command",
+    )
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert polled.data["command"]["id"] == created.data["id"]
+    AgentCommand.objects.filter(pk=created.data["id"]).update(
+        command_type="cluster.capi.pivot.execute",
+    )
+
+    revoked = client.post(f"/api/v1/agent-nodes/{node_id}/revoke/", {}, format="json")
+
+    command = AgentCommand.objects.get(pk=created.data["id"])
+    assert revoked.status_code == 200
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert command.error["retryable"] is False
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+
+
+@pytest.mark.django_db
 def test_agent_runtime_rejects_malformed_node_id(node_workspace):
     user, tenant, project, client = node_workspace
     response = APIClient().post(

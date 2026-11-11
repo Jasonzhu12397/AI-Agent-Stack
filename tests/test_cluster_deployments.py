@@ -238,6 +238,44 @@ def test_cluster_deployment_cancel_stops_queued_commands(cluster_delivery_worksp
     assert command.status == AgentCommand.Status.CANCELLED
 
 
+@pytest.mark.django_db
+def test_deployment_cancel_marks_running_mutating_command_outcome_unknown(
+    cluster_delivery_workspace,
+):
+    _, tenant, project, node, _, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node)
+    command = AgentCommand.objects.get(deployment_id=created.data["id"])
+    lease_token = uuid.uuid4()
+    AgentCommand.objects.filter(pk=command.pk).update(
+        command_type="cluster.capi.pivot.execute",
+        status=AgentCommand.Status.RUNNING,
+        lease_token=lease_token,
+        lease_expires_at=timezone.now() + datetime.timedelta(seconds=60),
+    )
+
+    cancelled = client.post(
+        f"/api/v1/cluster-deployments/{created.data['id']}/cancel/",
+        {},
+        format="json",
+    )
+
+    command.refresh_from_db()
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    assert cancelled.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.CANCELLED
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert command.error["retryable"] is False
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+    assert deployment.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert deployment.error["command_ids"] == [str(command.id)]
+
+
 
 @pytest.mark.django_db
 def test_target_postflight_rejects_dry_run_plan_even_if_prerequisites_are_present(

@@ -11,7 +11,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.audit import record_audit_event
-from core.agent_node_views import _tenant_and_project, _validate_payload
+from core.agent_node_views import (
+    _cancel_agent_commands,
+    _tenant_and_project,
+    _validate_payload,
+)
 from core.cluster_deployment_services import queue_deployment_command
 from core.models import (
     AgentCommand,
@@ -234,21 +238,28 @@ class ClusterDeploymentCancelView(APIView):
                 ClusterDeployment.Status.CANCELLED,
             }:
                 return Response({"detail": "Deployment is already terminal."}, status=409)
+            now = timezone.now()
             deployment.status = ClusterDeployment.Status.CANCELLED
-            deployment.finished_at = timezone.now()
-            deployment.save(update_fields=["status", "finished_at", "updated_at"])
-            AgentCommand.objects.filter(
-                deployment=deployment,
-                status__in=[
-                    AgentCommand.Status.QUEUED,
-                    AgentCommand.Status.WAITING_APPROVAL,
-                    AgentCommand.Status.RUNNING,
-                ],
-            ).update(
-                status=AgentCommand.Status.CANCELLED,
-                finished_at=timezone.now(),
-                lease_token=None,
-                lease_expires_at=None,
+            deployment.finished_at = now
+            unknown_outcomes = _cancel_agent_commands(
+                AgentCommand.objects.filter(
+                    deployment=deployment,
+                    status__in=[
+                        AgentCommand.Status.QUEUED,
+                        AgentCommand.Status.WAITING_APPROVAL,
+                        AgentCommand.Status.RUNNING,
+                    ],
+                ),
+                now,
+            )
+            if unknown_outcomes:
+                deployment.error = {
+                    "code": "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+                    "command_ids": unknown_outcomes,
+                    "retryable": False,
+                }
+            deployment.save(
+                update_fields=["status", "finished_at", "error", "updated_at"]
             )
         return Response(_deployment_data(deployment))
 

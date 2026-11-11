@@ -77,6 +77,39 @@ MUTATING_COMMANDS = {
     "cluster.capi.pivot.execute",
     "cluster.capi.worker.provision",
 }
+
+def _cancel_agent_commands(queryset, now):
+    unknown_outcomes = []
+    commands = queryset.select_for_update().order_by("id")
+    for command in commands:
+        if (
+            command.status == AgentCommand.Status.RUNNING
+            and command.command_type in MUTATING_COMMANDS
+        ):
+            command.status = AgentCommand.Status.FAILED
+            command.error = {
+                "code": "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+                "retryable": False,
+            }
+            unknown_outcomes.append(str(command.id))
+        else:
+            command.status = AgentCommand.Status.CANCELLED
+            command.error = None
+        command.finished_at = now
+        command.lease_token = None
+        command.lease_expires_at = None
+        command.save(
+            update_fields=[
+                "status",
+                "error",
+                "finished_at",
+                "lease_token",
+                "lease_expires_at",
+                "updated_at",
+            ]
+        )
+    return unknown_outcomes
+
 FORBIDDEN_PAYLOAD_KEYS = {
     "shell",
     "command",
@@ -1276,18 +1309,16 @@ class AgentNodeRevokeView(APIView):
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
-            AgentCommand.objects.filter(
-                node=node,
-                status__in=[
-                    AgentCommand.Status.QUEUED,
-                    AgentCommand.Status.WAITING_APPROVAL,
-                    AgentCommand.Status.RUNNING,
-                ],
-            ).update(
-                status=AgentCommand.Status.CANCELLED,
-                finished_at=timezone.now(),
-                lease_token=None,
-                lease_expires_at=None,
+            _cancel_agent_commands(
+                AgentCommand.objects.filter(
+                    node=node,
+                    status__in=[
+                        AgentCommand.Status.QUEUED,
+                        AgentCommand.Status.WAITING_APPROVAL,
+                        AgentCommand.Status.RUNNING,
+                    ],
+                ),
+                timezone.now(),
             )
         record_audit_event(
             request,
