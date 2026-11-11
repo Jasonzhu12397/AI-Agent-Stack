@@ -82,7 +82,7 @@ jobs:
       - name: Install Live ISO and QEMU build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y live-build xorriso squashfs-tools debootstrap debian-archive-keyring wget ca-certificates qemu-system-x86 dosfstools mtools curl
+          sudo apt-get install -y qemu-system-x86 dosfstools mtools curl
       - name: Build pinned EPH Live ISO
         id: build
         run: |
@@ -93,10 +93,19 @@ jobs:
             --output "$RUNNER_TEMP/k3s-sha256.txt"
           K3S_SHA256_AMD64="$(awk '$2 == "k3s" { print $1; exit }' "$RUNNER_TEMP/k3s-sha256.txt")"
           [[ "$K3S_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]]
-          sudo env K3S_VERSION="$K3S_VERSION" \
-            K3S_SHA256_AMD64="$K3S_SHA256_AMD64" \
-            OUTPUT_DIR="$RUNNER_TEMP/eph-iso-out" \
-            bash eph-iso/build.sh
+          mkdir -p "$RUNNER_TEMP/eph-iso-out"
+          docker run --rm --pull=always --privileged \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$RUNNER_TEMP/eph-iso-out:/output" \
+            -w /workspace \
+            -e K3S_VERSION="$K3S_VERSION" \
+            -e K3S_SHA256_AMD64="$K3S_SHA256_AMD64" \
+            -e OUTPUT_DIR=/output \
+            debian:bookworm bash -ec '
+              apt-get update
+              apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates debian-archive-keyring
+              bash eph-iso/build.sh
+            '
           ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
           test -n "$ISO_FILE"
           (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
