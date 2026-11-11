@@ -1,7 +1,5 @@
 import importlib.util
-import json
 import pathlib
-import re
 import uuid
 
 import pytest
@@ -76,3 +74,17 @@ def test_bootstrap_config_rejects_unsafe_values(change, expected):
 def test_bootstrap_does_not_accept_missing_fields():
     with pytest.raises(BOOTSTRAP.BootstrapError, match="BOOTSTRAP_CONFIG_FIELDS_MISSING"):
         BOOTSTRAP.validate_config({"node_id": str(uuid.uuid4())})
+
+
+def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
+    dropin = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
+    content = dropin.read_text(encoding="utf-8")
+    assert "Wants=k3s.service eph-bootstrap.service" in content
+
+
+def test_bootstrap_agent_manifest_is_bundled_into_iso():
+    script = (ROOT / "eph-iso/build.sh").read_text(encoding="utf-8")
+    assert "deploy/agents/namespace.yaml" in script
+    assert "deploy/agents/rbac.yaml" in script
+    assert "deploy/agents/eph-node-agent.yaml" in script
+    assert "usr/share/ai-agent-studio/eph-manifests" in script
