@@ -2076,7 +2076,7 @@ def execute_command(
     if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
         raise NodeAgentError("CAPABILITY_NOT_CONFIGURED")
     if command_type == "cluster.kubernetes.version.upgrade":
-        supported_versions = {"v1.33", "v1.35", "v1.36"}
+        supported_versions = {"v1.33", "v1.34", "v1.35", "v1.36"}
         if (
             node_type != "target_cluster"
             or set(payload)
