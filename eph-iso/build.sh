@@ -32,12 +32,14 @@ install -d "$BUILD_DIR/config/includes.chroot/usr/local/bin"
 install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests"
 install -d "$BUILD_DIR/config/includes.chroot/usr/local/sbin"
 cp "$ROOT_DIR/bootstrap.py" "$BUILD_DIR/config/includes.chroot/usr/local/lib/eph-bootstrap.py"
-cp "$REPO_ROOT/deploy/agents/namespace.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/namespace.yaml"
-cp "$REPO_ROOT/eph-rbac.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/rbac.yaml"
-cp "$REPO_ROOT/deploy/agents/eph-node-agent.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/eph-node-agent.yaml"
+manifest_dir="$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests"
+cp "$REPO_ROOT/deploy/agents/namespace.yaml" "$manifest_dir/namespace.yaml"
+cp "$ROOT_DIR/eph-rbac.yaml" "$manifest_dir/rbac.yaml"
+cp "$REPO_ROOT/deploy/agents/eph-node-agent.yaml" "$manifest_dir/eph-node-agent.yaml"
 
 wget -q -O "$BUILD_DIR/k3s" "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/k3s"
-printf '%s  %s\n' "$K3S_SHA256_AMD64" "$BUILD_DIR/k3s" | sha256sum -c - || fail "K3S_CHECKSUM_MISMATCH"
+printf '%s  %s\n' "$K3S_SHA256_AMD64" "$BUILD_DIR/k3s" |
+    sha256sum -c - || fail "K3S_CHECKSUM_MISMATCH"
 install -m 0755 "$BUILD_DIR/k3s" "$BUILD_DIR/config/includes.chroot/usr/local/bin/k3s"
 
 cd "$BUILD_DIR"
