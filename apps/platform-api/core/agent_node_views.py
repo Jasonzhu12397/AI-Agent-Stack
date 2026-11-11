@@ -2021,6 +2021,11 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                 verified_fingerprint
                 and locked.client_certificate_fingerprint
                 and hmac.compare_digest(verified_fingerprint, locked.client_certificate_fingerprint)
+                and locked.last_activated_client_certificate_fingerprint
+                and hmac.compare_digest(
+                    verified_fingerprint,
+                    locked.last_activated_client_certificate_fingerprint,
+                )
             ):
                 return Response({"node_id": str(locked.id), "activated": True, "idempotent": True}, status=200)
             pending_fingerprint = locked.pending_client_certificate_fingerprint
@@ -2033,12 +2038,14 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
             ):
                 return Response({"detail": "Pending certificate is missing, expired, or not presented."}, status=409)
             locked.client_certificate_fingerprint = pending_fingerprint
+            locked.last_activated_client_certificate_fingerprint = pending_fingerprint
             locked.client_certificate_bound_at = pending_at
             locked.client_certificate_revoked_at = None
             locked.pending_client_certificate_fingerprint = ""
             locked.pending_client_certificate_bound_at = None
             locked.save(update_fields=[
                 "client_certificate_fingerprint",
+                "last_activated_client_certificate_fingerprint",
                 "client_certificate_bound_at",
                 "client_certificate_revoked_at",
                 "pending_client_certificate_fingerprint",
