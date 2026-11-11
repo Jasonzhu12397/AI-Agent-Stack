@@ -1597,7 +1597,7 @@ class AgentNodeCommandListCreateView(APIView):
                 set(payload) != {"cluster_name", "current_version", "target_version", "execution_mode"}
                 or payload.get("cluster_name") != node.cluster_name
                 or not isinstance(payload.get("current_version"), str)
-                or not re.fullmatch(r"v1\\.\\d+(?:\\.\\d+)?", payload["current_version"])
+                or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
                 or payload.get("target_version") not in SUPPORTED_KUBERNETES_MINOR_VERSIONS
                 or payload.get("execution_mode") != "simulation"
             ):
