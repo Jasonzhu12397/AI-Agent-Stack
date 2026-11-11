@@ -32,11 +32,8 @@ def test_network_profile_installer_rejects_oversized_files(tmp_path):
     media.mkdir(parents=True)
     (media / "10-large.network").write_text("x" * 32769, encoding="utf-8")
 
-    monkeypatch.setattr(NETWORK_CONFIG, "MEDIA_ROOT", media)
-    monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
-
     try:
-        NETWORK_CONFIG["install_network_configuration"]()
+        NETWORK_CONFIG["install_network_configuration"](media, target)
     except ValueError as error:
         assert "EPH_NETWORK_CONFIG_INVALID" in str(error)
     else:
