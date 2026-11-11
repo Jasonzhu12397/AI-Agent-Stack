@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 
-MEDIA_ROOT = Path("/run/eph-bootstrap-media")
+MEDIA_ROOT = Path("/mnt/eph-bootstrap")
 MANIFEST_ROOT = Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 
