@@ -35,6 +35,19 @@ Configure the existing Vault workload identity settings:
   scope the API workload identity to the AgentNode tenant and project.
 - `BMC_VAULT_CA_BUNDLE`: optional trusted CA bundle for Vault TLS.
 
+EPH PKI trust configuration:
+
+- `EPH_PKI_TRUSTED_CA_BUNDLE`: required filesystem path to an independently
+  provisioned PEM bundle containing trusted root CA certificates for the EPH
+  issuing hierarchy. Never populate this file from the Vault response.
+  Enrollment fails closed if the bundle is missing, unreadable, malformed, or
+  does not validate the returned issuing chain.
+
+The API validates CA basic constraints, `keyCertSign`, certificate validity,
+issuer ordering, every intermediate signature, and the final chain against
+this independent trust bundle. The validated issuing chain and root are
+returned to the EPH node.
+
 EPH PKI settings:
 
 - `EPH_PKI_MOUNT`: PKI secrets-engine mount, default `pki`.
