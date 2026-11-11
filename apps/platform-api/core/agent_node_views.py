@@ -234,6 +234,48 @@ def _command_data(command):
     }
 
 
+def _validate_kubernetes_upgrade_result(command, result):
+    if command.command_type != "cluster.kubernetes.version.upgrade":
+        return None
+    if not isinstance(result, dict):
+        return "Kubernetes upgrade result must be an object."
+    expected_identity = {
+        "cluster_name": command.payload.get("cluster_name"),
+        "current_version": command.payload.get("current_version"),
+        "target_version": command.payload.get("target_version"),
+    }
+    if any(result.get(key) != value for key, value in expected_identity.items()):
+        return "Kubernetes upgrade result does not match the approved command."
+    if (
+        result.get("approval_required") is not True
+        or result.get("upgrade_simulated") is not True
+        or result.get("upgrade_performed") is not False
+        or result.get("side_effects") is not False
+        or result.get("requires_manual_execution") is not True
+        or result.get("resume_supported") is not False
+    ):
+        return "Kubernetes upgrade result violates the simulation-only safety contract."
+    expected_steps = [
+        ("preflight", "not_run"),
+        ("control_plane", "not_started"),
+        ("workers", "not_started"),
+        ("postflight", "not_started"),
+    ]
+    steps = result.get("upgrade_steps")
+    if not isinstance(steps, list) or len(steps) != len(expected_steps):
+        return "Kubernetes upgrade plan must contain the four ordered, unexecuted stages."
+    for index, (name, status_value) in enumerate(expected_steps):
+        step = steps[index]
+        if (
+            not isinstance(step, dict)
+            or step.get("sequence") != index + 1
+            or step.get("name") != name
+            or step.get("status") != status_value
+        ):
+            return "Kubernetes upgrade plan stages must remain ordered and unexecuted."
+    return None
+
+
 def _payload_hash(command_type, payload):
     encoded = json.dumps(
         {"command_type": command_type, "payload": payload},
@@ -2109,6 +2151,9 @@ class AgentRuntimeResultView(APIView):
                      "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
                     status=409,
                 )
+            result_error = _validate_kubernetes_upgrade_result(command, result)
+            if outcome == "succeeded" and result_error:
+                return Response({"detail": result_error}, status=409)
             command.status = (
                 AgentCommand.Status.SUCCEEDED
                 if outcome == "succeeded"
