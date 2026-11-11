@@ -2083,7 +2083,7 @@ def execute_command(
             or not isinstance(payload.get("cluster_name"), str)
             or not payload["cluster_name"]
             or not isinstance(payload.get("current_version"), str)
-            or not re.fullmatch(r"v1\\.\\d+(?:\\.\\d+)?", payload["current_version"])
+            or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
             or payload.get("target_version") not in supported_versions
             or payload.get("execution_mode") != "simulation"
         ):
