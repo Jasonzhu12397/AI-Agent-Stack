@@ -1826,14 +1826,14 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 or node.revoked_at is not None
             ):
                 return Response({"detail": "Invalid or revoked EPH node identity."}, status=401)
+            supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(supplied_hash, node.credential_hash):
+                return Response({"detail": "Invalid or revoked node credential."}, status=401)
             if node.client_certificate_fingerprint and node.client_certificate_revoked_at is None:
                 return Response(
                     {"detail": "An active client certificate is already bound to this node."},
                     status=409,
                 )
-            supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-            if not hmac.compare_digest(supplied_hash, node.credential_hash):
-                return Response({"detail": "Invalid or revoked node credential."}, status=401)
 
             try:
                 issued = sign_eph_csr(
