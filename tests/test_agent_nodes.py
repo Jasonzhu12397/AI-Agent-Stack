@@ -72,7 +72,11 @@ def test_target_agent_rejects_unsupported_kubernetes_version(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
-        {"name": "version-target-invalid", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        {
+            "name": "version-target-invalid",
+            "node_type": "target_cluster",
+            "cluster_name": "edge-lab",
+        },
         format="json",
     )
     response = client.post(
