@@ -7,6 +7,7 @@ K3S_VERSION="${K3S_VERSION:-}"
 K3S_SHA256_AMD64="${K3S_SHA256_AMD64:-}"
 KUBERNETES_VERSION=""
 KUBERNETES_MINOR=""
+K3S_VERSION_URL=""
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
 BUILD_DIR="$ROOT_DIR/.build"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
@@ -21,6 +22,7 @@ fail() {
 [[ "$K3S_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "K3S_SHA256_AMD64_INVALID"
 KUBERNETES_VERSION="${K3S_VERSION%%+*}"
 KUBERNETES_MINOR="${KUBERNETES_VERSION%.*}"
+K3S_VERSION_URL="${K3S_VERSION/+/%2B}"
 case "$KUBERNETES_MINOR" in
     v1.33|v1.34|v1.35|v1.36) ;;
     *) fail "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED:$KUBERNETES_MINOR" ;;
@@ -46,7 +48,7 @@ cp "$REPO_ROOT/deploy/agents/namespace.yaml" "$manifest_dir/namespace.yaml"
 cp "$ROOT_DIR/eph-rbac.yaml" "$manifest_dir/rbac.yaml"
 cp "$REPO_ROOT/deploy/agents/eph-node-agent.yaml" "$manifest_dir/eph-node-agent.yaml"
 
-wget -q -O "$BUILD_DIR/k3s" "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/k3s"
+wget -q -O "$BUILD_DIR/k3s" "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION_URL/k3s"
 printf '%s  %s\n' "$K3S_SHA256_AMD64" "$BUILD_DIR/k3s" |
     sha256sum -c - || fail "K3S_CHECKSUM_MISMATCH"
 install -m 0755 "$BUILD_DIR/k3s" "$BUILD_DIR/config/includes.chroot/usr/local/bin/k3s"
