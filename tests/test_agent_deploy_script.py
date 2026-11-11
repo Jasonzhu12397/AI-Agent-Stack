@@ -27,7 +27,6 @@ def test_dual_agent_deploy_script_requires_pivot_and_ironic_secrets():
     assert "target-cluster-agent-credentials control-url node-id token" in script
 
 
-
 def test_both_agent_deployments_require_mtls_and_mount_node_credentials():
     for filename in ("eph-node-agent.yaml", "target-cluster-agent.yaml"):
         manifest = (ROOT / "deploy/agents" / filename).read_text(encoding="utf-8")
@@ -53,12 +52,19 @@ def test_node_agents_are_kubernetes_workloads_and_not_compose_services():
 
     assert "eph-node-agent:" not in compose
     assert "target-cluster-agent:" not in compose
-    assert "profiles: [\"node-agents\"]" not in compose
+    assert 'profiles: ["node-agents"]' not in compose
     assert "kind: Deployment" in eph
     assert "replicas: 1" in eph
     assert "kind: Deployment" in target
     assert "serviceAccountName: eph-node-agent" in eph
     assert "AGENT_NODE_TYPE" in eph and "eph_node" in eph
     assert "EPH Agent runs inside a temporary single-node Kubernetes cluster" in docs
-    assert "always a Kubernetes Pod inside the temporary single-node Kubernetes cluster" in root_readme
-    assert "docker compose" not in root_readme[root_readme.index("### Deploy the EPH and Target Agents as Kubernetes Pods"):root_readme.index("## Local checks")]
+    assert (
+        "always a Kubernetes Pod inside the temporary single-node Kubernetes cluster"
+        in root_readme
+    )
+    agent_docs_start = root_readme.index(
+        "### Deploy the EPH and Target Agents as Kubernetes Pods"
+    )
+    agent_docs_end = root_readme.index("## Local checks")
+    assert "docker compose" not in root_readme[agent_docs_start:agent_docs_end]
