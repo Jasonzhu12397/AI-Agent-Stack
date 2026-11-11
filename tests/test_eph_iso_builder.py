@@ -408,3 +408,47 @@ def test_bootstrap_fails_when_agent_deployment_rollout_fails(
 
     with pytest.raises(subprocess.CalledProcessError):
         BOOTSTRAP["bootstrap"]()
+
+
+def test_bootstrap_rejects_partial_capi_pivot_kubeconfig_pair(
+    monkeypatch,
+    tmp_path,
+):
+    media_root = tmp_path / "media"
+    events = _prepare_bootstrap_runtime(monkeypatch, tmp_path)
+    (media_root / "capi").mkdir()
+    (media_root / "capi" / "source.kubeconfig").write_text(
+        "source kubeconfig",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        BOOTSTRAP["BootstrapError"],
+        match="CAPI_PIVOT_KUBECONFIG_SET_INCOMPLETE",
+    ):
+        BOOTSTRAP["bootstrap"]()
+
+    assert not any(
+        event[0] == "secret" and event[1] == "capi-pivot-kubeconfigs"
+        for event in events
+    )
+
+
+def test_bootstrap_creates_capi_pivot_secret_only_when_both_kubeconfigs_exist(
+    monkeypatch,
+    tmp_path,
+):
+    media_root = tmp_path / "media"
+    events = _prepare_bootstrap_runtime(monkeypatch, tmp_path)
+    (media_root / "capi").mkdir()
+    for name in ("source.kubeconfig", "target.kubeconfig"):
+        (media_root / "capi" / name).write_text(name, encoding="utf-8")
+
+    BOOTSTRAP["bootstrap"]()
+
+    assert (
+        "secret",
+        "capi-pivot-kubeconfigs",
+        "ai-agent-system",
+        ["source.kubeconfig", "target.kubeconfig"],
+    ) in events
