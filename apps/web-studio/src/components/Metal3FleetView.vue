@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
+  createAgentCommand,
   getAgentNodes,
   getFleetMachines,
   getProjectAgentCommands,
@@ -42,6 +43,10 @@ const commandCount = ref(0);
 const commandOffset = ref(0);
 const commandStatus = ref("");
 const commandPageSize = 100;
+const supportedKubernetesVersions = ["v1.33", "v1.35", "v1.36"] as const;
+const selectedKubernetesVersions = ref<Record<string, string>>({});
+const versionApplyBusy = ref<string | null>(null);
+const versionApplyMessages = ref<Record<string, string>>({});
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const loading = ref(false);
@@ -195,6 +200,54 @@ function deploymentOwnershipLabel(deployment: ClusterDeployment): string {
   if (dualAgent.target_agent_owns_cluster === true) return "Target Agent owns cluster";
   if (dualAgent.pivot_simulated === true) return "Simulation only · ownership unchanged";
   return "Ownership not transferred";
+}
+
+function defaultKubernetesVersion(deployment: ClusterDeployment): string {
+  const currentMinor = deployment.kubernetes_version.match(/^v1\.\d+/)?.[0];
+  return currentMinor && supportedKubernetesVersions.includes(currentMinor as (typeof supportedKubernetesVersions)[number])
+    ? currentMinor
+    : supportedKubernetesVersions[0];
+}
+
+function selectedKubernetesVersion(deployment: ClusterDeployment): string {
+  return selectedKubernetesVersions.value[deployment.id] ?? defaultKubernetesVersion(deployment);
+}
+
+function setSelectedKubernetesVersion(deploymentId: string, version: string): void {
+  selectedKubernetesVersions.value[deploymentId] = version;
+}
+
+function targetAgentOnline(deployment: ClusterDeployment): boolean {
+  return nodes.value.some((node) => node.id === deployment.target_node_id && node.node_type === "target_cluster" && node.status === "online");
+}
+
+async function applyKubernetesVersion(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    versionApplyMessages.value[deployment.id] = "A Target Agent must be assigned before requesting a version change.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    versionApplyMessages.value[deployment.id] = "The Target Agent must be online before requesting a version change.";
+    return;
+  }
+  const targetVersion = selectedKubernetesVersion(deployment);
+  versionApplyBusy.value = deployment.id;
+  versionApplyMessages.value[deployment.id] = "";
+  try {
+    const command = await createAgentCommand(targetAgent.id, "cluster.kubernetes.version.upgrade", {
+      cluster_name: deployment.cluster_name,
+      current_version: deployment.kubernetes_version,
+      target_version: targetVersion,
+      execution_mode: "simulation",
+    });
+    versionApplyMessages.value[deployment.id] = "Version " + targetVersion + " request created (" + command.status + "); independent approval is required.";
+    await refreshData();
+  } catch (cause) {
+    versionApplyMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request Kubernetes version change.";
+  } finally {
+    versionApplyBusy.value = null;
+  }
 }
 
 function identityStatusType(status: string): "success" | "warning" | "danger" | "info" {
@@ -398,7 +451,30 @@ onUnmounted(() => {
         <div class="fleet-panel-heading"><h3>Target Cluster Delivery</h3><span>{{ deployments.length }} WORKFLOWS</span></div>
         <el-table :data="deployments" size="small" class="task-table">
           <el-table-column prop="cluster_name" label="Cluster" min-width="150" />
-          <el-table-column prop="kubernetes_version" label="Kubernetes" min-width="120" />
+          <el-table-column label="Kubernetes Version" min-width="310">
+            <template #default="scope">
+              <div class="fleet-version-control">
+                <el-select
+                  :model-value="selectedKubernetesVersion(scope.row)"
+                  size="small"
+                  style="width: 112px"
+                  @change="(value: string) => setSelectedKubernetesVersion(scope.row.id, value)"
+                >
+                  <el-option v-for="version in supportedKubernetesVersions" :key="version" :label="version" :value="version" />
+                </el-select>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="versionApplyBusy === scope.row.id"
+                  :disabled="!targetAgentOnline(scope.row) || selectedKubernetesVersion(scope.row) === scope.row.kubernetes_version.split('.').slice(0, 2).join('.')"
+                  @click="applyKubernetesVersion(scope.row)"
+                >Apply</el-button>
+              </div>
+              <small class="fleet-version-current">Current: {{ scope.row.kubernetes_version }}</small>
+              <small v-if="versionApplyMessages[scope.row.id]" class="fleet-version-message">{{ versionApplyMessages[scope.row.id] }}</small>
+            </template>
+          </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
             <template #default="scope"><el-tag :type="statusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag></template>
           </el-table-column>
@@ -423,6 +499,7 @@ onUnmounted(() => {
             <template #default="scope"><code>{{ scope.row.plan_hash.slice(0, 14) }}</code></template>
           </el-table-column>
         </el-table>
+        <p class="fleet-footnote">Supported selections: v1.33, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
       </section>
     </template>
 
@@ -491,6 +568,8 @@ onUnmounted(() => {
 .fleet-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .fleet-panel-heading h3 { margin: 0; color: #e4effa; font-size: 14px; }
 .fleet-panel-heading span { color: #6f8ba5; font-size: 9px; letter-spacing: .12em; }
+.fleet-version-control { display: flex; align-items: center; gap: 7px; }
+.fleet-version-current, .fleet-version-message { display: block; margin-top: 4px; color: #7791aa; font-size: 10px; line-height: 1.4; }
 .fleet-node-row, .fleet-deployment-row { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-top: 1px solid rgba(119, 151, 180, .12); }
 .fleet-node-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(52, 161, 188, .13); color: #55c7d8; }
 .fleet-node-glyph { font-size: 18px; line-height: 1; }
