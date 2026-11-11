@@ -7,6 +7,12 @@ from django.utils import timezone
 from core.models import EPHSeedArtifact
 
 
+def _batches(values, batch_size):
+    iterator = iter(values)
+    for first in iterator:
+        yield [first, *islice(iterator, batch_size - 1)]
+
+
 class Command(BaseCommand):
     help = "Erase encrypted payloads from expired, undownloaded EPH seed artifacts."
 
@@ -41,12 +47,11 @@ class Command(BaseCommand):
             )
             return
 
-        artifact_ids = expired.values_list("id", flat=True)
+        artifact_ids = expired.values_list("id", flat=True).iterator(
+            chunk_size=batch_size
+        )
         erased = 0
-        for offset in range(0, total, batch_size):
-            batch_ids = list(artifact_ids[offset : offset + batch_size])
-            if not batch_ids:
-                continue
+        for batch_ids in _batches(artifact_ids, batch_size):
             with transaction.atomic():
                 erased += EPHSeedArtifact.objects.filter(
                     id__in=batch_ids,
