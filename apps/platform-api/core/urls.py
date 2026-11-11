@@ -16,6 +16,7 @@ from core.agent_node_views import (
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
+    AgentRuntimeEPHCertificateExchangeView,
     AgentRuntimeInventoryReportView,
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
@@ -232,6 +233,11 @@ urlpatterns = [
         "api/v1/agent-runtime/inventory/",
         AgentRuntimeInventoryReportView.as_view(),
         name="agent-runtime-inventory",
+    ),
+    path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/",
+        AgentRuntimeEPHCertificateExchangeView.as_view(),
+        name="agent-runtime-eph-certificate-exchange",
     ),
     path(
         "api/v1/agent-runtime/heartbeat/",
