@@ -1853,8 +1853,9 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                     status=400,
                 )
 
+            agent_token = secrets.token_urlsafe(48)
             node.credential_hash = hashlib.sha256(
-                secrets.token_urlsafe(48).encode("utf-8")
+                agent_token.encode("utf-8")
             ).hexdigest()
             node.client_certificate_fingerprint = issued["fingerprint_sha256"]
             node.client_certificate_bound_at = timezone.now()
@@ -1889,6 +1890,7 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 "ca_chain": issued["ca_chain"],
                 "fingerprint_sha256": issued["fingerprint_sha256"],
                 "token_consumed": True,
+                "agent_token": agent_token,
                 "private_key_returned": False,
             },
             status=200,
