@@ -95,7 +95,7 @@ def render_nocloud_seed(config):
     if normalized_node_id != node_id.lower():
         raise EPHSeedError("EPH_SEED_NODE_ID_INVALID")
 
-    token = _require_string(config, "enrollment_token", minimum=32, maximum=512)
+    token = _require_string(config, "enrollment_token", minimum=1, maximum=512)
     if not TOKEN_PATTERN.fullmatch(token):
         raise EPHSeedError("EPH_SEED_ENROLLMENT_TOKEN_INVALID")
 
