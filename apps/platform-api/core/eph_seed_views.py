@@ -4,7 +4,6 @@ import hmac
 import io
 import json
 import secrets
-import uuid
 import zipfile
 from datetime import timedelta
 
@@ -282,7 +281,7 @@ class EPHSeedArtifactDownloadView(APIView):
             content_type="application/zip",
         )
         response["Content-Disposition"] = (
-            'attachment; filename="eph-seed-{}.zip"'.format(artifact.agent_node_id)
+            f'attachment; filename="eph-seed-{artifact.agent_node_id}.zip"'
         )
         response["Cache-Control"] = "no-store, max-age=0"
         response["Pragma"] = "no-cache"
