@@ -31,6 +31,7 @@ Runs as a Pod in the target Kubernetes cluster after its API and control plane a
 - Verify expected Cluster identity and UID against an independently executed test fixture or controlled integration cluster.
 - Report Machine inventory and Ready counts to the control plane.
 - When a MachineDeployment name is supplied to `cluster.postflight`, verify its UID, generation convergence, desired/updated/ready/available replica counts and unavailable replicas before reporting worker inventory complete.
+- The same postflight path correlates each CAPI worker Machine's `infrastructureRef` to its Metal3Machine UID and BareMetalHost `consumerRef`, requiring the host to be online and provisioned without reported errors before declaring the worker inventory complete. Set `baremetal_host_namespace` to the namespace containing those BareMetalHost resources.
 - Persist and restore deployment checkpoints across agent restarts.
 
 The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run target adoption verification commands.
