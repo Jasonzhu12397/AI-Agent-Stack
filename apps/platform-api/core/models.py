@@ -434,6 +434,7 @@ class AgentNode(models.Model):
     client_certificate_revoked_at = models.DateTimeField(null=True, blank=True)
     pending_client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
     pending_client_certificate_bound_at = models.DateTimeField(null=True, blank=True)
+    last_activated_client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.OFFLINE)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_seen_ip = models.GenericIPAddressField(null=True, blank=True)
