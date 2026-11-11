@@ -22,7 +22,10 @@ from typing import Any
 import yaml
 
 from .capabilities import ROLE_CAPABILITIES
-from .certificate_rotation import CertificateRotationError, CertificateRotationManager
+from .certificate_rotation import (
+    CertificateRotationError,
+    CertificateRotationManager,
+)
 from .capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
