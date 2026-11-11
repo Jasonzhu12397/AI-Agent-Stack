@@ -63,6 +63,8 @@ def validate_eph_csr(csr_pem, expected_common_name=None):
             )
         ):
             raise EPHCertificateError("EPH_CERTIFICATE_CSR_SUBJECT_INVALID")
+    except EPHCertificateError:
+        raise
     except (ValueError, UnicodeEncodeError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_INVALID:csr") from None
     return csr_pem.strip() + "\n"
