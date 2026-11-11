@@ -8,7 +8,7 @@ import httpx
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from django.conf import settings
 
 from core.bmc_credentials import _vault_url, resolve_vault_jwt_token
@@ -97,6 +97,43 @@ def _validate_ca_chain(ca_chain, issuing_ca):
         _decode_pem(certificate, "CERTIFICATE", "ca_chain", 131072)
         normalized.append(certificate.strip() + "\n")
     return "".join(normalized)
+
+
+
+def _validate_issued_client_certificate(certificate, expected_common_name):
+    from datetime import datetime, timezone
+
+    try:
+        common_names = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        basic_constraints = certificate.extensions.get_extension_for_class(
+            x509.BasicConstraints
+        ).value
+        key_usage = certificate.extensions.get_extension_for_class(
+            x509.KeyUsage
+        ).value
+        extended_key_usage = certificate.extensions.get_extension_for_class(
+            x509.ExtendedKeyUsage
+        ).value
+    except x509.ExtensionNotFound:
+        raise EPHCertificateError(
+            "EPH_CERTIFICATE_SIGNER_CERTIFICATE_PROFILE_INVALID"
+        ) from None
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if (
+        len(common_names) != 1
+        or common_names[0].value != expected_common_name
+        or basic_constraints.ca
+        or not key_usage.digital_signature
+        or ExtendedKeyUsageOID.CLIENT_AUTH not in extended_key_usage
+    ):
+        raise EPHCertificateError(
+            "EPH_CERTIFICATE_SIGNER_CERTIFICATE_PROFILE_INVALID"
+        )
+    if certificate.not_valid_before > now or certificate.not_valid_after <= now:
+        raise EPHCertificateError(
+            "EPH_CERTIFICATE_SIGNER_CERTIFICATE_VALIDITY_INVALID"
+        )
 
 
 def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
@@ -193,15 +230,9 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        issued_common_names = issued_certificate.subject.get_attributes_for_oid(
-            NameOID.COMMON_NAME
-        )
-        if (
-            csr_public_key != issued_public_key
-            or len(issued_common_names) != 1
-            or issued_common_names[0].value != common_name
-        ):
+        if csr_public_key != issued_public_key:
             raise EPHCertificateError("EPH_CERTIFICATE_SIGNER_CERTIFICATE_MISMATCH")
+        _validate_issued_client_certificate(issued_certificate, common_name)
     except (ValueError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_SIGNER_CERTIFICATE_INVALID") from None
     chain_pem = _validate_ca_chain(ca_chain, issuing_ca)
