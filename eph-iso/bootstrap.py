@@ -1,15 +1,15 @@
 import json
 import os
+import pathlib
 import re
 import shutil
 import subprocess
 import tempfile
-import urllib.parse
 import uuid
-from pathlib import Path
+import urllib.parse
 
 
-MEDIA_ROOT = Path("/mnt/eph-bootstrap")
+MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap")
 MANIFEST_ROOT = Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 
@@ -26,7 +26,7 @@ def validate_config(config):
         raise BootstrapError("BOOTSTRAP_CONFIG_FIELDS_MISSING")
     control_url = config["control_url"]
     if not isinstance(control_url, str):
-        raise BootstrapError("CONTROL_URL_INVALID")
+        raise BootstrapError("CONTROL_URL_INVALID") from None
     try:
         parsed = urllib.parse.urlsplit(control_url)
         parsed_port = parsed.port
@@ -46,7 +46,7 @@ def validate_config(config):
     try:
         uuid.UUID(config["node_id"])
     except (ValueError, TypeError, AttributeError):
-        raise BootstrapError("NODE_ID_INVALID")
+        raise BootstrapError("NODE_ID_INVALID") from None
     token = config["enrollment_token"]
     if not isinstance(token, str) or not 32 <= len(token) <= 512:
         raise BootstrapError("ENROLLMENT_TOKEN_INVALID")
@@ -64,8 +64,7 @@ def _run(arguments, input_text=None):
         input=input_text,
         text=True,
         check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -74,7 +73,7 @@ def _copy_secret_file(source, destination):
     try:
         resolved_path = source_path.resolve(strict=True)
     except FileNotFoundError:
-        raise BootstrapError("BOOTSTRAP_SECRET_FILE_MISSING:" + source)
+        raise BootstrapError("BOOTSTRAP_SECRET_FILE_MISSING:" + source) from None
     if (
         source_path.is_symlink()
         or not resolved_path.is_relative_to(MEDIA_ROOT.resolve())
@@ -96,7 +95,7 @@ def _create_secret(name, namespace, files):
         command.append("--from-file=" + key + "=" + str(path))
     command.extend(["--dry-run=client", "-o", "yaml"])
     rendered = subprocess.run(
-        command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        command, check=True, text=True, capture_output=True
     ).stdout
     _run([
         "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
