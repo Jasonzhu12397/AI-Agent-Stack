@@ -17,6 +17,8 @@ from core.agent_node_views import (
     AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
     AgentRuntimeEPHCertificateExchangeView,
+    AgentRuntimeEPHCertificateRenewalView,
+    AgentRuntimeEPHCertificateActivationView,
     AgentRuntimeInventoryReportView,
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
