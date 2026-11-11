@@ -25,8 +25,6 @@ def valid_config():
             },
         },
         "ca_certificate": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
-        "client_certificate": "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----",
-        "client_private_key": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----",
     }
 
 
@@ -41,7 +39,9 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
     assert metadata["instance-id"].startswith("eph-node-")
     assert metadata["local-hostname"] == "eph-node-01"
     assert network["version"] == 2
-    assert len(user_data["write_files"]) == 4
+    assert len(user_data["write_files"]) == 2
+    assert not any("tls.key" in item["path"] for item in user_data["write_files"])
+    assert not any("tls.crt" in item["path"] for item in user_data["write_files"])
 
 
 def test_seed_secrets_are_written_with_root_only_permissions():
@@ -73,10 +73,6 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         (
             {"ca_certificate": "not-a-certificate"},
             "EPH_SEED_CREDENTIAL_INVALID:ca_certificate",
-        ),
-        (
-            {"client_private_key": "-----BEGIN PRIVATE KEY-----"},
-            "EPH_SEED_CREDENTIAL_INVALID:client_private_key",
         ),
     ],
 )
