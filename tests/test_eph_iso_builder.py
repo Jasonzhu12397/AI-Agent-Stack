@@ -250,6 +250,7 @@ def test_bootstrap_rejects_non_object_or_incomplete_certificate_response(respons
         )
 
 
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -263,8 +264,9 @@ def test_bootstrap_rejects_non_object_or_incomplete_certificate_response(respons
     ],
 )
 def test_bootstrap_rejects_untrusted_certificate_exchange_fields(change):
+    node_id = str(uuid.uuid4())
     response = {
-        "node_id": str(uuid.uuid4()),
+        "node_id": node_id,
         "client_certificate": (
             "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n"
         ),
@@ -280,7 +282,4 @@ def test_bootstrap_rejects_untrusted_certificate_exchange_fields(change):
         BOOTSTRAP["BootstrapError"],
         match="CLIENT_CERTIFICATE_RESPONSE_INVALID",
     ):
-        BOOTSTRAP["_validate_certificate_exchange_response"](
-            response,
-            str(uuid.uuid4()) if "node_id" not in change else str(uuid.uuid4()),
-        )
+        BOOTSTRAP["_validate_certificate_exchange_response"](response, node_id)
