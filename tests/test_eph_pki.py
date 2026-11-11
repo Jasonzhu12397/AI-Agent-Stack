@@ -164,6 +164,20 @@ def test_vault_ca_chain_rejects_invalid_trust_bundle(tmp_path):
         )
 
 
+def test_vault_ca_chain_rejects_trailing_trust_bundle_data(tmp_path):
+    _, root = _make_root_ca()
+    trust_path = tmp_path / "trusted-root.pem"
+    trust_path.write_bytes(
+        root.public_bytes(serialization.Encoding.PEM) + b"unexpected"
+    )
+    with pytest.raises(EPHCertificateError, match="TRUST_ANCHOR_INVALID"):
+        _validate_ca_chain(
+            [],
+            root.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+            str(trust_path),
+        )
+
+
 def test_vault_ca_chain_rejects_untrusted_issuer(tmp_path):
     _, root = _make_root_ca()
     other_key = ec.generate_private_key(ec.SECP256R1())
