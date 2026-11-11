@@ -99,13 +99,26 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
     if not values or len(values) > 8:
         raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
 
+    if not all(isinstance(value, str) for value in values):
+        raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
+
     try:
         trust_pem = Path(trusted_ca_bundle).read_text(encoding="ascii")
+        if len(trust_pem) > 1048576:
+            raise ValueError("Trust bundle exceeds size limit.")
         trust_blocks = re.findall(
             r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
             trust_pem,
             re.DOTALL,
         )
+        residue = re.sub(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            "",
+            trust_pem,
+            flags=re.DOTALL,
+        )
+        if residue.strip() or not trust_blocks:
+            raise ValueError("Trust bundle contains invalid data.")
         trust_roots = [
             x509.load_pem_x509_certificate(block.encode("ascii"))
             for block in trust_blocks
@@ -119,9 +132,6 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
     except (OSError, UnicodeError, ValueError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_INVALID") from None
 
-    if not trust_roots:
-        raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_INVALID")
-
     now = datetime.now(UTC).replace(tzinfo=None)
     for certificate in [*chain_certificates, *trust_roots]:
         try:
@@ -131,11 +141,21 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
             usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
         except x509.ExtensionNotFound:
             raise EPHCertificateError("EPH_CERTIFICATE_CA_PROFILE_INVALID") from None
+        chain_index = (
+            chain_certificates.index(certificate)
+            if certificate in chain_certificates
+            else None
+        )
         if (
             not constraints.ca
             or not usage.key_cert_sign
             or certificate.not_valid_before > now
             or certificate.not_valid_after <= now
+            or (
+                chain_index is not None
+                and constraints.path_length is not None
+                and constraints.path_length < chain_index
+            )
         ):
             raise EPHCertificateError("EPH_CERTIFICATE_CA_PROFILE_INVALID")
 
