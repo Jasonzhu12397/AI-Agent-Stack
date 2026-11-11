@@ -102,3 +102,28 @@ has booted and exchanged its one-time enrollment credential.
 Attach the resulting ISO as a separate virtual CD-ROM/USB device while booting
 the generic EPH Live ISO. Do not bake per-node tokens, certificates, or network
 configuration into the generic Live ISO.
+
+
+## Expired seed payload cleanup
+
+Expired, undownloaded seed artifacts are no longer downloadable immediately when
+their expiry time passes. To erase their encrypted payloads while retaining the
+audit/lifecycle metadata, run the Django management command from the repository
+root:
+
+\`\`\`bash
+python manage.py cleanup_expired_eph_seed_artifacts --dry-run
+python manage.py cleanup_expired_eph_seed_artifacts --batch-size 500
+\`\`\`
+
+The command clears only \`encrypted_payload\` for artifacts whose expiry has
+passed and which have not been downloaded or explicitly revoked. It retains the
+artifact row, node/user references, expiry timestamp, download-token hash, and
+creation timestamp for audit and troubleshooting. Downloaded and unexpired
+artifacts are not modified. A batch size from 1 to 10000 is accepted; the
+default is 500. The dry-run reports the number of payloads that would be erased.
+
+Run this command from a scheduled platform maintenance job (for example, once
+daily). The job must use the same database and application settings as the
+Platform API. Do not place the Fernet key or enrollment/download tokens in
+the scheduler command line or logs.
