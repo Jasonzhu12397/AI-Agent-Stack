@@ -15,13 +15,3 @@ write_files:
     permissions: "0600"
     content: |
       REPLACE_WITH_CA_CERTIFICATE
-  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.crt
-    owner: root:root
-    permissions: "0600"
-    content: |
-      REPLACE_WITH_CLIENT_CERTIFICATE
-  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.key
-    owner: root:root
-    permissions: "0600"
-    content: |
-      REPLACE_WITH_CLIENT_PRIVATE_KEY
