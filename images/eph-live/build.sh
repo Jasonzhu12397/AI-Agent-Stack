@@ -26,7 +26,6 @@ cp "$WORK_DIR/kubernetes-release.key" "$WORK_DIR/source/config/archives/kubernet
 printf 'deb https://pkgs.k8s.io/core:/stable:/%s/deb/ /\n' "v$KUBERNETES_MINOR" > "$WORK_DIR/source/config/archives/kubernetes.list.chroot"
 curl --fail --silent --show-error --location "https://github.com/flannel-io/flannel/releases/download/$FLANNEL_VERSION/kube-flannel.yml" -o "$WORK_DIR/source/config/includes.chroot/usr/local/share/eph/flannel.yaml"
 printf '%s  %s\n' "$FLANNEL_MANIFEST_SHA256" "$WORK_DIR/source/config/includes.chroot/usr/local/share/eph/flannel.yaml" | sha256sum -c -
-cp "$REPO_ROOT/deploy/agents/rbac.yaml" "$WORK_DIR/source/config/includes.chroot/usr/local/share/eph/node-agent-rbac.yaml"
 sed -i 's|FLANNEL_MANIFEST_URL|file:///usr/local/share/eph/flannel.yaml|g' "$WORK_DIR/source/config/includes.chroot/usr/local/sbin/eph-k8s-bootstrap"
 chmod 0755 "$WORK_DIR/source/auto/config" "$WORK_DIR/source/config/includes.chroot/usr/local/sbin/eph-k8s-bootstrap"
 docker build -f "$ROOT_DIR/Dockerfile.builder" -t "$BUILDER_IMAGE" "$ROOT_DIR"
