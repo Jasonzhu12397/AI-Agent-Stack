@@ -248,3 +248,39 @@ def test_bootstrap_rejects_non_object_or_incomplete_certificate_response(respons
             response,
             str(uuid.uuid4()),
         )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"node_id": str(uuid.uuid4())},
+        {"token_consumed": False},
+        {"agent_token": "short"},
+        {"agent_token": None},
+        {"client_certificate": None},
+        {"ca_chain": []},
+        {"fingerprint_sha256": "invalid"},
+    ],
+)
+def test_bootstrap_rejects_untrusted_certificate_exchange_fields(change):
+    response = {
+        "node_id": str(uuid.uuid4()),
+        "client_certificate": (
+            "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n"
+        ),
+        "ca_chain": (
+            "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n"
+        ),
+        "fingerprint_sha256": "a" * 64,
+        "agent_token": "b" * 64,
+        "token_consumed": True,
+    }
+    response.update(change)
+    with pytest.raises(
+        BOOTSTRAP["BootstrapError"],
+        match="CLIENT_CERTIFICATE_RESPONSE_INVALID",
+    ):
+        BOOTSTRAP["_validate_certificate_exchange_response"](
+            response,
+            str(uuid.uuid4()) if "node_id" not in change else str(uuid.uuid4()),
+        )
