@@ -2681,7 +2681,7 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
     )
-    assert replay.status_code == 409
+    assert replay.status_code == 401
 
 
 @pytest.mark.django_db
