@@ -2620,3 +2620,88 @@ def test_kubernetes_upgrade_result_enforces_simulation_only_contract():
 def test_non_upgrade_command_result_skips_upgrade_contract():
     command = type("Command", (), {"command_type": "node.health", "payload": {}})()
     assert _validate_kubernetes_upgrade_result(command, {"ok": True}) is None
+
+
+
+@pytest.mark.django_db
+def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprint(
+    monkeypatch,
+    node_workspace,
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-csr-exchange", "node_type": "eph_node"},
+        format="json",
+    )
+    assert enrolled.status_code == 201
+    node_id = enrolled.data["id"]
+    enrollment_token = enrolled.data["enrollment_token"]
+    original_hash = AgentNode.objects.get(pk=node_id).credential_hash
+    fingerprint = "a" * 64
+    certificate = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"
+    ca_chain = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"
+
+    def fake_signer(**kwargs):
+        assert kwargs["node_id"] == node_id
+        assert kwargs["tenant_id"] == str(tenant.id)
+        assert kwargs["project_id"] == str(project.id)
+        return {
+            "client_certificate": certificate,
+            "ca_chain": ca_chain,
+            "fingerprint_sha256": fingerprint,
+            "common_name": f"agent-node-{node_id}.agents.internal",
+        }
+
+    monkeypatch.setattr("core.agent_node_views.sign_eph_csr", fake_signer)
+    runtime = APIClient()
+    response = runtime.post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
+    )
+
+    assert response.status_code == 200
+    assert response.data["node_id"] == node_id
+    assert response.data["client_certificate"] == certificate
+    assert response.data["ca_chain"] == ca_chain
+    assert response.data["fingerprint_sha256"] == fingerprint
+    assert response.data["token_consumed"] is True
+    assert response.data["private_key_returned"] is False
+    node = AgentNode.objects.get(pk=node_id)
+    assert node.credential_hash != original_hash
+    assert node.client_certificate_fingerprint == fingerprint
+    assert node.client_certificate_bound_at is not None
+    assert node.client_certificate_revoked_at is None
+
+    replay = runtime.post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
+    )
+    assert replay.status_code == 409
+
+
+@pytest.mark.django_db
+def test_target_agent_cannot_exchange_eph_client_certificate(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {
+            "name": "target-csr-exchange",
+            "node_type": "target_cluster",
+            "cluster_name": "target-lab",
+        },
+        format="json",
+    )
+    runtime = APIClient()
+    response = runtime.post(
+        f"/api/v1/agent-runtime/nodes/{enrolled.data['id']}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrolled.data['enrollment_token']}",
+    )
+
+    assert response.status_code == 401
