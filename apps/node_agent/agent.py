@@ -2092,14 +2092,45 @@ def execute_command(
             or payload.get("execution_mode") != "simulation"
         ):
             raise NodeAgentError("KUBERNETES_VERSION_UPGRADE_REQUEST_INVALID")
+        upgrade_steps = [
+            {
+                "sequence": 1,
+                "name": "preflight",
+                "description": "Verify cluster identity, node health, capacity and version skew.",
+                "status": "not_run",
+            },
+            {
+                "sequence": 2,
+                "name": "control_plane",
+                "description": "Plan the control-plane upgrade and its availability checks.",
+                "status": "not_started",
+            },
+            {
+                "sequence": 3,
+                "name": "workers",
+                "description": "Plan a serial worker rollout with drain and readiness gates.",
+                "status": "not_started",
+            },
+            {
+                "sequence": 4,
+                "name": "postflight",
+                "description": "Verify cluster version convergence and workload health.",
+                "status": "not_started",
+            },
+        ]
         return {
             "cluster_name": payload["cluster_name"],
             "current_version": payload["current_version"],
             "target_version": payload["target_version"],
+            "plan_status": "simulation_plan_created",
+            "approval_required": True,
+            "preflight_performed": False,
+            "upgrade_steps": upgrade_steps,
             "upgrade_simulated": True,
             "upgrade_performed": False,
             "side_effects": False,
             "requires_manual_execution": True,
+            "resume_supported": False,
         }
     if command_type == "node.health":
         return {
