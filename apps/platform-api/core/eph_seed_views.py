@@ -97,7 +97,10 @@ class EPHSeedArtifactCreateView(APIView):
         )
         enrollment_token = request.data.get("enrollment_token")
         if not isinstance(enrollment_token, str) or not 32 <= len(enrollment_token) <= 512:
-            return Response({"detail": "A valid one-time enrollment token is required."}, status=400)
+            return Response(
+                {"detail": "A valid one-time enrollment token is required."},
+                status=400,
+            )
         supplied_hash = hashlib.sha256(enrollment_token.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(supplied_hash, node.credential_hash):
             return Response({"detail": "Invalid or already consumed enrollment token."}, status=401)
@@ -106,7 +109,10 @@ class EPHSeedArtifactCreateView(APIView):
         except (TypeError, ValueError):
             return Response({"detail": "expires_in_seconds must be an integer."}, status=400)
         if not 60 <= lifetime <= 3600:
-            return Response({"detail": "Seed lifetime must be between 60 and 3600 seconds."}, status=400)
+            return Response(
+                {"detail": "Seed lifetime must be between 60 and 3600 seconds."},
+                status=400,
+            )
 
         seed_config = {
             "control_url": request.data.get("control_url"),
@@ -243,7 +249,10 @@ class EPHSeedArtifactDownloadView(APIView):
                     cipher.decrypt(artifact.encrypted_payload.encode("ascii"))
                 )
             except (InvalidToken, ValueError, UnicodeEncodeError):
-                return Response({"detail": "Seed artifact integrity validation failed."}, status=503)
+                return Response(
+                    {"detail": "Seed artifact integrity validation failed."},
+                    status=503,
+                )
             if (
                 not isinstance(seed, dict)
                 or set(seed) != {"user-data", "meta-data", "network-config"}
@@ -284,7 +293,10 @@ class EPHSeedArtifactRevokeView(APIView):
                 agent_node=node,
             )
             if artifact.downloaded_at is not None:
-                return Response({"detail": "A downloaded seed artifact cannot be revoked."}, status=409)
+                return Response(
+                    {"detail": "A downloaded seed artifact cannot be revoked."},
+                    status=409,
+                )
             if artifact.revoked_at is None:
                 artifact.revoked_at = timezone.now()
                 artifact.encrypted_payload = ""
