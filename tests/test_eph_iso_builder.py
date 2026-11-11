@@ -112,6 +112,7 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
     ).read_text(encoding="utf-8")
     assert "cloud-init" in package_list
+    assert "systemd-networkd" in package_list
     assert "NoCloud" in datasource
     assert "CIDATA" in datasource
     assert "cloud-init.target" in service
