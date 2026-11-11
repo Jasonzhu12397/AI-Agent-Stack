@@ -122,6 +122,7 @@ jobs:
             - [python3, -c, "import urllib.request; urllib.request.urlopen('http://10.0.2.2:18080/cloud-init-ready', timeout=10).read()"]
           EOF
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
+          touch "$RUNNER_TEMP/cloud-init-ready"
           python3 -m http.server 18080 --bind 0.0.0.0 --directory "$RUNNER_TEMP" > "$RUNNER_TEMP/cloud-init-http.log" 2>&1 &
           HTTP_PID=$!
           dd if=/dev/zero of="$RUNNER_TEMP/eph-seed.img" bs=1M count=64
