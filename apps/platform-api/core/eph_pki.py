@@ -7,6 +7,7 @@ import re
 import httpx
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import NameOID
 from django.conf import settings
 
@@ -179,6 +180,28 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
         "client_certificate",
         131072,
     )
+    try:
+        csr = x509.load_pem_x509_csr(csr_pem.encode("ascii"))
+        issued_certificate = x509.load_der_x509_certificate(certificate_der)
+        csr_public_key = csr.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        issued_public_key = issued_certificate.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        issued_common_names = issued_certificate.subject.get_attributes_for_oid(
+            NameOID.COMMON_NAME
+        )
+        if (
+            csr_public_key != issued_public_key
+            or len(issued_common_names) != 1
+            or issued_common_names[0].value != common_name
+        ):
+            raise EPHCertificateError("EPH_CERTIFICATE_SIGNER_CERTIFICATE_MISMATCH")
+    except (ValueError, UnsupportedAlgorithm):
+        raise EPHCertificateError("EPH_CERTIFICATE_SIGNER_CERTIFICATE_INVALID") from None
     chain_pem = _validate_ca_chain(ca_chain, issuing_ca)
     return {
         "client_certificate": certificate.strip() + "\n",
