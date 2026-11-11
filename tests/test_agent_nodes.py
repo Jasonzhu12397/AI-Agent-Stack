@@ -53,7 +53,7 @@ def test_target_agent_kubernetes_version_upgrade_requires_approval(node_workspac
             "command_type": "cluster.kubernetes.version.upgrade",
             "payload": {
                 "cluster_name": "edge-lab",
-                "current_version": "v1.32.2",
+                "current_version": "v1.34.2",
                 "target_version": "v1.35",
                 "execution_mode": "simulation",
             },
