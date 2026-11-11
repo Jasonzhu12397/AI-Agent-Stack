@@ -12,6 +12,8 @@ def test_dual_agent_deploy_script_requires_two_contexts_and_digest_image():
     assert "EPH_AND_TARGET_CONTEXTS_MUST_DIFFER" in script
     assert "AGENT_IMAGE_MUST_BE_PINNED_BY_SHA256_DIGEST" in script
     assert "apply --dry-run=server" in script
+    assert "printf '%s\\n'" in script
+    assert 'printf "%s\\n"' in script
     assert "rollout status deployment/eph-node-agent" in script
     assert "rollout status deployment/target-cluster-agent" in script
     assert "rollout status daemonset/network-inventory-agent" in script
