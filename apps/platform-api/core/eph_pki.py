@@ -14,7 +14,7 @@ from core.bmc_credentials import _vault_url, resolve_vault_jwt_token
 
 
 PEM_PATTERN = re.compile(
-    r"-----BEGIN ([A-Z0-9 ]+)-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END \\1-----",
+    r"-----BEGIN ([A-Z0-9 ]+)-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END \1-----",
     re.DOTALL,
 )
 MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -37,7 +37,7 @@ def _decode_pem(value, expected_label, field, maximum):
         raise EPHCertificateError("EPH_CERTIFICATE_INVALID:" + field)
     try:
         decoded = base64.b64decode(
-            re.sub(r"\\s+", "", match.group(2)),
+            re.sub(r"\s+", "", match.group(2)),
             validate=True,
         )
     except (ValueError, TypeError):
@@ -64,7 +64,7 @@ def validate_eph_csr(csr_pem, expected_common_name=None):
             raise EPHCertificateError("EPH_CERTIFICATE_CSR_SUBJECT_INVALID")
     except (ValueError, UnicodeEncodeError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_INVALID:csr") from None
-    return csr_pem.strip() + "\\n"
+    return csr_pem.strip() + "\n"
 
 
 def _vault_headers(token):
@@ -92,7 +92,7 @@ def _validate_ca_chain(ca_chain, issuing_ca):
     normalized = []
     for certificate in values:
         _decode_pem(certificate, "CERTIFICATE", "ca_chain", 131072)
-        normalized.append(certificate.strip() + "\\n")
+        normalized.append(certificate.strip() + "\n")
     return "".join(normalized)
 
 
@@ -181,7 +181,7 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
     )
     chain_pem = _validate_ca_chain(ca_chain, issuing_ca)
     return {
-        "client_certificate": certificate.strip() + "\\n",
+        "client_certificate": certificate.strip() + "\n",
         "ca_chain": chain_pem,
         "fingerprint_sha256": hashlib.sha256(certificate_der).hexdigest(),
         "common_name": common_name,
