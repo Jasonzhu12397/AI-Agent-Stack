@@ -17,6 +17,7 @@ import {
   type Tenant,
 } from "../services/api";
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
+import { getKubernetesUpgradeFailure } from "../domain/kubernetesUpgrade";
 
 type FleetTab = "dashboard" | "fleet" | "eph" | "clusters" | "terminal" | "operations";
 
@@ -657,7 +658,7 @@ onUnmounted(() => {
 .fleet-upgrade-steps li { display: flex; align-items: center; gap: 10px; }
 .fleet-upgrade-steps li > div { display: grid; gap: 3px; flex: 1; }
 .fleet-upgrade-step-sequence { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(52, 161, 188, .13); color: #55c7d8; font-size: 10px; }
-.fleet-upgrade-pending, .fleet-upgrade-safety { color: #8198af; font-size: 10px; }
+.fleet-upgrade-pending, .fleet-upgrade-safety { color: #8198af; font-size: 10px; }\n.fleet-upgrade-failure { display: grid; gap: 5px; color: #e5a0a0; }\n.fleet-upgrade-failure span { color: #c58f8f; overflow-wrap: anywhere; }
 .fleet-upgrade-safety { margin: 8px 0 0; color: #d3a66b; }
 .fleet-terminal-body { max-height: 600px; overflow: auto; padding: 12px 16px; }
 .fleet-terminal-line { display: grid; grid-template-columns: 150px 110px minmax(140px, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(80, 122, 150, .12); }
