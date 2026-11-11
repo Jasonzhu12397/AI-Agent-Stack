@@ -6,7 +6,7 @@ REPO_ROOT="$(cd -- "$ROOT_DIR/.." && pwd)"
 K3S_VERSION="${K3S_VERSION:-}"
 K3S_SHA256_AMD64="${K3S_SHA256_AMD64:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
-BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build}"
+BUILD_DIR="$ROOT_DIR/.build"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
 
 fail() {
@@ -33,7 +33,7 @@ install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-mani
 install -d "$BUILD_DIR/config/includes.chroot/usr/local/sbin"
 cp "$ROOT_DIR/bootstrap.py" "$BUILD_DIR/config/includes.chroot/usr/local/lib/eph-bootstrap.py"
 cp "$REPO_ROOT/deploy/agents/namespace.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/namespace.yaml"
-cp "$REPO_ROOT/deploy/agents/rbac.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/rbac.yaml"
+cp "$REPO_ROOT/eph-rbac.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/rbac.yaml"
 cp "$REPO_ROOT/deploy/agents/eph-node-agent.yaml" "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/eph-manifests/eph-node-agent.yaml"
 
 wget -q -O "$BUILD_DIR/k3s" "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/k3s"
