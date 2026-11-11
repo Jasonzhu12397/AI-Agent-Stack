@@ -8,7 +8,7 @@ IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 HOSTNAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 TOKEN_PATTERN = re.compile(r"^[!-~]{32,512}$")
 PEM_PATTERN = re.compile(
-    r"-----BEGIN ([A-Z0-9 ]+)-----.*?-----END \\1-----\\s*",
+    r"-----BEGIN ([A-Z0-9 ]+)-----.*?-----END \1-----\s*",
     re.DOTALL,
 )
 
@@ -55,12 +55,12 @@ def _validate_network_config(network_config):
 
 
 def _validate_pem(value, field, expected_type):
-    if not isinstance(value, str) or len(value) > 131072 or "\\x00" in value:
+    if not isinstance(value, str) or len(value) > 131072 or "\x00" in value:
         raise EPHSeedError("EPH_SEED_CREDENTIAL_INVALID:" + field)
     match = PEM_PATTERN.fullmatch(value.strip())
     if match is None or match.group(1) != expected_type:
         raise EPHSeedError("EPH_SEED_CREDENTIAL_INVALID:" + field)
-    return value.rstrip() + "\\n"
+    return value.rstrip() + "\n"
 
 
 def render_nocloud_seed(config):
@@ -160,7 +160,7 @@ def render_nocloud_seed(config):
         "local-hostname": hostname,
     }
     return {
-        "user-data": "#cloud-config\\n" + json.dumps(user_data, indent=2),
-        "meta-data": json.dumps(metadata, indent=2, sort_keys=True) + "\\n",
-        "network-config": json.dumps(network_config, indent=2, sort_keys=True) + "\\n",
+        "user-data": "#cloud-config\n" + json.dumps(user_data, indent=2),
+        "meta-data": json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        "network-config": json.dumps(network_config, indent=2, sort_keys=True) + "\n",
     }
