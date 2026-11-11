@@ -63,6 +63,27 @@ def validate_config(config):
     return config
 
 
+def _validate_certificate_exchange_response(result, node_id):
+    if not isinstance(result, dict):
+        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID")
+    agent_token = result.get("agent_token")
+    certificate = result.get("client_certificate")
+    ca_chain = result.get("ca_chain")
+    fingerprint = result.get("fingerprint_sha256")
+    if (
+        not isinstance(agent_token, str)
+        or not TOKEN_PATTERN.fullmatch(agent_token)
+        or not isinstance(certificate, str)
+        or not isinstance(ca_chain, str)
+        or not isinstance(fingerprint, str)
+        or not FINGERPRINT_PATTERN.fullmatch(fingerprint)
+        or result.get("node_id") != node_id
+        or result.get("token_consumed") is not True
+    ):
+        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID")
+    return agent_token, certificate, ca_chain, fingerprint
+
+
 def _run(arguments, input_text=None):
     subprocess.run(
         arguments,
@@ -168,21 +189,9 @@ def _request_client_certificate(config, secret_dir, control_ca_path):
     except (TypeError, ValueError, UnicodeDecodeError):
         raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID") from None
 
-    agent_token = result.get("agent_token")
-    certificate = result.get("client_certificate")
-    ca_chain = result.get("ca_chain")
-    fingerprint = result.get("fingerprint_sha256")
-    if (
-        not isinstance(agent_token, str)
-        or not TOKEN_PATTERN.fullmatch(agent_token)
-        or not isinstance(certificate, str)
-        or not isinstance(ca_chain, str)
-        or not isinstance(fingerprint, str)
-        or not FINGERPRINT_PATTERN.fullmatch(fingerprint)
-        or result.get("node_id") != config["node_id"]
-        or result.get("token_consumed") is not True
-    ):
-        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID")
+    agent_token, certificate, ca_chain, fingerprint = (
+        _validate_certificate_exchange_response(result, config["node_id"])
+    )
 
     certificate_path.write_text(certificate + ca_chain, encoding="ascii")
     os.chmod(str(certificate_path), 0o600)
