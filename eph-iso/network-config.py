@@ -1,6 +1,6 @@
+import pathlib
 import re
 import shutil
-import pathlib
 
 
 MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap/network")
