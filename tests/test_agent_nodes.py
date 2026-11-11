@@ -2810,7 +2810,7 @@ def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_ident
             "client_certificate": "NEW CERTIFICATE",
             "ca_chain": "TRUSTED CA",
             "fingerprint_sha256": new_fingerprint,
-            "common_name": "agent-node-{}.agents.internal".format(node.id),
+            "common_name": f"agent-node-{node.id}.agents.internal",
         },
     )
     runtime = APIClient()
