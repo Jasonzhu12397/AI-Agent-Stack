@@ -4308,7 +4308,16 @@ class ControlPlaneClient:
                     context=self.tls_context,
                 )
             with response_context as response:
-                return json.loads(response.read().decode("utf-8"))
+                response_body = response.read(4 * 1024 * 1024 + 1)
+            if len(response_body) > 4 * 1024 * 1024:
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_TOO_LARGE")
+            try:
+                document = json.loads(response_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_INVALID") from None
+            if not isinstance(document, dict):
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_INVALID")
+            return document
         except urllib.error.HTTPError as exc:
             raise NodeAgentError(f"CONTROL_PLANE_HTTP_{exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
