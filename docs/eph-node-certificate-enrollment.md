@@ -37,6 +37,14 @@ Configure the existing Vault workload identity settings:
 
 EPH PKI trust configuration:
 
+For the cloud Compose deployment, set `EPH_PKI_TRUSTED_CA_HOST_PATH` in
+`.env.cloud` to the absolute host path of that PEM bundle. Compose mounts it
+read-only at `/etc/ssl/certs/eph-trusted-root.pem` and sets
+`EPH_PKI_TRUSTED_CA_BUNDLE` to that in-container path. Keep the trust bundle
+outside the repository and restrict host file permissions to the API service
+operator. If the host path is unset, Compose mounts an empty `/dev/null`
+source and certificate enrollment fails closed.
+
 - `EPH_PKI_TRUSTED_CA_BUNDLE`: required filesystem path to an independently
   provisioned PEM bundle containing trusted root CA certificates for the EPH
   issuing hierarchy. Never populate this file from the Vault response.
