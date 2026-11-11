@@ -3704,11 +3704,87 @@ def execute_command(
             else:
                 ready_worker_node_names.append(node_name)
 
+        machine_deployment_status = {
+            "requested": bool(machine_deployment_name),
+            "found": False,
+            "uid": None,
+            "generation": None,
+            "observed_generation": None,
+            "desired_replicas": None,
+            "updated_replicas": None,
+            "ready_replicas": None,
+            "available_replicas": None,
+            "unavailable_replicas": None,
+            "rollout_complete": False,
+        }
+        if machine_deployment_name:
+            if (
+                not isinstance(machine_deployment_name, str)
+                or not re.fullmatch(
+                    r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?",
+                    machine_deployment_name,
+                )
+            ):
+                raise NodeAgentError("INVALID_CAPI_WORKER_POSTFLIGHT_SPEC")
+            deployment_path = (
+                f"/apis/cluster.x-k8s.io/{machine_version}/namespaces/"
+                f"{namespace}/machinedeployments/{machine_deployment_name}"
+            )
+            deployment = kubernetes_api_get(deployment_path)
+            deployment_metadata = deployment.get("metadata", {})
+            deployment_spec = deployment.get("spec", {})
+            deployment_status = deployment.get("status", {})
+            generation = deployment_metadata.get("generation")
+            observed_generation = deployment_status.get("observedGeneration")
+            desired_replicas = deployment_spec.get("replicas", 1)
+            updated_replicas = deployment_status.get("updatedReplicas", 0)
+            ready_replicas = deployment_status.get("readyReplicas", 0)
+            available_replicas = deployment_status.get("availableReplicas", 0)
+            unavailable_replicas = deployment_status.get("unavailableReplicas", 0)
+            conditions = deployment_status.get("conditions", [])
+            blocking_conditions = [
+                condition
+                for condition in conditions
+                if isinstance(condition, dict)
+                and condition.get("type") in {"Ready", "Available"}
+                and condition.get("status") == "False"
+            ]
+            rollout_complete = (
+                isinstance(generation, int)
+                and not isinstance(generation, bool)
+                and isinstance(observed_generation, int)
+                and not isinstance(observed_generation, bool)
+                and observed_generation >= generation
+                and desired_replicas == expected_workers
+                and updated_replicas == expected_workers
+                and ready_replicas == expected_workers
+                and available_replicas == expected_workers
+                and unavailable_replicas == 0
+                and not blocking_conditions
+            )
+            machine_deployment_status = {
+                "requested": True,
+                "found": True,
+                "uid": deployment_metadata.get("uid"),
+                "generation": generation,
+                "observed_generation": observed_generation,
+                "desired_replicas": desired_replicas,
+                "updated_replicas": updated_replicas,
+                "ready_replicas": ready_replicas,
+                "available_replicas": available_replicas,
+                "unavailable_replicas": unavailable_replicas,
+                "rollout_complete": rollout_complete,
+            }
         inventory_complete = (
             len(worker_machines) == expected_workers
             and len(ready_worker_node_names) == expected_workers
             and len(not_ready_workers) == 0
             and len(set(ready_worker_node_names)) == expected_workers
+            and (
+                machine_deployment_status["rollout_complete"]
+                if machine_deployment_name
+                else True
+            )
         )
         result.update(
             {
@@ -3716,6 +3792,7 @@ def execute_command(
                 "namespace": namespace,
                 "expected_worker_replicas": expected_workers,
                 "machine_deployment_name": machine_deployment_name,
+                "machine_deployment_status": machine_deployment_status,
                 "worker_machine_count": len(worker_machines),
                 "ready_worker_machine_count": len(ready_worker_node_names),
                 "not_ready_worker_machine_names": not_ready_workers,

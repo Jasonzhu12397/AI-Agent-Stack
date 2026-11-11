@@ -30,6 +30,7 @@ Runs as a Pod in the target Kubernetes cluster after its API and control plane a
 - Validate target CAPI/Metal3 APIs and controller readiness before handoff.
 - Verify expected Cluster identity and UID against an independently executed test fixture or controlled integration cluster.
 - Report Machine inventory and Ready counts to the control plane.
+- When a MachineDeployment name is supplied to `cluster.postflight`, verify its UID, generation convergence, desired/updated/ready/available replica counts and unavailable replicas before reporting worker inventory complete.
 - Persist and restore deployment checkpoints across agent restarts.
 
 The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run target adoption verification commands.
