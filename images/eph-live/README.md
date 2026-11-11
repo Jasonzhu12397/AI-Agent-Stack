@@ -21,6 +21,22 @@ The build host requires Docker, curl, gpg and sha256sum. The builder uses Debian
 
 The Flannel checksum must be obtained from a trusted release verification process. The builder refuses an empty or malformed checksum and refuses mutable Agent image tags. Never copy a checksum from an untrusted mirror.
 
+## Enroll the EPH Agent identity
+
+Create the node identity in the Cloud Agent Studio API before generating the seed. This endpoint requires a tenant owner/admin identity:
+
+    POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/
+
+Request body:
+
+    {
+      "name": "eph-node-01",
+      "node_type": "eph_node",
+      "capabilities": ["host.inventory", "cluster.read", "metal3.read"]
+    }
+
+The response includes the new node UUID in id and the one-time raw credential in enrollment_token. Use those values as NODE_ID and NODE_TOKEN when running create-seed.sh. The API stores only the credential hash and returns the raw token once; if it is lost, rotate or revoke the node credential through the documented credential lifecycle API and do not reuse another node's identity. Keep the API administrator credential out of shell history and out of the seed ISO.
+
 ## First-boot bootstrap input
 
 The first implementation expects a NoCloud config-drive seed to provide /run/eph-bootstrap/bootstrap.env and mTLS files ca.crt, tls.crt, and tls.key under /run/eph-bootstrap/. The environment file is loaded by systemd and must define:
