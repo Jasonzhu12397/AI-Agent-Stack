@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import hmac
 import json
 import os
 import ssl
@@ -335,7 +336,7 @@ class CertificateRotationManager:
             self.client.node_id,
             self.ca_file,
         )
-        if not hashlib.compare_digest(calculated, fingerprint.lower()):
+        if not hmac.compare_digest(calculated, fingerprint.lower()):
             raise CertificateRotationError("AGENT_TLS_ROTATION_FINGERPRINT_MISMATCH")
         certificate_bytes = certificate_pem.encode("ascii")
         self._patch_secret({
