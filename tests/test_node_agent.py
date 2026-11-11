@@ -42,6 +42,17 @@ def test_target_agent_kubernetes_version_upgrade_is_simulation_only():
     assert result["upgrade_performed"] is False
     assert result["side_effects"] is False
     assert result["requires_manual_execution"] is True
+    assert result["plan_status"] == "simulation_plan_created"
+    assert result["approval_required"] is True
+    assert result["preflight_performed"] is False
+    assert [step["name"] for step in result["upgrade_steps"]] == [
+        "preflight",
+        "control_plane",
+        "workers",
+        "postflight",
+    ]
+    assert all(step["status"] in {"not_run", "not_started"} for step in result["upgrade_steps"])
+    assert result["resume_supported"] is False
 
 
 def test_target_agent_can_upgrade_from_v133_to_v134_in_simulation():
