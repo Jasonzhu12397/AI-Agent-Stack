@@ -2708,3 +2708,73 @@ def test_target_agent_cannot_exchange_eph_client_certificate(node_workspace):
     )
 
     assert response.status_code == 401
+
+
+
+@pytest.mark.django_db
+def test_eph_certificate_signer_unavailable_does_not_consume_enrollment_token(
+    monkeypatch,
+    node_workspace,
+):
+    from core.eph_pki import EPHCertificateSignerUnavailable
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-csr-retry", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    node = AgentNode.objects.get(pk=node_id)
+    original_hash = node.credential_hash
+
+    def unavailable_signer(**kwargs):
+        raise EPHCertificateSignerUnavailable("not configured")
+
+    monkeypatch.setattr("core.agent_node_views.sign_eph_csr", unavailable_signer)
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    assert response.status_code == 503
+    node.refresh_from_db()
+    assert node.credential_hash == original_hash
+    assert node.client_certificate_fingerprint == ""
+    assert node.client_certificate_bound_at is None
+
+
+@pytest.mark.django_db
+def test_eph_certificate_signer_rejection_does_not_bind_certificate(
+    monkeypatch,
+    node_workspace,
+):
+    from core.eph_pki import EPHCertificateError
+
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-csr-invalid", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+
+    def invalid_signer(**kwargs):
+        raise EPHCertificateError("invalid csr")
+
+    monkeypatch.setattr("core.agent_node_views.sign_eph_csr", invalid_signer)
+    response = APIClient().post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "not-a-csr"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    assert response.status_code == 400
+    node = AgentNode.objects.get(pk=node_id)
+    assert node.client_certificate_fingerprint == ""
+    assert node.client_certificate_bound_at is None
