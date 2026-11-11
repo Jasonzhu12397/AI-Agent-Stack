@@ -1,7 +1,6 @@
 import pathlib
 import runpy
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "eph-iso/network-config.py"
 NETWORK_CONFIG = runpy.run_path(str(MODULE_PATH))
