@@ -113,27 +113,30 @@ jobs:
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
       - name: Boot ISO and verify single-node Kubernetes API
         run: |
-          mkdir -p "$RUNNER_TEMP/ephboot/network"
-          printf '%s\n' '[Match]' 'Name=en*' 'Type=ether' '' '[Network]' 'DHCP=ipv4' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
-          dd if=/dev/zero of="$RUNNER_TEMP/ephboot.img" bs=1M count=64
-          mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/ephboot.img"
-          mmd -i "$RUNNER_TEMP/ephboot.img" ::/network
-          mcopy -i "$RUNNER_TEMP/ephboot.img" "$RUNNER_TEMP/ephboot/network/10-qemu.network" ::/network/10-qemu.network
-          qemu-system-x86_64 \
-            -machine accel=tcg,usb=off \
-            -cpu max -m 4096 -smp 2 \
-            -cdrom "${{ steps.build.outputs.iso_file }}" \
-            -drive "file=$RUNNER_TEMP/ephboot.img,format=raw,if=virtio" \
-            -boot order=d \
-            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
-            -device virtio-net-pci,netdev=net0 \
-            -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
+          mkdir -p "$RUNNER_TEMP/eph-seed"
+          printf '%s\\n' 'instance-id: ci-eph-node' 'local-hostname: eph-node' > "$RUNNER_TEMP/eph-seed/meta-data"
+          printf '%s\\n' '#cloud-config' 'ssh_pwauth: false' > "$RUNNER_TEMP/eph-seed/user-data"
+          cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
+          dd if=/dev/zero of="$RUNNER_TEMP/eph-seed.img" bs=1M count=64
+          mkfs.vfat -n CIDATA "$RUNNER_TEMP/eph-seed.img"
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/meta-data" ::meta-data
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
+          qemu-system-x86_64 \\
+            -machine accel=tcg,usb=off \\
+            -cpu max -m 4096 -smp 2 \\
+            -cdrom "${{ steps.build.outputs.iso_file }}" \\
+            -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \\
+            -boot order=d \\
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \\
+            -device virtio-net-pci,netdev=net0 \\
+            -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \\
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
           trap 'kill "$QEMU_PID" >/dev/null 2>&1 || true' EXIT
           ready=false
           for attempt in $(seq 1 60); do
-            if curl --insecure --fail --silent --max-time 3 \
+            if curl --insecure --fail --silent --max-time 3 \\
               https://127.0.0.1:16443/readyz >/dev/null; then
               ready=true
               break
@@ -148,6 +151,7 @@ jobs:
             cat "$RUNNER_TEMP/eph-qemu.log"
             exit 1
           fi
+          grep -q 'DataSourceNoCloud' "$RUNNER_TEMP/eph-qemu.log"
       - name: Upload EPH Live ISO artifact
         uses: actions/upload-artifact@v4
         with:
