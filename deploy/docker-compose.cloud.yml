@@ -22,7 +22,7 @@ services:
       AGENT_MTLS_REQUIRED: ${AGENT_MTLS_REQUIRED:-false}
       AGENT_MTLS_TRUSTED_PROXY_IP: ${AGENT_MTLS_INGRESS_IP:-172.30.250.2}
       AGENT_MTLS_TRUSTED_PROXY_CIDRS: ${AGENT_MTLS_TRUSTED_PROXY_CIDRS:-}
-      EPH_PKI_TRUSTED_CA_BUNDLE: /run/secrets/eph-trusted-root.pem
+      EPH_PKI_TRUSTED_CA_BUNDLE: /etc/ssl/certs/eph-trusted-root.pem
     command:
       - sh
       - -c
@@ -34,7 +34,7 @@ services:
       - agent_mtls
     restart: unless-stopped
     volumes:
-      - ${EPH_PKI_TRUSTED_CA_HOST_PATH:-/dev/null}:/run/secrets/eph-trusted-root.pem:ro
+      - ${EPH_PKI_TRUSTED_CA_HOST_PATH:-/dev/null}:/etc/ssl/certs/eph-trusted-root.pem:ro
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
