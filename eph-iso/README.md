@@ -1,10 +1,17 @@
 # EPH Live ISO
 
-This directory builds the first reproducible x86_64 EPH Live ISO runtime. The ISO boots a Debian Live system with `toram`, runs a single-node K3s Kubernetes control plane, and deploys the EPH Agent as a Kubernetes Deployment Pod. The ISO does not install an operating system to the node's local disk.
+This directory builds the first repeatable x86_64 EPH Live ISO runtime. The ISO boots a Debian Live system with `toram`, runs a single-node K3s Kubernetes control plane, and deploys the EPH Agent as a Kubernetes Deployment Pod. The ISO does not install an operating system to the node's local disk.
 
 ## Build prerequisites
 
-Run the builder on a Debian 12/bookworm build host with `live-build`, `xorriso`, `squashfs-tools`, `wget` and `sha256sum` installed. The build currently targets amd64 only. Pin the K3s release and provide its independently verified SHA-256 checksum:
+Run the builder on a Debian 12/bookworm build host. Install the required packages with:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y live-build xorriso squashfs-tools wget ca-certificates debootstrap
+```
+
+The build currently targets amd64 only. The build currently targets amd64 only. Pin the K3s release and provide its independently verified SHA-256 checksum:
 
 ```bash
 sudo env \
@@ -30,11 +37,11 @@ The version above is an example input, not a claim that its checksum has been ve
 }
 ```
 
-4. Put the mTLS files at `tls/ca.crt`, `tls/tls.crt`, and `tls/tls.key`. Put the CAPI source and target kubeconfigs at `capi/source.kubeconfig` and `capi/target.kubeconfig`. The config volume is mounted read-only with `nosuid,nodev,noexec`.
-5. Boot the ISO. K3s starts as a single-node Kubernetes control plane. The bootstrap service creates the EPH credentials, mTLS and CAPI kubeconfig Secrets, applies the EPH Agent ServiceAccount/RBAC/Deployment manifests, and waits for the Agent Deployment rollout.
+4. Put the mTLS files at `tls/ca.crt`, `tls/tls.crt`, and `tls/tls.key`. Optionally put both CAPI source and target kubeconfigs at `capi/source.kubeconfig` and `capi/target.kubeconfig`; provide both or neither. The config volume is mounted read-only with `nosuid,nodev,noexec`.
+5. Boot the ISO. K3s starts as a single-node Kubernetes control plane. The bootstrap service creates EPH credentials and mTLS Secrets, optionally creates the CAPI kubeconfig Secret when both kubeconfigs are present, applies dedicated EPH-only ServiceAccount/RBAC/Deployment manifests, and waits for the Agent Deployment rollout.
 6. Confirm the node heartbeat and `node.health` result in the Cloud Control Plane before starting any bootstrap orchestration.
 
-The enrollment token is read from the removable bootstrap volume and copied into a Kubernetes Secret using temporary mode-0600 files. It is not written into the ISO, the kernel command line, or shell history. The one-time token and client certificate must be issued for the intended node by the existing Agent enrollment flow. Never reuse a Target Agent identity for the EPH runtime.
+The enrollment token is read from the removable bootstrap volume and copied into a Kubernetes Secret using temporary mode-0600 files. The bootstrap service calls `k3s kubectl` directly, so the ISO does not need a separate kubectl binary. It is not written into the ISO, the kernel command line, or shell history. The one-time token and client certificate must be issued for the intended node by the existing Agent enrollment flow. Never reuse a Target Agent identity for the EPH runtime.
 
 ## Runtime layout
 
