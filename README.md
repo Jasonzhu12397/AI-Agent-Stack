@@ -62,9 +62,9 @@ The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kube
 5. Build and push the digest-pinned Node Agent image, then deploy it into the two independent Kubernetes contexts:
 
 ```bash
-EPH_CONTEXT=<eph-single-node-k8s-context> \\
-TARGET_CONTEXT=<target-cluster-k8s-context> \\
-AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \\
+EPH_CONTEXT=<eph-single-node-k8s-context> \
+TARGET_CONTEXT=<target-cluster-k8s-context> \
+AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \
 bash deploy/agents/deploy.sh
 ```
 
