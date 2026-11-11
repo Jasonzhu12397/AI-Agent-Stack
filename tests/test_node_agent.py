@@ -52,7 +52,7 @@ def test_target_agent_rejects_unsupported_kubernetes_version():
                 "payload": {
                     "cluster_name": "edge-lab",
                     "current_version": "v1.32.2",
-                    "target_version": "v1.34",
+                    "target_version": "v1.37",
                     "execution_mode": "simulation",
                 },
             },
