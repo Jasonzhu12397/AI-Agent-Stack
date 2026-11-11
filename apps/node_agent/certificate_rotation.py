@@ -35,6 +35,8 @@ def _load_certificates(pem_data):
     if not isinstance(pem_data, bytes) or not pem_data or len(pem_data) > 1024 * 1024:
         raise CertificateRotationError("AGENT_TLS_ROTATION_CA_CHAIN_INVALID")
     blocks = pem_data.split(marker)
+    if blocks[0].strip():
+        raise CertificateRotationError("AGENT_TLS_ROTATION_CA_CHAIN_INVALID")
     certificates = []
     for block in blocks[1:]:
         encoded = marker + block
@@ -163,11 +165,11 @@ class CertificateRotationManager:
             method=method,
         )
         try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self.api_timeout,
-                context=context,
-            ) as response:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=context),
+            )
+            with opener.open(request, timeout=self.api_timeout) as response:
                 body = response.read(1024 * 1024 + 1)
             if len(body) > 1024 * 1024:
                 raise CertificateRotationError("AGENT_TLS_ROTATION_KUBERNETES_RESPONSE_TOO_LARGE")
