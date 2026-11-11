@@ -1599,6 +1599,8 @@ class AgentNodeCommandListCreateView(APIView):
                 or not isinstance(payload.get("current_version"), str)
                 or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
                 or payload.get("target_version") not in SUPPORTED_KUBERNETES_MINOR_VERSIONS
+                or int(payload["target_version"].split(".")[1])
+                != int(payload["current_version"].split(".")[1]) + 1
                 or payload.get("execution_mode") != "simulation"
             ):
                 return Response({"detail": "Kubernetes version request is invalid or unsupported."}, status=400)
