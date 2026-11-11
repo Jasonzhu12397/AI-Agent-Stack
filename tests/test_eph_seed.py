@@ -58,7 +58,7 @@ def test_seed_secrets_are_written_with_root_only_permissions():
 @pytest.mark.parametrize(
     "change,expected",
     [
-        ({"control_url": "http://control.example.com"}, "EPH_SEED_CONTROL_URL_INVALID"),
+        ({"control_url": "http://control.example.com"}, "EPH_SEED_CONTROL_URL_INVALID"),\n        ({"control_url": "https://control.example.com/path"}, "EPH_SEED_CONTROL_URL_INVALID"),\n        ({"control_url": "https://"}, "EPH_SEED_CONTROL_URL_INVALID"),
         ({"node_id": "invalid"}, "EPH_SEED_NODE_ID_INVALID"),
         ({"enrollment_token": "short"}, "EPH_SEED_ENROLLMENT_TOKEN_INVALID"),
         ({"agent_image": "registry.example.com/agent:latest"}, "EPH_SEED_AGENT_IMAGE_NOT_PINNED"),
