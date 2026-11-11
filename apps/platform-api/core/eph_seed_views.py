@@ -104,10 +104,12 @@ class EPHSeedArtifactCreateView(APIView):
         supplied_hash = hashlib.sha256(enrollment_token.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(supplied_hash, node.credential_hash):
             return Response({"detail": "Invalid or already consumed enrollment token."}, status=401)
-        try:
-            lifetime = int(request.data.get("expires_in_seconds", 1800))
-        except (TypeError, ValueError):
-            return Response({"detail": "expires_in_seconds must be an integer."}, status=400)
+        lifetime = request.data.get("expires_in_seconds", 1800)
+        if type(lifetime) is not int:
+            return Response(
+                {"detail": "expires_in_seconds must be an integer."},
+                status=400,
+            )
         if not 60 <= lifetime <= 3600:
             return Response(
                 {"detail": "Seed lifetime must be between 60 and 3600 seconds."},
@@ -227,17 +229,30 @@ class EPHSeedArtifactDownloadView(APIView):
             return Response({"detail": "Seed artifact encryption is unavailable."}, status=503)
 
         with transaction.atomic():
-            artifact = EPHSeedArtifact.objects.select_for_update().filter(
+            artifact_hint = EPHSeedArtifact.objects.filter(
                 pk=artifact_id
+            ).only("agent_node_id").first()
+            if artifact_hint is None:
+                return Response(
+                    {"detail": "Seed artifact is unavailable, expired, revoked, or consumed."},
+                    status=404,
+                )
+            node = AgentNode.objects.select_for_update().filter(
+                pk=artifact_hint.agent_node_id
+            ).first()
+            artifact = EPHSeedArtifact.objects.select_for_update().filter(
+                pk=artifact_id,
+                agent_node_id=artifact_hint.agent_node_id,
             ).first()
             now = timezone.now()
             if (
-                artifact is None
+                node is None
+                or node.status == AgentNode.Status.REVOKED
+                or node.revoked_at is not None
+                or artifact is None
                 or artifact.revoked_at is not None
                 or artifact.downloaded_at is not None
                 or artifact.expires_at <= now
-                or artifact.agent_node.status == AgentNode.Status.REVOKED
-                or artifact.agent_node.revoked_at is not None
                 or not hmac.compare_digest(supplied_hash, artifact.download_token_hash)
             ):
                 return Response(
@@ -287,6 +302,7 @@ class EPHSeedArtifactRevokeView(APIView):
             node_type=AgentNode.NodeType.EPH_NODE,
         )
         with transaction.atomic():
+            node = AgentNode.objects.select_for_update().get(pk=node.pk)
             artifact = get_object_or_404(
                 EPHSeedArtifact.objects.select_for_update(),
                 pk=artifact_id,
