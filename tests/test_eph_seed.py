@@ -23,9 +23,9 @@ def valid_config():
                 }
             },
         },
-        "ca_certificate": "-----BEGIN CERTIFICATE-----\\nCA\\n-----END CERTIFICATE-----",
-        "client_certificate": "-----BEGIN CERTIFICATE-----\\nCLIENT\\n-----END CERTIFICATE-----",
-        "client_private_key": "-----BEGIN PRIVATE KEY-----\\nKEY\\n-----END PRIVATE KEY-----",
+        "ca_certificate": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+        "client_certificate": "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----",
+        "client_private_key": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----",
     }
 
 
@@ -33,8 +33,8 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
     seed = render_nocloud_seed(valid_config())
 
     assert set(seed) == {"user-data", "meta-data", "network-config"}
-    assert seed["user-data"].startswith("#cloud-config\\n")
-    user_data = json.loads(seed["user-data"].split("\\n", 1)[1])
+    assert seed["user-data"].startswith("#cloud-config\n")
+    user_data = json.loads(seed["user-data"].split("\n", 1)[1])
     metadata = json.loads(seed["meta-data"])
     network = json.loads(seed["network-config"])
     assert metadata["instance-id"].startswith("eph-node-")
@@ -45,7 +45,7 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
 
 def test_seed_secrets_are_written_with_root_only_permissions():
     seed = render_nocloud_seed(valid_config())
-    user_data = json.loads(seed["user-data"].split("\\n", 1)[1])
+    user_data = json.loads(seed["user-data"].split("\n", 1)[1])
 
     for item in user_data["write_files"]:
         assert item["owner"] == "root:root"
@@ -58,7 +58,9 @@ def test_seed_secrets_are_written_with_root_only_permissions():
 @pytest.mark.parametrize(
     "change,expected",
     [
-        ({"control_url": "http://control.example.com"}, "EPH_SEED_CONTROL_URL_INVALID"),\n        ({"control_url": "https://control.example.com/path"}, "EPH_SEED_CONTROL_URL_INVALID"),\n        ({"control_url": "https://"}, "EPH_SEED_CONTROL_URL_INVALID"),
+        ({"control_url": "http://control.example.com"}, "EPH_SEED_CONTROL_URL_INVALID"),
+        ({"control_url": "https://control.example.com/path"}, "EPH_SEED_CONTROL_URL_INVALID"),
+        ({"control_url": "https://"}, "EPH_SEED_CONTROL_URL_INVALID"),
         ({"node_id": "invalid"}, "EPH_SEED_NODE_ID_INVALID"),
         ({"enrollment_token": "short"}, "EPH_SEED_ENROLLMENT_TOKEN_INVALID"),
         ({"agent_image": "registry.example.com/agent:latest"}, "EPH_SEED_AGENT_IMAGE_NOT_PINNED"),
