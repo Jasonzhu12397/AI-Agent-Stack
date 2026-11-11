@@ -7,7 +7,7 @@ import re
 import httpx
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from django.conf import settings
 
@@ -81,9 +81,15 @@ def _vault_headers(token):
     return headers
 
 
-def _validate_ca_chain(ca_chain, issuing_ca):
+def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
+    from datetime import UTC, datetime
+    from pathlib import Path
+
     if not isinstance(ca_chain, list) and ca_chain not in (None, ""):
         raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
+    if not isinstance(trusted_ca_bundle, str) or not trusted_ca_bundle:
+        raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_NOT_CONFIGURED")
+
     values = []
     if issuing_ca:
         values.append(issuing_ca)
@@ -92,11 +98,94 @@ def _validate_ca_chain(ca_chain, issuing_ca):
             values.append(certificate)
     if not values or len(values) > 8:
         raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
-    normalized = []
-    for certificate in values:
-        _decode_pem(certificate, "CERTIFICATE", "ca_chain", 131072)
-        normalized.append(certificate.strip() + "\n")
-    return "".join(normalized)
+
+    try:
+        trust_pem = Path(trusted_ca_bundle).read_text(encoding="ascii")
+        trust_blocks = re.findall(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            trust_pem,
+            re.DOTALL,
+        )
+        trust_roots = [
+            x509.load_pem_x509_certificate(block.encode("ascii"))
+            for block in trust_blocks
+        ]
+        chain_certificates = [
+            x509.load_pem_x509_certificate(
+                (value.strip() + "\n").encode("ascii")
+            )
+            for value in values
+        ]
+    except (OSError, UnicodeError, ValueError):
+        raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_INVALID") from None
+
+    if not trust_roots:
+        raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_INVALID")
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    for certificate in [*chain_certificates, *trust_roots]:
+        try:
+            constraints = certificate.extensions.get_extension_for_class(
+                x509.BasicConstraints
+            ).value
+            usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+        except x509.ExtensionNotFound:
+            raise EPHCertificateError("EPH_CERTIFICATE_CA_PROFILE_INVALID") from None
+        if (
+            not constraints.ca
+            or not usage.key_cert_sign
+            or certificate.not_valid_before > now
+            or certificate.not_valid_after <= now
+        ):
+            raise EPHCertificateError("EPH_CERTIFICATE_CA_PROFILE_INVALID")
+
+    trusted_fingerprints = {
+        certificate.fingerprint(hashes.SHA256())
+        for certificate in trust_roots
+    }
+    for index, certificate in enumerate(chain_certificates):
+        if certificate.fingerprint(hashes.SHA256()) in trusted_fingerprints:
+            if index != len(chain_certificates) - 1:
+                raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_ORDER_INVALID")
+            break
+        if index + 1 < len(chain_certificates):
+            issuer = chain_certificates[index + 1]
+        else:
+            issuer = next(
+                (
+                    root
+                    for root in trust_roots
+                    if certificate.issuer == root.subject
+                ),
+                None,
+            )
+            if issuer is None:
+                raise EPHCertificateError("EPH_CERTIFICATE_CA_UNTRUSTED")
+        try:
+            certificate.verify_directly_issued_by(issuer)
+        except (ValueError, TypeError, UnsupportedAlgorithm):
+            raise EPHCertificateError("EPH_CERTIFICATE_CA_SIGNATURE_INVALID") from None
+        if index == len(chain_certificates) - 1 and issuer.fingerprint(
+            hashes.SHA256()
+        ) not in trusted_fingerprints:
+            raise EPHCertificateError("EPH_CERTIFICATE_CA_UNTRUSTED")
+
+    if chain_certificates[-1].fingerprint(hashes.SHA256()) not in trusted_fingerprints:
+        root = next(
+            (
+                item
+                for item in trust_roots
+                if chain_certificates[-1].issuer == item.subject
+            ),
+            None,
+        )
+        if root is None:
+            raise EPHCertificateError("EPH_CERTIFICATE_CA_UNTRUSTED")
+        values.append(root.public_bytes(serialization.Encoding.PEM).decode("ascii"))
+
+    if len(values) > 8:
+        raise EPHCertificateError("EPH_CERTIFICATE_CA_CHAIN_INVALID")
+    return "".join(value.strip() + "\n" for value in values)
 
 
 
@@ -237,7 +326,11 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
         _validate_issued_client_certificate(issued_certificate, common_name)
     except (ValueError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_SIGNER_CERTIFICATE_INVALID") from None
-    chain_pem = _validate_ca_chain(ca_chain, issuing_ca)
+    chain_pem = _validate_ca_chain(
+        ca_chain,
+        issuing_ca,
+        getattr(settings, "EPH_PKI_TRUSTED_CA_BUNDLE", ""),
+    )
     return {
         "client_certificate": certificate.strip() + "\n",
         "ca_chain": chain_pem,
