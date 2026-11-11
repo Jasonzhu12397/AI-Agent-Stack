@@ -509,7 +509,7 @@ onUnmounted(() => {
             <template #default="scope"><code>{{ scope.row.plan_hash.slice(0, 14) }}</code></template>
           </el-table-column>
         </el-table>
-        <p class="fleet-footnote">Supported selections: v1.33, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
+        <p class="fleet-footnote">Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
       </section>
     </template>
 
