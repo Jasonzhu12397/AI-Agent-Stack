@@ -139,3 +139,6 @@ BMC_VAULT_JWT_PROJECT_CLAIM = os.getenv("BMC_VAULT_JWT_PROJECT_CLAIM", "project_
 BMC_VAULT_NAMESPACE = os.getenv("BMC_VAULT_NAMESPACE", "").strip()
 BMC_VAULT_CA_BUNDLE = os.getenv("BMC_VAULT_CA_BUNDLE", "").strip()
 BMC_VAULT_TIMEOUT_SECONDS = float(os.getenv("BMC_VAULT_TIMEOUT_SECONDS", "5"))
+EPH_PKI_MOUNT = os.getenv("EPH_PKI_MOUNT", "pki").strip("/")
+EPH_PKI_ROLE = os.getenv("EPH_PKI_ROLE", "agent-nodes").strip()
+EPH_PKI_TTL = os.getenv("EPH_PKI_TTL", "24h").strip()
