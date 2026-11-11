@@ -108,6 +108,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         status=Task.Status.RUNNING,
         lease_owner="worker-test",
         lease_token=uuid.uuid4(),
+        lease_expires_at=timezone.now() + timezone.timedelta(minutes=5),
         available_at=timezone.now(),
     )
     AgentRun.objects.create(
@@ -191,7 +192,16 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
         task.status = Task.Status.RUNNING
         task.lease_owner = "worker-resume"
         task.lease_token = uuid.uuid4()
-        task.save(update_fields=["status", "lease_owner", "lease_token", "updated_at"])
+        task.lease_expires_at = timezone.now() + timezone.timedelta(minutes=5)
+        task.save(
+            update_fields=[
+                "status",
+                "lease_owner",
+                "lease_token",
+                "lease_expires_at",
+                "updated_at",
+            ]
+        )
         worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = (
             lambda arguments, context: {"value": f"{arguments['key']}-ready"}
         )
