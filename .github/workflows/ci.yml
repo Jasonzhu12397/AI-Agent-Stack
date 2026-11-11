@@ -98,6 +98,8 @@ jobs:
             haproxy:3.2-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: Exercise Agent mTLS ingress end to end
         run: bash tests/integration/test_agent_mtls_proxy.sh
+      - name: Build EPH Live ISO builder image
+        run: docker build -f images/eph-live/Dockerfile.builder -t ai-agent-eph-live-builder:ci images/eph-live
       - name: Build and smoke test production Vue image
         run: |
           docker build -f Dockerfile.web-studio -t ai-agent-web:ci .
