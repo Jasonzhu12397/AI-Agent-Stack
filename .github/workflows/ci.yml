@@ -119,6 +119,10 @@ jobs:
           #cloud-config
           ssh_pwauth: false
           runcmd:
+            - [k3s, kubectl, create, namespace, eph-ci-smoke]
+            - [k3s, kubectl, --namespace, eph-ci-smoke, create, deployment, workload-smoke, --image=registry.k8s.io/pause:3.10]
+            - [k3s, kubectl, --namespace, eph-ci-smoke, rollout, status, deployment/workload-smoke, --timeout=180s]
+            - [k3s, kubectl, --namespace, eph-ci-smoke, wait, --for=condition=Ready, pod, --selector=app=workload-smoke, --timeout=180s]
             - [python3, -c, "import urllib.request; urllib.request.urlopen('http://10.0.2.2:18080/cloud-init-ready', timeout=10).read()"]
           EOF
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
