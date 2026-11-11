@@ -21,7 +21,7 @@ Use one generic ISO for every machine. Do not rebuild the ISO to inject per-node
 
 The seed volume must use the filesystem label CIDATA and contain these files at its root:
 
-- user-data: cloud-config that writes the node bootstrap configuration and TLS material.
+- user-data: cloud-config that writes the node bootstrap configuration and control-plane CA trust.
 - meta-data: unique instance ID and hostname.
 - network-config: cloud-init v2 network configuration for the site's interfaces.
 
@@ -46,12 +46,12 @@ cloud-localds --filesystem=iso \
 
 For production, the Cloud Control Plane must render a unique user-data document per node. It must inject:
 - control_url, node UUID, one-time enrollment token, and immutable EPH Agent image reference pinned by SHA-256 digest.
-- The trusted CA certificate and the node-specific client certificate/private key.
+- The trusted CA certificate used to verify the Cloud Control Plane HTTPS endpoint. The EPH node generates its own private key and CSR after boot; the Cloud Control Plane exchanges the one-time token for a Vault-signed node certificate and a new runtime token.
 - Optional CAPI pivot kubeconfigs only when both source and target kubeconfigs are present and the workflow authorizes their use.
 
-Cloud-init writes these files under /etc/ai-agent-studio/eph-bootstrap with root ownership and restrictive permissions. The EPH bootstrap systemd unit waits for cloud-init and network readiness, starts after K3s, creates Kubernetes Secrets, applies the dedicated EPH Agent RBAC and Deployment, and waits for the Agent rollout.
+Cloud-init writes the bootstrap configuration and control-plane CA under /etc/ai-agent-studio/eph-bootstrap with root ownership and restrictive permissions. The EPH bootstrap systemd unit waits for cloud-init and network readiness, starts after K3s, generates a private key locally with OpenSSL, submits a CSR using the one-time token, verifies the returned certificate fingerprint and public-key match, then creates Kubernetes Secrets with the new node-bound runtime token and mTLS identity. It applies the dedicated EPH Agent RBAC and Deployment and waits for the Agent rollout.
 
-The example user-data contains obvious placeholders and is not deployable as-is. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Do not put per-node secrets in the generic ISO, kernel command line, build logs, or shared seed images. Use a short-lived one-time enrollment token; exchange it for node-bound credentials and revoke it after registration. Protect seed media as secret material and destroy it after provisioning.
+The example user-data contains obvious placeholders and is not deployable as-is. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Do not put per-node secrets in the generic ISO, kernel command line, build logs, or shared seed images. The seed contains a short-lived one-time enrollment token; the API consumes it only after Vault PKI signs the CSR and returns a separate node-bound runtime token. The node private key is never sent to the API or placed on the seed media. Protect seed media as secret material and destroy it after provisioning.
 
 ## Network configuration
 
