@@ -197,8 +197,13 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
             "PUBLIC KEY",
         ]
     )
-    monkeypatch.setitem(BOOTSTRAP, "_run", fake_run)
-    monkeypatch.setitem(BOOTSTRAP, "_run_output", lambda arguments: next(output_values))
+    bootstrap_globals = BOOTSTRAP["_request_client_certificate"].__globals__
+    monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_run_output",
+        lambda arguments: next(output_values),
+    )
     monkeypatch.setattr(
         BOOTSTRAP["ssl"],
         "create_default_context",
