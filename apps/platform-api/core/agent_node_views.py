@@ -79,7 +79,7 @@ MUTATING_COMMANDS = {
     "cluster.capi.worker.provision",
     "cluster.kubernetes.version.upgrade",
 }
-SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.35", "v1.36"})
+SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.34", "v1.35", "v1.36"})
 
 def _cancel_agent_commands(queryset, now):
     unknown_outcomes = []
