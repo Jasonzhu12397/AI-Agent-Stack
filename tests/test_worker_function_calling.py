@@ -23,8 +23,14 @@ from worker_app import tasks as worker_tasks
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("risk_level,expire_after_tool", [("low", False), ("low", True), ("high", False)])
-def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level, expire_after_tool):
+@pytest.mark.parametrize(
+    "risk_level,expire_after_tool",
+    [("low", False), ("low", True), ("high", False)],
+)
+def test_agent_worker_executes_tool_then_returns_final_model_answer(
+    risk_level,
+    expire_after_tool,
+):
     user = get_user_model().objects.create_user(username="tool-agent-user")
     tenant = Tenant.objects.create(name="Tool tenant", slug="tool-tenant")
     project = Project.objects.create(tenant=tenant, name="Tool project", slug="tool-project")
