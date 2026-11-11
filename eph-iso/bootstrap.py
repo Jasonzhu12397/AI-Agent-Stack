@@ -81,7 +81,7 @@ def _copy_secret_file(source, destination):
 
 def _create_secret(name, namespace, files):
     command = [
-        "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
         "--namespace", namespace, "create", "secret", "generic", name,
     ]
     for key, path in files.items():
@@ -91,7 +91,7 @@ def _create_secret(name, namespace, files):
         command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ).stdout
     _run([
-        "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
         "apply", "-f", "-"
     ], rendered)
 
@@ -103,7 +103,7 @@ def _apply_file(path, image=None):
             "REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION", image
         )
     _run([
-        "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
         "apply", "-f", "-"
     ], content)
 
@@ -138,24 +138,30 @@ def bootstrap():
             tls_files[key] = path
 
         capi_files = {}
-        for key, source in (
+        capi_sources = (
             ("source.kubeconfig", "capi/source.kubeconfig"),
             ("target.kubeconfig", "capi/target.kubeconfig"),
-        ):
-            path = secret_dir / key
-            _copy_secret_file(source, path)
-            capi_files[key] = path
+        )
+        capi_present = [(MEDIA_ROOT / source).exists() for _, source in capi_sources]
+        if any(capi_present) and not all(capi_present):
+            raise BootstrapError("CAPI_PIVOT_KUBECONFIG_SET_INCOMPLETE")
+        if all(capi_present):
+            for key, source in capi_sources:
+                path = secret_dir / key
+                _copy_secret_file(source, path)
+                capi_files[key] = path
 
-        _run(["kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        _run(["k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
               "apply", "-f", str(MANIFEST_ROOT / "namespace.yaml")])
-        _run(["kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        _run(["k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
               "apply", "-f", str(MANIFEST_ROOT / "rbac.yaml")])
         _create_secret("eph-node-agent-credentials", "ai-agent-system", credential_files)
         _create_secret("agent-control-plane-mtls", "ai-agent-system", tls_files)
-        _create_secret("capi-pivot-kubeconfigs", "ai-agent-system", capi_files)
+        if capi_files:
+            _create_secret("capi-pivot-kubeconfigs", "ai-agent-system", capi_files)
         _apply_file(MANIFEST_ROOT / "eph-node-agent.yaml", config["agent_image"])
         _run([
-            "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+            "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
             "--namespace", "ai-agent-system", "rollout", "status",
             "deployment/eph-node-agent", "--timeout=10m"
         ])
