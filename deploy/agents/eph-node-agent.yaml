@@ -136,6 +136,7 @@ spec:
         - name: capi-pivot-kubeconfigs
           secret:
             secretName: capi-pivot-kubeconfigs
+            optional: true
             items:
               - key: source.kubeconfig
                 path: source.kubeconfig
