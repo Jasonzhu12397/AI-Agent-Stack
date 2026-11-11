@@ -1941,7 +1941,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
             and node.pending_client_certificate_bound_at
             and node.pending_client_certificate_bound_at + datetime.timedelta(minutes=10) > now
         ):
-            return Response({"detail": "A certificate renewal is already pending activation."}, status=409)
+            return Response(
+                {"detail": "A certificate renewal is already pending activation."},
+                status=409,
+            )
         try:
             issued = sign_eph_csr(
                 csr_pem=csr_pem,
@@ -1952,7 +1955,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
         except EPHCertificateSignerUnavailable:
             return Response({"detail": "EPH certificate signer is unavailable."}, status=503)
         except EPHCertificateError:
-            return Response({"detail": "EPH certificate signing response or CSR is invalid."}, status=400)
+            return Response(
+                {"detail": "EPH certificate signing response or CSR is invalid."},
+                status=400,
+            )
 
         with transaction.atomic():
             locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
@@ -1967,11 +1973,16 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
                 )
                 or not hmac.compare_digest(locked.credential_hash, node.credential_hash)
             ):
-                return Response({"detail": "EPH node identity changed during certificate renewal."}, status=409)
+                return Response(
+                    {"detail": "EPH node identity changed during certificate renewal."},
+                    status=409,
+                )
             if (
                 locked.pending_client_certificate_fingerprint
                 and locked.pending_client_certificate_bound_at
-                and locked.pending_client_certificate_bound_at + datetime.timedelta(minutes=10) > timezone.now()
+                and locked.pending_client_certificate_bound_at
+                + datetime.timedelta(minutes=10)
+                > timezone.now()
             ):
                 return Response({"detail": "A certificate renewal is already pending activation."}, status=409)
             locked.pending_client_certificate_fingerprint = issued["fingerprint_sha256"]
@@ -1988,7 +1999,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
                 "agent_node",
                 locked.id,
                 project=locked.project,
-                metadata={"fingerprint_sha256": issued["fingerprint_sha256"], "issuer": "vault_pki"},
+                metadata={
+                    "fingerprint_sha256": issued["fingerprint_sha256"],
+                    "issuer": "vault_pki",
+                },
             )
         return Response({
             "node_id": str(node.id),
@@ -2015,7 +2029,11 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
         ).strip().lower()
         with transaction.atomic():
             locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
-            if locked is None or locked.status == AgentNode.Status.REVOKED or locked.revoked_at is not None:
+            if (
+                locked is None
+                or locked.status == AgentNode.Status.REVOKED
+                or locked.revoked_at is not None
+            ):
                 return Response({"detail": "EPH node identity is revoked."}, status=401)
             if (
                 verified_fingerprint
@@ -2027,7 +2045,10 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                     locked.last_activated_client_certificate_fingerprint,
                 )
             ):
-                return Response({"node_id": str(locked.id), "activated": True, "idempotent": True}, status=200)
+                return Response(
+                    {"node_id": str(locked.id), "activated": True, "idempotent": True},
+                    status=200,
+                )
             pending_fingerprint = locked.pending_client_certificate_fingerprint
             pending_at = locked.pending_client_certificate_bound_at
             if (
@@ -2036,7 +2057,10 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                 or pending_at + datetime.timedelta(minutes=10) <= timezone.now()
                 or not hmac.compare_digest(verified_fingerprint, pending_fingerprint)
             ):
-                return Response({"detail": "Pending certificate is missing, expired, or not presented."}, status=409)
+                return Response(
+                    {"detail": "Pending certificate is missing, expired, or not presented."},
+                    status=409,
+                )
             locked.client_certificate_fingerprint = pending_fingerprint
             locked.last_activated_client_certificate_fingerprint = pending_fingerprint
             locked.client_certificate_bound_at = pending_at
@@ -2061,7 +2085,10 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                 project=locked.project,
                 metadata={"fingerprint_sha256": pending_fingerprint},
             )
-        return Response({"node_id": str(locked.id), "activated": True, "idempotent": False}, status=200)
+        return Response(
+            {"node_id": str(locked.id), "activated": True, "idempotent": False},
+            status=200,
+        )
 
 
 class AgentRuntimeHeartbeatView(APIView):
