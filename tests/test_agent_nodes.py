@@ -2825,7 +2825,12 @@ def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_ident
     ):
         staged = runtime.post(
             f"/api/v1/agent-runtime/nodes/{node.id}/certificate/renew/",
-            {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nTEST\n-----END CERTIFICATE REQUEST-----\n"},
+            {
+                "csr_pem": (
+                    "-----BEGIN CERTIFICATE REQUEST-----\nTEST\n"
+                    "-----END CERTIFICATE REQUEST-----\n"
+                )
+            },
             format="json",
             **auth,
         )
