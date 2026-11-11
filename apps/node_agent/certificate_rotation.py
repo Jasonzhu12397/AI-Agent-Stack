@@ -80,7 +80,7 @@ def _verify_signature(certificate, issuer):
         raise CertificateRotationError("AGENT_TLS_ROTATION_CERTIFICATE_SIGNATURE_INVALID") from exc
 
 
-def validate_issued_certificate(certificate_pem, ca_chain_pem, private_key, node_id, trust_bundle_path):
+def validate_issued_certificate(certificate_pem, ca_chain_pem, private_key, node_id, trusted_certificate_bundle):
     try:
         certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
         common_names = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -95,7 +95,7 @@ def validate_issued_certificate(certificate_pem, ca_chain_pem, private_key, node
         if _certificate_time(certificate.not_valid_after) <= now:
             raise CertificateRotationError("AGENT_TLS_ROTATION_CERTIFICATE_EXPIRED")
         chain = _load_certificates(ca_chain_pem.encode("ascii"))
-        trust_bundle = _load_certificates(Path(trust_bundle_path).read_bytes())
+        trust_bundle = _load_certificates(trusted_certificate_bundle)
     except (OSError, UnicodeError, ValueError, AttributeError) as exc:
         if isinstance(exc, CertificateRotationError):
             raise
@@ -135,7 +135,7 @@ class CertificateRotationManager:
             hours=int(os.environ.get("AGENT_TLS_ROTATION_RENEW_BEFORE_HOURS", "6"))
         )
         self.last_check = None
-        self.check_interval = datetime.timedelta(minutes=5)
+        self.check_interval = datetime.timedelta(seconds=30)
         self.api_timeout = 10
 
     def _kubernetes_request(self, method, path, payload=None):
@@ -334,11 +334,13 @@ class CertificateRotationManager:
             ca_chain_pem,
             private_key,
             self.client.node_id,
-            self.ca_file,
+            current_certificate_pem,
         )
         if not hmac.compare_digest(calculated, fingerprint.lower()):
             raise CertificateRotationError("AGENT_TLS_ROTATION_FINGERPRINT_MISMATCH")
-        certificate_bytes = certificate_pem.encode("ascii")
+        certificate_bytes = (
+            certificate_pem.encode("ascii") + ca_chain_pem.encode("ascii")
+        )
         self._patch_secret({
             "pending.tls.crt": self._encode_secret_value(certificate_bytes),
             "pending.tls.key": self._encode_secret_value(private_key_pem),
