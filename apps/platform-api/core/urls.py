@@ -22,6 +22,11 @@ from core.agent_node_views import (
     AgentRuntimePollView,
     AgentRuntimeResultView,
 )
+from core.eph_seed_views import (
+    EPHSeedArtifactCreateView,
+    EPHSeedArtifactDownloadView,
+    EPHSeedArtifactRevokeView,
+)
 from core.agent_views import (
     AgentDetailView,
     AgentListCreateView,
@@ -233,6 +238,23 @@ urlpatterns = [
         "api/v1/agent-runtime/inventory/",
         AgentRuntimeInventoryReportView.as_view(),
         name="agent-runtime-inventory",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "agent-nodes/<uuid:node_id>/seed-artifacts/",
+        EPHSeedArtifactCreateView.as_view(),
+        name="eph-seed-artifact-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "agent-nodes/<uuid:node_id>/seed-artifacts/<uuid:artifact_id>/revoke/",
+        EPHSeedArtifactRevokeView.as_view(),
+        name="eph-seed-artifact-revoke",
+    ),
+    path(
+        "api/v1/agent-runtime/seed-artifacts/<uuid:artifact_id>/download/",
+        EPHSeedArtifactDownloadView.as_view(),
+        name="eph-seed-artifact-download",
     ),
     path(
         "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/",
