@@ -88,7 +88,7 @@ def test_seed_rejects_invalid_node_configuration(change, expected):
         render_nocloud_seed(config)
 
 
-def test_seed_does_not_accept_missing_network_or_tls_material():
+def test_seed_does_not_accept_missing_network_or_control_plane_ca():
     config = valid_config()
     del config["network_config"]
 
