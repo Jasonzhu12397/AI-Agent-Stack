@@ -392,9 +392,10 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
     ]
     assert len(rollout) == 1
     assert rollout[0][1][-3:] == [
+        "status",
         "deployment/eph-node-agent",
         "--timeout=10m",
-    ][-3:]
+    ]
 
 
 def test_bootstrap_fails_when_agent_deployment_rollout_fails(
