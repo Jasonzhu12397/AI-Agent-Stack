@@ -2673,7 +2673,9 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
     assert response.data["private_key_returned"] is False
     node = AgentNode.objects.get(pk=node_id)
     assert node.credential_hash != original_hash
-    assert node.credential_hash == hashlib.sha256(\n        response.data["agent_token"].encode("utf-8")\n    ).hexdigest()
+    assert node.credential_hash == hashlib.sha256(
+        response.data["agent_token"].encode("utf-8")
+    ).hexdigest()
     assert node.client_certificate_fingerprint == fingerprint
     assert node.client_certificate_bound_at is not None
     assert node.client_certificate_revoked_at is None
