@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 
 
-MEDIA_ROOT = Path("/run/eph-bootstrap-media/network")
+MEDIA_ROOT = Path("/mnt/eph-bootstrap/network")
 TARGET_ROOT = Path("/etc/systemd/network")
 ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
 
