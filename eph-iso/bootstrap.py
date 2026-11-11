@@ -8,7 +8,6 @@ import tempfile
 import urllib.parse
 import uuid
 
-
 MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap")
 MANIFEST_ROOT = pathlib.Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
@@ -31,7 +30,7 @@ def validate_config(config):
         parsed = urllib.parse.urlsplit(control_url)
         parsed_port = parsed.port
     except ValueError:
-        raise BootstrapError("CONTROL_URL_INVALID")
+        raise BootstrapError("CONTROL_URL_INVALID") from None
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -185,4 +184,4 @@ if __name__ == "__main__":
     except (BootstrapError, OSError, ValueError, subprocess.CalledProcessError) as error:
         message = str(error) if isinstance(error, BootstrapError) else "EPH_BOOTSTRAP_FAILED"
         print(message, file=__import__("sys").stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
