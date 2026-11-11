@@ -86,12 +86,12 @@ def test_target_agent_rejects_unsupported_kubernetes_version(node_workspace):
             "payload": {
                 "cluster_name": "edge-lab",
                 "current_version": "v1.32.2",
-                "target_version": "v1.34",
+                "target_version": "v1.37",
                 "execution_mode": "simulation",
             },
         },
         format="json",
-        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v134",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v137",
     )
 
     assert response.status_code == 400
