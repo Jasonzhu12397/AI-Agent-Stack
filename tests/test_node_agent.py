@@ -4082,7 +4082,7 @@ def test_machine_deployment_dry_run_rejects_api_redirects(monkeypatch, tmp_path)
 
     class FakeOpener:
         def open(self, request, timeout):
-            raise urllib.error.HTTPError(
+            raise agent.urllib.error.HTTPError(
                 request.full_url,
                 302,
                 "Found",
