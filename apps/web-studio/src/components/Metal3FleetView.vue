@@ -573,6 +573,11 @@ onUnmounted(() => {
                 <el-tag type="info" size="small">{{ upgradeStepStatus(step) }}</el-tag>
               </li>
             </ol>
+            <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
+              Upgrade simulation failed. Review the Agent error before taking further action.
+              <span v-if="getKubernetesUpgradeFailure(command.error)">{{ getKubernetesUpgradeFailure(command.error) }}</span>
+              <span v-else>No structured failure detail was returned.</span>
+            </p>
             <p v-else class="fleet-upgrade-pending">
               {{ command.status === "waiting_approval" ? "Awaiting independent approval; no upgrade step has executed." : "The Agent has not returned an upgrade plan yet." }}
             </p>
