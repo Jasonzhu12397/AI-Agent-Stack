@@ -125,6 +125,8 @@ def _validate_issued_client_certificate(certificate, expected_common_name):
         or common_names[0].value != expected_common_name
         or basic_constraints.ca
         or not key_usage.digital_signature
+        or key_usage.key_cert_sign
+        or key_usage.crl_sign
         or ExtendedKeyUsageOID.CLIENT_AUTH not in extended_key_usage
     ):
         raise EPHCertificateError(
