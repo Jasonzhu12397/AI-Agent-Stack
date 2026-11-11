@@ -55,9 +55,14 @@ install -m 0755 "$BUILD_DIR/k3s" "$BUILD_DIR/config/includes.chroot/usr/local/bi
 
 cd "$BUILD_DIR"
 lb config \
+    --mode debian \
     --distribution bookworm \
     --architectures "$ARCHITECTURE" \
-    --binary-images iso-hybrid \
+    --mirror-bootstrap https://deb.debian.org/debian/ \
+    --mirror-chroot https://deb.debian.org/debian/ \
+    --mirror-chroot-security https://security.debian.org/debian-security/ \
+    --mirror-binary https://deb.debian.org/debian/ \
+    --mirror-binary-security https://security.debian.org/debian-security/ \
     --archive-areas "main contrib non-free-firmware" \
     --apt-recommends false \
     --debian-installer false \
