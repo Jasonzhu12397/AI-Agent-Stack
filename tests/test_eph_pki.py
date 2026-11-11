@@ -1,7 +1,7 @@
 # ruff: noqa: I001
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
@@ -21,7 +21,7 @@ def _csr(common_name="agent-node-test.agents.internal"):
         x509.CertificateSigningRequestBuilder()
         .subject_name(subject)
         .sign(private_key, hashes.SHA256())
-        .public_bytes(__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]).Encoding.PEM)
+        .public_bytes(serialization.Encoding.PEM)
         .decode("ascii")
     )
 
