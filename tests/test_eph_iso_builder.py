@@ -237,3 +237,14 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     assert result["tls.key"] == key_path
     assert result["tls.crt"].read_text(encoding="ascii") == certificate + certificate
     assert key_path.stat().st_mode & 0o777 == 0o600
+
+@pytest.mark.parametrize(
+    "response",
+    [None, [], "{}", 1, {"agent_token": "a" * 64}],
+)
+def test_bootstrap_rejects_non_object_or_incomplete_certificate_response(response):
+    with pytest.raises(BOOTSTRAP["BootstrapError"], match="CLIENT_CERTIFICATE_RESPONSE_INVALID"):
+        BOOTSTRAP["_validate_certificate_exchange_response"](
+            response,
+            str(uuid.uuid4()),
+        )
