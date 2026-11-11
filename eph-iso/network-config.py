@@ -8,12 +8,14 @@ ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
 FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
-def install_network_configuration():
-    if not MEDIA_ROOT.is_dir() or MEDIA_ROOT.is_symlink():
+def install_network_configuration(media_root=None, target_root=None):
+    media_root = pathlib.Path(media_root) if media_root is not None else MEDIA_ROOT
+    target_root = pathlib.Path(target_root) if target_root is not None else TARGET_ROOT
+    if not media_root.is_dir() or media_root.is_symlink():
         return
-    TARGET_ROOT.mkdir(mode=0o755, parents=True, exist_ok=True)
-    media_root = MEDIA_ROOT.resolve()
-    for source in sorted(MEDIA_ROOT.iterdir()):
+    target_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    resolved_media_root = media_root.resolve()
+    for source in sorted(media_root.iterdir()):
         if (
             source.suffix not in ALLOWED_SUFFIXES
             or not FILENAME_PATTERN.fullmatch(source.name)
@@ -22,9 +24,9 @@ def install_network_configuration():
         ):
             continue
         resolved = source.resolve(strict=True)
-        if not resolved.is_relative_to(media_root) or resolved.stat().st_size > 32768:
+        if not resolved.is_relative_to(resolved_media_root) or resolved.stat().st_size > 32768:
             raise ValueError("EPH_NETWORK_CONFIG_INVALID:" + source.name)
-        destination = TARGET_ROOT / source.name
+        destination = target_root / source.name
         shutil.copyfile(str(resolved), str(destination))
         destination.chmod(0o644)
 
