@@ -42,7 +42,11 @@ kubectl apply -f /run/eph-bootstrap/flannel.yaml
 kubectl -n kube-flannel rollout status daemonset/kube-flannel-ds --timeout=180s
 kubectl create namespace ai-agent-system --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f /usr/local/share/eph/node-agent-rbac.yaml
-kubectl -n ai-agent-system create secret generic eph-node-agent-credentials --from-literal=control-url="$CONTROL_URL" --from-literal=node-id="$NODE_ID" --from-literal=token="$NODE_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
+printf '%s' "$CONTROL_URL" >/run/eph-bootstrap/control-url
+printf '%s' "$NODE_ID" >/run/eph-bootstrap/node-id
+printf '%s' "$NODE_TOKEN" >/run/eph-bootstrap/token
+chmod 0600 /run/eph-bootstrap/control-url /run/eph-bootstrap/node-id /run/eph-bootstrap/token
+kubectl -n ai-agent-system create secret generic eph-node-agent-credentials --from-file=control-url=/run/eph-bootstrap/control-url --from-file=node-id=/run/eph-bootstrap/node-id --from-file=token=/run/eph-bootstrap/token --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n ai-agent-system create secret generic agent-control-plane-tls --from-file=ca.crt=/run/eph-bootstrap/ca.crt --from-file=tls.crt=/run/eph-bootstrap/tls.crt --from-file=tls.key=/run/eph-bootstrap/tls.key --dry-run=client -o yaml | kubectl apply -f -
 cat >/run/eph-bootstrap/eph-agent.yaml <<EOF
 apiVersion: v1
