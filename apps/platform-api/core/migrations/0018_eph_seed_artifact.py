@@ -15,7 +15,15 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="EPHSeedArtifact",
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
                 ("encrypted_payload", models.TextField()),
                 ("download_token_hash", models.CharField(max_length=64)),
                 ("expires_at", models.DateTimeField()),
