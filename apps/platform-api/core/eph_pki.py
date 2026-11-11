@@ -5,13 +5,16 @@ import json
 import re
 
 import httpx
+from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.x509.oid import NameOID
 from django.conf import settings
 
 from core.bmc_credentials import _vault_url, resolve_vault_jwt_token
 
 
 PEM_PATTERN = re.compile(
-    r"-----BEGIN ([A-Z0-9 ]+)-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END \1-----",
+    r"-----BEGIN ([A-Z0-9 ]+)-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END \\1-----",
     re.DOTALL,
 )
 MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -34,7 +37,7 @@ def _decode_pem(value, expected_label, field, maximum):
         raise EPHCertificateError("EPH_CERTIFICATE_INVALID:" + field)
     try:
         decoded = base64.b64decode(
-            re.sub(r"\s+", "", match.group(2)),
+            re.sub(r"\\s+", "", match.group(2)),
             validate=True,
         )
     except (ValueError, TypeError):
@@ -44,9 +47,24 @@ def _decode_pem(value, expected_label, field, maximum):
     return decoded
 
 
-def validate_eph_csr(csr_pem):
+def validate_eph_csr(csr_pem, expected_common_name=None):
     _decode_pem(csr_pem, "CERTIFICATE REQUEST", "csr", 16384)
-    return csr_pem.strip() + "\n"
+    try:
+        csr = x509.load_pem_x509_csr(csr_pem.encode("ascii"))
+        common_names = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        if not csr.is_signature_valid:
+            raise EPHCertificateError("EPH_CERTIFICATE_CSR_SIGNATURE_INVALID")
+        if (
+            expected_common_name is not None
+            and (
+                len(common_names) != 1
+                or common_names[0].value != expected_common_name
+            )
+        ):
+            raise EPHCertificateError("EPH_CERTIFICATE_CSR_SUBJECT_INVALID")
+    except (ValueError, UnicodeEncodeError, UnsupportedAlgorithm):
+        raise EPHCertificateError("EPH_CERTIFICATE_INVALID:csr") from None
+    return csr_pem.strip() + "\\n"
 
 
 def _vault_headers(token):
@@ -74,12 +92,13 @@ def _validate_ca_chain(ca_chain, issuing_ca):
     normalized = []
     for certificate in values:
         _decode_pem(certificate, "CERTIFICATE", "ca_chain", 131072)
-        normalized.append(certificate.strip() + "\n")
+        normalized.append(certificate.strip() + "\\n")
     return "".join(normalized)
 
 
 def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
-    csr_pem = validate_eph_csr(csr_pem)
+    common_name = f"agent-node-{node_id}.agents.internal"
+    csr_pem = validate_eph_csr(csr_pem, common_name)
     mount = getattr(settings, "EPH_PKI_MOUNT", "pki").strip("/")
     role = getattr(settings, "EPH_PKI_ROLE", "agent-nodes")
     ttl = getattr(settings, "EPH_PKI_TTL", "24h")
@@ -103,7 +122,6 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
     verify = ca_bundle if ca_bundle else True
     timeout_value = float(getattr(settings, "BMC_VAULT_TIMEOUT_SECONDS", 5))
     timeout = httpx.Timeout(timeout_value, connect=min(3.0, timeout_value))
-    common_name = f"agent-node-{node_id}.agents.internal"
     payload = {
         "csr": csr_pem,
         "common_name": common_name,
@@ -163,7 +181,7 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
     )
     chain_pem = _validate_ca_chain(ca_chain, issuing_ca)
     return {
-        "client_certificate": certificate.strip() + "\n",
+        "client_certificate": certificate.strip() + "\\n",
         "ca_chain": chain_pem,
         "fingerprint_sha256": hashlib.sha256(certificate_der).hexdigest(),
         "common_name": common_name,
