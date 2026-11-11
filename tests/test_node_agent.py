@@ -60,6 +60,22 @@ def test_target_agent_rejects_unsupported_kubernetes_version():
         )
 
 
+def test_target_agent_rejects_skipping_kubernetes_minor_versions():
+    with pytest.raises(agent.NodeAgentError, match="KUBERNETES_VERSION_UPGRADE_REQUEST_INVALID"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.kubernetes.version.upgrade",
+                "payload": {
+                    "cluster_name": "edge-lab",
+                    "current_version": "v1.34.2",
+                    "target_version": "v1.36",
+                    "execution_mode": "simulation",
+                },
+            },
+            "target_cluster",
+        )
+
+
 def test_eph_agent_cannot_execute_kubernetes_version_upgrade():
     with pytest.raises(agent.NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
         agent.execute_command(
