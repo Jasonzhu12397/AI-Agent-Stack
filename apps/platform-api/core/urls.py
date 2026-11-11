@@ -262,6 +262,16 @@ urlpatterns = [
         name="agent-runtime-eph-certificate-exchange",
     ),
     path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/renew/",
+        AgentRuntimeEPHCertificateRenewalView.as_view(),
+        name="agent-runtime-eph-certificate-renewal",
+    ),
+    path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/activate/",
+        AgentRuntimeEPHCertificateActivationView.as_view(),
+        name="agent-runtime-eph-certificate-activation",
+    ),
+    path(
         "api/v1/agent-runtime/heartbeat/",
         AgentRuntimeHeartbeatView.as_view(),
         name="agent-runtime-heartbeat",
