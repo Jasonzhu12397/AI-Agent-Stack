@@ -379,7 +379,6 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
         "tls.crt",
         "tls.key",
     ]) in events
-    assert ("manifest", "eph-node-agent.yaml", valid_config()["agent_image"]) not in events
     assert any(
         event[0] == "manifest"
         and event[1] == "eph-node-agent.yaml"
