@@ -20,7 +20,11 @@ def test_validate_eph_csr_accepts_pem_and_normalizes_final_newline():
         "not-a-csr",
         "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----",
         "-----BEGIN CERTIFICATE REQUEST-----\n***\n-----END CERTIFICATE REQUEST-----",
-        "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----" + ("A" * 16384),
+        (
+            "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n"
+            "-----END CERTIFICATE REQUEST-----"
+            + ("A" * 16384)
+        ),
     ],
 )
 def test_validate_eph_csr_rejects_invalid_or_oversized_pem(csr):
