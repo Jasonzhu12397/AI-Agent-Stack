@@ -24,10 +24,24 @@ def validate_config(config):
     required = {"control_url", "node_id", "enrollment_token", "agent_image"}
     if not required.issubset(config):
         raise BootstrapError("BOOTSTRAP_CONFIG_FIELDS_MISSING")
-    parsed = urllib.parse.urlsplit(config["control_url"])
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    control_url = config["control_url"]
+    if not isinstance(control_url, str):
         raise BootstrapError("CONTROL_URL_INVALID")
-    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+    try:
+        parsed = urllib.parse.urlsplit(control_url)
+        parsed_port = parsed.port
+    except ValueError:
+        raise BootstrapError("CONTROL_URL_INVALID")
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or (parsed_port is not None and not 1 <= parsed_port <= 65535)
+    ):
         raise BootstrapError("CONTROL_URL_INVALID")
     try:
         uuid.UUID(config["node_id"])
@@ -38,7 +52,8 @@ def validate_config(config):
         raise BootstrapError("ENROLLMENT_TOKEN_INVALID")
     if any(ord(character) < 33 or ord(character) > 126 for character in token):
         raise BootstrapError("ENROLLMENT_TOKEN_INVALID")
-    if not isinstance(config["agent_image"], str) or not IMAGE_PATTERN.fullmatch(config["agent_image"]):
+    image = config["agent_image"]
+    if not isinstance(image, str) or not IMAGE_PATTERN.fullmatch(image):
         raise BootstrapError("AGENT_IMAGE_NOT_PINNED_BY_DIGEST")
     return config
 
@@ -58,6 +73,8 @@ def _copy_secret_file(source, destination):
     source_path = MEDIA_ROOT / source
     if not source_path.is_file() or source_path.is_symlink():
         raise BootstrapError("BOOTSTRAP_SECRET_FILE_MISSING:" + source)
+    if source_path.stat().st_size == 0:
+        raise BootstrapError("BOOTSTRAP_SECRET_FILE_EMPTY:" + source)
     shutil.copyfile(str(source_path), str(destination))
     os.chmod(str(destination), 0o600)
 
