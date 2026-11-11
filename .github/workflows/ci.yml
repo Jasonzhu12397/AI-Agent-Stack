@@ -115,8 +115,15 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/eph-seed"
           printf '%s\n' 'instance-id: ci-eph-node' 'local-hostname: eph-node' > "$RUNNER_TEMP/eph-seed/meta-data"
-          printf '%s\n' '#cloud-config' 'ssh_pwauth: false' > "$RUNNER_TEMP/eph-seed/user-data"
+          cat > "$RUNNER_TEMP/eph-seed/user-data" <<'EOF'
+          #cloud-config
+          ssh_pwauth: false
+          runcmd:
+            - [python3, -c, "import urllib.request; urllib.request.urlopen('http://10.0.2.2:18080/cloud-init-ready', timeout=10).read()"]
+          EOF
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
+          python3 -m http.server 18080 --bind 0.0.0.0 --directory "$RUNNER_TEMP" > "$RUNNER_TEMP/cloud-init-http.log" 2>&1 &
+          HTTP_PID=$!
           dd if=/dev/zero of="$RUNNER_TEMP/eph-seed.img" bs=1M count=64
           mkfs.vfat -n CIDATA "$RUNNER_TEMP/eph-seed.img"
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/meta-data" ::meta-data
@@ -133,12 +140,18 @@ jobs:
             -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
-          trap 'kill "$QEMU_PID" >/dev/null 2>&1 || true' EXIT
+          trap 'kill "$QEMU_PID" "$HTTP_PID" >/dev/null 2>&1 || true' EXIT
           ready=false
+          cloud_init_ready=false
           for attempt in $(seq 1 60); do
             if curl --insecure --fail --silent --max-time 3 \
               https://127.0.0.1:16443/readyz >/dev/null; then
               ready=true
+            fi
+            if grep -q 'GET /cloud-init-ready ' "$RUNNER_TEMP/cloud-init-http.log"; then
+              cloud_init_ready=true
+            fi
+            if [ "$ready" = true ] && [ "$cloud_init_ready" = true ]; then
               break
             fi
             if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
@@ -146,9 +159,10 @@ jobs:
             fi
             sleep 5
           done
-          if [ "$ready" != true ]; then
+          if [ "$ready" != true ] || [ "$cloud_init_ready" != true ]; then
             cat "$RUNNER_TEMP/qemu.stdout"
             cat "$RUNNER_TEMP/eph-qemu.log"
+            cat "$RUNNER_TEMP/cloud-init-http.log"
             exit 1
           fi
       - name: Upload EPH Live ISO artifact
