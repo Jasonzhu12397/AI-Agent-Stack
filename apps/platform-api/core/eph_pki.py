@@ -3,7 +3,6 @@ import base64
 import hashlib
 import json
 import re
-from urllib.parse import urlsplit
 
 import httpx
 from django.conf import settings
