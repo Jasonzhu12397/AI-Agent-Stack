@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$ROOT_DIR/../.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
 KUBERNETES_MINOR="${KUBERNETES_MINOR:-1.35}"
 FLANNEL_VERSION="${FLANNEL_VERSION:-v0.27.4}"
