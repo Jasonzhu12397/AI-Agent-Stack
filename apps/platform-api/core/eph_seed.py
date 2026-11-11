@@ -111,13 +111,6 @@ def render_nocloud_seed(config):
     ca_certificate = _validate_pem(
         config.get("ca_certificate"), "ca_certificate", "CERTIFICATE"
     )
-    client_certificate = _validate_pem(
-        config.get("client_certificate"), "client_certificate", "CERTIFICATE"
-    )
-    client_private_key = _validate_pem(
-        config.get("client_private_key"), "client_private_key", "PRIVATE KEY"
-    )
-
     bootstrap_config = {
         "control_url": control_url,
         "node_id": node_id,
@@ -136,18 +129,6 @@ def render_nocloud_seed(config):
             "owner": "root:root",
             "permissions": "0600",
             "content": ca_certificate,
-        },
-        {
-            "path": "/etc/ai-agent-studio/eph-bootstrap/tls/tls.crt",
-            "owner": "root:root",
-            "permissions": "0600",
-            "content": client_certificate,
-        },
-        {
-            "path": "/etc/ai-agent-studio/eph-bootstrap/tls/tls.key",
-            "owner": "root:root",
-            "permissions": "0600",
-            "content": client_private_key,
         },
     ]
     user_data = {
