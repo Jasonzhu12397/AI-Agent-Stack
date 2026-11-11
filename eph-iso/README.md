@@ -43,6 +43,14 @@ The version above is an example input, not a claim that its checksum has been ve
 
 The enrollment token is read from the removable bootstrap volume and copied into a Kubernetes Secret using temporary mode-0600 files. The bootstrap service calls `k3s kubectl` directly, so the ISO does not need a separate kubectl binary. It is not written into the ISO, the kernel command line, or shell history. The one-time token and client certificate must be issued for the intended node by the existing Agent enrollment flow. Never reuse a Target Agent identity for the EPH runtime.
 
+## Per-node network configuration
+
+The ISO mounts the separate `EPHBOOT` volume before systemd-networkd starts. Put one or more site-specific networkd files in its `network/` directory. The bootstrap service stages regular `.network`, `.netdev`, and `.link` files into `/etc/systemd/network` before the network service starts. Filenames are restricted and each file is limited to 32 KiB.
+
+For DHCP, copy and adapt `eph-iso/examples/network/10-uplink-dhcp.network` to `EPHBOOT/network/10-uplink.network`. For static addressing, adapt `eph-iso/examples/network/10-uplink-static.network`. Replace the example interface name and documentation-only IP addresses with values from the site network plan. Do not assume a fixed interface name or MAC address. Bond, VLAN, bridge, and link settings can be supplied as additional networkd `.netdev`, `.network`, and `.link` files.
+
+The example profiles are not automatically installed into the ISO. A boot volume without a usable network profile may boot Kubernetes but cannot enroll the EPH Agent with the Cloud Control Plane.
+
 ## Runtime layout
 
 - Debian Live root filesystem: booted with `toram`; no disk installation.
