@@ -12,7 +12,7 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
 from cryptography.x509.oid import NameOID
 
 
@@ -21,13 +21,13 @@ class CertificateRotationError(Exception):
 
 
 def _utc_now():
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def _certificate_time(value):
     if value.tzinfo is None:
-        return value.replace(tzinfo=datetime.timezone.utc)
-    return value.astimezone(datetime.timezone.utc)
+        return value.replace(tzinfo=datetime.UTC)
+    return value.astimezone(datetime.UTC)
 
 
 def _load_certificates(pem_data):
@@ -82,7 +82,13 @@ def _verify_signature(certificate, issuer):
         raise CertificateRotationError("AGENT_TLS_ROTATION_CERTIFICATE_SIGNATURE_INVALID") from exc
 
 
-def validate_issued_certificate(certificate_pem, ca_chain_pem, private_key, node_id, trusted_certificate_bundle):
+def validate_issued_certificate(
+    certificate_pem,
+    ca_chain_pem,
+    private_key,
+    node_id,
+    trusted_certificate_bundle,
+):
     try:
         certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
         common_names = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -131,7 +137,10 @@ class CertificateRotationManager:
         self.cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
         self.key_file = os.environ.get("AGENT_TLS_KEY_FILE", "").strip()
         self.ca_file = os.environ.get("AGENT_TLS_CA_FILE", "").strip()
-        self.secret_name = os.environ.get("AGENT_TLS_ROTATION_SECRET_NAME", "agent-control-plane-mtls")
+        self.secret_name = os.environ.get(
+            "AGENT_TLS_ROTATION_SECRET_NAME",
+            "agent-control-plane-mtls",
+        )
         self.namespace = os.environ.get("POD_NAMESPACE", "ai-agent-system")
         self.threshold = datetime.timedelta(
             hours=int(os.environ.get("AGENT_TLS_ROTATION_RENEW_BEFORE_HOURS", "6"))
@@ -151,7 +160,9 @@ class CertificateRotationManager:
             token = token_path.read_text(encoding="ascii").strip()
             context = ssl.create_default_context(cafile=str(ca_path))
         except (OSError, UnicodeError, ssl.SSLError) as exc:
-            raise CertificateRotationError("AGENT_TLS_ROTATION_KUBERNETES_AUTH_UNAVAILABLE") from exc
+            raise CertificateRotationError(
+                "AGENT_TLS_ROTATION_KUBERNETES_AUTH_UNAVAILABLE"
+            ) from exc
         if not token or len(token) > 16384:
             raise CertificateRotationError("AGENT_TLS_ROTATION_KUBERNETES_AUTH_INVALID")
         request = urllib.request.Request(
@@ -263,7 +274,8 @@ class CertificateRotationManager:
             raise CertificateRotationError("AGENT_TLS_ROTATION_PENDING_TIMESTAMP_INVALID") from exc
         if created_at.tzinfo is None:
             raise CertificateRotationError("AGENT_TLS_ROTATION_PENDING_TIMESTAMP_INVALID")
-        if _utc_now() - created_at.astimezone(datetime.timezone.utc) >= datetime.timedelta(minutes=9):
+        pending_age = _utc_now() - created_at.astimezone(datetime.UTC)
+        if pending_age >= datetime.timedelta(minutes=9):
             self._patch_secret({
                 "pending.tls.crt": None,
                 "pending.tls.key": None,
