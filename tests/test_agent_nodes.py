@@ -2784,3 +2784,122 @@ def test_eph_certificate_signer_rejection_does_not_bind_certificate(
     node = AgentNode.objects.get(pk=node_id)
     assert node.client_certificate_fingerprint == ""
     assert node.client_certificate_bound_at is None
+
+
+@pytest.mark.django_db
+def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_identity(
+    node_workspace,
+    monkeypatch,
+):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-cert-rotation", "node_type": "eph_node"},
+        format="json",
+    )
+    assert enrolled.status_code == 201
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    old_fingerprint = "a" * 64
+    new_fingerprint = "b" * 64
+    node.client_certificate_fingerprint = old_fingerprint
+    node.client_certificate_bound_at = timezone.now()
+    node.save(update_fields=["client_certificate_fingerprint", "client_certificate_bound_at"])
+    monkeypatch.setattr(
+        "core.agent_node_views.sign_eph_csr",
+        lambda **kwargs: {
+            "client_certificate": "NEW CERTIFICATE",
+            "ca_chain": "TRUSTED CA",
+            "fingerprint_sha256": new_fingerprint,
+            "common_name": "agent-node-{}.agents.internal".format(node.id),
+        },
+    )
+    runtime = APIClient()
+    auth = {
+        "HTTP_AUTHORIZATION": "Bearer " + enrolled.data["enrollment_token"],
+        "HTTP_X_VERIFIED_CLIENT_CERT_SHA256": old_fingerprint,
+        "REMOTE_ADDR": "127.0.0.1",
+    }
+    with override_settings(
+        AGENT_MTLS_REQUIRED=True,
+        AGENT_MTLS_TRUSTED_PROXY_IP="127.0.0.1",
+    ):
+        staged = runtime.post(
+            f"/api/v1/agent-runtime/nodes/{node.id}/certificate/renew/",
+            {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nTEST\n-----END CERTIFICATE REQUEST-----\n"},
+            format="json",
+            **auth,
+        )
+        node.refresh_from_db()
+        assert staged.status_code == 200
+        assert staged.data["activation_required"] is True
+        assert "agent_token" not in staged.data
+        assert node.client_certificate_fingerprint == old_fingerprint
+        assert node.pending_client_certificate_fingerprint == new_fingerprint
+
+        new_auth = dict(auth)
+        new_auth["HTTP_X_VERIFIED_CLIENT_CERT_SHA256"] = new_fingerprint
+        activated = runtime.post(
+            f"/api/v1/agent-runtime/nodes/{node.id}/certificate/activate/",
+            {},
+            format="json",
+            **new_auth,
+        )
+        node.refresh_from_db()
+        assert activated.status_code == 200
+        assert activated.data["activated"] is True
+        assert activated.data["idempotent"] is False
+        assert node.client_certificate_fingerprint == new_fingerprint
+        assert node.pending_client_certificate_fingerprint == ""
+        assert node.last_activated_client_certificate_fingerprint == new_fingerprint
+
+        retried = runtime.post(
+            f"/api/v1/agent-runtime/nodes/{node.id}/certificate/activate/",
+            {},
+            format="json",
+            **new_auth,
+        )
+        assert retried.status_code == 200
+        assert retried.data["idempotent"] is True
+
+        old_identity = runtime.post(
+            "/api/v1/agent-runtime/heartbeat/",
+            {"node_id": str(node.id)},
+            format="json",
+            **auth,
+        )
+        assert old_identity.status_code == 401
+
+
+@pytest.mark.django_db
+def test_eph_certificate_activation_rejects_expired_pending_identity(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-cert-expired", "node_type": "eph_node"},
+        format="json",
+    )
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    old_fingerprint = "c" * 64
+    pending_fingerprint = "d" * 64
+    node.client_certificate_fingerprint = old_fingerprint
+    node.client_certificate_bound_at = timezone.now()
+    node.pending_client_certificate_fingerprint = pending_fingerprint
+    node.pending_client_certificate_bound_at = timezone.now() - datetime.timedelta(minutes=11)
+    node.save()
+    runtime = APIClient()
+    with override_settings(
+        AGENT_MTLS_REQUIRED=True,
+        AGENT_MTLS_TRUSTED_PROXY_IP="127.0.0.1",
+    ):
+        response = runtime.post(
+            f"/api/v1/agent-runtime/nodes/{node.id}/certificate/activate/",
+            {},
+            format="json",
+            HTTP_AUTHORIZATION="Bearer " + enrolled.data["enrollment_token"],
+            HTTP_X_VERIFIED_CLIENT_CERT_SHA256=pending_fingerprint,
+            REMOTE_ADDR="127.0.0.1",
+        )
+    node.refresh_from_db()
+    assert response.status_code == 409
+    assert node.client_certificate_fingerprint == old_fingerprint
+    assert node.pending_client_certificate_fingerprint == pending_fingerprint
