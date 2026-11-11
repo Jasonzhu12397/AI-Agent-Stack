@@ -1,12 +1,10 @@
-import importlib.util
 import pathlib
+import runpy
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "eph-iso/network-config.py"
-SPEC = importlib.util.spec_from_file_location("eph_iso_network_config", MODULE_PATH)
-NETWORK_CONFIG = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(NETWORK_CONFIG)
+NETWORK_CONFIG = runpy.run_path(str(MODULE_PATH))
 
 
 def test_network_profile_installer_copies_only_supported_regular_files(tmp_path, monkeypatch):
@@ -24,7 +22,7 @@ def test_network_profile_installer_copies_only_supported_regular_files(tmp_path,
 
     monkeypatch.setattr(NETWORK_CONFIG, "MEDIA_ROOT", media)
     monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
-    NETWORK_CONFIG.install_network_configuration()
+    NETWORK_CONFIG["install_network_configuration"]()
 
     assert (target / "10-uplink.network").is_file()
     assert not (target / "ignore.txt").exists()
