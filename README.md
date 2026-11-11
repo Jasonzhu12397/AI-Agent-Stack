@@ -6,6 +6,10 @@ An extensible, policy-governed AI Agent platform with separate frontend and back
 
 The long-term infrastructure product scope is documented in [Omni-Inspired Infrastructure Platform Roadmap](docs/omni-parity-roadmap.md). Omni is a capability benchmark; this project uses CAPI + Metal3 + Ironic and the dual-Agent EPH/Target lifecycle rather than copying Talos-specific implementation.
 
+## EPH RAM Live ISO
+
+The first EPH Live ISO builder and per-node NoCloud seed generator are under [images/eph-live](images/eph-live/README.md). The ISO boots Debian Live with toram, initializes a single-node Kubernetes cluster, and deploys the EPH Agent as a Kubernetes Deployment. This is an initial implementation; QEMU boot validation and hardware qualification remain release gates.
+
 ## Current architecture
 
 - **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
