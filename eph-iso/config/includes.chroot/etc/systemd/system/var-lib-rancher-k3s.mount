@@ -1,0 +1,12 @@
+[Unit]
+Description=RAM-backed K3s state
+Before=k3s.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/rancher/k3s
+Type=tmpfs
+Options=mode=0750,size=60%,nosuid,nodev
+
+[Install]
+WantedBy=multi-user.target
