@@ -100,3 +100,34 @@ authority and validates the CSR signature.
   enrollment token, certificate body, or private key.
 - If Vault is unavailable, enrollment remains pending and the one-time token
   remains usable for a retry. No certificate is issued by a fallback path.
+
+## Certificate renewal and activation
+
+An enrolled EPH node renews its certificate without consuming a second
+enrollment token. The renewal API requires the currently active mTLS identity
+and the existing node-bound runtime bearer token:
+
+- `POST /api/v1/agent-runtime/nodes/{node_uuid}/certificate/renew/` with
+  exactly one `csr_pem` field.
+- The API signs the node-bound CSR through the configured Vault PKI role and
+  stores only the pending certificate fingerprint and issue timestamp.
+- The response contains the new leaf certificate and validated CA chain. It
+  does not contain a private key or a replacement bearer token.
+- The old certificate remains active while the pending certificate is staged.
+  A second renewal is rejected while a non-expired pending certificate exists.
+- The node must install the new certificate and locally generated matching
+  private key, establish a fresh mTLS connection, and call
+  `POST /api/v1/agent-runtime/nodes/{node_uuid}/certificate/activate/` with an
+  empty JSON object.
+- Activation accepts only the pending fingerprint presented by the trusted
+  mTLS ingress and atomically promotes it. The previous fingerprint stops
+  authenticating immediately after the transaction commits.
+- Pending certificates expire after ten minutes. An expired pending identity
+  cannot be activated; the active certificate remains unchanged.
+- Repeating activation with the already activated certificate is idempotent,
+  allowing recovery when the activation response is lost.
+
+The API endpoints and database state implement the server-side staged
+activation protocol. The node-side certificate file rotation and fresh TLS
+handshake orchestration must be deployed before enabling unattended renewal
+in production.
