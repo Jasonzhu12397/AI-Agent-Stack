@@ -1,0 +1,6 @@
+[Match]
+Name=enp5s0
+Type=ether
+
+[Network]
+DHCP=ipv4
