@@ -6,7 +6,7 @@ import re
 
 import httpx
 from cryptography import x509
-from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from django.conf import settings
@@ -116,7 +116,7 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
             )
             for value in values
         ]
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError, ValueError, UnsupportedAlgorithm):
         raise EPHCertificateError("EPH_CERTIFICATE_TRUST_ANCHOR_INVALID") from None
 
     if not trust_roots:
@@ -163,7 +163,7 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
                 raise EPHCertificateError("EPH_CERTIFICATE_CA_UNTRUSTED")
         try:
             certificate.verify_directly_issued_by(issuer)
-        except (ValueError, TypeError, UnsupportedAlgorithm):
+        except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
             raise EPHCertificateError("EPH_CERTIFICATE_CA_SIGNATURE_INVALID") from None
         if index == len(chain_certificates) - 1 and issuer.fingerprint(
             hashes.SHA256()
