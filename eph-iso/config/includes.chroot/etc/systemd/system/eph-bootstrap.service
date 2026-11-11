@@ -6,7 +6,7 @@ Requires=k3s.service
 
 [Service]
 Type=oneshot
-ExecStartPre=/usr/local/sbin/eph-bootstrap-mount.sh
+ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-bootstrap-mount.sh
 ExecStart=/usr/bin/python3 /usr/local/lib/eph-bootstrap.py
 RemainAfterExit=yes
 TimeoutStartSec=15min
