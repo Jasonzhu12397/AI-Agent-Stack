@@ -4039,7 +4039,9 @@ def test_machine_deployment_create_uses_strict_api_validation(
             assert request.get_header("Authorization") == (
                 "Bearer test-service-account-token"
             )
-            assert json.loads(request.data.decode("utf-8"))["kind"] == "MachineDeployment"
+            assert json.loads(request.data.decode("utf-8"))["kind"] == (
+                "MachineDeployment"
+            )
             assert timeout == 30
             return FakeResponse()
 
