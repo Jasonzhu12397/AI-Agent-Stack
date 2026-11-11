@@ -33,6 +33,7 @@ from core.models import (
     AgentCommand,
     AgentMachine,
     AgentNode,
+    EPHSeedArtifact,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
     Project,
@@ -1359,6 +1360,11 @@ class AgentNodeRevokeView(APIView):
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
+            EPHSeedArtifact.objects.filter(
+                agent_node=node,
+                downloaded_at__isnull=True,
+                revoked_at__isnull=True,
+            ).update(revoked_at=timezone.now(), encrypted_payload="")
             _cancel_agent_commands(
                 AgentCommand.objects.filter(
                     node=node,
@@ -1429,6 +1435,11 @@ class AgentNodeCredentialRotateView(APIView):
             node.status = AgentNode.Status.OFFLINE
             node.last_seen_at = None
             node.last_seen_ip = None
+            EPHSeedArtifact.objects.filter(
+                agent_node=node,
+                downloaded_at__isnull=True,
+                revoked_at__isnull=True,
+            ).update(revoked_at=timezone.now(), encrypted_payload="")
             node.save(
                 update_fields=[
                     "credential_hash",
