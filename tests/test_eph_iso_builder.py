@@ -31,8 +31,10 @@ def test_eph_iso_builder_pins_k3s_and_verifies_checksum():
 
 
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
-    service = (ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service").read_text(encoding="utf-8")
-    agent_manifest = (ROOT / "deploy/agents/eph-node-agent.yaml").read_text(encoding="utf-8")
+    service_path = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
+    service = service_path.read_text(encoding="utf-8")
+    agent_path = ROOT / "deploy/agents/eph-node-agent.yaml"
+    agent_manifest = agent_path.read_text(encoding="utf-8")
     assert "eph-bootstrap.py" in service
     assert "kind: Deployment" in agent_manifest
     assert "kind: Pod" not in agent_manifest
@@ -77,7 +79,10 @@ def test_bootstrap_does_not_accept_missing_fields():
 
 
 def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
-    dropin = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
+    dropin = (
+        ROOT
+        / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
+    )
     content = dropin.read_text(encoding="utf-8")
     assert "Wants=k3s.service eph-bootstrap.service" in content
 
@@ -85,6 +90,6 @@ def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
 def test_bootstrap_agent_manifest_is_bundled_into_iso():
     script = (ROOT / "eph-iso/build.sh").read_text(encoding="utf-8")
     assert "deploy/agents/namespace.yaml" in script
-    assert "deploy/agents/rbac.yaml" in script
+    assert "eph-rbac.yaml" in script
     assert "deploy/agents/eph-node-agent.yaml" in script
     assert "usr/share/ai-agent-studio/eph-manifests" in script
