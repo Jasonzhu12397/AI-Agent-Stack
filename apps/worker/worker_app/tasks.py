@@ -672,6 +672,7 @@ def execute_agent_run(task):
                 ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
+            _renew_agent_lease(task)
             messages.append(
                 {
                     "role": "tool",
