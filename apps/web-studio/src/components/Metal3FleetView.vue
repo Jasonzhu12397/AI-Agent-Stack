@@ -217,10 +217,6 @@ function isNextKubernetesMinorVersion(deployment: ClusterDeployment, version: st
   return nextKubernetesMinorVersion(deployment) === version;
 }
 
-function selectedKubernetesVersion(deployment: ClusterDeployment): string {
-  return selectedKubernetesVersions.value[deployment.id] ?? defaultKubernetesVersion(deployment);
-}
-
 function setSelectedKubernetesVersion(deploymentId: string, version: string): void {
   selectedKubernetesVersions.value[deploymentId] = version;
 }
