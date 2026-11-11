@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from node_agent import certificate_rotation
+from node_agent import agent, certificate_rotation
 
 
 def _create_ca():
@@ -364,3 +364,41 @@ def test_eph_agent_discards_expired_pending_certificate_without_replacing_active
     assert manager.maintain() is False
     assert "pending.tls.crt" not in secret["data"]
     assert base64.b64decode(secret["data"]["tls.crt"]) == active_cert_pem + ca_pem
+
+
+
+def test_control_plane_request_uses_pending_certificate_tls_context(monkeypatch):
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-context",
+        "node-token",
+    )
+    pending_context = ssl.create_default_context()
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size=-1):
+            return b'{"accepted": true}'
+
+    def fake_urlopen(request, timeout, context=None):
+        captured["url"] = request.full_url
+        captured["context"] = context
+        return Response()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+
+    result = client.request(
+        "/api/v1/agent-runtime/nodes/node-context/certificate/activate/",
+        {},
+        tls_context=pending_context,
+    )
+
+    assert result == {"accepted": True}
+    assert captured["url"].endswith("/certificate/activate/")
+    assert captured["context"] is pending_context
