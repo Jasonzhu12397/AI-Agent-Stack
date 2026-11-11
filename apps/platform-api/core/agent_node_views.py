@@ -2042,6 +2042,8 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                 locked is None
                 or locked.status == AgentNode.Status.REVOKED
                 or locked.revoked_at is not None
+                or locked.client_certificate_revoked_at is not None
+                or not hmac.compare_digest(locked.credential_hash, node.credential_hash)
             ):
                 return Response({"detail": "EPH node identity is revoked."}, status=401)
             if (
@@ -2053,6 +2055,7 @@ class AgentRuntimeEPHCertificateActivationView(APIView):
                     verified_fingerprint,
                     locked.last_activated_client_certificate_fingerprint,
                 )
+                and not locked.pending_client_certificate_fingerprint
             ):
                 return Response(
                     {"node_id": str(locked.id), "activated": True, "idempotent": True},
