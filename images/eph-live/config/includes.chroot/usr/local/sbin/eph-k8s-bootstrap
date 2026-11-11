@@ -11,6 +11,7 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 : "${NODE_ID:?NODE_ID_REQUIRED}"
 : "${NODE_TOKEN:?NODE_TOKEN_REQUIRED}"
 [[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_UNSUPPORTED"
+[[ "$(kubeadm version -o short)" == "$KUBERNETES_VERSION" ]] || fail "KUBERNETES_VERSION_MUST_MATCH_IMAGE"
 [[ "$FLANNEL_MANIFEST_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || fail "FLANNEL_MANIFEST_SHA256_INVALID"
 [[ "$NODE_AGENT_IMAGE" =~ @sha256:[a-f0-9]{64}$ ]] || fail "NODE_AGENT_IMAGE_MUST_BE_DIGEST_PINNED"
 [[ "$CONTROL_URL" =~ ^https://[^[:space:]]+$ ]] || fail "CONTROL_URL_INVALID"
@@ -83,6 +84,8 @@ spec:
               value: "true"
             - name: AGENT_NODE_TYPE
               value: eph_node
+            - name: AGENT_HOST_SYSFS_PATH
+              value: /host/sys
             - name: AGENT_CONTROL_URL
               valueFrom:
                 secretKeyRef:
@@ -124,7 +127,14 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: host-sysfs
+              mountPath: /host/sys
+              readOnly: true
       volumes:
+        - name: host-sysfs
+          hostPath:
+            path: /sys
+            type: Directory
         - name: agent-tls
           secret:
             secretName: agent-control-plane-tls
