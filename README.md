@@ -16,7 +16,7 @@ The long-term infrastructure product scope is documented in [Omni-Inspired Infra
 - **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
 - **Node agents:** the Python runner supports EPH preflight, typed Metal3/CAPI cluster-plan validation, dynamic CAPI/Metal3 API discovery and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
-- **Deployment:** Docker Compose for local development; a production cloud Control Plane Compose profile uses managed PostgreSQL, Redis and Qdrant; separate Kubernetes manifests and deployment helpers install EPH, Target and network-inventory Agents. Provider-specific infrastructure and production Helm packaging remain in progress.
+- **Deployment:** Docker Compose is limited to the local Cloud Control Plane development stack and the production cloud Control Plane profile. EPH and Target Agents run only as Kubernetes Pods from dedicated Deployments; the EPH Agent runs inside the temporary single-node EPH Kubernetes cluster. The target network-inventory publisher runs as a DaemonSet.
 
 The FastAPI and React implementation has been replaced. The Vue UI follows the layout and interaction patterns in [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), ported from its React implementation rather than embedding React into this Vue application. The navigation includes Dashboard, Model Manager, Agent Studio, Workflow DAG, Integration Hub, Knowledge Bases, Metal3 Fleet, Governance, Audit & Activity, Organization and Docs & Matrix. The previous verified workflow milestone passed full CI in [run 41421574449](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421574449), commit `56d29c006031fa9363e79c88f2c365aa1649ebf2`; this branch's dual-agent work is awaiting its own PR CI.
 
@@ -51,44 +51,28 @@ Use that account to sign in to the Vue Studio; tenant membership provisioning is
 - Liveness: http://localhost:8000/health/live
 - Readiness: http://localhost:8000/health/ready
 
-### Run the two local node-agent processes
+### Deploy the EPH and Target Agents as Kubernetes Pods
+
+The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kubernetes cluster running on the EPH bare-metal host**. This is the same Kubernetes-native operating model used by Metal3/Ironic controllers: Kubernetes Deployments, ServiceAccounts, RBAC, Secrets, probes, resource limits and Pod lifecycle management. The Target Agent is also deployed as a Pod inside the target Kubernetes cluster. Neither Agent is launched by Docker Compose or as a standalone host process.
 
 1. Sign in to the Studio and create/select a tenant and project. The enrolling user must be a tenant owner or tenant administrator; project-only membership is not sufficient.
-2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. For the first enrollment choose **EPH Node Agent** (`eph_node`); for the second choose **Target Cluster Agent** (`target_cluster`). Give each a unique name and, for the Target Agent, its target cluster name.
-3. The Studio sends an authenticated request to the tenant/project-scoped enrollment endpoint:
-
-   `POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/`
-
-   The backend generates both values; do not generate or invent them manually:
-   - `NODE_ID` is the UUID primary key assigned when the `AgentNode` record is created.
-   - `TOKEN` is generated server-side with Python `secrets.token_urlsafe(36)`. The API returns it as `enrollment_token` exactly once. The database stores only `SHA-256(TOKEN)` in `credential_hash`, never the plaintext token.
-   - The response `id` is the node UUID to use as `*_AGENT_NODE_ID`. The response `enrollment_token` is the matching `*_AGENT_TOKEN`.
-4. Copy the UUID and one-time token from each enrollment result immediately. If the token is dismissed or lost, it cannot be read back; use the node's **Rotate credential** action to issue a new token. Rotating invalidates the previous token. Do not reuse the EPH token for Target or vice versa.
-5. Add the two independently generated credential pairs to the ignored local `.env` file:
-
-```dotenv
-EPH_AGENT_NODE_ID=<eph-node-uuid>
-EPH_AGENT_TOKEN=<eph-one-time-token>
-TARGET_AGENT_NODE_ID=<target-node-uuid>
-TARGET_AGENT_TOKEN=<target-one-time-token>
-```
-
-6. Start the two optional agent processes:
+2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Node Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
+3. The Studio creates the AgentNode UUID and generates the one-time token server-side with Python `secrets.token_urlsafe(36)`. The API returns the token as `enrollment_token` exactly once; the database stores only its SHA-256 hash. Copy each node UUID and token into your secret manager. If a token is lost, use **Rotate credential**; never reuse EPH credentials for Target.
+4. Prepare the Kubernetes Secrets, mTLS certificates and (for EPH) the source/target CAPI kubeconfigs as described in [Kubernetes Agent deployment](deploy/agents/README.md). Do not place credentials in Compose environment files or Git.
+5. Build and push the digest-pinned Node Agent image, then deploy it into the two independent Kubernetes contexts:
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agents up --build -d eph-node-agent target-cluster-agent
-docker compose --env-file .env -f deploy/docker-compose.yml logs -f eph-node-agent target-cluster-agent
+EPH_CONTEXT=<eph-single-node-k8s-context> \\
+TARGET_CONTEXT=<target-cluster-k8s-context> \\
+AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \\
+bash deploy/agents/deploy.sh
 ```
 
-6. In the Studio, dispatch `node.health` to both agents. Use the **Metal3 / CAPI cluster plan** form on the EPH node to create a persisted workflow: the control plane queues `host.preflight`, then automatically queues `cluster.plan` and stores the plan result.
+The helper performs server-side dry-run validation, applies the EPH Deployment to the EPH single-node cluster, applies the Target Deployment and network-inventory DaemonSet to the target cluster, then waits for all workloads to become Ready. The EPH Pod is scheduled by the EPH Kubernetes scheduler and talks to the local Kubernetes API using its dedicated ServiceAccount. It does not run outside Kubernetes.
 
-The local Compose target agent runs outside a Kubernetes cluster, so it can report node health but Kubernetes API commands require the agent to be deployed inside the target cluster with a dedicated ServiceAccount and CA/token mounts. The EPH Compose process reports its container environment, not the physical host. Do not use this local profile as a production deployment.
+6. In the Studio, dispatch `node.health` to both enrolled Agents. Use the **Metal3 / CAPI cluster plan** workflow on the EPH Agent to run the read-only preflight and plan checks.
 
-Stop services:
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml --profile node-agents down
-```
+Docker Compose is reserved for the local Cloud Control Plane development stack (API, Cloud Agent worker, database, cache, vector database and web UI). It must never start, supervise or substitute for the EPH or Target Agent Pods.
 
 ## Local checks
 
