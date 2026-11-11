@@ -11,7 +11,7 @@ sudo apt-get update
 sudo apt-get install -y live-build xorriso squashfs-tools wget ca-certificates debootstrap
 ```
 
-The build currently targets amd64 only. The build currently targets amd64 only. Pin the K3s release and provide its independently verified SHA-256 checksum:
+The build currently targets amd64 only. The build currently targets amd64 only and supports Kubernetes minors v1.33, v1.34, v1.35, and v1.36. The K3s release tag determines the Kubernetes version in the temporary EPH cluster. Pin the K3s release and provide its independently verified SHA-256 checksum:
 
 ```bash
 sudo env \
@@ -20,7 +20,7 @@ sudo env \
   bash eph-iso/build.sh
 ```
 
-The version above is an example input, not a claim that its checksum has been verified. Obtain the checksum from the official K3s release artifact and verify it independently. The build fails closed if the version or checksum is missing or malformed. The resulting ISO and checksum file are written to `eph-iso/out/`.
+The version above is an example input, not a claim that its checksum has been verified. Obtain the checksum from the official K3s release artifact and verify it independently. The build fails closed if the version or checksum is missing or malformed. The resulting ISO, SHA-256 sidecar, and release metadata JSON are written to `eph-iso/out/`. The metadata records the K3s/Kubernetes version, architecture, artifact filename, and ISO digest.
 
 ## Boot and enrollment
 
