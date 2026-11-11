@@ -71,11 +71,19 @@ def _run(arguments, input_text=None):
 
 def _copy_secret_file(source, destination):
     source_path = MEDIA_ROOT / source
-    if not source_path.is_file() or source_path.is_symlink():
+    try:
+        resolved_path = source_path.resolve(strict=True)
+    except FileNotFoundError:
         raise BootstrapError("BOOTSTRAP_SECRET_FILE_MISSING:" + source)
-    if source_path.stat().st_size == 0:
+    if (
+        source_path.is_symlink()
+        or not resolved_path.is_relative_to(MEDIA_ROOT.resolve())
+        or not resolved_path.is_file()
+    ):
+        raise BootstrapError("BOOTSTRAP_SECRET_FILE_INVALID:" + source)
+    if resolved_path.stat().st_size == 0:
         raise BootstrapError("BOOTSTRAP_SECRET_FILE_EMPTY:" + source)
-    shutil.copyfile(str(source_path), str(destination))
+    shutil.copyfile(str(resolved_path), str(destination))
     os.chmod(str(destination), 0o600)
 
 
@@ -99,9 +107,10 @@ def _create_secret(name, namespace, files):
 def _apply_file(path, image=None):
     content = path.read_text(encoding="utf-8")
     if image:
-        content = content.replace(
-            "REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION", image
-        )
+        placeholder = "REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION"
+        if content.count(placeholder) != 1:
+            raise BootstrapError("EPH_AGENT_IMAGE_PLACEHOLDER_INVALID")
+        content = content.replace(placeholder, image)
     _run([
         "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
         "apply", "-f", "-"
@@ -110,7 +119,11 @@ def _apply_file(path, image=None):
 
 def bootstrap():
     config_path = MEDIA_ROOT / "bootstrap.json"
-    if not config_path.is_file() or config_path.is_symlink():
+    if (
+        not config_path.is_file()
+        or config_path.is_symlink()
+        or config_path.stat().st_size > 65536
+    ):
         raise BootstrapError("BOOTSTRAP_CONFIG_NOT_FOUND")
     config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
 
