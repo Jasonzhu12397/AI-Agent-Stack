@@ -20,3 +20,10 @@ kubelet
 kubeadm
 kubectl
 cloud-init
+conntrack
+socat
+ebtables
+ipset
+iptables
+nftables
+kmod
