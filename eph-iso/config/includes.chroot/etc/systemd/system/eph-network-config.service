@@ -1,6 +1,6 @@
 [Unit]
 Description=Install per-node systemd-networkd configuration from EPHBOOT
-After=run-eph\x2dbootstrap\x2dmedia.mount
+After=mnt-eph\x2dbootstrap.mount
 Before=systemd-networkd.service
 
 [Service]
