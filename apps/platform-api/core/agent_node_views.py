@@ -1597,7 +1597,8 @@ class AgentNodeCommandListCreateView(APIView):
                     status=400,
                 )
             if (
-                set(payload) != {"cluster_name", "current_version", "target_version", "execution_mode"}
+                set(payload)
+                != {"cluster_name", "current_version", "target_version", "execution_mode"}
                 or payload.get("cluster_name") != node.cluster_name
                 or not isinstance(payload.get("current_version"), str)
                 or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
