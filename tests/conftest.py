@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import pytest
 from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
