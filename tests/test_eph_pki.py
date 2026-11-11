@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import pytest
 
 from core.eph_pki import (
