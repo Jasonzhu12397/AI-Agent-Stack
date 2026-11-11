@@ -1844,7 +1844,11 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 )
             except EPHCertificateSignerUnavailable:
                 return Response(
-                    {"detail": "EPH certificate signer is unavailable; enrollment remains pending."},
+                    {
+                        "detail": (
+                            "EPH certificate signer is unavailable; enrollment remains pending."
+                        )
+                    },
                     status=503,
                 )
             except EPHCertificateError:
