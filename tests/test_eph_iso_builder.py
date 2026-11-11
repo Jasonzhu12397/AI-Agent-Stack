@@ -70,12 +70,12 @@ def test_bootstrap_config_rejects_unsafe_values(change, expected):
     config = valid_config()
     config.update(change)
     with pytest.raises(BOOTSTRAP["BootstrapError"], match=expected):
-        BOOTSTRAP.validate_config(config)
+        BOOTSTRAP["validate_config"](config)
 
 
 def test_bootstrap_does_not_accept_missing_fields():
-    with pytest.raises(BOOTSTRAP.BootstrapError, match="BOOTSTRAP_CONFIG_FIELDS_MISSING"):
-        BOOTSTRAP.validate_config({"node_id": str(uuid.uuid4())})
+    with pytest.raises(BOOTSTRAP["BootstrapError"], match="BOOTSTRAP_CONFIG_FIELDS_MISSING"):
+        BOOTSTRAP["validate_config"]({"node_id": str(uuid.uuid4())})
 
 
 def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
