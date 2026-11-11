@@ -23,8 +23,14 @@ from worker_app import tasks as worker_tasks
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("risk_level", ["low", "high"])
-def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
+@pytest.mark.parametrize(
+    "risk_level,expire_after_tool",
+    [("low", False), ("low", True), ("high", False)],
+)
+def test_agent_worker_executes_tool_then_returns_final_model_answer(
+    risk_level,
+    expire_after_tool,
+):
     user = get_user_model().objects.create_user(username="tool-agent-user")
     tenant = Tenant.objects.create(name="Tool tenant", slug="tool-tenant")
     project = Project.objects.create(tenant=tenant, name="Tool project", slug="tool-project")
@@ -154,9 +160,15 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
 
     fake_gateway = FakeGateway()
     handlers = worker_tasks.TOOL_ROUTER._handlers.copy()
-    worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = (
-        lambda arguments, context: {"value": f"{arguments['key']}-ready"}
-    )
+
+    def lookup_handler(arguments, context):
+        if expire_after_tool:
+            Task.objects.filter(pk=task.pk).update(
+                lease_expires_at=timezone.now() - timezone.timedelta(seconds=1)
+            )
+        return {"value": f"{arguments['key']}-ready"}
+
+    worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = lookup_handler
     try:
         with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
             if risk_level == "high":
@@ -165,12 +177,25 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
                     match="waiting for explicit connector tool approval",
                 ):
                     worker_tasks.execute_agent_run(task)
+            elif expire_after_tool:
+                with pytest.raises(
+                    worker_tasks.PermanentTaskError,
+                    match="lease was lost or cancellation was requested",
+                ):
+                    worker_tasks.execute_agent_run(task)
             else:
                 result = worker_tasks.execute_agent_run(task)
     finally:
         worker_tasks.TOOL_ROUTER._handlers = handlers
 
     assert fake_gateway.calls[0]["kwargs"]["tools"][0]["function"]["name"] == "demo__lookup"
+    if expire_after_tool:
+        task.refresh_from_db()
+        assert task.status == Task.Status.RUNNING
+        assert task.lease_expires_at < timezone.now()
+        assert len(fake_gateway.calls) == 1
+        return
+
     if risk_level == "high":
         task.refresh_from_db()
         approval = ToolApprovalRequest.objects.get(task=task, call_id="call-1")
@@ -202,9 +227,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(risk_level):
                 "updated_at",
             ]
         )
-        worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = (
-            lambda arguments, context: {"value": f"{arguments['key']}-ready"}
-        )
+        worker_tasks.TOOL_ROUTER._handlers[("demo", "lookup")] = lookup_handler
         try:
             with patch.object(worker_tasks, "ModelGateway", return_value=fake_gateway):
                 resumed_result = worker_tasks.execute_agent_run(task)
