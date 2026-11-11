@@ -28,7 +28,7 @@ def _csr(common_name="agent-node-test.agents.internal"):
 def test_validate_eph_csr_accepts_valid_signature_and_normalizes_final_newline():
     csr = _csr()
 
-    assert validate_eph_csr(csr, "agent-node-test.agents.internal").endswith("\\n")
+    assert validate_eph_csr(csr, "agent-node-test.agents.internal").endswith("\n")
 
 
 def test_validate_eph_csr_rejects_wrong_node_identity():
@@ -44,14 +44,14 @@ def test_validate_eph_csr_rejects_wrong_node_identity():
     [
         "",
         "not-a-csr",
-        "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----",
-        "-----BEGIN CERTIFICATE REQUEST-----\\n***\\n-----END CERTIFICATE REQUEST-----",
+        "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE REQUEST-----\n***\n-----END CERTIFICATE REQUEST-----",
         (
-            "-----BEGIN CERTIFICATE REQUEST-----\\nMAA=\\n"
+            "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n"
             "-----END CERTIFICATE REQUEST-----"
             + ("A" * 16384)
         ),
-        "-----BEGIN CERTIFICATE REQUEST-----\\nMAA=\\n-----END CERTIFICATE REQUEST-----",
+        "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----",
     ],
 )
 def test_validate_eph_csr_rejects_invalid_or_oversized_pem(csr):
@@ -60,12 +60,12 @@ def test_validate_eph_csr_rejects_invalid_or_oversized_pem(csr):
 
 
 def test_vault_ca_chain_is_ordered_from_issuing_ca_and_deduplicated():
-    issuing_ca = "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----"
-    root_ca = "-----BEGIN CERTIFICATE-----\\nMAE=\\n-----END CERTIFICATE-----"
+    issuing_ca = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----"
+    root_ca = "-----BEGIN CERTIFICATE-----\nMAE=\n-----END CERTIFICATE-----"
 
     chain = _validate_ca_chain([issuing_ca, root_ca], issuing_ca)
 
-    assert chain == issuing_ca + "\\n" + root_ca + "\\n"
+    assert chain == issuing_ca + "\n" + root_ca + "\n"
 
 
 def test_vault_ca_chain_rejects_missing_or_invalid_chain():
