@@ -1946,7 +1946,11 @@ def test_bmc_redfish_api_persists_failure_evidence_and_audit(
         bmc_endpoint="https://192.168.10.31",
         bmc_credential_ref="vault://lab/bmc/failure-test",
     )
-    settings.BMC_CREDENTIAL_RESOLVER = "test_agent_nodes.redfish_test_resolver"
+    settings.BMC_CREDENTIAL_RESOLVER = "tests.redfish-test-resolver"
+    monkeypatch.setattr(
+        "core.agent_node_views.import_string",
+        lambda path: redfish_test_resolver,
+    )
 
     def fail_verification(*args, **kwargs):
         raise exception
