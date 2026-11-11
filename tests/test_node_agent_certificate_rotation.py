@@ -3,11 +3,11 @@ import datetime
 import hashlib
 import ssl
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
-import pytest
 
 from node_agent import certificate_rotation
 
