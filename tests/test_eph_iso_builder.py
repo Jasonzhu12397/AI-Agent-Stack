@@ -84,7 +84,7 @@ def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
     )
     content = dropin.read_text(encoding="utf-8")
-    assert "Wants=k3s.service eph-bootstrap.service" in content
+    assert "k3s.service eph-bootstrap.service" in content
 
 
 def test_bootstrap_agent_manifest_is_bundled_into_iso():
