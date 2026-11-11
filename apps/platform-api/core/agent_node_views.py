@@ -1592,7 +1592,10 @@ class AgentNodeCommandListCreateView(APIView):
             return Response({"detail": payload_error}, status=400)
         if command_type == "cluster.kubernetes.version.upgrade":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
-                return Response({"detail": "Kubernetes version changes require a Target Cluster Agent."}, status=400)
+                return Response(
+                    {"detail": "Kubernetes version changes require a Target Cluster Agent."},
+                    status=400,
+                )
             if (
                 set(payload) != {"cluster_name", "current_version", "target_version", "execution_mode"}
                 or payload.get("cluster_name") != node.cluster_name
