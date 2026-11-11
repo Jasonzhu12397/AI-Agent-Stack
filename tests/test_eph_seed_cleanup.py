@@ -8,9 +8,7 @@ from django.core.management.base import CommandError
 from django.utils import timezone
 
 from core.models import EPHSeedArtifact
-from tests.test_eph_seed_artifacts import create_seed
-
-pytest_plugins = ["tests.test_eph_seed_artifacts"]
+from tests.test_eph_seed_artifacts import create_seed, seed_workspace
 
 
 @pytest.mark.django_db
