@@ -41,6 +41,7 @@ printf '%s  %s\n' "$FLANNEL_MANIFEST_SHA256" /run/eph-bootstrap/flannel.yaml | s
 kubectl apply -f /run/eph-bootstrap/flannel.yaml
 kubectl -n kube-flannel rollout status daemonset/kube-flannel-ds --timeout=180s
 kubectl create namespace ai-agent-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f /usr/local/share/eph/node-agent-rbac.yaml
 kubectl -n ai-agent-system create secret generic eph-node-agent-credentials --from-literal=control-url="$CONTROL_URL" --from-literal=node-id="$NODE_ID" --from-literal=token="$NODE_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n ai-agent-system create secret generic agent-control-plane-tls --from-file=ca.crt=/run/eph-bootstrap/ca.crt --from-file=tls.crt=/run/eph-bootstrap/tls.crt --from-file=tls.key=/run/eph-bootstrap/tls.key --dry-run=client -o yaml | kubectl apply -f -
 cat >/run/eph-bootstrap/eph-agent.yaml <<EOF
@@ -74,6 +75,8 @@ spec:
           env:
             - name: APP_ENV
               value: production
+            - name: AGENT_TLS_CLIENT_CERT_REQUIRED
+              value: "true"
             - name: AGENT_NODE_TYPE
               value: eph_node
             - name: AGENT_CONTROL_URL
