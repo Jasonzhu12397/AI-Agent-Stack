@@ -4675,3 +4675,33 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
         "eph_node",
         {},
     )
+
+
+def test_long_running_leased_command_keeps_agent_liveness_fresh(monkeypatch):
+    liveness_updates = []
+
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            return {"id": command_id}
+
+    def slow_command(command, node_type, cancellation_event=None):
+        time.sleep(0.06)
+        return {"ready": True}
+
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+    monkeypatch.setattr(
+        agent,
+        "touch_health_files",
+        lambda readiness=False: liveness_updates.append(readiness),
+    )
+
+    result = agent.execute_command_with_lease(
+        FakeClient(),
+        {"id": "command-liveness", "lease_token": "lease-liveness"},
+        "eph_node",
+        renew_interval=0.01,
+    )
+
+    assert result == {"ready": True}
+    assert liveness_updates
+    assert all(readiness is False for readiness in liveness_updates)
