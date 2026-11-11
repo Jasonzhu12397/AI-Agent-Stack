@@ -4,7 +4,6 @@ import uuid
 
 import pytest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOOTSTRAP_PATH = ROOT / "eph-iso/bootstrap.py"
 BOOTSTRAP = runpy.run_path(str(BOOTSTRAP_PATH))
