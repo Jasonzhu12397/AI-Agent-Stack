@@ -3,17 +3,17 @@ import datetime
 import hashlib
 import ssl
 
-import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+import pytest
 
 from node_agent import certificate_rotation
 
 
 def _create_ca():
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "EPH Test Root"),
@@ -33,7 +33,7 @@ def _create_ca():
 
 
 def _issue_client_certificate(ca_key, ca_certificate, node_id, validity_hours=24):
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([
         x509.NameAttribute(
@@ -170,7 +170,7 @@ def test_eph_agent_stages_and_activates_certificate_using_node_generated_key(
         def request(self, path, payload=None, tls_context=None):
             if path.endswith("/certificate/renew/"):
                 csr = x509.load_pem_x509_csr(payload["csr_pem"].encode("ascii"))
-                now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+                now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
                 certificate = (
                     x509.CertificateBuilder()
                     .subject_name(csr.subject)
