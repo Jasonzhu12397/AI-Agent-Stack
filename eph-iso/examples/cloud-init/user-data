@@ -1,0 +1,27 @@
+#cloud-config
+write_files:
+  - path: /etc/ai-agent-studio/eph-bootstrap/bootstrap.json
+    owner: root:root
+    permissions: "0600"
+    content: |
+      {
+        "control_url": "https://agent-control.example.com",
+        "node_id": "00000000-0000-4000-8000-000000000001",
+        "enrollment_token": "REPLACE_WITH_ONE_TIME_TOKEN",
+        "agent_image": "registry.example.com/ai-agent-node-agent@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      }
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/ca.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      REPLACE_WITH_CA_CERTIFICATE
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      REPLACE_WITH_CLIENT_CERTIFICATE
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.key
+    owner: root:root
+    permissions: "0600"
+    content: |
+      REPLACE_WITH_CLIENT_PRIVATE_KEY
