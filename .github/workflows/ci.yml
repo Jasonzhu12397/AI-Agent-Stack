@@ -73,6 +73,81 @@ jobs:
       - name: Build Vue Studio
         run: npm run build
 
+  eph-iso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Live ISO and QEMU build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates qemu-system-x86 dosfstools mtools curl
+      - name: Build pinned EPH Live ISO
+        id: build
+        run: |
+          K3S_VERSION="v1.35.3+k3s1"
+          K3S_VERSION_URL="${K3S_VERSION/+/%2B}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION_URL}/sha256sum-amd64.txt" \
+            --output "$RUNNER_TEMP/k3s-sha256.txt"
+          K3S_SHA256_AMD64="$(awk '$2 == "k3s" { print $1; exit }' "$RUNNER_TEMP/k3s-sha256.txt")"
+          [[ "$K3S_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]]
+          sudo env K3S_VERSION="$K3S_VERSION" \
+            K3S_SHA256_AMD64="$K3S_SHA256_AMD64" \
+            OUTPUT_DIR="$RUNNER_TEMP/eph-iso-out" \
+            bash eph-iso/build.sh
+          ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
+          test -n "$ISO_FILE"
+          sha256sum --check "$ISO_FILE.sha256"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
+          echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
+      - name: Boot ISO and verify single-node Kubernetes API
+        run: |
+          mkdir -p "$RUNNER_TEMP/ephboot/network"
+          printf '[Match]\\nName=en*\\nType=ether\\n\\n[Network]\\nDHCP=ipv4\\n' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
+          dd if=/dev/zero of="$RUNNER_TEMP/ephboot.img" bs=1M count=64
+          mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/ephboot.img"
+          mmd -i "$RUNNER_TEMP/ephboot.img" ::/network
+          mcopy -i "$RUNNER_TEMP/ephboot.img" "$RUNNER_TEMP/ephboot/network/10-qemu.network" ::/network/10-qemu.network
+          qemu-system-x86_64 \
+            -machine accel=tcg,usb=off \
+            -cpu max -m 4096 -smp 2 \
+            -cdrom "${{ steps.build.outputs.iso_file }}" \
+            -drive "file=$RUNNER_TEMP/ephboot.img,format=raw,if=virtio" \
+            -boot order=d \
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
+            -device virtio-net-pci,netdev=net0 \
+            -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
+            -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
+          QEMU_PID=$!
+          trap 'kill "$QEMU_PID" >/dev/null 2>&1 || true' EXIT
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --insecure --fail --silent --max-time 3 \
+              https://127.0.0.1:16443/readyz >/dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/qemu.stdout"
+            cat "$RUNNER_TEMP/eph-qemu.log"
+            exit 1
+          fi
+      - name: Upload EPH Live ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agent-eph-live-v1.35.3-amd64
+          path: |
+            ${{ steps.build.outputs.iso_file }}
+            ${{ steps.build.outputs.iso_file }}.sha256
+            ${{ steps.build.outputs.iso_file }}.release.json
+          if-no-files-found: error
+          retention-days: 14
+
   compose:
     runs-on: ubuntu-latest
     steps:
