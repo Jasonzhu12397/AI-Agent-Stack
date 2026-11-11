@@ -556,6 +556,8 @@ export function getProjectAgentCommands(
   );
 }
 
+export const SUPPORTED_KUBERNETES_VERSIONS = ["v1.33", "v1.34", "v1.35", "v1.36"] as const;
+
 export function createAgentCommand(
   nodeId: string,
   commandType: string,

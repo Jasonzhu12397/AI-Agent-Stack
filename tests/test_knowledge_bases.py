@@ -216,6 +216,7 @@ def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
         status=Task.Status.RUNNING,
         lease_owner="worker-test",
         lease_token=uuid.uuid4(),
+        lease_expires_at=timezone.now() + timezone.timedelta(minutes=5),
         available_at=timezone.now(),
     )
     AgentRun.objects.create(

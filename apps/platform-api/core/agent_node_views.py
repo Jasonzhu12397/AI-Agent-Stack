@@ -70,13 +70,49 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.postflight",
     "cluster.capi.worker.preflight",
     "cluster.capi.worker.provision",
+    "cluster.kubernetes.version.upgrade",
     "cluster.metal3.observe",
     "k8s.resource.read",
 }
 MUTATING_COMMANDS = {
     "cluster.capi.pivot.execute",
     "cluster.capi.worker.provision",
+    "cluster.kubernetes.version.upgrade",
 }
+SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.34", "v1.35", "v1.36"})
+
+def _cancel_agent_commands(queryset, now):
+    unknown_outcomes = []
+    commands = queryset.select_for_update().order_by("id")
+    for command in commands:
+        if (
+            command.status == AgentCommand.Status.RUNNING
+            and command.command_type in MUTATING_COMMANDS
+        ):
+            command.status = AgentCommand.Status.FAILED
+            command.error = {
+                "code": "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+                "retryable": False,
+            }
+            unknown_outcomes.append(str(command.id))
+        else:
+            command.status = AgentCommand.Status.CANCELLED
+            command.error = None
+        command.finished_at = now
+        command.lease_token = None
+        command.lease_expires_at = None
+        command.save(
+            update_fields=[
+                "status",
+                "error",
+                "finished_at",
+                "lease_token",
+                "lease_expires_at",
+                "updated_at",
+            ]
+        )
+    return unknown_outcomes
+
 FORBIDDEN_PAYLOAD_KEYS = {
     "shell",
     "command",
@@ -196,6 +232,48 @@ def _command_data(command):
         "started_at": command.started_at,
         "finished_at": command.finished_at,
     }
+
+
+def _validate_kubernetes_upgrade_result(command, result):
+    if command.command_type != "cluster.kubernetes.version.upgrade":
+        return None
+    if not isinstance(result, dict):
+        return "Kubernetes upgrade result must be an object."
+    expected_identity = {
+        "cluster_name": command.payload.get("cluster_name"),
+        "current_version": command.payload.get("current_version"),
+        "target_version": command.payload.get("target_version"),
+    }
+    if any(result.get(key) != value for key, value in expected_identity.items()):
+        return "Kubernetes upgrade result does not match the approved command."
+    if (
+        result.get("approval_required") is not True
+        or result.get("upgrade_simulated") is not True
+        or result.get("upgrade_performed") is not False
+        or result.get("side_effects") is not False
+        or result.get("requires_manual_execution") is not True
+        or result.get("resume_supported") is not False
+    ):
+        return "Kubernetes upgrade result violates the simulation-only safety contract."
+    expected_steps = [
+        ("preflight", "not_run"),
+        ("control_plane", "not_started"),
+        ("workers", "not_started"),
+        ("postflight", "not_started"),
+    ]
+    steps = result.get("upgrade_steps")
+    if not isinstance(steps, list) or len(steps) != len(expected_steps):
+        return "Kubernetes upgrade plan must contain the four ordered, unexecuted stages."
+    for index, (name, status_value) in enumerate(expected_steps):
+        step = steps[index]
+        if (
+            not isinstance(step, dict)
+            or step.get("sequence") != index + 1
+            or step.get("name") != name
+            or step.get("status") != status_value
+        ):
+            return "Kubernetes upgrade plan stages must remain ordered and unexecuted."
+    return None
 
 
 def _payload_hash(command_type, payload):
@@ -1276,18 +1354,16 @@ class AgentNodeRevokeView(APIView):
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
-            AgentCommand.objects.filter(
-                node=node,
-                status__in=[
-                    AgentCommand.Status.QUEUED,
-                    AgentCommand.Status.WAITING_APPROVAL,
-                    AgentCommand.Status.RUNNING,
-                ],
-            ).update(
-                status=AgentCommand.Status.CANCELLED,
-                finished_at=timezone.now(),
-                lease_token=None,
-                lease_expires_at=None,
+            _cancel_agent_commands(
+                AgentCommand.objects.filter(
+                    node=node,
+                    status__in=[
+                        AgentCommand.Status.QUEUED,
+                        AgentCommand.Status.WAITING_APPROVAL,
+                        AgentCommand.Status.RUNNING,
+                    ],
+                ),
+                timezone.now(),
             )
         record_audit_event(
             request,
@@ -1556,6 +1632,28 @@ class AgentNodeCommandListCreateView(APIView):
         payload_error = _validate_payload(payload)
         if payload_error:
             return Response({"detail": payload_error}, status=400)
+        if command_type == "cluster.kubernetes.version.upgrade":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return Response(
+                    {"detail": "Kubernetes version changes require a Target Cluster Agent."},
+                    status=400,
+                )
+            if (
+                set(payload)
+                != {"cluster_name", "current_version", "target_version", "execution_mode"}
+                or payload.get("cluster_name") != node.cluster_name
+                or not isinstance(payload.get("current_version"), str)
+                or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
+                or not isinstance(payload.get("target_version"), str)
+                or payload.get("target_version") not in SUPPORTED_KUBERNETES_MINOR_VERSIONS
+                or int(payload["target_version"].split(".")[1])
+                != int(payload["current_version"].split(".")[1]) + 1
+                or payload.get("execution_mode") != "simulation"
+            ):
+                return Response(
+                    {"detail": "Kubernetes version request is invalid or unsupported."},
+                    status=400,
+                )
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
             return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
@@ -2053,6 +2151,9 @@ class AgentRuntimeResultView(APIView):
                      "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
                     status=409,
                 )
+            result_error = _validate_kubernetes_upgrade_result(command, result)
+            if outcome == "succeeded" and result_error:
+                return Response({"detail": result_error}, status=409)
             command.status = (
                 AgentCommand.Status.SUCCEEDED
                 if outcome == "succeeded"

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
+  createAgentCommand,
   getAgentNodes,
   getFleetMachines,
   getProjectAgentCommands,
   getClusterDeployments,
   getProjects,
   getTenants,
+  SUPPORTED_KUBERNETES_VERSIONS,
   type AgentCommand,
   type AgentNode,
   type FleetMachine,
@@ -15,6 +17,7 @@ import {
   type Tenant,
 } from "../services/api";
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
+import { getKubernetesUpgradeFailure } from "../domain/kubernetesUpgrade";
 
 type FleetTab = "dashboard" | "fleet" | "eph" | "clusters" | "terminal" | "operations";
 
@@ -42,6 +45,10 @@ const commandCount = ref(0);
 const commandOffset = ref(0);
 const commandStatus = ref("");
 const commandPageSize = 100;
+const supportedKubernetesVersions = SUPPORTED_KUBERNETES_VERSIONS;
+const selectedKubernetesVersions = ref<Record<string, string>>({});
+const versionApplyBusy = ref<string | null>(null);
+const versionApplyMessages = ref<Record<string, string>>({});
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const loading = ref(false);
@@ -59,6 +66,9 @@ const activeDeployments = computed(() =>
 );
 const recentCommands = computed(() =>
   [...commands.value].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+);
+const kubernetesUpgradeCommands = computed(() =>
+  recentCommands.value.filter((command) => command.command_type === "cluster.kubernetes.version.upgrade"),
 );
 const latestActivity = computed(() => {
   const commandTimes = commands.value.map((item) => item.finished_at ?? item.started_at ?? item.created_at);
@@ -197,6 +207,57 @@ function deploymentOwnershipLabel(deployment: ClusterDeployment): string {
   return "Ownership not transferred";
 }
 
+function nextKubernetesMinorVersion(deployment: ClusterDeployment): string | null {
+  const currentMinor = Number(deployment.kubernetes_version.match(/^v1\.(\d+)/)?.[1]);
+  if (!Number.isInteger(currentMinor)) return null;
+  return supportedKubernetesVersions.find((version) => Number(version.split(".")[1]) === currentMinor + 1) ?? null;
+}
+
+function selectedKubernetesVersion(deployment: ClusterDeployment): string {
+  return selectedKubernetesVersions.value[deployment.id] ?? nextKubernetesMinorVersion(deployment) ?? "";
+}
+
+function isNextKubernetesMinorVersion(deployment: ClusterDeployment, version: string): boolean {
+  return nextKubernetesMinorVersion(deployment) === version;
+}
+
+function setSelectedKubernetesVersion(deploymentId: string, version: string): void {
+  selectedKubernetesVersions.value[deploymentId] = version;
+}
+
+function targetAgentOnline(deployment: ClusterDeployment): boolean {
+  return nodes.value.some((node) => node.id === deployment.target_node_id && node.node_type === "target_cluster" && node.status === "online");
+}
+
+async function applyKubernetesVersion(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    versionApplyMessages.value[deployment.id] = "A Target Agent must be assigned before requesting a version change.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    versionApplyMessages.value[deployment.id] = "The Target Agent must be online before requesting a version change.";
+    return;
+  }
+  const targetVersion = selectedKubernetesVersion(deployment);
+  versionApplyBusy.value = deployment.id;
+  versionApplyMessages.value[deployment.id] = "";
+  try {
+    const command = await createAgentCommand(targetAgent.id, "cluster.kubernetes.version.upgrade", {
+      cluster_name: deployment.cluster_name,
+      current_version: deployment.kubernetes_version,
+      target_version: targetVersion,
+      execution_mode: "simulation",
+    });
+    versionApplyMessages.value[deployment.id] = "Version " + targetVersion + " request created (" + command.status + "); independent approval is required.";
+    await refreshData();
+  } catch (cause) {
+    versionApplyMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request Kubernetes version change.";
+  } finally {
+    versionApplyBusy.value = null;
+  }
+}
+
 function identityStatusType(status: string): "success" | "warning" | "danger" | "info" {
   if (status === "verified") return "success";
   if (status === "conflict") return "danger";
@@ -223,6 +284,20 @@ function commandDetail(command: AgentCommand): string {
   if (command.error) return JSON.stringify(command.error);
   if (command.result) return JSON.stringify(command.result);
   return JSON.stringify(command.payload);
+}
+
+function kubernetesUpgradeSteps(command: AgentCommand): Array<Record<string, unknown>> {
+  const steps = command.result?.upgrade_steps;
+  return Array.isArray(steps)
+    ? steps.filter((step): step is Record<string, unknown> =>
+        Boolean(step) && typeof step === "object" && !Array.isArray(step),
+      )
+    : [];
+}
+
+function upgradeStepStatus(step: Record<string, unknown>): string {
+  const status = step.status;
+  return typeof status === "string" ? status.replaceAll("_", " ") : "not reported";
 }
 
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
@@ -398,7 +473,36 @@ onUnmounted(() => {
         <div class="fleet-panel-heading"><h3>Target Cluster Delivery</h3><span>{{ deployments.length }} WORKFLOWS</span></div>
         <el-table :data="deployments" size="small" class="task-table">
           <el-table-column prop="cluster_name" label="Cluster" min-width="150" />
-          <el-table-column prop="kubernetes_version" label="Kubernetes" min-width="120" />
+          <el-table-column label="Kubernetes Version" min-width="310">
+            <template #default="scope">
+              <div class="fleet-version-control">
+                <el-select
+                  :model-value="selectedKubernetesVersion(scope.row)"
+                  size="small"
+                  style="width: 112px"
+                  @change="(value: string) => setSelectedKubernetesVersion(scope.row.id, value)"
+                >
+                  <el-option
+                    v-for="version in supportedKubernetesVersions"
+                    :key="version"
+                    :label="version"
+                    :value="version"
+                    :disabled="!isNextKubernetesMinorVersion(scope.row, version)"
+                  />
+                </el-select>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="versionApplyBusy === scope.row.id"
+                  :disabled="!targetAgentOnline(scope.row) || !isNextKubernetesMinorVersion(scope.row, selectedKubernetesVersion(scope.row))"
+                  @click="applyKubernetesVersion(scope.row)"
+                >Apply</el-button>
+              </div>
+              <small class="fleet-version-current">Current: {{ scope.row.kubernetes_version }} · Upgrade one minor version at a time</small>
+              <small v-if="versionApplyMessages[scope.row.id]" class="fleet-version-message">{{ versionApplyMessages[scope.row.id] }}</small>
+            </template>
+          </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
             <template #default="scope"><el-tag :type="statusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag></template>
           </el-table-column>
@@ -423,6 +527,7 @@ onUnmounted(() => {
             <template #default="scope"><code>{{ scope.row.plan_hash.slice(0, 14) }}</code></template>
           </el-table-column>
         </el-table>
+        <p class="fleet-footnote">Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
       </section>
     </template>
 
@@ -445,6 +550,40 @@ onUnmounted(() => {
           <el-button size="small" plain :disabled="commandOffset === 0 || refreshing" @click="changeCommandPage(-1)">Previous</el-button>
           <el-button size="small" plain :disabled="commandOffset + commandPageSize >= commandCount || refreshing" @click="changeCommandPage(1)">Next</el-button>
         </div>
+        <section v-if="kubernetesUpgradeCommands.length" class="fleet-upgrade-plans">
+          <div class="fleet-panel-heading">
+            <h3>Kubernetes upgrade plans</h3>
+            <span>{{ kubernetesUpgradeCommands.length }} COMMANDS</span>
+          </div>
+          <article v-for="command in kubernetesUpgradeCommands" :key="command.id" class="fleet-upgrade-plan">
+            <div class="fleet-upgrade-plan-heading">
+              <div>
+                <strong>{{ String(command.payload.cluster_name ?? "Target cluster") }}</strong>
+                <small>{{ String(command.payload.current_version ?? "unknown") }} → {{ String(command.payload.target_version ?? "unknown") }}</small>
+              </div>
+              <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+            </div>
+            <ol v-if="kubernetesUpgradeSteps(command).length" class="fleet-upgrade-steps">
+              <li v-for="step in kubernetesUpgradeSteps(command)" :key="String(step.sequence ?? step.name)">
+                <span class="fleet-upgrade-step-sequence">{{ step.sequence }}</span>
+                <div>
+                  <strong>{{ String(step.name ?? "Upgrade step").replaceAll("_", " ") }}</strong>
+                  <small>{{ String(step.description ?? "") }}</small>
+                </div>
+                <el-tag type="info" size="small">{{ upgradeStepStatus(step) }}</el-tag>
+              </li>
+            </ol>
+            <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
+              Upgrade simulation failed. Review the Agent error before taking further action.
+              <span v-if="getKubernetesUpgradeFailure(command.error)">{{ getKubernetesUpgradeFailure(command.error) }}</span>
+              <span v-else>No structured failure detail was returned.</span>
+            </p>
+            <p v-else class="fleet-upgrade-pending">
+              {{ command.status === "waiting_approval" ? "Awaiting independent approval; no upgrade step has executed." : "The Agent has not returned an upgrade plan yet." }}
+            </p>
+            <p class="fleet-upgrade-safety">Simulation-only · no live Kubernetes or kubeadm changes</p>
+          </article>
+        </section>
         <div class="fleet-terminal-body">
           <div v-for="command in recentCommands" :key="command.id" class="fleet-terminal-line">
             <span class="terminal-time">{{ formatTime(command.finished_at ?? command.started_at ?? command.created_at) }}</span>
@@ -491,6 +630,8 @@ onUnmounted(() => {
 .fleet-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .fleet-panel-heading h3 { margin: 0; color: #e4effa; font-size: 14px; }
 .fleet-panel-heading span { color: #6f8ba5; font-size: 9px; letter-spacing: .12em; }
+.fleet-version-control { display: flex; align-items: center; gap: 7px; }
+.fleet-version-current, .fleet-version-message { display: block; margin-top: 4px; color: #7791aa; font-size: 10px; line-height: 1.4; }
 .fleet-node-row, .fleet-deployment-row { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-top: 1px solid rgba(119, 151, 180, .12); }
 .fleet-node-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(52, 161, 188, .13); color: #55c7d8; }
 .fleet-node-glyph { font-size: 18px; line-height: 1; }
@@ -512,6 +653,18 @@ onUnmounted(() => {
 .fleet-terminal-bar { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(93, 134, 164, .2); color: #73a2ba; font-size: 9px; letter-spacing: .12em; }
 .fleet-terminal-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(93, 134, 164, .16); color: #7e9bb4; font-size: 10px; }
 .fleet-terminal-controls .el-select { width: 170px; }
+.fleet-upgrade-plans { margin: 12px 0 16px; padding: 14px; border: 1px solid rgba(112, 151, 187, .2); border-radius: 10px; background: rgba(14, 31, 49, .72); }
+.fleet-upgrade-plan { padding: 12px 0; border-top: 1px solid rgba(119, 151, 180, .12); }
+.fleet-upgrade-plan-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.fleet-upgrade-plan-heading > div { display: grid; gap: 4px; }
+.fleet-upgrade-plan-heading strong, .fleet-upgrade-steps strong { color: #dce9f6; font-size: 12px; }
+.fleet-upgrade-plan-heading small, .fleet-upgrade-steps small { color: #8198af; font-size: 10px; }
+.fleet-upgrade-steps { display: grid; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.fleet-upgrade-steps li { display: flex; align-items: center; gap: 10px; }
+.fleet-upgrade-steps li > div { display: grid; gap: 3px; flex: 1; }
+.fleet-upgrade-step-sequence { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(52, 161, 188, .13); color: #55c7d8; font-size: 10px; }
+.fleet-upgrade-pending, .fleet-upgrade-safety { color: #8198af; font-size: 10px; }\n.fleet-upgrade-failure { display: grid; gap: 5px; color: #e5a0a0; }\n.fleet-upgrade-failure span { color: #c58f8f; overflow-wrap: anywhere; }
+.fleet-upgrade-safety { margin: 8px 0 0; color: #d3a66b; }
 .fleet-terminal-body { max-height: 600px; overflow: auto; padding: 12px 16px; }
 .fleet-terminal-line { display: grid; grid-template-columns: 150px 110px minmax(140px, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(80, 122, 150, .12); }
 .terminal-time, .terminal-node { color: #6f8da5; font-size: 10px; }

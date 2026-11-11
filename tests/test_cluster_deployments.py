@@ -238,6 +238,44 @@ def test_cluster_deployment_cancel_stops_queued_commands(cluster_delivery_worksp
     assert command.status == AgentCommand.Status.CANCELLED
 
 
+@pytest.mark.django_db
+def test_deployment_cancel_marks_running_mutating_command_outcome_unknown(
+    cluster_delivery_workspace,
+):
+    _, tenant, project, node, _, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node)
+    command = AgentCommand.objects.get(deployment_id=created.data["id"])
+    lease_token = uuid.uuid4()
+    AgentCommand.objects.filter(pk=command.pk).update(
+        command_type="cluster.capi.pivot.execute",
+        status=AgentCommand.Status.RUNNING,
+        lease_token=lease_token,
+        lease_expires_at=timezone.now() + datetime.timedelta(seconds=60),
+    )
+
+    cancelled = client.post(
+        f"/api/v1/cluster-deployments/{created.data['id']}/cancel/",
+        {},
+        format="json",
+    )
+
+    command.refresh_from_db()
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    assert cancelled.status_code == 200
+    assert deployment.status == ClusterDeployment.Status.CANCELLED
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert command.error["retryable"] is False
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+    assert deployment.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert deployment.error["command_ids"] == [str(command.id)]
+
+
 
 @pytest.mark.django_db
 def test_target_postflight_rejects_dry_run_plan_even_if_prerequisites_are_present(
@@ -1247,6 +1285,84 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_command.node_id == eph_node.id
     assert deployment.error is None
 
+    approver = get_user_model().objects.create_user(
+        username="dual-agent-e2e-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    approver_client = APIClient()
+    approver_client.force_authenticate(user=approver)
+    approved = approver_client.post(
+        f"/api/v1/agent-commands/{pivot_command.id}/approve/",
+        {"plan_hash": pivot_command.plan_hash},
+        format="json",
+    )
+    assert approved.status_code == 200
+    assert approved.data["status"] == AgentCommand.Status.QUEUED
+
+    eph_agent_client = APIClient()
+    pivot_poll = eph_agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+    assert pivot_poll.status_code == 200
+    pivot_command_data = pivot_poll.data["command"]
+    assert pivot_command_data["id"] == str(pivot_command.id)
+    assert pivot_command_data["command_type"] == "cluster.capi.pivot.execute"
+
+    pivot_result = {
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": True,
+        "source_namespace_scope_verified": True,
+        "target_management_plane_verified": True,
+        "cluster_name": "edge-lab",
+        "namespace": "capi-system",
+        "ownership_transferred": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
+        "side_effects": False,
+    }
+    pivot_submitted = eph_agent_client.post(
+        f"/api/v1/agent-runtime/commands/{pivot_command_data['id']}/result/",
+        {
+            "node_id": str(eph_node.id),
+            "outcome": "succeeded",
+            "result": pivot_result,
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+        HTTP_X_AGENT_LEASE=pivot_command_data["lease_token"],
+    )
+
+    deployment.refresh_from_db()
+    pivot_command.refresh_from_db()
+    assert pivot_submitted.status_code == 200
+    assert pivot_command.status == AgentCommand.Status.SUCCEEDED
+    assert pivot_command.approved_by_id == approver.id
+    assert deployment.error is None
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
+    assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
+    assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+    ).exists()
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.worker.preflight",
+    ).exists()
+
 
 @pytest.mark.django_db
 def test_source_capi_pivot_preflight_rejects_malformed_inventory_counts(
@@ -1432,8 +1548,10 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
+@pytest.mark.parametrize("approval_valid", [True, False])
+def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_transfer_ownership(
     cluster_delivery_workspace,
+    approval_valid,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
@@ -1485,6 +1603,29 @@ def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
     assert pivot_command.node_id == eph_node.id
     assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
 
+    if approval_valid:
+        approver = get_user_model().objects.create_user(
+            username="dual-agent-pivot-approver",
+            password="test-password",
+        )
+        TenantMembership.objects.create(
+            tenant=tenant,
+            user=approver,
+            role=TenantMembership.Role.ADMIN,
+        )
+        pivot_command.status = AgentCommand.Status.SUCCEEDED
+        pivot_command.approved_by = approver
+        pivot_command.approved_at = timezone.now()
+        pivot_command.approved_plan_hash = pivot_command.plan_hash
+        pivot_command.save(
+            update_fields=[
+                "status",
+                "approved_by",
+                "approved_at",
+                "approved_plan_hash",
+            ]
+        )
+
     handle_deployment_command_result(
         pivot_command,
         "succeeded",
@@ -1507,6 +1648,14 @@ def test_dual_agent_pivot_simulation_does_not_transfer_cluster_ownership(
     )
 
     deployment.refresh_from_db()
+    if not approval_valid:
+        assert deployment.status == ClusterDeployment.Status.FAILED
+        assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
+        assert deployment.plan_result.get("dual_agent", {}).get(
+            "target_agent_owns_cluster"
+        ) is not True
+        return
+
     dual_agent = deployment.plan_result["dual_agent"]
     assert dual_agent["phase"] == "pivot_simulation_ready"
     assert dual_agent["pivot_simulated"] is True

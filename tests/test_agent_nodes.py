@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 from node_agent.capabilities import ROLE_CAPABILITIES
+from core.agent_node_views import _validate_kubernetes_upgrade_result
 import datetime
 import hashlib
 
@@ -37,6 +38,169 @@ def node_workspace(db):
     client = APIClient()
     client.force_authenticate(user=user)
     return user, tenant, project, client
+
+
+@pytest.mark.django_db
+def test_target_agent_kubernetes_version_upgrade_requires_approval(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.35",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v135",
+    )
+
+    assert response.status_code == 202
+    assert response.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+    assert response.data["command_type"] == "cluster.kubernetes.version.upgrade"
+
+
+@pytest.mark.django_db
+def test_target_agent_can_request_v134_after_v133(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target-v134", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.33.2",
+                "target_version": "v1.34",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v134-approved",
+    )
+
+    assert response.status_code == 202
+    assert response.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+
+
+@pytest.mark.django_db
+def test_target_agent_rejects_unsupported_kubernetes_version(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {
+            "name": "version-target-invalid",
+            "node_type": "target_cluster",
+            "cluster_name": "edge-lab",
+        },
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.32.2",
+                "target_version": "v1.37",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v137",
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_target_agent_rejects_non_string_kubernetes_version(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target-type", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": [],
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-invalid-type",
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_target_agent_rejects_skipping_kubernetes_minor_versions(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target-skip", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.36",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-skip-v136",
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_eph_agent_cannot_request_kubernetes_version_upgrade(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-eph", "node_type": "eph_node"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.32.2",
+                "target_version": "v1.35",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-eph-v135",
+    )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.django_db
@@ -646,6 +810,47 @@ def test_revoking_node_cancels_running_command_and_clears_lease(node_workspace):
     command = AgentCommand.objects.get(pk=command_id)
     assert revoked.status_code == 200
     assert command.status == AgentCommand.Status.CANCELLED
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+
+
+@pytest.mark.django_db
+def test_revoking_node_marks_running_mutating_command_outcome_unknown(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "eph-mutating-revoke", "node_type": "eph_node"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    token = enrolled.data["enrollment_token"]
+    created = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "node.health", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="revoke-running-mutating-command",
+    )
+    agent_client = APIClient()
+    polled = agent_client.post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": node_id},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert polled.data["command"]["id"] == created.data["id"]
+    AgentCommand.objects.filter(pk=created.data["id"]).update(
+        command_type="cluster.capi.pivot.execute",
+    )
+
+    revoked = client.post(f"/api/v1/agent-nodes/{node_id}/revoke/", {}, format="json")
+
+    command = AgentCommand.objects.get(pk=created.data["id"])
+    assert revoked.status_code == 200
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert command.error["retryable"] is False
     assert command.lease_token is None
     assert command.lease_expires_at is None
 
@@ -2361,3 +2566,57 @@ def test_agent_command_approval_is_single_writer_and_preserves_first_approver(no
     assert command.approved_by_id == first_user.id
     assert command.approved_by_id != second_user.id
     assert command.approved_plan_hash == created.data["plan_hash"]
+
+
+
+def test_kubernetes_upgrade_result_enforces_simulation_only_contract():
+    command = type("Command", (), {
+        "command_type": "cluster.kubernetes.version.upgrade",
+        "payload": {
+            "cluster_name": "edge-lab",
+            "current_version": "v1.33.2",
+            "target_version": "v1.34",
+        },
+    })()
+    result = {
+        "cluster_name": "edge-lab",
+        "current_version": "v1.33.2",
+        "target_version": "v1.34",
+        "approval_required": True,
+        "upgrade_simulated": True,
+        "upgrade_performed": False,
+        "side_effects": False,
+        "requires_manual_execution": True,
+        "resume_supported": False,
+        "upgrade_steps": [
+            {"sequence": 1, "name": "preflight", "status": "not_run"},
+            {"sequence": 2, "name": "control_plane", "status": "not_started"},
+            {"sequence": 3, "name": "workers", "status": "not_started"},
+            {"sequence": 4, "name": "postflight", "status": "not_started"},
+        ],
+    }
+    assert _validate_kubernetes_upgrade_result(command, result) is None
+
+    executed = dict(result, upgrade_performed=True)
+    assert "simulation-only" in _validate_kubernetes_upgrade_result(command, executed)
+
+    side_effects = dict(result, side_effects=True)
+    assert "simulation-only" in _validate_kubernetes_upgrade_result(command, side_effects)
+
+    wrong_target = dict(result, target_version="v1.35")
+    assert "approved command" in _validate_kubernetes_upgrade_result(command, wrong_target)
+
+    reordered = dict(result, upgrade_steps=list(reversed(result["upgrade_steps"])))
+    assert "ordered and unexecuted" in _validate_kubernetes_upgrade_result(command, reordered)
+
+    advanced = dict(result, upgrade_steps=[
+        dict(result["upgrade_steps"][0]),
+        dict(result["upgrade_steps"][1], status="completed"),
+        *result["upgrade_steps"][2:],
+    ])
+    assert "ordered and unexecuted" in _validate_kubernetes_upgrade_result(command, advanced)
+
+
+def test_non_upgrade_command_result_skips_upgrade_contract():
+    command = type("Command", (), {"command_type": "node.health", "payload": {}})()
+    assert _validate_kubernetes_upgrade_result(command, {"ok": True}) is None

@@ -35,6 +35,7 @@ ROLE_CAPABILITIES = {
             "cluster.capi.pivot.postflight",
             "cluster.capi.worker.preflight",
             "cluster.capi.worker.provision",
+            "cluster.kubernetes.version.upgrade",
             "cluster.metal3.observe",
             "k8s.resource.read",
         }
