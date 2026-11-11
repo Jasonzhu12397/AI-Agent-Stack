@@ -1,5 +1,5 @@
-import importlib.util
 import pathlib
+import runpy
 import uuid
 
 import pytest
@@ -7,9 +7,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOOTSTRAP_PATH = ROOT / "eph-iso/bootstrap.py"
-SPEC = importlib.util.spec_from_file_location("eph_iso_bootstrap", BOOTSTRAP_PATH)
-BOOTSTRAP = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BOOTSTRAP)
+BOOTSTRAP = runpy.run_path(str(BOOTSTRAP_PATH))
 
 
 def valid_config():
@@ -56,7 +54,7 @@ def test_eph_k3s_and_kubelet_state_are_ram_backed():
 
 
 def test_bootstrap_config_accepts_pinned_image_and_https_endpoint():
-    assert BOOTSTRAP.validate_config(valid_config())["node_id"]
+    assert BOOTSTRAP["validate_config"](valid_config())["node_id"]
 
 
 @pytest.mark.parametrize(
@@ -72,7 +70,7 @@ def test_bootstrap_config_accepts_pinned_image_and_https_endpoint():
 def test_bootstrap_config_rejects_unsafe_values(change, expected):
     config = valid_config()
     config.update(change)
-    with pytest.raises(BOOTSTRAP.BootstrapError, match=expected):
+    with pytest.raises(BOOTSTRAP["BootstrapError"], match=expected):
         BOOTSTRAP.validate_config(config)
 
 
@@ -101,8 +99,14 @@ def test_bootstrap_agent_manifest_is_bundled_into_iso():
 def test_eph_boot_media_mount_and_network_configuration_are_ordered_before_k3s():
     mount = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/mnt-eph\\x2dbootstrap.mount"
     local_fs = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/local-fs.target.d/eph.conf"
-    network_service = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-network-config.service"
-    network_dropin = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/systemd-networkd.service.d/eph.conf"
+    network_service = (
+        ROOT
+        / "eph-iso/config/includes.chroot/etc/systemd/system/eph-network-config.service"
+    )
+    network_dropin = (
+        ROOT
+        / "eph-iso/config/includes.chroot/etc/systemd/system/systemd-networkd.service.d/eph.conf"
+    )
     assert "Where=/mnt/eph-bootstrap" in mount.read_text(encoding="utf-8")
     assert "mnt-eph\\x2dbootstrap.mount" in local_fs.read_text(encoding="utf-8")
     assert "Before=systemd-networkd.service" in network_service.read_text(encoding="utf-8")
