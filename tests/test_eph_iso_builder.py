@@ -283,3 +283,127 @@ def test_bootstrap_rejects_untrusted_certificate_exchange_fields(change):
         match="CLIENT_CERTIFICATE_RESPONSE_INVALID",
     ):
         BOOTSTRAP["_validate_certificate_exchange_response"](response, node_id)
+
+
+
+def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
+    import json
+    import subprocess
+
+    media_root = tmp_path / "media"
+    manifest_root = tmp_path / "manifests"
+    (media_root / "tls").mkdir(parents=True)
+    manifest_root.mkdir()
+    (media_root / "bootstrap.json").write_text(
+        json.dumps(valid_config()),
+        encoding="utf-8",
+    )
+    (media_root / "tls" / "ca.crt").write_text(
+        "CONTROL CA",
+        encoding="ascii",
+    )
+    for name in ("namespace.yaml", "rbac.yaml", "eph-node-agent.yaml"):
+        (manifest_root / name).write_text(name, encoding="utf-8")
+
+    secret_files = {}
+    for name, content in (
+        ("ca.crt", "CONTROL CA"),
+        ("tls.crt", "CLIENT CERTIFICATE"),
+        ("tls.key", "LOCAL PRIVATE KEY"),
+    ):
+        path = tmp_path / name
+        path.write_text(content, encoding="ascii")
+        secret_files[name] = path
+    secret_files["agent_token"] = "b" * 64
+
+    events = []
+
+    def fake_run(arguments, input_text=None):
+        events.append(("run", list(arguments), input_text))
+        if fail_rollout and "rollout" in arguments:
+            raise subprocess.CalledProcessError(1, arguments)
+
+    def fake_create_secret(name, namespace, files):
+        events.append(("secret", name, namespace, sorted(files)))
+
+    def fake_apply_file(path, image=None):
+        events.append(("manifest", pathlib.Path(path).name, image))
+
+    bootstrap_globals = BOOTSTRAP["bootstrap"].__globals__
+    monkeypatch.setitem(bootstrap_globals, "MEDIA_ROOT", media_root)
+    monkeypatch.setitem(bootstrap_globals, "MANIFEST_ROOT", manifest_root)
+    monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
+    monkeypatch.setitem(bootstrap_globals, "_create_secret", fake_create_secret)
+    monkeypatch.setitem(bootstrap_globals, "_apply_file", fake_apply_file)
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_request_client_certificate",
+        lambda config, secret_dir, control_ca_path: dict(secret_files),
+    )
+    return events
+
+
+def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
+    monkeypatch,
+    tmp_path,
+):
+    events = _prepare_bootstrap_runtime(monkeypatch, tmp_path)
+
+    BOOTSTRAP["bootstrap"]()
+
+    assert events[0][0:2] == ("run", [
+        "k3s",
+        "kubectl",
+        "--kubeconfig",
+        "/etc/rancher/k3s/k3s.yaml",
+        "apply",
+        "-f",
+        str(tmp_path / "manifests" / "namespace.yaml"),
+    ])
+    assert events[1][0:2] == ("run", [
+        "k3s",
+        "kubectl",
+        "--kubeconfig",
+        "/etc/rancher/k3s/k3s.yaml",
+        "apply",
+        "-f",
+        str(tmp_path / "manifests" / "rbac.yaml"),
+    ])
+    assert ("secret", "eph-node-agent-credentials", "ai-agent-system", [
+        "control-url",
+        "node-id",
+        "token",
+    ]) in events
+    assert ("secret", "agent-control-plane-mtls", "ai-agent-system", [
+        "ca.crt",
+        "tls.crt",
+        "tls.key",
+    ]) in events
+    assert ("manifest", "eph-node-agent.yaml", valid_config()["agent_image"]) not in events
+    assert any(
+        event[0] == "manifest"
+        and event[1] == "eph-node-agent.yaml"
+        and event[2].endswith("@sha256:" + "a" * 64)
+        for event in events
+    )
+    rollout = [
+        event for event in events
+        if event[0] == "run" and "rollout" in event[1]
+    ]
+    assert len(rollout) == 1
+    assert rollout[0][1][-3:] == [
+        "deployment/eph-node-agent",
+        "--timeout=10m",
+    ][-3:]
+
+
+def test_bootstrap_fails_when_agent_deployment_rollout_fails(
+    monkeypatch,
+    tmp_path,
+):
+    import subprocess
+
+    _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=True)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        BOOTSTRAP["bootstrap"]()
