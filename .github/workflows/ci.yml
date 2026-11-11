@@ -107,7 +107,7 @@ jobs:
           dd if=/dev/zero of="$RUNNER_TEMP/ephboot.img" bs=1M count=64
           mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/ephboot.img"
           mmd -i "$RUNNER_TEMP/ephboot.img" ::/network
-          printf '%s\n' '[Match]' 'Name=en*' 'Type=ether' '' '[Network]' 'DHCP=ipv4' > "$RUNNER_TEMP/ephboot/network/10-qemu.network"
+          mcopy -i "$RUNNER_TEMP/ephboot.img" "$RUNNER_TEMP/ephboot/network/10-qemu.network" ::/network/10-qemu.network
           qemu-system-x86_64 \
             -machine accel=tcg,usb=off \
             -cpu max -m 4096 -smp 2 \
