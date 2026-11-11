@@ -25,18 +25,16 @@ def test_cloud_agent_has_a_dedicated_image_and_worker_entrypoint():
     assert worker["image"] == "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
 
 
-def test_local_compose_uses_dedicated_cloud_and_node_agent_images():
+def test_local_compose_runs_cloud_services_but_not_node_agents():
     compose = yaml.safe_load(
         (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
     )
     services = compose["services"]
     assert services["worker"]["build"]["dockerfile"] == "Dockerfile.cloud-agent"
     cloud_image = "${AI_AGENT_CLOUD_AGENT_IMAGE:-ai-agent-cloud-agent:local}"
-    node_image = "${AI_AGENT_NODE_AGENT_IMAGE:-ai-agent-node-agent:local}"
     assert services["worker"]["image"] == cloud_image
-    for name in ("eph-node-agent", "target-cluster-agent"):
-        assert services[name]["image"] == node_image
-        assert "build" not in services[name]
+    assert "eph-node-agent" not in services
+    assert "target-cluster-agent" not in services
 
 
 def test_node_agent_image_contains_only_cluster_runtime_and_minimal_dependency():
@@ -47,7 +45,7 @@ def test_node_agent_image_contains_only_cluster_runtime_and_minimal_dependency()
     assert "COPY pyproject.toml" not in dockerfile
     assert "COPY apps/platform-api" not in dockerfile
     assert "COPY apps/worker" not in dockerfile
-    assert "CMD [\"python\", \"-m\", \"apps.node_agent.agent\"" in dockerfile
+    assert 'CMD ["python", "-m", "apps.node_agent.agent"' in dockerfile
 
 
 def test_cloud_and_cluster_agent_entrypoints_are_not_the_same():
