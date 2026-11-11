@@ -1,16 +1,16 @@
 import json
 import re
 import uuid
+from urllib.parse import urlsplit
 
 
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 HOSTNAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 TOKEN_PATTERN = re.compile(r"^[!-~]{32,512}$")
-PEM_BLOCKS = {
-    "ca_certificate": ("-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"),
-    "client_certificate": ("-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"),
-    "client_private_key": ("-----BEGIN", "-----END"),
-}
+PEM_PATTERN = re.compile(
+    r"-----BEGIN ([A-Z0-9 ]+)-----.*?-----END \\1-----\\s*",
+    re.DOTALL,
+)
 
 
 class EPHSeedError(ValueError):
@@ -40,16 +40,25 @@ def _validate_network_config(network_config):
         value = network_config[key]
         if not isinstance(value, dict) or not value:
             raise EPHSeedError("EPH_SEED_NETWORK_CONFIG_INVALID")
-        if any(not isinstance(name, str) or not name for name in value):
+        if any(
+            not isinstance(name, str) or not name or not isinstance(settings, dict)
+            for name, settings in value.items()
+        ):
             raise EPHSeedError("EPH_SEED_NETWORK_CONFIG_INVALID")
+    try:
+        encoded = json.dumps(network_config, allow_nan=False)
+    except (TypeError, ValueError):
+        raise EPHSeedError("EPH_SEED_NETWORK_CONFIG_INVALID") from None
+    if len(encoded.encode("utf-8")) > 65536:
+        raise EPHSeedError("EPH_SEED_NETWORK_CONFIG_TOO_LARGE")
     return network_config
 
 
-def _validate_pem(value, field):
-    begin, end = PEM_BLOCKS[field]
-    if not isinstance(value, str) or len(value) > 131072:
+def _validate_pem(value, field, expected_type):
+    if not isinstance(value, str) or len(value) > 131072 or "\\x00" in value:
         raise EPHSeedError("EPH_SEED_CREDENTIAL_INVALID:" + field)
-    if begin not in value or end not in value or "\\x00" in value:
+    match = PEM_PATTERN.fullmatch(value.strip())
+    if match is None or match.group(1) != expected_type:
         raise EPHSeedError("EPH_SEED_CREDENTIAL_INVALID:" + field)
     return value.rstrip() + "\\n"
 
@@ -59,10 +68,21 @@ def render_nocloud_seed(config):
         raise EPHSeedError("EPH_SEED_CONFIG_INVALID")
 
     control_url = _require_string(config, "control_url", maximum=2048)
+    try:
+        parsed_url = urlsplit(control_url)
+        parsed_port = parsed_url.port
+    except ValueError:
+        raise EPHSeedError("EPH_SEED_CONTROL_URL_INVALID") from None
     if (
-        not control_url.startswith("https://")
+        parsed_url.scheme != "https"
+        or not parsed_url.hostname
+        or parsed_url.username
+        or parsed_url.password
+        or parsed_url.path not in ("", "/")
+        or parsed_url.query
+        or parsed_url.fragment
+        or (parsed_port is not None and not 1 <= parsed_port <= 65535)
         or any(character.isspace() for character in control_url)
-        or "@" in control_url.split("/", 3)[2]
     ):
         raise EPHSeedError("EPH_SEED_CONTROL_URL_INVALID")
 
@@ -87,12 +107,14 @@ def render_nocloud_seed(config):
         raise EPHSeedError("EPH_SEED_HOSTNAME_INVALID")
 
     network_config = _validate_network_config(config.get("network_config"))
-    ca_certificate = _validate_pem(config.get("ca_certificate"), "ca_certificate")
+    ca_certificate = _validate_pem(
+        config.get("ca_certificate"), "ca_certificate", "CERTIFICATE"
+    )
     client_certificate = _validate_pem(
-        config.get("client_certificate"), "client_certificate"
+        config.get("client_certificate"), "client_certificate", "CERTIFICATE"
     )
     client_private_key = _validate_pem(
-        config.get("client_private_key"), "client_private_key"
+        config.get("client_private_key"), "client_private_key", "PRIVATE KEY"
     )
 
     bootstrap_config = {
