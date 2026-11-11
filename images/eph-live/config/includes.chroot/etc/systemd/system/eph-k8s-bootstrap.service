@@ -1,0 +1,16 @@
+[Unit]
+Description=Bootstrap the temporary EPH single-node Kubernetes cluster
+Wants=network-online.target
+After=network-online.target cloud-final.service containerd.service
+Requires=containerd.service
+ConditionPathExists=/run/eph-bootstrap/bootstrap.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/run/eph-bootstrap/bootstrap.env
+ExecStart=/usr/local/sbin/eph-k8s-bootstrap
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
