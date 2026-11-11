@@ -95,21 +95,33 @@ def test_bootstrap_agent_manifest_is_bundled_into_iso():
     assert "usr/share/ai-agent-studio/eph-manifests" in script
 
 
-def test_eph_boot_media_mount_and_network_configuration_are_ordered_before_k3s():
-    mount = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/mnt-eph\\x2dbootstrap.mount"
-    local_fs = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/local-fs.target.d/eph.conf"
-    network_service = (
+def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
+    package_list = (
+        ROOT / "eph-iso/config/package-lists/eph-node.list.chroot"
+    ).read_text(encoding="utf-8")
+    datasource = (
         ROOT
-        / "eph-iso/config/includes.chroot/etc/systemd/system/eph-network-config.service"
-    )
-    network_dropin = (
+        / "eph-iso/config/includes.chroot/etc/cloud/cloud.cfg.d/90-eph-nocloud.cfg"
+    ).read_text(encoding="utf-8")
+    service = (
         ROOT
-        / "eph-iso/config/includes.chroot/etc/systemd/system/systemd-networkd.service.d/eph.conf"
-    )
-    assert "Where=/mnt/eph-bootstrap" in mount.read_text(encoding="utf-8")
-    assert "mnt-eph\\x2dbootstrap.mount" in local_fs.read_text(encoding="utf-8")
-    assert "Before=systemd-networkd.service" in network_service.read_text(encoding="utf-8")
-    assert "Requires=eph-network-config.service" in network_dropin.read_text(encoding="utf-8")
+        / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
+    ).read_text(encoding="utf-8")
+    multi_user = (
+        ROOT
+        / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
+    ).read_text(encoding="utf-8")
+    assert "cloud-init" in package_list
+    assert "NoCloud" in datasource
+    assert "CIDATA" in datasource
+    assert "cloud-init.target" in service
+    assert "After=cloud-init.target" in service
+    assert "k3s.service eph-bootstrap.service" in multi_user
+    assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
+        ROOT / "eph-iso/bootstrap.py"
+    ).read_text(encoding="utf-8")
+    for name in ("user-data", "meta-data", "network-config"):
+        assert (ROOT / "eph-iso/examples/cloud-init" / name).is_file()
 
 
 def test_eph_agent_capi_pivot_secret_is_optional_until_target_cluster_exists():
