@@ -4479,6 +4479,7 @@ def execute_command_with_lease(
         while not stop_event.wait(renew_interval):
             try:
                 client.renew_lease(command_id, lease_token)
+                touch_health_files()
             except NodeAgentError as exc:
                 renewal_errors.append(exc)
                 stop_event.set()
