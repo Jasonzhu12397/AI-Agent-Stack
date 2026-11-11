@@ -20,6 +20,11 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 install -d -m 0700 /run/eph-bootstrap /etc/kubernetes /root/.kube
 systemctl enable containerd kubelet
 systemctl start containerd
+modprobe overlay
+modprobe br_netfilter
+sysctl -w net.bridge.bridge-nf-call-iptables=1
+sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+sysctl -w net.ipv4.ip_forward=1
 cat >/run/eph-bootstrap/kubeadm.yaml <<EOF
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
@@ -72,6 +77,9 @@ spec:
         app: eph-node-agent
     spec:
       serviceAccountName: eph-node-agent
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent
           image: "$NODE_AGENT_IMAGE"
@@ -114,6 +122,18 @@ spec:
             runAsUser: 10001
             capabilities:
               drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
           resources:
             requests:
               cpu: 50m
