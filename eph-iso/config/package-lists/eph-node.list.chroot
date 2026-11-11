@@ -3,7 +3,6 @@ linux-image-amd64
 live-boot
 live-config
 cloud-init
-systemd-networkd
 ca-certificates
 curl
 iproute2
