@@ -1017,7 +1017,6 @@ class AuditEvent(models.Model):
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
 
 
-
 class EPHSeedArtifact(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     agent_node = models.ForeignKey(
@@ -1045,3 +1044,6 @@ class EPHSeedArtifact(models.Model):
                 name="eph_seed_lifecycle_idx",
             ),
         ]
+
+
+from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
