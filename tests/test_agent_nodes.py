@@ -94,6 +94,32 @@ def test_target_agent_rejects_unsupported_kubernetes_version(node_workspace):
 
 
 @pytest.mark.django_db
+def test_target_agent_rejects_skipping_kubernetes_minor_versions(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target-skip", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.36",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-skip-v136",
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
 def test_eph_agent_cannot_request_kubernetes_version_upgrade(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
