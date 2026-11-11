@@ -1,0 +1,131 @@
+#!/bin/bash
+set -euo pipefail
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+: "${KUBERNETES_VERSION:?KUBERNETES_VERSION_REQUIRED}"
+: "${POD_CIDR:?POD_CIDR_REQUIRED}"
+: "${SERVICE_CIDR:?SERVICE_CIDR_REQUIRED}"
+: "${FLANNEL_MANIFEST_SHA256:?FLANNEL_MANIFEST_SHA256_REQUIRED}"
+: "${FLANNEL_MANIFEST_URL:?FLANNEL_MANIFEST_URL_REQUIRED}"
+: "${NODE_AGENT_IMAGE:?NODE_AGENT_IMAGE_REQUIRED}"
+: "${CONTROL_URL:?CONTROL_URL_REQUIRED}"
+: "${NODE_ID:?NODE_ID_REQUIRED}"
+: "${NODE_TOKEN:?NODE_TOKEN_REQUIRED}"
+[[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_UNSUPPORTED"
+[[ "$FLANNEL_MANIFEST_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || fail "FLANNEL_MANIFEST_SHA256_INVALID"
+[[ "$NODE_AGENT_IMAGE" =~ @sha256:[a-f0-9]{64}$ ]] || fail "NODE_AGENT_IMAGE_MUST_BE_DIGEST_PINNED"
+[[ "$CONTROL_URL" =~ ^https://[^[:space:]]+$ ]] || fail "CONTROL_URL_INVALID"
+[[ "$NODE_ID" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || fail "NODE_ID_INVALID"
+[[ "$NODE_TOKEN" =~ ^[A-Za-z0-9._~-]{24,4096}$ ]] || fail "NODE_TOKEN_INVALID"
+install -d -m 0700 /run/eph-bootstrap /etc/kubernetes /root/.kube
+systemctl enable containerd kubelet
+systemctl start containerd
+cat >/run/eph-bootstrap/kubeadm.yaml <<EOF
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: "$KUBERNETES_VERSION"
+networking:
+  podSubnet: "$POD_CIDR"
+  serviceSubnet: "$SERVICE_CIDR"
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+EOF
+kubeadm init --config /run/eph-bootstrap/kubeadm.yaml --skip-token-print
+install -m 0600 /etc/kubernetes/admin.conf /root/.kube/config
+export KUBECONFIG=/etc/kubernetes/admin.conf
+kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+curl --fail --silent --show-error --location "$FLANNEL_MANIFEST_URL" -o /run/eph-bootstrap/flannel.yaml
+printf '%s  %s\n' "$FLANNEL_MANIFEST_SHA256" /run/eph-bootstrap/flannel.yaml | sha256sum -c -
+kubectl apply -f /run/eph-bootstrap/flannel.yaml
+kubectl -n kube-flannel rollout status daemonset/kube-flannel-ds --timeout=180s
+kubectl create namespace ai-agent-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ai-agent-system create secret generic eph-node-agent-credentials --from-literal=control-url="$CONTROL_URL" --from-literal=node-id="$NODE_ID" --from-literal=token="$NODE_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ai-agent-system create secret generic agent-control-plane-tls --from-file=ca.crt=/run/eph-bootstrap/ca.crt --from-file=tls.crt=/run/eph-bootstrap/tls.crt --from-file=tls.key=/run/eph-bootstrap/tls.key --dry-run=client -o yaml | kubectl apply -f -
+cat >/run/eph-bootstrap/eph-agent.yaml <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eph-node-agent
+  namespace: ai-agent-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eph-node-agent
+  namespace: ai-agent-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eph-node-agent
+  template:
+    metadata:
+      labels:
+        app: eph-node-agent
+    spec:
+      serviceAccountName: eph-node-agent
+      containers:
+        - name: agent
+          image: "$NODE_AGENT_IMAGE"
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+          env:
+            - name: APP_ENV
+              value: production
+            - name: AGENT_NODE_TYPE
+              value: eph_node
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eph-node-agent-credentials
+                  key: control-url
+            - name: AGENT_NODE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: eph-node-agent-credentials
+                  key: node-id
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: eph-node-agent-credentials
+                  key: token
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/agent/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/agent/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/agent/tls.key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: agent-tls
+              mountPath: /var/run/secrets/agent
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: agent-tls
+          secret:
+            secretName: agent-control-plane-tls
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+EOF
+kubectl apply -f /run/eph-bootstrap/eph-agent.yaml
+kubectl -n ai-agent-system rollout status deployment/eph-node-agent --timeout=180s
+kubectl wait --for=condition=Ready node --all --timeout=180s
