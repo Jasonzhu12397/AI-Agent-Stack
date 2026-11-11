@@ -66,6 +66,9 @@ const activeDeployments = computed(() =>
 const recentCommands = computed(() =>
   [...commands.value].sort((left, right) => right.created_at.localeCompare(left.created_at)),
 );
+const kubernetesUpgradeCommands = computed(() =>
+  recentCommands.value.filter((command) => command.command_type === "cluster.kubernetes.version.upgrade"),
+);
 const latestActivity = computed(() => {
   const commandTimes = commands.value.map((item) => item.finished_at ?? item.started_at ?? item.created_at);
   const deploymentTimes = deployments.value.map((item) => item.updated_at);
@@ -280,6 +283,20 @@ function commandDetail(command: AgentCommand): string {
   if (command.error) return JSON.stringify(command.error);
   if (command.result) return JSON.stringify(command.result);
   return JSON.stringify(command.payload);
+}
+
+function kubernetesUpgradeSteps(command: AgentCommand): Array<Record<string, unknown>> {
+  const steps = command.result?.upgrade_steps;
+  return Array.isArray(steps)
+    ? steps.filter((step): step is Record<string, unknown> =>
+        Boolean(step) && typeof step === "object" && !Array.isArray(step),
+      )
+    : [];
+}
+
+function upgradeStepStatus(step: Record<string, unknown>): string {
+  const status = step.status;
+  return typeof status === "string" ? status.replaceAll("_", " ") : "not reported";
 }
 
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
@@ -532,6 +549,35 @@ onUnmounted(() => {
           <el-button size="small" plain :disabled="commandOffset === 0 || refreshing" @click="changeCommandPage(-1)">Previous</el-button>
           <el-button size="small" plain :disabled="commandOffset + commandPageSize >= commandCount || refreshing" @click="changeCommandPage(1)">Next</el-button>
         </div>
+        <section v-if="kubernetesUpgradeCommands.length" class="fleet-upgrade-plans">
+          <div class="fleet-panel-heading">
+            <h3>Kubernetes upgrade plans</h3>
+            <span>{{ kubernetesUpgradeCommands.length }} COMMANDS</span>
+          </div>
+          <article v-for="command in kubernetesUpgradeCommands" :key="command.id" class="fleet-upgrade-plan">
+            <div class="fleet-upgrade-plan-heading">
+              <div>
+                <strong>{{ String(command.payload.cluster_name ?? "Target cluster") }}</strong>
+                <small>{{ String(command.payload.current_version ?? "unknown") }} → {{ String(command.payload.target_version ?? "unknown") }}</small>
+              </div>
+              <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+            </div>
+            <ol v-if="kubernetesUpgradeSteps(command).length" class="fleet-upgrade-steps">
+              <li v-for="step in kubernetesUpgradeSteps(command)" :key="String(step.sequence ?? step.name)">
+                <span class="fleet-upgrade-step-sequence">{{ step.sequence }}</span>
+                <div>
+                  <strong>{{ String(step.name ?? "Upgrade step").replaceAll("_", " ") }}</strong>
+                  <small>{{ String(step.description ?? "") }}</small>
+                </div>
+                <el-tag type="info" size="small">{{ upgradeStepStatus(step) }}</el-tag>
+              </li>
+            </ol>
+            <p v-else class="fleet-upgrade-pending">
+              {{ command.status === "waiting_approval" ? "Awaiting independent approval; no upgrade step has executed." : "The Agent has not returned an upgrade plan yet." }}
+            </p>
+            <p class="fleet-upgrade-safety">Simulation-only · no live Kubernetes or kubeadm changes</p>
+          </article>
+        </section>
         <div class="fleet-terminal-body">
           <div v-for="command in recentCommands" :key="command.id" class="fleet-terminal-line">
             <span class="terminal-time">{{ formatTime(command.finished_at ?? command.started_at ?? command.created_at) }}</span>
@@ -601,6 +647,18 @@ onUnmounted(() => {
 .fleet-terminal-bar { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(93, 134, 164, .2); color: #73a2ba; font-size: 9px; letter-spacing: .12em; }
 .fleet-terminal-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(93, 134, 164, .16); color: #7e9bb4; font-size: 10px; }
 .fleet-terminal-controls .el-select { width: 170px; }
+.fleet-upgrade-plans { margin: 12px 0 16px; padding: 14px; border: 1px solid rgba(112, 151, 187, .2); border-radius: 10px; background: rgba(14, 31, 49, .72); }
+.fleet-upgrade-plan { padding: 12px 0; border-top: 1px solid rgba(119, 151, 180, .12); }
+.fleet-upgrade-plan-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.fleet-upgrade-plan-heading > div { display: grid; gap: 4px; }
+.fleet-upgrade-plan-heading strong, .fleet-upgrade-steps strong { color: #dce9f6; font-size: 12px; }
+.fleet-upgrade-plan-heading small, .fleet-upgrade-steps small { color: #8198af; font-size: 10px; }
+.fleet-upgrade-steps { display: grid; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.fleet-upgrade-steps li { display: flex; align-items: center; gap: 10px; }
+.fleet-upgrade-steps li > div { display: grid; gap: 3px; flex: 1; }
+.fleet-upgrade-step-sequence { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(52, 161, 188, .13); color: #55c7d8; font-size: 10px; }
+.fleet-upgrade-pending, .fleet-upgrade-safety { color: #8198af; font-size: 10px; }
+.fleet-upgrade-safety { margin: 8px 0 0; color: #d3a66b; }
 .fleet-terminal-body { max-height: 600px; overflow: auto; padding: 12px 16px; }
 .fleet-terminal-line { display: grid; grid-template-columns: 150px 110px minmax(140px, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(80, 122, 150, .12); }
 .terminal-time, .terminal-node { color: #6f8da5; font-size: 10px; }
