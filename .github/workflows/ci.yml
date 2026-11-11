@@ -80,7 +80,7 @@ jobs:
       - name: Install Live ISO and QEMU build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates qemu-system-x86 dosfstools mtools curl
+          sudo apt-get install -y live-build xorriso squashfs-tools debootstrap debian-archive-keyring wget ca-certificates qemu-system-x86 dosfstools mtools curl
       - name: Build pinned EPH Live ISO
         id: build
         run: |
