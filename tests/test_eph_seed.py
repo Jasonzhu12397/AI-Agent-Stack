@@ -64,11 +64,20 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         ({"control_url": "https://"}, "EPH_SEED_CONTROL_URL_INVALID"),
         ({"node_id": "invalid"}, "EPH_SEED_NODE_ID_INVALID"),
         ({"enrollment_token": "short"}, "EPH_SEED_ENROLLMENT_TOKEN_INVALID"),
-        ({"agent_image": "registry.example.com/agent:latest"}, "EPH_SEED_AGENT_IMAGE_NOT_PINNED"),
+        (
+            {"agent_image": "registry.example.com/agent:latest"},
+            "EPH_SEED_AGENT_IMAGE_NOT_PINNED",
+        ),
         ({"hostname": "../invalid"}, "EPH_SEED_HOSTNAME_INVALID"),
         ({"network_config": {"version": 1}}, "EPH_SEED_NETWORK_CONFIG_INVALID"),
-        ({"ca_certificate": "not-a-certificate"}, "EPH_SEED_CREDENTIAL_INVALID:ca_certificate"),
-        (\n            {"client_private_key": "-----BEGIN PRIVATE KEY-----"},\n            "EPH_SEED_CREDENTIAL_INVALID:client_private_key",\n        ),
+        (
+            {"ca_certificate": "not-a-certificate"},
+            "EPH_SEED_CREDENTIAL_INVALID:ca_certificate",
+        ),
+        (
+            {"client_private_key": "-----BEGIN PRIVATE KEY-----"},
+            "EPH_SEED_CREDENTIAL_INVALID:client_private_key",
+        ),
     ],
 )
 def test_seed_rejects_invalid_node_configuration(change, expected):
