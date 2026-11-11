@@ -2085,6 +2085,7 @@ def execute_command(
             or not payload["cluster_name"]
             or not isinstance(payload.get("current_version"), str)
             or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
+            or not isinstance(payload.get("target_version"), str)
             or payload.get("target_version") not in supported_versions
             or int(payload["target_version"].split(".")[1])
             != int(payload["current_version"].split(".")[1]) + 1
