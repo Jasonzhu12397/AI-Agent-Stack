@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 
 from .capabilities import ROLE_CAPABILITIES
+from .certificate_rotation import CertificateRotationError, CertificateRotationManager
 from .capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
@@ -4267,6 +4268,7 @@ class ControlPlaneClient:
         ):
             raise NodeAgentError("AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS")
         self.tls_context = build_control_plane_tls_context()
+        self.certificate_rotation = CertificateRotationManager(self)
         self.deployment_checkpoints: dict[str, dict[str, Any]] = {}
 
     def request(
@@ -4275,6 +4277,7 @@ class ControlPlaneClient:
         payload: dict[str, Any] | None = None,
         lease_token: str = "",
         method: str = "POST",
+        tls_context: ssl.SSLContext | None = None,
     ) -> dict[str, Any]:
         if method not in {"GET", "POST"}:
             raise NodeAgentError("UNSUPPORTED_CONTROL_PLANE_METHOD")
@@ -4299,13 +4302,14 @@ class ControlPlaneClient:
             method=method,
         )
         try:
-            if self.tls_context is None:
+            request_tls_context = tls_context or self.tls_context
+            if request_tls_context is None:
                 response_context = urllib.request.urlopen(request, timeout=self.timeout)
             else:
                 response_context = urllib.request.urlopen(
                     request,
                     timeout=self.timeout,
-                    context=self.tls_context,
+                    context=request_tls_context,
                 )
             with response_context as response:
                 response_body = response.read(4 * 1024 * 1024 + 1)
@@ -4561,6 +4565,11 @@ def validate_deployment_checkpoint_for_command(
 
 
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
+    if node_type == "eph_node":
+        try:
+            client.certificate_rotation.maintain()
+        except CertificateRotationError as exc:
+            raise NodeAgentError(str(exc)) from exc
     heartbeat = client.heartbeat(node_type)
     inventory = inspect_host_network_hardware()
     if inventory.get("status") == "observed":
