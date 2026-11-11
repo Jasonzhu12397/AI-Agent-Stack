@@ -17,14 +17,19 @@ def test_dual_agent_deploy_script_requires_two_contexts_and_digest_image():
     assert "rollout status daemonset/network-inventory-agent" in script
 
 
-def test_dual_agent_deploy_script_requires_pivot_and_ironic_secrets():
+def test_dual_agent_deploy_script_requires_pivot_but_not_optional_ironic_secrets():
     script = (ROOT / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
+    target = (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(
+        encoding="utf-8"
+    )
 
     assert "capi-pivot-kubeconfigs" in script
     assert "source.kubeconfig target.kubeconfig" in script
-    assert "ironic-api-credentials api-url token" in script
+    assert "ironic-api-credentials api-url token" not in script
     assert "eph-node-agent-credentials control-url node-id token" in script
     assert "target-cluster-agent-credentials control-url node-id token" in script
+    assert "name: ironic-api-credentials" in target
+    assert "optional: true" in target
 
 
 def test_both_agent_deployments_require_mtls_and_mount_node_credentials():
