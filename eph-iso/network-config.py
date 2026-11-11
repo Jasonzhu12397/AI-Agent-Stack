@@ -1,10 +1,10 @@
 import re
 import shutil
-from pathlib import Path
+import pathlib
 
 
-MEDIA_ROOT = Path("/mnt/eph-bootstrap/network")
-TARGET_ROOT = Path("/etc/systemd/network")
+MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap/network")
+TARGET_ROOT = pathlib.Path("/etc/systemd/network")
 ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
 FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
