@@ -1,0 +1,48 @@
+import importlib.util
+import pathlib
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "eph-iso/network-config.py"
+SPEC = importlib.util.spec_from_file_location("eph_iso_network_config", MODULE_PATH)
+NETWORK_CONFIG = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(NETWORK_CONFIG)
+
+
+def test_network_profile_installer_copies_only_supported_regular_files(tmp_path, monkeypatch):
+    media = tmp_path / "media" / "network"
+    target = tmp_path / "target"
+    media.mkdir(parents=True)
+    (media / "10-uplink.network").write_text(
+        "[Match]\nName=enp5s0\n\n[Network]\nDHCP=ipv4\n",
+        encoding="utf-8",
+    )
+    (media / "ignore.txt").write_text("ignored", encoding="utf-8")
+    outside = tmp_path / "outside.network"
+    outside.write_text("not copied", encoding="utf-8")
+    (media / "99-link.network").symlink_to(outside)
+
+    monkeypatch.setattr(NETWORK_CONFIG, "MEDIA_ROOT", media)
+    monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
+    NETWORK_CONFIG.install_network_configuration()
+
+    assert (target / "10-uplink.network").is_file()
+    assert not (target / "ignore.txt").exists()
+    assert not (target / "99-link.network").exists()
+
+
+def test_network_profile_installer_rejects_oversized_files(tmp_path, monkeypatch):
+    media = tmp_path / "media" / "network"
+    target = tmp_path / "target"
+    media.mkdir(parents=True)
+    (media / "10-large.network").write_text("x" * 32769, encoding="utf-8")
+
+    monkeypatch.setattr(NETWORK_CONFIG, "MEDIA_ROOT", media)
+    monkeypatch.setattr(NETWORK_CONFIG, "TARGET_ROOT", target)
+
+    try:
+        NETWORK_CONFIG.install_network_configuration()
+    except ValueError as error:
+        assert "EPH_NETWORK_CONFIG_INVALID" in str(error)
+    else:
+        raise AssertionError("Oversized network profile was accepted")
