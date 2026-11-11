@@ -93,3 +93,14 @@ def test_bootstrap_agent_manifest_is_bundled_into_iso():
     assert "eph-rbac.yaml" in script
     assert "deploy/agents/eph-node-agent.yaml" in script
     assert "usr/share/ai-agent-studio/eph-manifests" in script
+
+
+def test_eph_boot_media_mount_and_network_configuration_are_ordered_before_k3s():
+    mount = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/mnt-eph\\x2dbootstrap.mount"
+    local_fs = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/local-fs.target.d/eph.conf"
+    network_service = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-network-config.service"
+    network_dropin = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/systemd-networkd.service.d/eph.conf"
+    assert "Where=/mnt/eph-bootstrap" in mount.read_text(encoding="utf-8")
+    assert "mnt-eph\\x2dbootstrap.mount" in local_fs.read_text(encoding="utf-8")
+    assert "Before=systemd-networkd.service" in network_service.read_text(encoding="utf-8")
+    assert "Requires=eph-network-config.service" in network_dropin.read_text(encoding="utf-8")
