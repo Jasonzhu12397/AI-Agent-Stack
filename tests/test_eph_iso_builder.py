@@ -28,6 +28,9 @@ def test_eph_iso_builder_pins_k3s_and_verifies_checksum():
     assert "sha256sum -c -" in script
     assert "boot=live components toram" in script
     assert "iso-hybrid" in script
+    assert "v1.33|v1.34|v1.35|v1.36" in script
+    assert "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED" in script
+    assert "EPH_ISO_METADATA" in script
 
 
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
@@ -104,3 +107,12 @@ def test_eph_boot_media_mount_and_network_configuration_are_ordered_before_k3s()
     assert "mnt-eph\\x2dbootstrap.mount" in local_fs.read_text(encoding="utf-8")
     assert "Before=systemd-networkd.service" in network_service.read_text(encoding="utf-8")
     assert "Requires=eph-network-config.service" in network_dropin.read_text(encoding="utf-8")
+
+
+def test_eph_agent_capi_pivot_secret_is_optional_until_target_cluster_exists():
+    manifest = (ROOT / "deploy/agents/eph-node-agent.yaml").read_text(encoding="utf-8")
+    assert "secretName: capi-pivot-kubeconfigs" in manifest
+    assert "optional: true" in manifest
+    bootstrap = (ROOT / "eph-iso/bootstrap.py").read_text(encoding="utf-8")
+    assert "CAPI_PIVOT_KUBECONFIG_SET_INCOMPLETE" in bootstrap
+    assert "if capi_files:" in bootstrap
