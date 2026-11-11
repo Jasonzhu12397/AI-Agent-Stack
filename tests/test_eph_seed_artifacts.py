@@ -221,3 +221,68 @@ def test_seed_artifact_requires_project_administrator(seed_workspace):
     response = create_seed(client, tenant, project, enrollment)
 
     assert response.status_code == 403
+
+
+
+@pytest.mark.django_db
+def test_node_revocation_invalidates_undownloaded_seed_artifact(seed_workspace):
+    tenant, project, client, enrollment = seed_workspace
+    created = create_seed(client, tenant, project, enrollment)
+    assert created.status_code == 201
+
+    revoked = client.post(
+        f"/api/v1/agent-nodes/{enrollment['id']}/revoke/",
+        {},
+        format="json",
+    )
+
+    assert revoked.status_code == 200
+    artifact = EPHSeedArtifact.objects.get(pk=created.data["artifact_id"])
+    assert artifact.revoked_at is not None
+    assert artifact.encrypted_payload == ""
+
+    download = APIClient().get(
+        created.data["download_url"],
+        HTTP_AUTHORIZATION="Bearer " + created.data["download_token"],
+    )
+    assert download.status_code == 404
+
+
+@pytest.mark.django_db
+def test_credential_rotation_invalidates_undownloaded_seed_artifact(seed_workspace):
+    tenant, project, client, enrollment = seed_workspace
+    created = create_seed(client, tenant, project, enrollment)
+    assert created.status_code == 201
+
+    rotated = client.post(
+        f"/api/v1/agent-nodes/{enrollment['id']}/credentials/rotate/",
+        {},
+        format="json",
+    )
+
+    assert rotated.status_code == 200
+    artifact = EPHSeedArtifact.objects.get(pk=created.data["artifact_id"])
+    assert artifact.revoked_at is not None
+    assert artifact.encrypted_payload == ""
+
+    download = APIClient().get(
+        created.data["download_url"],
+        HTTP_AUTHORIZATION="Bearer " + created.data["download_token"],
+    )
+    assert download.status_code == 404
+
+
+@pytest.mark.django_db
+def test_downloaded_seed_cannot_be_reissued_with_same_enrollment_token(seed_workspace):
+    tenant, project, client, enrollment = seed_workspace
+    created = create_seed(client, tenant, project, enrollment)
+    assert created.status_code == 201
+    download = APIClient().get(
+        created.data["download_url"],
+        HTTP_AUTHORIZATION="Bearer " + created.data["download_token"],
+    )
+    assert download.status_code == 200
+
+    second = create_seed(client, tenant, project, enrollment)
+
+    assert second.status_code == 409
