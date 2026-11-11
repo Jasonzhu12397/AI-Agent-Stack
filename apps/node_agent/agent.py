@@ -3771,7 +3771,9 @@ def execute_command(
                     raise NodeAgentError("CAPI_WORKER_INFRASTRUCTURE_REF_INVALID")
                 infra_namespace = infrastructure_ref.get("namespace", namespace)
                 if infra_namespace != namespace:
-                    raise NodeAgentError("CAPI_WORKER_INFRASTRUCTURE_NAMESPACE_MISMATCH")
+                    raise NodeAgentError(
+                        "CAPI_WORKER_INFRASTRUCTURE_NAMESPACE_MISMATCH"
+                    )
                 metal3_machine = kubernetes_api_get(
                     f"/apis/infrastructure.cluster.x-k8s.io/{metal3_version}/"
                     f"namespaces/{namespace}/metal3machines/"
@@ -3796,7 +3798,11 @@ def execute_command(
                 consumer_ref = host["consumer_ref"]
                 provisioning = host_status.get("provisioning", {})
                 if (
-                    consumer_ref.get("kind") != "Metal3Machine"
+                    not isinstance(host_metadata.get("name"), str)
+                    or not host_metadata.get("name")
+                    or not isinstance(host_metadata.get("uid"), str)
+                    or not host_metadata.get("uid")
+                    or consumer_ref.get("kind") != "Metal3Machine"
                     or consumer_ref.get("apiVersion")
                     != f"infrastructure.cluster.x-k8s.io/{metal3_version}"
                     or consumer_ref.get("uid") != metal3_uid
