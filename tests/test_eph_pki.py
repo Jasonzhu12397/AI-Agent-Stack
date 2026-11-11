@@ -61,21 +61,119 @@ def test_validate_eph_csr_rejects_invalid_or_oversized_pem(csr):
         validate_eph_csr(csr)
 
 
-def test_vault_ca_chain_is_ordered_from_issuing_ca_and_deduplicated():
-    issuing_ca = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----"
-    root_ca = "-----BEGIN CERTIFICATE-----\nMAE=\n-----END CERTIFICATE-----"
+def _make_ca(subject_name, issuer_name, issuer_key, serial):
+    from datetime import datetime, timedelta
 
-    chain = _validate_ca_chain([issuing_ca, root_ca], issuing_ca)
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_name)])
+    issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer_name)])
+    now = datetime.utcnow()
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(serial)
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(issuer_key, hashes.SHA256())
+    )
+    return key, certificate
 
-    assert chain == issuing_ca + "\n" + root_ca + "\n"
+
+def _make_root_ca():
+    from datetime import datetime, timedelta
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EPH test root")])
+    now = datetime.utcnow()
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(100)
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return key, certificate
 
 
-def test_vault_ca_chain_rejects_missing_or_invalid_chain():
-    with pytest.raises(EPHCertificateError):
-        _validate_ca_chain([], "")
+def test_vault_ca_chain_verifies_intermediate_and_appends_trusted_root(tmp_path):
+    root_key, root = _make_root_ca()
+    _, intermediate = _make_ca(
+        "EPH issuing CA",
+        "EPH test root",
+        root_key,
+        101,
+    )
+    root_path = tmp_path / "trusted-root.pem"
+    root_path.write_bytes(root.public_bytes(serialization.Encoding.PEM))
+    intermediate_pem = intermediate.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
-    with pytest.raises(EPHCertificateError):
-        _validate_ca_chain(["not-a-certificate"], "")
+    chain = _validate_ca_chain([], intermediate_pem, str(root_path))
+
+    assert chain.count("-----BEGIN CERTIFICATE-----") == 2
+    assert chain.endswith(root.public_bytes(serialization.Encoding.PEM).decode("ascii"))
+
+
+def test_vault_ca_chain_rejects_missing_trust_anchor():
+    with pytest.raises(EPHCertificateError, match="TRUST_ANCHOR_NOT_CONFIGURED"):
+        _validate_ca_chain([], "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----", "")
+
+
+def test_vault_ca_chain_rejects_invalid_trust_bundle(tmp_path):
+    trust_path = tmp_path / "invalid-root.pem"
+    trust_path.write_text("not a certificate", encoding="ascii")
+    with pytest.raises(EPHCertificateError, match="TRUST_ANCHOR_INVALID"):
+        _validate_ca_chain([], "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----", str(trust_path))
+
+
+def test_vault_ca_chain_rejects_untrusted_issuer(tmp_path):
+    root_key, root = _make_root_ca()
+    other_key = ec.generate_private_key(ec.SECP256R1())
+    _, intermediate = _make_ca(
+        "EPH issuing CA",
+        "EPH test root",
+        other_key,
+        102,
+    )
+    trust_path = tmp_path / "trusted-root.pem"
+    trust_path.write_bytes(root.public_bytes(serialization.Encoding.PEM))
+    intermediate_pem = intermediate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+    with pytest.raises(EPHCertificateError, match="CA_SIGNATURE_INVALID"):
+        _validate_ca_chain([], intermediate_pem, str(trust_path))
 
 
 
