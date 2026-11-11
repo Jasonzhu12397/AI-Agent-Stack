@@ -1,0 +1,9 @@
+[Unit]
+Description=Install per-node systemd-networkd configuration from EPHBOOT
+After=run-eph\x2dbootstrap\x2dmedia.mount
+Before=systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/eph-network-config.py
+RemainAfterExit=yes
