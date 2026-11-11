@@ -2803,7 +2803,12 @@ def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_ident
     new_fingerprint = "b" * 64
     node.client_certificate_fingerprint = old_fingerprint
     node.client_certificate_bound_at = timezone.now()
-    node.save(update_fields=["client_certificate_fingerprint", "client_certificate_bound_at"])
+    node.last_activated_client_certificate_fingerprint = old_fingerprint
+    node.save(update_fields=[
+        "client_certificate_fingerprint",
+        "client_certificate_bound_at",
+        "last_activated_client_certificate_fingerprint",
+    ])
     monkeypatch.setattr(
         "core.agent_node_views.sign_eph_csr",
         lambda **kwargs: {
@@ -2840,6 +2845,14 @@ def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_ident
         assert "agent_token" not in staged.data
         assert node.client_certificate_fingerprint == old_fingerprint
         assert node.pending_client_certificate_fingerprint == new_fingerprint
+
+        old_certificate_activation = runtime.post(
+            f"/api/v1/agent-runtime/nodes/{node.id}/certificate/activate/",
+            {},
+            format="json",
+            **auth,
+        )
+        assert old_certificate_activation.status_code == 409
 
         new_auth = dict(auth)
         new_auth["HTTP_X_VERIFIED_CLIENT_CERT_SHA256"] = new_fingerprint
