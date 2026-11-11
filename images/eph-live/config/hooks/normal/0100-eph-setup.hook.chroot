@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+install -d -m 0755 /etc/systemd/system/multi-user.target.wants
+ln -sf /etc/systemd/system/eph-k8s-bootstrap.service /etc/systemd/system/multi-user.target.wants/eph-k8s-bootstrap.service
+systemctl enable systemd-networkd.service
+systemctl enable systemd-resolved.service
+systemctl enable cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service
