@@ -1,3 +1,4 @@
+import re
 import shutil
 from pathlib import Path
 
@@ -5,6 +6,7 @@ from pathlib import Path
 MEDIA_ROOT = Path("/mnt/eph-bootstrap/network")
 TARGET_ROOT = Path("/etc/systemd/network")
 ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
+FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 def install_network_configuration():
@@ -15,6 +17,7 @@ def install_network_configuration():
     for source in sorted(MEDIA_ROOT.iterdir()):
         if (
             source.suffix not in ALLOWED_SUFFIXES
+            or not FILENAME_PATTERN.fullmatch(source.name)
             or source.is_symlink()
             or not source.is_file()
         ):
