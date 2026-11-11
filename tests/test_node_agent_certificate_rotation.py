@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import base64
 import datetime
 import hashlib
