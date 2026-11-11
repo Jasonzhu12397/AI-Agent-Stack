@@ -131,3 +131,39 @@ The API endpoints and database state implement the server-side staged
 activation protocol. The node-side certificate file rotation and fresh TLS
 handshake orchestration must be deployed before enabling unattended renewal
 in production.
+
+## EPH Agent automatic certificate rotation
+
+The EPH Agent enables automatic renewal when its active client certificate has
+six hours or less remaining. The agent creates a new P-256 key and CSR inside
+the EPH node, sends only the CSR over the existing mTLS connection, validates
+the returned node identity, key match, issuer chain, and fingerprint, and
+stages the new key and certificate in the local `agent-control-plane-mtls`
+Kubernetes Secret.
+
+The node Agent ServiceAccount receives a namespace-scoped Role limited to
+`get`, `patch`, and `update` on that single Secret. It does not receive
+permission to list or read other Secrets. The pending key is retained in that
+EPH-local Secret so a container restart can resume activation. It is never
+sent to the Cloud Agent or certificate issuer.
+
+The agent establishes the activation request using a fresh TLS context loaded
+from the pending certificate and private key. Only after the activation API
+confirms the new mTLS identity does it promote the pending keypair to the
+active `tls.crt` and `tls.key` Secret data. If the process restarts after the
+server activates but before the Secret promotion completes, it retries
+activation; the server's activation response is idempotent.
+
+Configuration in the EPH Agent Deployment:
+
+- `AGENT_TLS_ROTATION_ENABLED=true` enables automatic renewal.
+- `AGENT_TLS_ROTATION_RENEW_BEFORE_HOURS=6` sets the renewal threshold.
+- `AGENT_TLS_ROTATION_SECRET_NAME=agent-control-plane-mtls` selects the only
+  Secret the ServiceAccount may update.
+- `POD_NAMESPACE` is populated through the Kubernetes downward API.
+
+An expired pending request is discarded locally after nine minutes, leaving
+the old active certificate untouched. The API's pending activation expires
+after ten minutes, so the agent can safely request a fresh certificate after
+the old pending record expires. If Cloud signing, Kubernetes Secret access, or
+the new mTLS handshake fails, the agent does not promote the new certificate.
