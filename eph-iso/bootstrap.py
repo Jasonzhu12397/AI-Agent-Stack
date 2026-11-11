@@ -5,12 +5,12 @@ import re
 import shutil
 import subprocess
 import tempfile
-import uuid
 import urllib.parse
+import uuid
 
 
 MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap")
-MANIFEST_ROOT = Path("/usr/share/ai-agent-studio/eph-manifests")
+MANIFEST_ROOT = pathlib.Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 
 
@@ -127,7 +127,7 @@ def bootstrap():
     config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
 
     with tempfile.TemporaryDirectory(prefix="eph-bootstrap-") as temporary:
-        secret_dir = Path(temporary)
+        secret_dir = pathlib.Path(temporary)
         credential_files = {}
         for key, value in (
             ("control-url", config["control_url"]),
