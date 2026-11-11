@@ -2,6 +2,7 @@ systemd-sysv
 linux-image-amd64
 live-boot
 live-config
+cloud-init
 ca-certificates
 curl
 iproute2
