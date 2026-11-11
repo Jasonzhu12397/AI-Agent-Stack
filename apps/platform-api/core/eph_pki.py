@@ -119,10 +119,18 @@ def _validate_ca_chain(ca_chain, issuing_ca, trusted_ca_bundle):
         )
         if residue.strip() or not trust_blocks:
             raise ValueError("Trust bundle contains invalid data.")
+        if len(trust_blocks) > 32:
+            raise ValueError("Trust bundle contains too many CA certificates.")
         trust_roots = [
             x509.load_pem_x509_certificate(block.encode("ascii"))
             for block in trust_blocks
         ]
+        trust_fingerprints = [
+            certificate.fingerprint(hashes.SHA256())
+            for certificate in trust_roots
+        ]
+        if len(trust_fingerprints) != len(set(trust_fingerprints)):
+            raise ValueError("Trust bundle contains duplicate CA certificates.")
         chain_certificates = [
             x509.load_pem_x509_certificate(
                 (value.strip() + "\n").encode("ascii")
