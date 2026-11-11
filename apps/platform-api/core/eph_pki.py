@@ -101,7 +101,7 @@ def _validate_ca_chain(ca_chain, issuing_ca):
 
 
 def _validate_issued_client_certificate(certificate, expected_common_name):
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     try:
         common_names = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -119,7 +119,7 @@ def _validate_issued_client_certificate(certificate, expected_common_name):
             "EPH_CERTIFICATE_SIGNER_CERTIFICATE_PROFILE_INVALID"
         ) from None
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     if (
         len(common_names) != 1
         or common_names[0].value != expected_common_name
