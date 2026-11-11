@@ -4,6 +4,7 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 
 from core.models import EPHSeedArtifact
@@ -63,5 +64,5 @@ def test_cleanup_preserves_downloaded_and_unexpired_seed_artifacts(seed_workspac
 
 @pytest.mark.django_db
 def test_cleanup_rejects_invalid_batch_size():
-    with pytest.raises(Exception, match="batch-size"):
+    with pytest.raises(CommandError, match="batch-size"):
         call_command("cleanup_expired_eph_seed_artifacts", batch_size=0)
