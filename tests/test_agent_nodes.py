@@ -68,6 +68,33 @@ def test_target_agent_kubernetes_version_upgrade_requires_approval(node_workspac
 
 
 @pytest.mark.django_db
+def test_target_agent_can_request_v134_after_v133(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target-v134", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.33.2",
+                "target_version": "v1.34",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-edge-lab-v134-approved",
+    )
+
+    assert response.status_code == 202
+    assert response.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+
+
+@pytest.mark.django_db
 def test_target_agent_rejects_unsupported_kubernetes_version(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
