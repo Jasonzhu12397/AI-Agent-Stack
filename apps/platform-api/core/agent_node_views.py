@@ -1926,7 +1926,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
 
     def post(self, request, node_id):
         if not isinstance(request.data, dict) or set(request.data) != {"csr_pem"}:
-            return Response({"detail": "Only csr_pem is accepted for certificate renewal."}, status=400)
+            return Response(
+                {"detail": "Only csr_pem is accepted for certificate renewal."},
+                status=400,
+            )
         csr_pem = request.data.get("csr_pem")
         if not isinstance(csr_pem, str) or len(csr_pem) > 16384:
             return Response({"detail": "csr_pem must be a PEM CSR under 16 KiB."}, status=400)
@@ -1934,7 +1937,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
         if node is None or node.node_type != AgentNode.NodeType.EPH_NODE:
             return Response({"detail": "An active EPH node identity is required."}, status=401)
         if not node.client_certificate_fingerprint:
-            return Response({"detail": "An active client certificate is required for renewal."}, status=409)
+            return Response(
+                {"detail": "An active client certificate is required for renewal."},
+                status=409,
+            )
         now = timezone.now()
         if (
             node.pending_client_certificate_fingerprint
@@ -1984,7 +1990,10 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
                 + datetime.timedelta(minutes=10)
                 > timezone.now()
             ):
-                return Response({"detail": "A certificate renewal is already pending activation."}, status=409)
+                return Response(
+                    {"detail": "A certificate renewal is already pending activation."},
+                    status=409,
+                )
             locked.pending_client_certificate_fingerprint = issued["fingerprint_sha256"]
             locked.pending_client_certificate_bound_at = timezone.now()
             locked.save(update_fields=[
