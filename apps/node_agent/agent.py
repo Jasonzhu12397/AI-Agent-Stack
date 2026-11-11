@@ -3679,7 +3679,6 @@ def execute_command(
             worker_machines.append(machine)
 
         metal3_worker_status = []
-        metal3_inventory_complete = True
         if machine_deployment_name:
             host_namespace = payload.get("baremetal_host_namespace")
             if (
@@ -3925,6 +3924,7 @@ def execute_command(
             and len(set(ready_worker_node_names)) == expected_workers
             and (
                 machine_deployment_status["rollout_complete"]
+                and len(metal3_worker_status) == expected_workers
                 if machine_deployment_name
                 else True
             )
