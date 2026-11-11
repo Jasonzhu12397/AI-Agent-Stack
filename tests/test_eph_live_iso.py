@@ -22,6 +22,8 @@ def test_live_iso_boots_ram_and_runs_agent_as_kubernetes_deployment():
     assert "docker run" not in bootstrap
     assert "docker-compose" not in bootstrap
     assert "AGENT_TLS_CLIENT_CERT_REQUIRED" in bootstrap
+    assert "KUBERNETES_VERSION_MUST_MATCH_IMAGE" in bootstrap
+    assert "AGENT_HOST_SYSFS_PATH" in bootstrap
 
 
 def test_live_iso_requires_digest_pinned_agent_and_verified_cni():
