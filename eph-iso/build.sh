@@ -5,6 +5,8 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$ROOT_DIR/.." && pwd)"
 K3S_VERSION="${K3S_VERSION:-}"
 K3S_SHA256_AMD64="${K3S_SHA256_AMD64:-}"
+KUBERNETES_VERSION=""
+KUBERNETES_MINOR=""
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
 BUILD_DIR="$ROOT_DIR/.build"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
@@ -17,6 +19,12 @@ fail() {
 [ "$(id -u)" -eq 0 ] || fail "BUILD_MUST_RUN_AS_ROOT"
 [[ "$K3S_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || fail "K3S_VERSION_INVALID"
 [[ "$K3S_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "K3S_SHA256_AMD64_INVALID"
+KUBERNETES_VERSION="${K3S_VERSION%%+*}"
+KUBERNETES_MINOR="${KUBERNETES_VERSION%.*}"
+case "$KUBERNETES_MINOR" in
+    v1.33|v1.34|v1.35|v1.36) ;;
+    *) fail "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED:$KUBERNETES_MINOR" ;;
+esac
 [ "$ARCHITECTURE" = amd64 ] || fail "ARCHITECTURE_NOT_SUPPORTED"
 
 for command_name in lb xorriso mksquashfs wget sha256sum; do
