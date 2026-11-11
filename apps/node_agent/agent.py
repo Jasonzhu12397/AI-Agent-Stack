@@ -22,15 +22,15 @@ from typing import Any
 import yaml
 
 from .capabilities import ROLE_CAPABILITIES
-from .certificate_rotation import (
-    CertificateRotationError,
-    CertificateRotationManager,
-)
 from .capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
     run_capi_pivot_dry_run,
     run_capi_pivot_postflight,
+)
+from .certificate_rotation import (
+    CertificateRotationError,
+    CertificateRotationManager,
 )
 from .ironic_client import (
     IronicObservationError,
