@@ -75,5 +75,13 @@ install -m 0644 "$iso_file" "$output_file"
     cd "$OUTPUT_DIR"
     sha256sum "$(basename "$output_file")" > "$(basename "$output_file").sha256"
 )
+iso_sha256="$(sha256sum "$output_file" | awk '{print $1}')"
+metadata_file="$output_file.release.json"
+printf '{\n  "kubernetes_version": "%s",\n  "k3s_version": "%s",\n  "architecture": "%s",\n  "iso_file": "%s",\n  "sha256": "%s"\n}\n' \
+    "$KUBERNETES_VERSION" "$K3S_VERSION" "$ARCHITECTURE" \
+    "$(basename "$output_file")" "$iso_sha256" > "$metadata_file"
+
 printf 'EPH_ISO=%s\n' "$output_file"
 printf 'EPH_ISO_SHA256_FILE=%s.sha256\n' "$output_file"
+
+printf 'EPH_ISO_METADATA=%s\n' "$metadata_file"
