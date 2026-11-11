@@ -157,7 +157,11 @@ def test_vault_ca_chain_rejects_invalid_trust_bundle(tmp_path):
     trust_path = tmp_path / "invalid-root.pem"
     trust_path.write_text("not a certificate", encoding="ascii")
     with pytest.raises(EPHCertificateError, match="TRUST_ANCHOR_INVALID"):
-        _validate_ca_chain([], "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----", str(trust_path))
+        _validate_ca_chain(
+            [],
+            "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----",
+            str(trust_path),
+        )
 
 
 def test_vault_ca_chain_rejects_untrusted_issuer(tmp_path):
