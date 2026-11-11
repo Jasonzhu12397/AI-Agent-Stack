@@ -103,7 +103,7 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
     verify = ca_bundle if ca_bundle else True
     timeout_value = float(getattr(settings, "BMC_VAULT_TIMEOUT_SECONDS", 5))
     timeout = httpx.Timeout(timeout_value, connect=min(3.0, timeout_value))
-    common_name = "agent-node-{}.agents.internal".format(node_id)
+    common_name = f"agent-node-{node_id}.agents.internal"
     payload = {
         "csr": csr_pem,
         "common_name": common_name,
@@ -120,7 +120,7 @@ def sign_eph_csr(csr_pem, node_id, tenant_id, project_id):
         ) as client:
             with client.stream(
                 "POST",
-                "{}/v1/{}/sign/{}".format(address, mount, role),
+                f"{address}/v1/{mount}/sign/{role}",
                 headers=_vault_headers(token),
                 json=payload,
             ) as response:
