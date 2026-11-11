@@ -1,16 +1,23 @@
+import hashlib
+import hmac
 import json
 import os
 import pathlib
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 
 MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")
 MANIFEST_ROOT = pathlib.Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
+TOKEN_PATTERN = re.compile(r"^[!-~]{32,512}$")
+FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class BootstrapError(Exception):
@@ -43,13 +50,13 @@ def validate_config(config):
     ):
         raise BootstrapError("CONTROL_URL_INVALID")
     try:
-        uuid.UUID(config["node_id"])
+        normalized_node_id = str(uuid.UUID(config["node_id"]))
     except (ValueError, TypeError, AttributeError):
         raise BootstrapError("NODE_ID_INVALID") from None
+    if normalized_node_id != config["node_id"].lower():
+        raise BootstrapError("NODE_ID_INVALID")
     token = config["enrollment_token"]
-    if not isinstance(token, str) or not 32 <= len(token) <= 512:
-        raise BootstrapError("ENROLLMENT_TOKEN_INVALID")
-    if any(ord(character) < 33 or ord(character) > 126 for character in token):
+    if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
         raise BootstrapError("ENROLLMENT_TOKEN_INVALID")
     image = config["agent_image"]
     if not isinstance(image, str) or not IMAGE_PATTERN.fullmatch(image):
@@ -65,6 +72,15 @@ def _run(arguments, input_text=None):
         check=True,
         capture_output=True,
     )
+
+
+def _run_output(arguments):
+    return subprocess.run(
+        arguments,
+        text=True,
+        check=True,
+        capture_output=True,
+    ).stdout
 
 
 def _copy_secret_file(source, destination):
@@ -83,6 +99,137 @@ def _copy_secret_file(source, destination):
         raise BootstrapError("BOOTSTRAP_SECRET_FILE_EMPTY:" + source)
     shutil.copyfile(str(resolved_path), str(destination))
     os.chmod(str(destination), 0o600)
+
+
+def _request_client_certificate(config, secret_dir, control_ca_path):
+    key_path = secret_dir / "tls.key"
+    csr_path = secret_dir / "tls.csr"
+    certificate_path = secret_dir / "tls.crt"
+    common_name = "agent-node-{}.agents.internal".format(config["node_id"])
+
+    try:
+        _run([
+            "openssl",
+            "genpkey",
+            "-algorithm",
+            "EC",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-out",
+            str(key_path),
+        ])
+        os.chmod(str(key_path), 0o600)
+        _run([
+            "openssl",
+            "req",
+            "-new",
+            "-key",
+            str(key_path),
+            "-subj",
+            "/CN=" + common_name,
+            "-out",
+            str(csr_path),
+        ])
+        os.chmod(str(csr_path), 0o600)
+    except subprocess.CalledProcessError:
+        raise BootstrapError("LOCAL_CLIENT_KEY_GENERATION_FAILED") from None
+
+    csr_pem = csr_path.read_text(encoding="ascii")
+    request_body = json.dumps({"csr_pem": csr_pem}).encode("utf-8")
+    endpoint = (
+        config["control_url"].rstrip("/")
+        + "/api/v1/agent-runtime/nodes/"
+        + config["node_id"]
+        + "/certificate/"
+    )
+    request = urllib.request.Request(
+        endpoint,
+        data=request_body,
+        headers={
+            "Authorization": "Bearer " + config["enrollment_token"],
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    context = ssl.create_default_context(cafile=str(control_ca_path))
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+    )
+    try:
+        with opener.open(request, timeout=20) as response:
+            body = response.read(262145)
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError):
+        raise BootstrapError("CLIENT_CERTIFICATE_EXCHANGE_FAILED") from None
+    if len(body) > 262144:
+        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(body)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID") from None
+
+    agent_token = result.get("agent_token")
+    certificate = result.get("client_certificate")
+    ca_chain = result.get("ca_chain")
+    fingerprint = result.get("fingerprint_sha256")
+    if (
+        not isinstance(agent_token, str)
+        or not TOKEN_PATTERN.fullmatch(agent_token)
+        or not isinstance(certificate, str)
+        or not isinstance(ca_chain, str)
+        or not isinstance(fingerprint, str)
+        or not FINGERPRINT_PATTERN.fullmatch(fingerprint)
+        or result.get("node_id") != config["node_id"]
+        or result.get("token_consumed") is not True
+    ):
+        raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID")
+
+    certificate_path.write_text(certificate + ca_chain, encoding="ascii")
+    os.chmod(str(certificate_path), 0o600)
+    try:
+        actual_fingerprint = _run_output([
+            "openssl",
+            "x509",
+            "-in",
+            str(certificate_path),
+            "-noout",
+            "-fingerprint",
+            "-sha256",
+        ]).strip().split("=", 1)[-1].replace(":", "").lower()
+        certificate_public_key = _run_output([
+            "openssl",
+            "x509",
+            "-in",
+            str(certificate_path),
+            "-pubkey",
+            "-noout",
+        ]).strip()
+        private_public_key = _run_output([
+            "openssl",
+            "pkey",
+            "-in",
+            str(key_path),
+            "-pubout",
+        ]).strip()
+    except subprocess.CalledProcessError:
+        raise BootstrapError("CLIENT_CERTIFICATE_VALIDATION_FAILED") from None
+    if (
+        not hmac.compare_digest(actual_fingerprint, fingerprint)
+        or not hmac.compare_digest(certificate_public_key, private_public_key)
+    ):
+        raise BootstrapError("CLIENT_CERTIFICATE_KEY_MISMATCH")
+
+    try:
+        csr_path.unlink()
+    except FileNotFoundError:
+        pass
+    return {
+        "agent_token": agent_token,
+        "ca.crt": control_ca_path,
+        "tls.crt": certificate_path,
+        "tls.key": key_path,
+    }
 
 
 def _create_secret(name, namespace, files):
@@ -131,22 +278,19 @@ def bootstrap():
         for key, value in (
             ("control-url", config["control_url"]),
             ("node-id", config["node_id"]),
-            ("token", config["enrollment_token"]),
         ):
             path = secret_dir / key
             path.write_text(value, encoding="utf-8")
             os.chmod(str(path), 0o600)
             credential_files[key] = path
 
-        tls_files = {}
-        for key, source in (
-            ("ca.crt", "tls/ca.crt"),
-            ("tls.crt", "tls/tls.crt"),
-            ("tls.key", "tls/tls.key"),
-        ):
-            path = secret_dir / key
-            _copy_secret_file(source, path)
-            tls_files[key] = path
+        control_ca_path = secret_dir / "ca.crt"
+        _copy_secret_file("tls/ca.crt", control_ca_path)
+        tls_files = _request_client_certificate(config, secret_dir, control_ca_path)
+        token_path = secret_dir / "token"
+        token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
+        os.chmod(str(token_path), 0o600)
+        credential_files["token"] = token_path
 
         capi_files = {}
         capi_sources = (
