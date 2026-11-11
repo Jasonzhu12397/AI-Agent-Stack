@@ -360,6 +360,98 @@ def test_target_postflight_requires_capi_worker_machines_and_ready_nodes(monkeyp
     assert result["side_effects"] is False
 
 
+
+def test_target_postflight_requires_machine_deployment_rollout_convergence(monkeypatch):
+    deployment = {
+        "metadata": {"name": "edge-workers", "uid": "md-uid-1", "generation": 4},
+        "spec": {"replicas": 1},
+        "status": {
+            "observedGeneration": 4,
+            "updatedReplicas": 1,
+            "readyReplicas": 1,
+            "availableReplicas": 1,
+            "unavailableReplicas": 0,
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+
+    def fake_get(path):
+        if path == "/api/v1/nodes":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "worker-01"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    }
+                ]
+            }
+        if path == "/apis":
+            return {
+                "groups": [
+                    {
+                        "name": "cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    }
+                ]
+            }
+        if path.endswith("/machinedeployments/edge-workers"):
+            return deployment
+        raise AssertionError(path)
+
+    def fake_list(path, max_items=100000):
+        assert path.endswith("/namespaces/metal3-system/machines")
+        return [
+            {
+                "metadata": {
+                    "name": "edge-workers-abc",
+                    "labels": {"cluster.x-k8s.io/deployment-name": "edge-workers"},
+                },
+                "spec": {"clusterName": "edge-lab"},
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "nodeRef": {"name": "worker-01"},
+                },
+            }
+        ]
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+    command = {
+        "command_type": "cluster.postflight",
+        "payload": {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3-system",
+            "expected_worker_replicas": 1,
+            "machine_deployment_name": "edge-workers",
+        },
+    }
+
+    result = agent.execute_command(command, "target_cluster")
+
+    assert result["machine_deployment_status"] == {
+        "requested": True,
+        "found": True,
+        "uid": "md-uid-1",
+        "generation": 4,
+        "observed_generation": 4,
+        "desired_replicas": 1,
+        "updated_replicas": 1,
+        "ready_replicas": 1,
+        "available_replicas": 1,
+        "unavailable_replicas": 0,
+        "rollout_complete": True,
+    }
+    assert result["capi_worker_inventory_complete"] is True
+    assert result["side_effects"] is False
+
+    deployment["status"]["observedGeneration"] = 3
+    result = agent.execute_command(command, "target_cluster")
+
+    assert result["machine_deployment_status"]["rollout_complete"] is False
+    assert result["capi_worker_inventory_complete"] is False
+
+
+
 def test_kubernetes_resource_read_rejects_non_allowlisted_resources(monkeypatch):
     monkeypatch.setattr(
         agent,
