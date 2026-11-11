@@ -214,9 +214,12 @@ def test_only_one_active_undownloaded_seed_artifact_per_node(seed_workspace):
 @pytest.mark.django_db
 def test_seed_artifact_requires_project_administrator(seed_workspace):
     tenant, project, client, enrollment = seed_workspace
-    membership = ProjectMembership.objects.get(project=project)
-    membership.role = ProjectMembership.Role.VIEWER
-    membership.save(update_fields=["role"])
+    tenant_membership = TenantMembership.objects.get(tenant=tenant)
+    tenant_membership.role = TenantMembership.Role.MEMBER
+    tenant_membership.save(update_fields=["role"])
+    project_membership = ProjectMembership.objects.get(project=project)
+    project_membership.role = ProjectMembership.Role.VIEWER
+    project_membership.save(update_fields=["role"])
 
     response = create_seed(client, tenant, project, enrollment)
 
