@@ -1483,7 +1483,7 @@ def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return json.dumps(
                 {
                     "deployment_id": "deployment-123",
@@ -1525,7 +1525,7 @@ def test_control_plane_client_saves_checkpoint_without_credentials(monkeypatch):
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"sequence":5,"idempotent":false}'
 
     def fake_urlopen(request, timeout):
@@ -4427,7 +4427,7 @@ def test_control_plane_client_reports_host_inventory(monkeypatch):
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"identity_status":"candidate"}'
 
     def fake_urlopen(request, timeout):
@@ -4465,7 +4465,7 @@ def test_control_plane_client_uses_verified_tls_and_optional_client_certificate(
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"ok":true}'
 
     def fake_create_default_context(cafile=None):
@@ -4705,3 +4705,60 @@ def test_long_running_leased_command_keeps_agent_liveness_fresh(monkeypatch):
     assert result == {"ready": True}
     assert liveness_updates
     assert all(readiness is False for readiness in liveness_updates)
+
+
+@pytest.mark.parametrize("response_body", [b"[]", b'"not-an-object"', b"null", b"invalid-json"])
+def test_control_plane_client_rejects_non_object_or_invalid_json_responses(
+    monkeypatch,
+    response_body,
+):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size=-1):
+            return response_body
+
+    monkeypatch.setattr(
+        agent.urllib.request,
+        "urlopen",
+        lambda request, timeout: Response(),
+    )
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-response-validation",
+        "agent-token",
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="CONTROL_PLANE_RESPONSE_INVALID"):
+        client.request("/api/v1/agent-runtime/heartbeat/")
+
+
+def test_control_plane_client_rejects_oversized_responses(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size=-1):
+            assert size == 4 * 1024 * 1024 + 1
+            return b"x" * size
+
+    monkeypatch.setattr(
+        agent.urllib.request,
+        "urlopen",
+        lambda request, timeout: Response(),
+    )
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-response-size",
+        "agent-token",
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="CONTROL_PLANE_RESPONSE_TOO_LARGE"):
+        client.request("/api/v1/agent-runtime/heartbeat/")
