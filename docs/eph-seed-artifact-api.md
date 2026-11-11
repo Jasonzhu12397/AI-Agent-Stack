@@ -81,3 +81,24 @@ invalidate every undownloaded seed artifact for that node.
   a separate workflow component.
 - No real bare-metal provisioning or BMC side effect is performed by these
   endpoints.
+
+
+## Build a per-node CIDATA ISO
+
+The download API intentionally returns a ZIP, not a bootable disk image. Convert
+that per-node archive into a NoCloud seed ISO on a trusted provisioning host:
+
+\`\`\`bash
+bash eph-iso/create-seed-iso.sh eph-seed-{node-id}.zip eph-seed-{node-id}.iso
+\`\`\`
+
+The builder accepts exactly the three NoCloud files, rejects path traversal,
+duplicate/unexpected entries, symlinks, encrypted entries, and oversized files,
+then creates an ISO9660/Joliet image with volume label \`CIDATA\`. The output ISO
+and its checksum file are mode \`0600\`. It refuses to overwrite an existing
+output file. Keep the ISO on protected storage and destroy it after the node
+has booted and exchanged its one-time enrollment credential.
+
+Attach the resulting ISO as a separate virtual CD-ROM/USB device while booting
+the generic EPH Live ISO. Do not bake per-node tokens, certificates, or network
+configuration into the generic Live ISO.
