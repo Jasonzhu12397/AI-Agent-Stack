@@ -132,3 +132,96 @@ def test_eph_agent_capi_pivot_secret_is_optional_until_target_cluster_exists():
     bootstrap = (ROOT / "eph-iso/bootstrap.py").read_text(encoding="utf-8")
     assert "CAPI_PIVOT_KUBECONFIG_SET_INCOMPLETE" in bootstrap
     assert "if capi_files:" in bootstrap
+
+
+
+def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
+    monkeypatch,
+    tmp_path,
+):
+    import json
+
+    certificate = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"
+    fingerprint = "a" * 64
+    response_body = json.dumps(
+        {
+            "node_id": valid_config()["node_id"],
+            "client_certificate": certificate,
+            "ca_chain": certificate,
+            "fingerprint_sha256": fingerprint,
+            "agent_token": "b" * 64,
+            "token_consumed": True,
+        }
+    ).encode("utf-8")
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, limit):
+            return response_body
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+    config = valid_config()
+    response_data = json.loads(response_body)
+    response_data["node_id"] = config["node_id"]
+    response_body = json.dumps(response_data).encode("utf-8")
+    key_path = tmp_path / "tls.key"
+    csr_path = tmp_path / "tls.csr"
+
+    def fake_run(arguments, input_text=None):
+        if arguments[1] == "genpkey":
+            key_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
+        elif arguments[1] == "req":
+            csr_path.write_text(
+                "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----\n",
+                encoding="ascii",
+            )
+
+    output_values = iter(
+        [
+            "sha256 Fingerprint=" + ":".join(
+                fingerprint[index:index + 2].upper()
+                for index in range(0, len(fingerprint), 2)
+            ),
+            "PUBLIC KEY",
+            "PUBLIC KEY",
+        ]
+    )
+    monkeypatch.setitem(BOOTSTRAP, "_run", fake_run)
+    monkeypatch.setitem(BOOTSTRAP, "_run_output", lambda arguments: next(output_values))
+    monkeypatch.setattr(
+        BOOTSTRAP["urllib"].request,
+        "build_opener",
+        lambda *handlers: FakeOpener(),
+    )
+
+    control_ca_path = tmp_path / "control-ca.crt"
+    control_ca_path.write_text(certificate, encoding="ascii")
+    result = BOOTSTRAP["_request_client_certificate"](
+        config,
+        tmp_path,
+        control_ca_path,
+    )
+
+    request = captured["request"]
+    payload = json.loads(request.data)
+    assert request.full_url.endswith(
+        "/api/v1/agent-runtime/nodes/{}/certificate/".format(config["node_id"])
+    )
+    assert request.get_header("Authorization") == "Bearer " + config["enrollment_token"]
+    assert payload["csr_pem"].startswith("-----BEGIN CERTIFICATE REQUEST-----")
+    assert "LOCAL PRIVATE KEY" not in request.data.decode("utf-8")
+    assert result["agent_token"] == "b" * 64
+    assert result["tls.key"] == key_path
+    assert result["tls.crt"].read_text(encoding="ascii") == certificate + certificate
+    assert key_path.stat().st_mode & 0o777 == 0o600
