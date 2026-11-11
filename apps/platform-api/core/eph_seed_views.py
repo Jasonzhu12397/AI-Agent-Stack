@@ -151,9 +151,19 @@ class EPHSeedArtifactCreateView(APIView):
                 revoked_at__isnull=True,
                 expires_at__gt=now,
             ).exists()
-            if pending:
+            downloaded = EPHSeedArtifact.objects.select_for_update().filter(
+                agent_node=locked_node,
+                downloaded_at__isnull=False,
+                revoked_at__isnull=True,
+            ).exists()
+            if pending or downloaded:
                 return Response(
-                    {"detail": "An active, undownloaded seed artifact already exists."},
+                    {
+                        "detail": (
+                            "An active seed artifact already exists or the enrollment "
+                            "token has already been used to download one."
+                        )
+                    },
                     status=409,
                 )
             artifact = EPHSeedArtifact.objects.create(
