@@ -1,7 +1,6 @@
 import base64
 import datetime
 import hashlib
-import json
 import ssl
 
 import pytest
@@ -78,8 +77,6 @@ def test_validate_issued_certificate_requires_matching_identity_key_and_trusted_
     key, key_pem, certificate, certificate_pem, ca_pem, fingerprint = (
         _issue_client_certificate(ca_key, ca_certificate, "node-1")
     )
-    trust_path = tmp_path / "ca.pem"
-    trust_path.write_bytes(ca_pem)
 
     actual = certificate_rotation.validate_issued_certificate(
         certificate_pem.decode("ascii"),
@@ -146,7 +143,7 @@ def test_eph_agent_stages_and_activates_certificate_using_node_generated_key(
     tmp_path,
 ):
     ca_key, ca_certificate = _create_ca()
-    old_key, old_key_pem, _, old_cert_pem, ca_pem, _ = _issue_client_certificate(
+    _, old_key_pem, _, old_cert_pem, ca_pem, _ = _issue_client_certificate(
         ca_key,
         ca_certificate,
         "node-rotation",
