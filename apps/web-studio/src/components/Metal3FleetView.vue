@@ -203,11 +203,18 @@ function deploymentOwnershipLabel(deployment: ClusterDeployment): string {
   return "Ownership not transferred";
 }
 
-function defaultKubernetesVersion(deployment: ClusterDeployment): string {
-  const currentMinor = deployment.kubernetes_version.match(/^v1\.\d+/)?.[0];
-  return currentMinor && supportedKubernetesVersions.includes(currentMinor as (typeof supportedKubernetesVersions)[number])
-    ? currentMinor
-    : supportedKubernetesVersions[0];
+function nextKubernetesMinorVersion(deployment: ClusterDeployment): string | null {
+  const currentMinor = Number(deployment.kubernetes_version.match(/^v1\.(\d+)/)?.[1]);
+  if (!Number.isInteger(currentMinor)) return null;
+  return supportedKubernetesVersions.find((version) => Number(version.split(".")[1]) === currentMinor + 1) ?? null;
+}
+
+function selectedKubernetesVersion(deployment: ClusterDeployment): string {
+  return selectedKubernetesVersions.value[deployment.id] ?? nextKubernetesMinorVersion(deployment) ?? "";
+}
+
+function isNextKubernetesMinorVersion(deployment: ClusterDeployment, version: string): boolean {
+  return nextKubernetesMinorVersion(deployment) === version;
 }
 
 function selectedKubernetesVersion(deployment: ClusterDeployment): string {
@@ -461,18 +468,24 @@ onUnmounted(() => {
                   style="width: 112px"
                   @change="(value: string) => setSelectedKubernetesVersion(scope.row.id, value)"
                 >
-                  <el-option v-for="version in supportedKubernetesVersions" :key="version" :label="version" :value="version" />
+                  <el-option
+                    v-for="version in supportedKubernetesVersions"
+                    :key="version"
+                    :label="version"
+                    :value="version"
+                    :disabled="!isNextKubernetesMinorVersion(scope.row, version)"
+                  />
                 </el-select>
                 <el-button
                   size="small"
                   type="primary"
                   plain
                   :loading="versionApplyBusy === scope.row.id"
-                  :disabled="!targetAgentOnline(scope.row) || selectedKubernetesVersion(scope.row) === scope.row.kubernetes_version.split('.').slice(0, 2).join('.')"
+                  :disabled="!targetAgentOnline(scope.row) || !isNextKubernetesMinorVersion(scope.row, selectedKubernetesVersion(scope.row))"
                   @click="applyKubernetesVersion(scope.row)"
                 >Apply</el-button>
               </div>
-              <small class="fleet-version-current">Current: {{ scope.row.kubernetes_version }}</small>
+              <small class="fleet-version-current">Current: {{ scope.row.kubernetes_version }} · Upgrade one minor version at a time</small>
               <small v-if="versionApplyMessages[scope.row.id]" class="fleet-version-message">{{ versionApplyMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
