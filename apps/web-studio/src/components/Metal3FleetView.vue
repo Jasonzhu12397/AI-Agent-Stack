@@ -8,6 +8,7 @@ import {
   getClusterDeployments,
   getProjects,
   getTenants,
+  SUPPORTED_KUBERNETES_VERSIONS,
   type AgentCommand,
   type AgentNode,
   type FleetMachine,
@@ -43,7 +44,7 @@ const commandCount = ref(0);
 const commandOffset = ref(0);
 const commandStatus = ref("");
 const commandPageSize = 100;
-const supportedKubernetesVersions = ["v1.33", "v1.35", "v1.36"] as const;
+const supportedKubernetesVersions = SUPPORTED_KUBERNETES_VERSIONS;
 const selectedKubernetesVersions = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
