@@ -67,7 +67,7 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         ({"hostname": "../invalid"}, "EPH_SEED_HOSTNAME_INVALID"),
         ({"network_config": {"version": 1}}, "EPH_SEED_NETWORK_CONFIG_INVALID"),
         ({"ca_certificate": "not-a-certificate"}, "EPH_SEED_CREDENTIAL_INVALID:ca_certificate"),
-        ({"client_private_key": "-----BEGIN PRIVATE KEY-----"}, "EPH_SEED_CREDENTIAL_INVALID:client_private_key"),
+        (\n            {"client_private_key": "-----BEGIN PRIVATE KEY-----"},\n            "EPH_SEED_CREDENTIAL_INVALID:client_private_key",\n        ),
     ],
 )
 def test_seed_rejects_invalid_node_configuration(change, expected):
