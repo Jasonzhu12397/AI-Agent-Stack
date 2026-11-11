@@ -25,7 +25,7 @@ The Flannel checksum must be obtained from a trusted release verification proces
 
 The first implementation expects a NoCloud config-drive seed to provide /run/eph-bootstrap/bootstrap.env and mTLS files ca.crt, tls.crt, and tls.key under /run/eph-bootstrap/. The environment file is loaded by systemd and must define:
 
-- KUBERNETES_VERSION (supported minor versions 1.33 through 1.36)
+- KUBERNETES_VERSION (optional exact patch override; if omitted, the ISO uses its installed kubeadm patch from the selected 1.33 through 1.36 minor channel)
 - POD_CIDR and SERVICE_CIDR
 - FLANNEL_MANIFEST_URL (use file:///usr/local/share/eph/flannel.yaml)
 - FLANNEL_MANIFEST_SHA256
