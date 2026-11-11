@@ -58,6 +58,7 @@ lb config \
     --mode debian \
     --distribution bookworm \
     --architectures "$ARCHITECTURE" \
+    --binary-images iso-hybrid \
     --mirror-bootstrap https://deb.debian.org/debian/ \
     --mirror-chroot https://deb.debian.org/debian/ \
     --mirror-chroot-security https://security.debian.org/debian-security/ \
