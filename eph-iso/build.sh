@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$ROOT_DIR/.." && pwd)"
-KUBERNETES_VERSION="${KUBERNETES_VERSION:-}"
+KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.35.3}"
 KUBERNETES_MINOR=""
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
 BUILD_DIR="$ROOT_DIR/.build"
@@ -15,7 +15,7 @@ fail() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail "BUILD_MUST_RUN_AS_ROOT"
-[[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_INVALID"
+[[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_INVALID:$KUBERNETES_VERSION"
 KUBERNETES_MINOR="${KUBERNETES_VERSION%.*}"
 case "$KUBERNETES_MINOR" in
     v1.33|v1.34|v1.35|v1.36) ;;
