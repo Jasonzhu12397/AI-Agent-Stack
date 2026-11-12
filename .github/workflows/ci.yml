@@ -166,9 +166,17 @@ jobs:
                 #!/bin/bash
                 set -eu
                 export KUBECONFIG=/etc/kubernetes/admin.conf
+                grep -Eq '(^|[[:space:]])toram([[:space:]]|$)' /proc/cmdline
+                test "$(swapon --show --noheadings | wc -l)" -eq 0
+                for mountpoint in /var/lib/containerd /var/lib/etcd /var/lib/kubelet; do
+                  test "$(findmnt -n -o FSTYPE --target "$mountpoint")" = tmpfs
+                done
+                NODE_COUNT="$(kubectl get nodes --no-headers | wc -l)"
+                test "$NODE_COUNT" -eq 1
                 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
                 test -n "$NODE_NAME"
                 kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
+                kubectl --namespace kube-flannel rollout status daemonset/kube-flannel-ds --timeout=180s
                 kubectl create namespace eph-ci-smoke --dry-run=client -o yaml | kubectl apply -f -
                 kubectl --namespace eph-ci-smoke apply -f - <<'MANIFEST'
                 apiVersion: apps/v1
@@ -193,6 +201,11 @@ jobs:
                 kubectl --namespace eph-ci-smoke wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s
                 READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
                 test -n "$READY_PODS"
+                POD_DETAILS="$(kubectl --namespace eph-ci-smoke get pod "$READY_PODS" -o jsonpath='{.status.podIP}{" "}{.spec.nodeName}{" "}{.status.containerStatuses[0].ready}')"
+                read -r POD_IP POD_NODE POD_READY <<< "$POD_DETAILS"
+                test -n "$POD_IP"
+                test "$POD_NODE" = "$NODE_NAME"
+                test "$POD_READY" = true
                 curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
           runcmd:
             - [bash, /usr/local/sbin/eph-ci-smoke.sh]
