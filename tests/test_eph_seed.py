@@ -2,7 +2,7 @@
 import base64
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography import x509
@@ -15,7 +15,7 @@ from core.eph_seed import EPHSeedError, render_nocloud_seed
 
 def make_ca_certificate(common_name):
     key = ec.generate_private_key(ec.SECP256R1())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
     certificate = (
         x509.CertificateBuilder()
