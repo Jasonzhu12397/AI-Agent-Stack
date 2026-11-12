@@ -350,7 +350,7 @@ def _wait_for_agent_pod():
         "--selector=app.kubernetes.io/name=eph-node-agent",
         "--field-selector=status.phase=Running",
         "-o",
-        "jsonpath={.items[?(@.status.conditions[?(@.type==\"Ready\" && @.status==\"True\")])].metadata.name}",
+        "jsonpath={.items[0].metadata.name}",
     ], timeout=15).strip()
     if not ready_pods:
         raise BootstrapError("EPH_AGENT_POD_NOT_READY")
