@@ -95,6 +95,14 @@ def test_seed_rejects_invalid_node_configuration(change, expected):
         render_nocloud_seed(config)
 
 
+def test_seed_requires_independent_agent_issuer_ca():
+    config = valid_config()
+    del config["agent_ca_certificate"]
+
+    with pytest.raises(EPHSeedError, match="EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate"):
+        render_nocloud_seed(config)
+
+
 def test_seed_does_not_accept_missing_network_or_control_plane_ca():
     config = valid_config()
     del config["network_config"]
