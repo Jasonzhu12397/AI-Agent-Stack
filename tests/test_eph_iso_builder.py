@@ -135,6 +135,9 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "cloud-init.target" in service
     assert "After=cloud-init.target" in service
     assert "cloud-init status --wait" in service
+    assert "Restart=on-failure" in service
+    assert "RestartSec=30s" in service
+    assert "StartLimitBurst=10" in service
     assert "k3s.service eph-bootstrap.service" in multi_user
     assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
         ROOT / "eph-iso/bootstrap.py"
