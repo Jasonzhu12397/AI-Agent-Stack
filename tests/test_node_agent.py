@@ -4722,6 +4722,47 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
     )
 
 
+def test_execute_command_rejects_command_when_lease_is_already_cancelled():
+    cancellation_event = agent.threading.Event()
+    cancellation_event.set()
+
+    with pytest.raises(agent.NodeAgentError, match="AGENT_COMMAND_CANCELLED"):
+        agent.execute_command(
+            {"command_type": "node.health", "payload": {}},
+            "eph_node",
+            cancellation_event=cancellation_event,
+        )
+
+
+def test_capi_postflight_stops_before_observation_after_lease_cancellation(monkeypatch):
+    cancellation_event = agent.threading.Event()
+
+    def cancel_during_postflight(payload):
+        cancellation_event.set()
+        return {"postflight_passed": True, "side_effects": False}
+
+    monkeypatch.setattr(agent, "run_capi_pivot_postflight", cancel_during_postflight)
+    monkeypatch.setattr(agent, "ironic_api_configured", lambda: False)
+    observation_calls = []
+    monkeypatch.setattr(
+        agent,
+        "observe_cluster_metal3",
+        lambda *args, **kwargs: observation_calls.append(True),
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="AGENT_COMMAND_CANCELLED"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.postflight",
+                "payload": {"cluster_name": "edge-lab", "namespace": "default"},
+            },
+            "target_cluster",
+            cancellation_event=cancellation_event,
+        )
+
+    assert observation_calls == []
+
+
 def test_long_running_leased_command_keeps_agent_liveness_fresh(monkeypatch):
     liveness_updates = []
 
