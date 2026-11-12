@@ -98,7 +98,7 @@ def test_bootstrap_does_not_accept_missing_fields():
         BOOTSTRAP["validate_config"]({"node_id": str(uuid.uuid4())})
 
 
-def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
+def test_systemd_starts_kubeadm_and_agent_bootstrap_from_multi_user_target():
     dropin = (
         ROOT
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
@@ -132,6 +132,8 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
     ).read_text(encoding="utf-8")
     assert "cloud-init" in package_list
+    assert "containerd" in package_list
+    assert "containernetworking-plugins" in package_list
     assert "NoCloud" in datasource
     assert "CIDATA" in datasource
     assert "cloud-init.target" in service
@@ -576,7 +578,7 @@ def test_bootstrap_creates_capi_pivot_secret_only_when_both_kubeconfigs_exist(
     ) in events
 
 
-def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
+def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "path: /usr/local/sbin/eph-ci-smoke.sh" in workflow
     assert "set -eu" in workflow
@@ -585,6 +587,8 @@ def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
     assert "wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s" in workflow
     assert "test -n \"$READY_PODS\"" in workflow
     assert "KUBEADM_API_READY=true" in workflow
+    assert "kubeadm" in workflow
+    assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED" in workflow
     callback = "curl --fail --silent --show-error --max-time 10 "
