@@ -181,6 +181,32 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/eph-seed"
           printf '%s\n' 'instance-id: ci-eph-node' 'local-hostname: eph-node' > "$RUNNER_TEMP/eph-seed/meta-data"
+          CERT_DIR="$RUNNER_TEMP/eph-certs"
+          mkdir -p "$CERT_DIR" "$RUNNER_TEMP/eph-bootstrap/tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$CERT_DIR/control-ca.key" -out "$CERT_DIR/control-ca.crt" -subj "/CN=EPH CI Control CA" -days 2 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -newkey rsa:2048 -nodes -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.csr" -subj "/CN=10.0.2.2"
+          printf '%s\\n' 'subjectAltName=IP:10.0.2.2' 'extendedKeyUsage=serverAuth' 'keyUsage=critical,digitalSignature,keyEncipherment' > "$CERT_DIR/server.ext"
+          openssl x509 -req -in "$CERT_DIR/server.csr" -CA "$CERT_DIR/control-ca.crt" -CAkey "$CERT_DIR/control-ca.key" -CAcreateserial -out "$CERT_DIR/server.crt" -days 2 -sha256 -extfile "$CERT_DIR/server.ext"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$CERT_DIR/agent-ca.key" -out "$CERT_DIR/agent-ca.crt" -subj "/CN=EPH CI Agent Issuer" -days 2 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+          ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
+          AGENT_TOKEN="$(openssl rand -hex 32)"
+          NODE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+          python3 - "$RUNNER_TEMP/eph-bootstrap/bootstrap.json" "$NODE_ID" "$ENROLLMENT_TOKEN" "10.0.2.2:5000/ai-agent-node-agent@${{ steps.agent-image.outputs.image_digest }}" <<'PY'
+          import json, pathlib, sys
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"control_url":"https://10.0.2.2:18443","node_id":sys.argv[2],"enrollment_token":sys.argv[3],"agent_image":sys.argv[4]}), encoding="utf-8")
+          PY
+          cp "$CERT_DIR/control-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/ca.crt"
+          cp "$CERT_DIR/agent-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/agent-ca.crt"
+          dd if=/dev/zero of="$RUNNER_TEMP/eph-bootstrap.img" bs=1M count=16
+          mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/eph-bootstrap.img"
+          mmd -i "$RUNNER_TEMP/eph-bootstrap.img" ::tls
+          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/bootstrap.json" ::bootstrap.json
+          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/tls/ca.crt" ::tls/ca.crt
+          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/tls/agent-ca.crt" ::tls/agent-ca.crt
+          nohup python3 eph-iso/ci/mock-control-plane.py --server-cert "$CERT_DIR/server.crt" --server-key "$CERT_DIR/server.key" --control-ca "$CERT_DIR/control-ca.crt" --agent-ca "$CERT_DIR/agent-ca.crt" --agent-ca-key "$CERT_DIR/agent-ca.key" --enrollment-token "$ENROLLMENT_TOKEN" --agent-token "$AGENT_TOKEN" > "$RUNNER_TEMP/eph-mock-control-plane.log" 2>&1 &
+          MOCK_CONTROL_PID=$!
+          sleep 2
+          kill -0 "$MOCK_CONTROL_PID"
           cat > "$RUNNER_TEMP/eph-seed/user-data" <<'EOF'
           #cloud-config
           ssh_pwauth: false
