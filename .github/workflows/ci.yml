@@ -328,7 +328,7 @@ jobs:
                 test "$AGENT_READY" = true
                 printf 'EPH_AGENT_POD=%s\n' "$AGENT_POD"
                 printf 'EPH_AGENT_POD_IP=%s\n' "$AGENT_POD_IP"
-                printf 'EPH_AGENT_POD_READY=true\\n'
+                printf 'EPH_AGENT_POD_READY=true\n'
                 READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
                 test -n "$READY_PODS"
                 POD_DETAILS="$(kubectl --namespace eph-ci-smoke get pod "$READY_PODS" -o jsonpath='{.status.podIP}{" "}{.spec.nodeName}{" "}{.status.containerStatuses[0].ready}')"
@@ -404,6 +404,8 @@ jobs:
             tail -n 500 "$RUNNER_TEMP/qemu-debug.log" || true
             printf '%s\n' '=== ISO boot catalog ==='
             xorriso -indev "${{ steps.build.outputs.iso_file }}" -report_el_torito plain 2>&1 || true
+            printf '%s\n' '=== EPH mock control-plane log ==='
+            cat "$RUNNER_TEMP/eph-mock-control-plane.log" || true
             printf '%s\n' '=== Cloud-init callback HTTP log ==='
             cat "$RUNNER_TEMP/cloud-init-http.log"
             printf '%s\n' '=== QEMU and HTTP process state ==='
@@ -413,7 +415,7 @@ jobs:
           printf '%s\n' 'KUBEADM_API_READY=true'
           printf '%s\n' 'KUBERNETES_WORKLOAD_SMOKE_READY=true'
           printf '%s\n' 'EPH_POD_TO_POD_NETWORK_READY=true'
-          printf '%s\n' 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED'
+          printf '%s\n' 'EPH_AGENT_POD_READY=true'
 
       - name: Upload EPH QEMU diagnostics
         if: always()
