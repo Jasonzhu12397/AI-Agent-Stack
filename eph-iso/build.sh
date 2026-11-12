@@ -54,7 +54,7 @@ for binary_name in kubeadm kubelet kubectl; do
 done
 install -d "$BUILD_DIR/config/includes.chroot/etc/default"
 install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio"
-wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/kube-flannel.yml" "https://raw.githubusercontent.com/flannel-io/flannel/v0.26.7/Documentation/kube-flannel.yml"
+wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" "https://raw.githubusercontent.com/projectcalico/calico/v3.31.0/manifests/calico.yaml"
 printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
