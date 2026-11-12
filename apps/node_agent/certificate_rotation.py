@@ -116,7 +116,7 @@ def _is_trusted_ca_certificate(certificate):
     )
 
 
-def _trusted_root_bundle_from_active_chain(pem_data):
+def _trusted_root_bundle(pem_data):
     certificates = _load_certificates(pem_data)
     roots = [
         certificate
@@ -124,7 +124,7 @@ def _trusted_root_bundle_from_active_chain(pem_data):
         if _is_trusted_ca_certificate(certificate)
     ]
     if not roots:
-        raise CertificateRotationError("AGENT_TLS_ROTATION_NO_TRUSTED_ROOT_IN_ACTIVE_CHAIN")
+        raise CertificateRotationError("AGENT_TLS_ROTATION_NO_TRUSTED_ROOT")
     return roots
 
 
@@ -180,7 +180,7 @@ def validate_issued_certificate(
     last = chain[-1]
     if not _is_trusted_ca_certificate(last):
         raise CertificateRotationError("AGENT_TLS_ROTATION_ROOT_NOT_SELF_SIGNED")
-    trusted_roots = _trusted_root_bundle_from_active_chain(trusted_certificate_bundle)
+    trusted_roots = _trusted_root_bundle(trusted_certificate_bundle)
     trusted = {
         item.fingerprint(hashes.SHA256())
         for item in trusted_roots
@@ -199,6 +199,10 @@ class CertificateRotationManager:
         self.cert_file = os.environ.get("AGENT_TLS_CERT_FILE", "").strip()
         self.key_file = os.environ.get("AGENT_TLS_KEY_FILE", "").strip()
         self.ca_file = os.environ.get("AGENT_TLS_CA_FILE", "").strip()
+        self.trusted_ca_file = os.environ.get(
+            "AGENT_TLS_ROTATION_TRUSTED_CA_FILE",
+            "/var/run/secrets/ai-agent/control-plane-tls/client-ca.crt",
+        ).strip()
         self.secret_name = os.environ.get(
             "AGENT_TLS_ROTATION_SECRET_NAME",
             "agent-control-plane-mtls",
@@ -365,7 +369,7 @@ class CertificateRotationManager:
     def maintain(self):
         if not self.enabled:
             return False
-        if not self.cert_file or not self.key_file or not self.ca_file:
+        if not self.cert_file or not self.key_file or not self.ca_file or not self.trusted_ca_file:
             raise CertificateRotationError("AGENT_TLS_ROTATION_TLS_FILES_REQUIRED")
         now = _utc_now()
         if self.last_check and now - self.last_check < self.check_interval:
@@ -405,12 +409,18 @@ class CertificateRotationManager:
             or response.get("private_key_returned") is not False
         ):
             raise CertificateRotationError("AGENT_TLS_ROTATION_RESPONSE_INVALID")
+        try:
+            trusted_ca_bundle = Path(self.trusted_ca_file).read_bytes()
+        except OSError as exc:
+            raise CertificateRotationError(
+                "AGENT_TLS_ROTATION_TRUST_ANCHOR_UNAVAILABLE"
+            ) from exc
         calculated = validate_issued_certificate(
             certificate_pem,
             ca_chain_pem,
             private_key,
             self.client.node_id,
-            current_certificate_pem,
+            trusted_ca_bundle,
         )
         if not hmac.compare_digest(calculated, fingerprint.lower()):
             raise CertificateRotationError("AGENT_TLS_ROTATION_FINGERPRINT_MISMATCH")
