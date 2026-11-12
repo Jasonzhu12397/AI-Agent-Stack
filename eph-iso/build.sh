@@ -53,6 +53,8 @@ for binary_name in kubeadm kubelet kubectl; do
     install -m 0755 "$BUILD_DIR/$binary_name" "$BUILD_DIR/config/includes.chroot/usr/local/bin/$binary_name"
 done
 install -d "$BUILD_DIR/config/includes.chroot/etc/default"
+install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio"
+wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/kube-flannel.yml" "https://raw.githubusercontent.com/flannel-io/flannel/v0.26.7/Documentation/kube-flannel.yml"
 printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
