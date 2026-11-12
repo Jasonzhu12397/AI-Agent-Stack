@@ -1,8 +1,8 @@
 [Unit]
 Description=Kubernetes Kubelet
 Wants=network-online.target containerd.service
-After=network-online.target containerd.service
-Requires=containerd.service
+After=network-online.target containerd.service var-lib-containerd.mount var-lib-kubelet.mount
+Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount
 StartLimitIntervalSec=0
 
 [Service]
