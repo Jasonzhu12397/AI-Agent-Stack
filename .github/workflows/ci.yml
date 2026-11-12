@@ -131,7 +131,21 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
           xorriso -osirrox on -indev "$ISO_FILE" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
           grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"
+          grep -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux.cfg"
+          printf '%s\\n' '=== BIOS boot configuration ==='
+          cat "$RUNNER_TEMP/isolinux.cfg"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload EPH Live ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agent-eph-live-v1.35.3-amd64
+          path: |
+            ${{ steps.build.outputs.iso_file }}
+            ${{ steps.build.outputs.iso_file }}.sha256
+            ${{ steps.build.outputs.iso_file }}.release.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Boot ISO and verify single-node Kubernetes API
         run: |
@@ -241,16 +255,19 @@ jobs:
           printf '%s\n' 'K3S_API_READY=true'
           printf '%s\n' 'K3S_WORKLOAD_SMOKE_READY=true'
           printf '%s\n' 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED'
-      - name: Upload EPH Live ISO artifact
+
+      - name: Upload EPH QEMU diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-agent-eph-live-v1.35.3-amd64
+          name: eph-qemu-diagnostics-${{ github.run_id }}
           path: |
-            ${{ steps.build.outputs.iso_file }}
-            ${{ steps.build.outputs.iso_file }}.sha256
-            ${{ steps.build.outputs.iso_file }}.release.json
-          if-no-files-found: error
-          retention-days: 14
+            ${{ runner.temp }}/eph-qemu.log
+            ${{ runner.temp }}/qemu.stdout
+            ${{ runner.temp }}/qemu-debug.log
+            ${{ runner.temp }}/cloud-init-http.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   compose:
     runs-on: ubuntu-latest
