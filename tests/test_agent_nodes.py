@@ -1193,6 +1193,8 @@ def test_agent_credential_rotation_invalidates_old_token_and_requires_new_token(
     )
 
     assert rotated.status_code == 200
+    assert rotated["Cache-Control"] == "no-store, max-age=0"
+    assert rotated["Pragma"] == "no-cache"
     new_token = rotated.data["enrollment_token"]
     assert new_token != old_token
     node = AgentNode.objects.get(pk=node_id)
