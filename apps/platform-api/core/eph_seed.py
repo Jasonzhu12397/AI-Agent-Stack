@@ -116,7 +116,9 @@ def render_nocloud_seed(config):
         "agent_ca_certificate",
         "CERTIFICATE",
     )
-    if agent_ca_certificate.strip() == ca_certificate.strip():
+    normalized_control_ca = re.sub(r"\\s+", "", ca_certificate)
+    normalized_agent_ca = re.sub(r"\\s+", "", agent_ca_certificate)
+    if normalized_agent_ca == normalized_control_ca:
         raise EPHSeedError("EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT")
     bootstrap_config = {
         "control_url": control_url,
