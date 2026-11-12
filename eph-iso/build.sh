@@ -3,11 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$ROOT_DIR/.." && pwd)"
-K3S_VERSION="${K3S_VERSION:-}"
-K3S_SHA256_AMD64="${K3S_SHA256_AMD64:-}"
-KUBERNETES_VERSION=""
+KUBERNETES_VERSION="${KUBERNETES_VERSION:-}"
 KUBERNETES_MINOR=""
-K3S_VERSION_URL=""
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/out}"
 BUILD_DIR="$ROOT_DIR/.build"
 ARCHITECTURE="${ARCHITECTURE:-amd64}"
@@ -18,11 +15,8 @@ fail() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail "BUILD_MUST_RUN_AS_ROOT"
-[[ "$K3S_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || fail "K3S_VERSION_INVALID"
-[[ "$K3S_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "K3S_SHA256_AMD64_INVALID"
-KUBERNETES_VERSION="${K3S_VERSION%%+*}"
+[[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_INVALID"
 KUBERNETES_MINOR="${KUBERNETES_VERSION%.*}"
-K3S_VERSION_URL="${K3S_VERSION/+/%2B}"
 case "$KUBERNETES_MINOR" in
     v1.33|v1.34|v1.35|v1.36) ;;
     *) fail "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED:$KUBERNETES_MINOR" ;;
@@ -48,10 +42,18 @@ cp "$REPO_ROOT/deploy/agents/namespace.yaml" "$manifest_dir/namespace.yaml"
 cp "$ROOT_DIR/eph-rbac.yaml" "$manifest_dir/rbac.yaml"
 cp "$REPO_ROOT/deploy/agents/eph-node-agent.yaml" "$manifest_dir/eph-node-agent.yaml"
 
-wget -q -O "$BUILD_DIR/k3s" "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION_URL/k3s"
-printf '%s  %s\n' "$K3S_SHA256_AMD64" "$BUILD_DIR/k3s" |
-    sha256sum -c - || fail "K3S_CHECKSUM_MISMATCH"
-install -m 0755 "$BUILD_DIR/k3s" "$BUILD_DIR/config/includes.chroot/usr/local/bin/k3s"
+for binary_name in kubeadm kubelet kubectl; do
+    download_url="https://dl.k8s.io/release/$KUBERNETES_VERSION/bin/linux/$ARCHITECTURE/$binary_name"
+    wget -q -O "$BUILD_DIR/$binary_name" "$download_url"
+    wget -q -O "$BUILD_DIR/$binary_name.sha256" "$download_url.sha256"
+    expected_sha256="$(tr -d '[:space:]' < "$BUILD_DIR/$binary_name.sha256")"
+    [[ "$expected_sha256" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBERNETES_BINARY_CHECKSUM_INVALID:$binary_name"
+    printf '%s  %s\n' "$expected_sha256" "$BUILD_DIR/$binary_name" | sha256sum -c - ||
+        fail "KUBERNETES_BINARY_CHECKSUM_MISMATCH:$binary_name"
+    install -m 0755 "$BUILD_DIR/$binary_name" "$BUILD_DIR/config/includes.chroot/usr/local/bin/$binary_name"
+done
+install -d "$BUILD_DIR/config/includes.chroot/etc/default"
+printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
 lb config \
@@ -76,7 +78,7 @@ lb build
 
 iso_file="$(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.iso' -print -quit)"
 [ -n "$iso_file" ] || fail "ISO_ARTIFACT_NOT_FOUND"
-version_tag="${K3S_VERSION#v}"
+version_tag="${KUBERNETES_VERSION#v}"
 output_file="$OUTPUT_DIR/ai-agent-eph-live-${version_tag}-amd64.iso"
 install -m 0644 "$iso_file" "$output_file"
 (
@@ -85,8 +87,8 @@ install -m 0644 "$iso_file" "$output_file"
 )
 iso_sha256="$(sha256sum "$output_file" | awk '{print $1}')"
 metadata_file="$output_file.release.json"
-printf '{\n  "kubernetes_version": "%s",\n  "k3s_version": "%s",\n  "architecture": "%s",\n  "iso_file": "%s",\n  "sha256": "%s"\n}\n' \
-    "$KUBERNETES_VERSION" "$K3S_VERSION" "$ARCHITECTURE" \
+printf '{\n  "kubernetes_version": "%s",\n  "runtime": "kubeadm-containerd",\n  "architecture": "%s",\n  "iso_file": "%s",\n  "sha256": "%s"\n}\n' \
+    "$KUBERNETES_VERSION" "$ARCHITECTURE" \
     "$(basename "$output_file")" "$iso_sha256" > "$metadata_file"
 
 printf 'EPH_ISO=%s\n' "$output_file"
