@@ -656,6 +656,10 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "EPH_CALICO_NODE_READY=true" in workflow
     assert "EPH_CALICO_CONTROLLERS_READY=true" in workflow
     assert "EPH_POD_TO_POD_NETWORK_READY=true" in workflow
+    assert "SERVER_POD_IP" in workflow
+    assert "workload-smoke.eph-ci-smoke.svc.cluster.local" in workflow
+    assert "EPH_DIRECT_POD_NETWORK_READY=true" in workflow
+    assert "EPH_SERVICE_DNS_NETWORK_READY=true" in workflow
     assert "EPH_RAM_BACKED_RUNTIME_STATE=true" in workflow
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=true" in workflow
@@ -667,6 +671,9 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "CLUSTERCTL_SHA256=c7301a8515ed329562b06c958463051dd55d9649fac591393f5df54a868fa79b" in workflow
     assert "kubectl.sha256" in workflow
     assert "eph-mock-control-plane.log" in workflow
+    assert "EPH_CI_AGENT_MTLS_HEARTBEAT_READY=true" in workflow
+    assert "EPH_AGENT_INVENTORY_READY=true" in workflow
+    assert "EPH_AGENT_COMMAND_POLL_READY=true" in workflow
     assert "/etc/ai-agent-studio/eph-bootstrap/bootstrap.json" in workflow
     assert "encoding: b64" in workflow
     assert "base64 -w0" in workflow
@@ -688,6 +695,7 @@ def test_eph_ci_control_plane_uses_separate_enrollment_and_agent_tokens():
     assert "EPH_CI_AGENT_CERTIFICATE_ISSUED" in fixture
     assert "EPH_CI_AGENT_MTLS_HEARTBEAT" in fixture
     assert '"token_consumed": True' in fixture
+    assert "server.enrollment_consumed = False" in fixture
 
 
 def test_eph_network_config_runs_before_systemd_networkd():
