@@ -2633,8 +2633,19 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             return Response({"detail": "Deployment is not in an agent handoff state."}, status=409)
         checkpoint = ClusterDeploymentCheckpoint.objects.filter(
             deployment=deployment,
-            agent_node=node,
         ).first()
+        if checkpoint is not None and checkpoint.agent_node_id != node.id:
+            return Response(
+                {
+                    "detail": (
+                        "A checkpoint belongs to a previous target agent. "
+                        "Automatic checkpoint transfer is disabled; manual recovery "
+                        "and explicit checkpoint adoption are required."
+                    ),
+                    "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
+                },
+                status=409,
+            )
         if checkpoint is None:
             return Response(
                 {
