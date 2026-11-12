@@ -2612,62 +2612,66 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
         ):
             return Response({"detail": "Invalid or stale target agent credential."}, status=401)
-        deployment = ClusterDeployment.objects.filter(
-            pk=deployment_id,
-            tenant=node.tenant,
-            project=node.project,
-            target_node=node,
-        ).first()
-        if deployment is None:
-            return Response(
-                {"detail": "Deployment is not assigned to this target agent."},
-                status=404,
-            )
-        if deployment.status not in {
-            ClusterDeployment.Status.CONTROL_PLANE_READY,
-            ClusterDeployment.Status.TARGET_AGENT_PENDING,
-            ClusterDeployment.Status.PROVISIONING,
-            ClusterDeployment.Status.WAITING_APPROVAL,
-            ClusterDeployment.Status.POSTFLIGHT,
-        }:
-            return Response({"detail": "Deployment is not in an agent handoff state."}, status=409)
-        checkpoint = ClusterDeploymentCheckpoint.objects.filter(
-            deployment=deployment,
-        ).first()
-        if checkpoint is not None and checkpoint.agent_node_id != node.id:
-            return Response(
-                {
-                    "detail": (
-                        "A checkpoint belongs to a previous target agent. "
-                        "Automatic checkpoint transfer is disabled; manual recovery "
-                        "and explicit checkpoint adoption are required."
-                    ),
-                    "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
-                },
-                status=409,
-            )
-        if checkpoint is None:
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().filter(
+                pk=deployment_id,
+                tenant=node.tenant,
+                project=node.project,
+                target_node=node,
+            ).first()
+            if deployment is None:
+                return Response(
+                    {"detail": "Deployment is not assigned to this target agent."},
+                    status=404,
+                )
+            if deployment.status not in {
+                ClusterDeployment.Status.CONTROL_PLANE_READY,
+                ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                ClusterDeployment.Status.PROVISIONING,
+                ClusterDeployment.Status.WAITING_APPROVAL,
+                ClusterDeployment.Status.POSTFLIGHT,
+            }:
+                return Response(
+                    {"detail": "Deployment is not in an agent handoff state."},
+                    status=409,
+                )
+            checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
+                deployment=deployment,
+            ).first()
+            if checkpoint is not None and checkpoint.agent_node_id != node.id:
+                return Response(
+                    {
+                        "detail": (
+                            "A checkpoint belongs to a previous target agent. "
+                            "Automatic checkpoint transfer is disabled; manual recovery "
+                            "and explicit checkpoint adoption are required."
+                        ),
+                        "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
+                    },
+                    status=409,
+                )
+            if checkpoint is None:
+                return Response(
+                    {
+                        "deployment_id": str(deployment.id),
+                        "generation": 1,
+                        "sequence": 0,
+                        "phase": "target_agent_bootstrap",
+                        "data": {},
+                        "resume_available": False,
+                    }
+                )
             return Response(
                 {
                     "deployment_id": str(deployment.id),
-                    "generation": 1,
-                    "sequence": 0,
-                    "phase": "target_agent_bootstrap",
-                    "data": {},
-                    "resume_available": False,
+                    "generation": checkpoint.generation,
+                    "sequence": checkpoint.sequence,
+                    "phase": checkpoint.phase,
+                    "data": checkpoint.data,
+                    "resume_available": True,
+                    "updated_at": checkpoint.updated_at,
                 }
             )
-        return Response(
-            {
-                "deployment_id": str(deployment.id),
-                "generation": checkpoint.generation,
-                "sequence": checkpoint.sequence,
-                "phase": checkpoint.phase,
-                "data": checkpoint.data,
-                "resume_available": True,
-                "updated_at": checkpoint.updated_at,
-            }
-        )
 
     def post(self, request, deployment_id):
         if not isinstance(request.data, dict):
