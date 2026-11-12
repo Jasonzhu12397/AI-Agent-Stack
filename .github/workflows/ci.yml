@@ -122,7 +122,7 @@ jobs:
           ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
           test -n "$ISO_FILE"
           (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["runtime"] == "kubeadm-containerd"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["calico_version"] == "v3.33.0"; assert d["runtime"] == "kubeadm-containerd"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Build and publish the EPH Agent image to the CI registry
