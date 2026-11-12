@@ -1,6 +1,6 @@
 [Unit]
 Description=RAM-backed kubelet state
-Before=k3s.service
+Before=kubelet.service
 
 [Mount]
 What=tmpfs
