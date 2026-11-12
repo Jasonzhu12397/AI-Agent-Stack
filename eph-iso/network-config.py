@@ -42,6 +42,7 @@ def install_network_configuration(media_root=None, target_root=None):
     resolved_media_root = media_root.resolve(strict=True)
     if not target_root.is_dir():
         raise ValueError("EPH_NETWORK_CONFIG_TARGET_INVALID")
+    profiles = []
     for source in sorted(media_root.iterdir()):
         if source.suffix not in ALLOWED_SUFFIXES:
             continue
@@ -57,14 +58,21 @@ def install_network_configuration(media_root=None, target_root=None):
             raise ValueError("EPH_NETWORK_CONFIG_INVALID:" + source.name)
         _validate_network_profile(resolved)
         destination = target_root / source.name
+        if destination.exists():
+            raise ValueError(
+                "EPH_NETWORK_CONFIG_DESTINATION_EXISTS:" + source.name
+            )
+        profiles.append((resolved, destination))
+
+    for source, destination in profiles:
         try:
-            with resolved.open("rb") as source_file:
+            with source.open("rb") as source_file:
                 with destination.open("xb") as destination_file:
                     shutil.copyfileobj(source_file, destination_file)
             destination.chmod(0o644)
         except FileExistsError:
             raise ValueError(
-                "EPH_NETWORK_CONFIG_DESTINATION_EXISTS:" + source.name
+                "EPH_NETWORK_CONFIG_DESTINATION_EXISTS:" + destination.name
             ) from None
         except OSError:
             try:
