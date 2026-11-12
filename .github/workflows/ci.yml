@@ -191,7 +191,7 @@ jobs:
             -cpu max -m 4096 -smp 2 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
-            -boot order=d \
+            -boot order=d,menu=off \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
             -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
