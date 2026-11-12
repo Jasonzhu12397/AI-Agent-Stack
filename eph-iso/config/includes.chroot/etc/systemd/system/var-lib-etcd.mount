@@ -1,0 +1,12 @@
+[Unit]
+Description=RAM-backed etcd state
+Before=eph-kubeadm-init.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/etcd
+Type=tmpfs
+Options=mode=0700,size=15%,nosuid,nodev
+
+[Install]
+WantedBy=multi-user.target
