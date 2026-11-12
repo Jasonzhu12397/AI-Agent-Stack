@@ -4,12 +4,11 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
-
-import pytest
 
 from core.eph_seed import EPHSeedError, render_nocloud_seed
 
@@ -63,12 +62,8 @@ def valid_config():
                 }
             },
         },
-        "ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
-        ),
-        "agent_ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\nINDEPENDENT AGENT CA\n-----END CERTIFICATE-----"
-        ),
+        "ca_certificate": make_ca_certificate("control-ca"),
+        "agent_ca_certificate": make_ca_certificate("agent-ca"),
     }
 
 
@@ -128,22 +123,6 @@ def test_seed_secrets_are_written_with_root_only_permissions():
             {"agent_ca_certificate": "not-a-certificate"},
             "EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate",
         ),
-        (
-            {
-                "agent_ca_certificate": (
-                    "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
-                )
-            },
-            "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
-        ),
-        (
-            {
-                "agent_ca_certificate": (
-                    "-----BEGIN CERTIFICATE-----\nCONTROL\nCA\n-----END CERTIFICATE-----"
-                )
-            },
-            "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
-        ),
     ],
 )
 def test_seed_rejects_invalid_node_configuration(change, expected):
@@ -165,14 +144,6 @@ def test_seed_requires_independent_agent_issuer_ca():
         render_nocloud_seed(config)
 
 
-def test_seed_does_not_accept_missing_network_or_control_plane_ca():
-    config = valid_config()
-    del config["network_config"]
-
-    with pytest.raises(EPHSeedError, match="EPH_SEED_NETWORK_CONFIG_INVALID"):
-        render_nocloud_seed(config)
-
-
 def test_seed_rejects_same_ca_with_different_pem_wrapping():
     config = valid_config()
     certificate = config["ca_certificate"]
@@ -180,15 +151,53 @@ def test_seed_rejects_same_ca_with_different_pem_wrapping():
         line for line in certificate.splitlines()
         if not line.startswith("-----")
     )
-    wrapped = base64.b64encode(base64.b64decode(encoded)).decode("ascii")
+    der = base64.b64decode(encoded)
+    wrapped = base64.b64encode(der).decode("ascii")
     config["agent_ca_certificate"] = (
-        "-----BEGIN CERTIFICATE-----\\n"
-        + "\\n".join(wrapped[index:index + 48] for index in range(0, len(wrapped), 48))
-        + "\\n-----END CERTIFICATE-----\\n"
+        "-----BEGIN CERTIFICATE-----\n"
+        + "\n".join(
+            wrapped[index:index + 48] for index in range(0, len(wrapped), 48)
+        )
+        + "\n-----END CERTIFICATE-----\n"
     )
 
     with pytest.raises(
         EPHSeedError,
         match="EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
     ):
+        render_nocloud_seed(config)
+
+
+def test_seed_rejects_non_ca_certificate():
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "leaf")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    config = valid_config()
+    config["agent_ca_certificate"] = certificate.public_bytes(
+        serialization.Encoding.PEM
+    ).decode("ascii")
+
+    with pytest.raises(
+        EPHSeedError,
+        match="EPH_SEED_CA_CERTIFICATE_INVALID:agent_ca_certificate",
+    ):
+        render_nocloud_seed(config)
+
+
+def test_seed_does_not_accept_missing_network_configuration():
+    config = valid_config()
+    del config["network_config"]
+
+    with pytest.raises(EPHSeedError, match="EPH_SEED_NETWORK_CONFIG_INVALID"):
         render_nocloud_seed(config)
