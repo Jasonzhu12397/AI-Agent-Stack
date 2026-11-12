@@ -121,7 +121,7 @@ def _copy_secret_file(source, destination):
     os.chmod(str(destination), 0o600)
 
 
-def _request_client_certificate(config, secret_dir, control_ca_path):
+def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_path):
     key_path = secret_dir / "tls.key"
     csr_path = secret_dir / "tls.csr"
     certificate_path = secret_dir / "tls.crt"
@@ -195,7 +195,22 @@ def _request_client_certificate(config, secret_dir, control_ca_path):
 
     certificate_path.write_text(certificate + ca_chain, encoding="ascii")
     os.chmod(str(certificate_path), 0o600)
+    leaf_path = secret_dir / "tls-leaf.crt"
+    chain_path = secret_dir / "tls-chain.crt"
+    leaf_path.write_text(certificate, encoding="ascii")
+    chain_path.write_text(ca_chain, encoding="ascii")
     try:
+        _run([
+            "openssl",
+            "verify",
+            "-purpose",
+            "sslclient",
+            "-CAfile",
+            str(issuer_ca_path),
+            "-untrusted",
+            str(chain_path),
+            str(leaf_path),
+        ])
         actual_fingerprint = _run_output([
             "openssl",
             "x509",
@@ -294,9 +309,11 @@ def bootstrap():
 
         control_ca_path = secret_dir / "ca.crt"
         _copy_secret_file("tls/ca.crt", control_ca_path)
-        tls_files = _request_client_certificate(config, secret_dir, control_ca_path)
         client_ca_path = secret_dir / "client-ca.crt"
         _copy_secret_file("tls/agent-ca.crt", client_ca_path)
+        tls_files = _request_client_certificate(
+            config, secret_dir, control_ca_path, client_ca_path
+        )
         tls_files["client-ca.crt"] = client_ca_path
         token_path = secret_dir / "token"
         token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
