@@ -9,7 +9,7 @@ Type=oneshot
 EnvironmentFile=-/etc/default/eph-node
 ExecStart=/usr/bin/bash /usr/local/sbin/eph-kubeadm-init.sh
 RemainAfterExit=yes
-TimeoutStartSec=20min
+TimeoutStartSec=30min
 
 [Install]
 WantedBy=multi-user.target
