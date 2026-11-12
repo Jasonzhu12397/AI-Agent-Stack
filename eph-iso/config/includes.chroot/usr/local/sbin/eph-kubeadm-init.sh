@@ -63,7 +63,7 @@ for attempt in $(seq 1 60); do
 done
 
 kubectl apply -f "$CALICO_MANIFEST"
+kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
 kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
-kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
