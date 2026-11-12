@@ -2075,6 +2075,8 @@ def execute_command(
     payload = command.get("payload", {})
     if not isinstance(payload, dict):
         raise NodeAgentError("INVALID_PAYLOAD")
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise NodeAgentError("AGENT_COMMAND_CANCELLED")
     if contains_forbidden_fields(payload):
         raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
     if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
@@ -3860,6 +3862,8 @@ def execute_command(
     if command_type == "cluster.capi.pivot.postflight":
         try:
             result = run_capi_pivot_postflight(payload)
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise NodeAgentError("AGENT_COMMAND_CANCELLED")
             ironic_lookup = get_ironic_node if ironic_api_configured() else None
             metal3_result = observe_cluster_metal3(
                 payload,
