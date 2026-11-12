@@ -393,6 +393,11 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
         lambda: events.append(("api_ready",)),
     )
     monkeypatch.setitem(bootstrap_globals, "_create_secret", fake_create_secret)
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_wait_for_agent_pod",
+        lambda: events.append(("agent_pod_ready",)),
+    )
     monkeypatch.setitem(bootstrap_globals, "_apply_file", fake_apply_file)
     monkeypatch.setitem(
         bootstrap_globals,
@@ -467,6 +472,47 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
         "deployment/eph-node-agent",
         "--timeout=10m",
     ]
+
+
+def test_bootstrap_requires_explicit_agent_pod_readiness(monkeypatch):
+    bootstrap_globals = BOOTSTRAP["_wait_for_agent_pod"].__globals__
+    commands = []
+    outputs = iter(["eph-node-agent-7d9f"])
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_run",
+        lambda command, input_text=None: commands.append(list(command)),
+    )
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_run_output",
+        lambda command, timeout=None: commands.append(list(command))
+        or next(outputs),
+    )
+
+    BOOTSTRAP["_wait_for_agent_pod"]()
+
+    assert commands[0][-5:] == [
+        "pod",
+        "--selector=app.kubernetes.io/name=eph-node-agent",
+        "--timeout=300s",
+    ][-5:]
+    assert commands[1][-4:] == [
+        "--field-selector=status.phase=Running",
+        "-o",
+        "jsonpath={.items[?(@.status.conditions[?(@.type==\"Ready\" && @.status==\"True\")])].metadata.name}",
+    ][-4:]
+
+
+def test_bootstrap_rejects_agent_pod_without_ready_running_instance(monkeypatch):
+    bootstrap_globals = BOOTSTRAP["_wait_for_agent_pod"].__globals__
+    monkeypatch.setitem(bootstrap_globals, "_run", lambda command, input_text=None: None)
+    monkeypatch.setitem(bootstrap_globals, "_run_output", lambda command, timeout=None: "")
+    with pytest.raises(
+        BOOTSTRAP["BootstrapError"],
+        match="EPH_AGENT_POD_NOT_READY",
+    ):
+        BOOTSTRAP["_wait_for_agent_pod"]()
 
 
 def test_bootstrap_fails_when_agent_deployment_rollout_fails(
