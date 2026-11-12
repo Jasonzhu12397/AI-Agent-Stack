@@ -15,3 +15,8 @@ write_files:
     permissions: "0600"
     content: |
       REPLACE_WITH_CA_CERTIFICATE
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/agent-ca.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      REPLACE_WITH_INDEPENDENT_EPH_AGENT_ISSUING_CA_ROOT
