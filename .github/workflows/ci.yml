@@ -125,6 +125,32 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["runtime"] == "kubeadm-containerd"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
 
+      - name: Build and publish the EPH Agent image to the CI registry
+        id: agent-image
+        run: |
+          docker run -d --name eph-ci-registry -p 5000:5000 registry:2
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null
+          CLUSTERCTL_VERSION=v1.10.6
+          KUBECTL_VERSION=v1.35.3
+          curl --fail --location --silent --show-error "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-amd64" -o "$RUNNER_TEMP/clusterctl"
+          curl --fail --location --silent --show-error "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o "$RUNNER_TEMP/kubectl"
+          CLUSTERCTL_SHA256="$(sha256sum "$RUNNER_TEMP/clusterctl" | awk '{print $1}')"
+          KUBECTL_SHA256="$(sha256sum "$RUNNER_TEMP/kubectl" | awk '{print $1}')"
+          docker build --platform linux/amd64 -f Dockerfile.node-agent \
+            --build-arg "CLUSTERCTL_VERSION=$CLUSTERCTL_VERSION" \
+            --build-arg "CLUSTERCTL_SHA256_AMD64=$CLUSTERCTL_SHA256" \
+            --build-arg "KUBECTL_VERSION=$KUBECTL_VERSION" \
+            --build-arg "KUBECTL_SHA256_AMD64=$KUBECTL_SHA256" \
+            -t localhost:5000/ai-agent-node-agent:ci .
+          docker push localhost:5000/ai-agent-node-agent:ci
+          ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+          AGENT_DIGEST="$(curl --fail --silent --show-error --head -H "Accept: $ACCEPT" http://127.0.0.1:5000/v2/ai-agent-node-agent/manifests/ci | awk -F ': ' 'tolower($1)=="docker-content-digest" {gsub("\\r", "", $2); print $2}')"
+          [[ "$AGENT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image_digest=$AGENT_DIGEST" >> "$GITHUB_OUTPUT"
       - name: Upload EPH Live ISO artifact
         uses: actions/upload-artifact@v4
         with:
