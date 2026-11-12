@@ -7,6 +7,7 @@ import shutil
 import ssl
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -270,6 +271,26 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
     }
 
 
+def _wait_for_kubernetes_api():
+    command = [
+        "k3s",
+        "kubectl",
+        "--kubeconfig",
+        "/etc/rancher/k3s/k3s.yaml",
+        "get",
+        "--raw=/readyz",
+    ]
+    for attempt in range(60):
+        try:
+            if _run_output(command).strip() == "ok":
+                return
+        except subprocess.CalledProcessError:
+            pass
+        if attempt < 59:
+            time.sleep(5)
+    raise BootstrapError("KUBERNETES_API_NOT_READY")
+
+
 def _create_secret(name, namespace, files):
     command = [
         "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
@@ -311,6 +332,18 @@ def bootstrap():
     config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
 
     with tempfile.TemporaryDirectory(prefix="eph-bootstrap-") as temporary:
+        _wait_for_kubernetes_api()
+        _run([
+            "k3s",
+            "kubectl",
+            "--kubeconfig",
+            "/etc/rancher/k3s/k3s.yaml",
+            "wait",
+            "--for=condition=Ready",
+            "nodes",
+            "--all",
+            "--timeout=300s",
+        ])
         secret_dir = pathlib.Path(temporary)
         credential_files = {}
         for key, value in (
