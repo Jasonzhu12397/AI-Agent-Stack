@@ -19,13 +19,18 @@ def test_dual_agent_deploy_script_requires_two_contexts_and_digest_image():
     assert "rollout status daemonset/network-inventory-agent" in script
 
 
-def test_dual_agent_deploy_script_requires_pivot_but_not_optional_ironic_secrets():
+def test_dual_agent_deploy_script_keeps_capi_pivot_optional_but_validates_present_secret():
     script = (ROOT / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
     target = (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(
         encoding="utf-8"
     )
 
     assert "capi-pivot-kubeconfigs" in script
+    assert 'ENABLE_CAPI_PIVOT="${ENABLE_CAPI_PIVOT:-false}"' in script
+    assert "validate_optional_pivot_secret" in script
+    assert "CAPI_PIVOT_KUBECONFIG_SECRET_REQUIRED" in script
+    assert "CAPI_PIVOT_SECRET_LOOKUP_FAILED" in script
+    assert "ENABLE_CAPI_PIVOT_MUST_BE_TRUE_OR_FALSE" in script
     assert "source.kubeconfig target.kubeconfig" in script
     assert "ironic-api-credentials api-url token" not in script
     assert "eph-node-agent-credentials control-url node-id token" in script
