@@ -92,7 +92,7 @@ jobs:
                 -o Acquire::http::Timeout=20 \
                 -o Acquire::https::Timeout=20 \
                 install --no-install-recommends -y \
-                qemu-system-x86 qemu-utils dosfstools mtools curl; then
+                qemu-system-x86 qemu-utils dosfstools mtools xorriso curl; then
                 exit 0
               fi
             fi
