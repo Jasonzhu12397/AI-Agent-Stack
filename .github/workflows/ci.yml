@@ -211,6 +211,13 @@ jobs:
           #cloud-config
           ssh_pwauth: false
           write_files:
+            - path: /etc/containerd/certs.d/10.0.2.2:5000/hosts.toml
+              owner: root:root
+              permissions: '0644'
+              content: |
+                server = "http://10.0.2.2:5000"
+                [host."http://10.0.2.2:5000"]
+                capabilities = ["pull", "resolve"]
             - path: /usr/local/sbin/eph-ci-smoke.sh
               owner: root:root
               permissions: '0755'
@@ -294,6 +301,29 @@ jobs:
                           command: ["sh", "-c", "wget -qO- http://workload-smoke.eph-ci-smoke.svc.cluster.local | grep -q 'Welcome to nginx'"]
                 NETWORK
                 kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-smoke --timeout=300s
+                for attempt in $(seq 1 120); do
+                  if systemctl is-active --quiet eph-bootstrap.service; then break; fi
+                  if systemctl is-failed --quiet eph-bootstrap.service; then
+                    systemctl --no-pager --full status eph-bootstrap.service >&2 || true
+                    journalctl -b -u eph-bootstrap.service --no-pager -n 200 >&2 || true
+                    exit 1
+                  fi
+                  sleep 5
+                done
+                systemctl is-active --quiet eph-bootstrap.service
+                kubectl --namespace ai-agent-system rollout status deployment/eph-node-agent --timeout=600s
+                kubectl --namespace ai-agent-system wait --for=condition=Ready pod --selector=app.kubernetes.io/name=eph-node-agent --timeout=300s
+                AGENT_POD="$(kubectl --namespace ai-agent-system get pods -l app.kubernetes.io/name=eph-node-agent -o jsonpath='{.items[0].metadata.name}')"
+                test -n "$AGENT_POD"
+                AGENT_DETAILS="$(kubectl --namespace ai-agent-system get pod "$AGENT_POD" -o jsonpath='{.status.phase}{" "}{.spec.nodeName}{" "}{.status.podIP}{" "}{.status.containerStatuses[0].ready}')"
+                read -r AGENT_PHASE AGENT_NODE AGENT_POD_IP AGENT_READY <<< "$AGENT_DETAILS"
+                test "$AGENT_PHASE" = Running
+                test "$AGENT_NODE" = "$NODE_NAME"
+                test -n "$AGENT_POD_IP"
+                test "$AGENT_READY" = true
+                printf 'EPH_AGENT_POD=%s\\n' "$AGENT_POD"
+                printf 'EPH_AGENT_POD_IP=%s\\n' "$AGENT_POD_IP"
+                printf 'EPH_AGENT_POD_READY=true\\n'
                 READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
                 test -n "$READY_PODS"
                 POD_DETAILS="$(kubectl --namespace eph-ci-smoke get pod "$READY_PODS" -o jsonpath='{.status.podIP}{" "}{.spec.nodeName}{" "}{.status.containerStatuses[0].ready}')"
@@ -312,7 +342,7 @@ jobs:
                 printf 'EPH_RAM_BACKED_RUNTIME_STATE=true\n'
                 curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
           runcmd:
-            - [bash, /usr/local/sbin/eph-ci-smoke.sh]
+            - [bash, -c, "nohup /usr/local/sbin/eph-ci-smoke.sh >/var/log/eph-ci-smoke.log 2>&1 &"]
           EOF
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
           touch "$RUNNER_TEMP/cloud-init-ready"
@@ -329,6 +359,7 @@ jobs:
             -cpu max -m 4096 -smp 2 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
+            -drive "file=$RUNNER_TEMP/eph-bootstrap.img,format=raw,if=virtio" \
             -boot order=d,menu=off \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
@@ -336,7 +367,7 @@ jobs:
             -d int,guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
-          trap 'kill "$QEMU_PID" "$HTTP_PID" >/dev/null 2>&1 || true' EXIT
+          trap 'kill "$QEMU_PID" "$HTTP_PID" "$MOCK_CONTROL_PID" >/dev/null 2>&1 || true' EXIT
           ready=false
           cloud_init_ready=false
           for attempt in $(seq 1 240); do
@@ -356,7 +387,7 @@ jobs:
             sleep 5
           done
           if [ "$ready" != true ] || [ "$cloud_init_ready" != true ]; then
-            printf 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED\n'
+            printf 'EPH_AGENT_POD_READY=false\n'
             printf 'QEMU_PID_ALIVE=%s\n' "$(kill -0 "$QEMU_PID" >/dev/null 2>&1 && echo true || echo false)"
             printf 'KUBEADM_API_READY=%s\n' "$ready"
             printf 'CLOUD_INIT_WORKLOAD_SMOKE_READY=%s\n' "$cloud_init_ready"
