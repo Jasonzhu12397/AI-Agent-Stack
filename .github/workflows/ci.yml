@@ -207,7 +207,8 @@ jobs:
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
           qemu-system-x86_64 \
-            -machine accel=tcg,thread=multi,usb=off \
+            -machine usb=off \\
+            -accel tcg,thread=multi \
             -cpu max -m 4096 -smp 2 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
@@ -245,7 +246,7 @@ jobs:
             printf '%s\n' '=== QEMU stdout ==='
             cat "$RUNNER_TEMP/qemu.stdout"
             printf '%s\n' '=== Guest serial console ==='
-            cat "$RUNNER_TEMP/eph-qemu.log"
+            if [ -f "$RUNNER_TEMP/eph-qemu.log" ]; then cat "$RUNNER_TEMP/eph-qemu.log"; else echo "QEMU_SERIAL_LOG_NOT_CREATED"; fi
             printf '%s\n' '=== QEMU debug log tail ==='
             tail -n 500 "$RUNNER_TEMP/qemu-debug.log" || true
             printf '%s\n' '=== ISO boot catalog ==='
