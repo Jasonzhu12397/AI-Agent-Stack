@@ -1,7 +1,7 @@
 # ruff: noqa: I001
 import io
 import zipfile
-from datetime import datetime, timedelta, timezone as datetime_timezone
+from datetime import UTC, datetime, timedelta
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -18,7 +18,7 @@ from core.models import EPHSeedArtifact, Project, ProjectMembership, Tenant, Ten
 
 def make_ca_certificate(common_name):
     key = ec.generate_private_key(ec.SECP256R1())
-    now = datetime.now(datetime_timezone.utc)
+    now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
     certificate = (
         x509.CertificateBuilder()
