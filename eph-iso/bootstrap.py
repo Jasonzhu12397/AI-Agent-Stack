@@ -203,14 +203,29 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
         _run([
             "openssl",
             "verify",
+            "-x509_strict",
             "-purpose",
             "sslclient",
+            "-verify_depth",
+            "8",
             "-CAfile",
             str(issuer_ca_path),
             "-untrusted",
             str(chain_path),
             str(leaf_path),
         ])
+        subject = _run_output([
+            "openssl",
+            "x509",
+            "-in",
+            str(leaf_path),
+            "-noout",
+            "-subject",
+            "-nameopt",
+            "RFC2253",
+        ]).strip()
+        if not hmac.compare_digest(subject, "subject=CN=" + common_name):
+            raise BootstrapError("CLIENT_CERTIFICATE_IDENTITY_INVALID")
         actual_fingerprint = _run_output([
             "openssl",
             "x509",
