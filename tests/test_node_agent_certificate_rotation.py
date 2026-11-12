@@ -179,7 +179,6 @@ def test_eph_agent_stages_and_activates_certificate_using_node_generated_key(
     monkeypatch.setenv("AGENT_TLS_KEY_FILE", str(key_path))
     monkeypatch.setenv("AGENT_TLS_CA_FILE", str(ca_path))
     monkeypatch.setenv("AGENT_TLS_ROTATION_TRUSTED_CA_FILE", str(trusted_ca_path))
-    monkeypatch.setenv("AGENT_TLS_ROTATION_TRUSTED_CA_FILE", str(trusted_ca_path))
     monkeypatch.setenv("AGENT_TLS_ROTATION_RENEW_BEFORE_HOURS", "6")
 
     class FakeClient:
