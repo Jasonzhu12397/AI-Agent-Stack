@@ -54,6 +54,22 @@ def test_eph_k3s_and_kubelet_state_are_ram_backed():
     assert "WantedBy=multi-user.target" in k3s
 
 
+def test_eph_k3s_service_requires_ram_mounts_before_start():
+    root = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system"
+    k3s = (root / "k3s.service").read_text(encoding="utf-8")
+    rancher = (root / "var-lib-rancher-k3s.mount").read_text(encoding="utf-8")
+    kubelet = (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
+
+    assert "Requires=var-lib-rancher-k3s.mount var-lib-kubelet.mount" in k3s
+    assert "After=network-online.target var-lib-rancher-k3s.mount var-lib-kubelet.mount" in k3s
+    assert "Where=/var/lib/rancher/k3s" in rancher
+    assert "Where=/var/lib/kubelet" in kubelet
+    assert "Options=mode=0750,size=60%,nosuid,nodev" in rancher
+    assert "Options=mode=0750,size=15%,nosuid,nodev" in kubelet
+    assert "Before=k3s.service" in rancher
+    assert "Before=k3s.service" in kubelet
+
+
 def test_bootstrap_config_accepts_pinned_image_and_https_endpoint():
     assert BOOTSTRAP["validate_config"](valid_config())["node_id"]
 
