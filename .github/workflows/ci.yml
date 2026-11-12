@@ -145,7 +145,7 @@ jobs:
       - name: Validate EPH BIOS boot configuration
         run: |
           xorriso -osirrox on -indev "${{ steps.build.outputs.iso_file }}" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
-          printf '%s\\n' '=== BIOS boot configuration ==='
+          printf '%s\n' '=== BIOS boot configuration ==='
           cat "$RUNNER_TEMP/isolinux.cfg"
           if ! grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"; then
             echo "EPH_BIOS_BOOT_TIMEOUT_MISSING" >&2
