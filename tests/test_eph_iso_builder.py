@@ -18,10 +18,11 @@ def valid_config():
     }
 
 
-def test_eph_iso_builder_pins_k3s_and_verifies_checksum():
+def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     script = (ROOT / "eph-iso/build.sh").read_text(encoding="utf-8")
-    assert "K3S_VERSION_INVALID" in script
-    assert "K3S_SHA256_AMD64_INVALID" in script
+    assert "KUBERNETES_VERSION_INVALID" in script
+    assert "KUBERNETES_BINARY_CHECKSUM_MISMATCH" in script
+    assert "kubeadm" in script and "kubelet" in script and "kubectl" in script
     assert "sha256sum -c -" in script
     assert "boot=live components toram" in script
     assert "console=ttyS0,115200n8" in script
@@ -43,31 +44,32 @@ def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
     assert "docker compose" not in service
 
 
-def test_eph_k3s_and_kubelet_state_are_ram_backed():
+def test_eph_containerd_etcd_and_kubelet_state_are_ram_backed():
     root = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system"
-    for name in ("var-lib-rancher-k3s.mount", "var-lib-kubelet.mount"):
+    for name in ("var-lib-containerd.mount", "var-lib-etcd.mount", "var-lib-kubelet.mount"):
         content = (root / name).read_text(encoding="utf-8")
         assert "What=tmpfs" in content
         assert "Type=tmpfs" in content
-    k3s = (root / "k3s.service").read_text(encoding="utf-8")
-    assert "k3s server" in k3s
-    assert "WantedBy=multi-user.target" in k3s
+    kubeadm = (root / "eph-kubeadm-init.service").read_text(encoding="utf-8")
+    assert "eph-kubeadm-init.sh" in kubeadm
+    assert "WantedBy=multi-user.target" in kubeadm
 
 
-def test_eph_k3s_service_requires_ram_mounts_before_start():
+def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     root = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system"
-    k3s = (root / "k3s.service").read_text(encoding="utf-8")
-    rancher = (root / "var-lib-rancher-k3s.mount").read_text(encoding="utf-8")
-    kubelet = (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
+    containerd = (root / "containerd.service.d/eph.conf").read_text(encoding="utf-8")
+    kubeadm = (root / "eph-kubeadm-init.service").read_text(encoding="utf-8")
+    containerd_mount = (root / "var-lib-containerd.mount").read_text(encoding="utf-8")
+    etcd_mount = (root / "var-lib-etcd.mount").read_text(encoding="utf-8")
+    kubelet_mount = (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
 
-    assert "Requires=var-lib-rancher-k3s.mount var-lib-kubelet.mount" in k3s
-    assert "After=network-online.target var-lib-rancher-k3s.mount var-lib-kubelet.mount" in k3s
-    assert "Where=/var/lib/rancher/k3s" in rancher
-    assert "Where=/var/lib/kubelet" in kubelet
-    assert "Options=mode=0750,size=60%,nosuid,nodev" in rancher
-    assert "Options=mode=0750,size=15%,nosuid,nodev" in kubelet
-    assert "Before=k3s.service" in rancher
-    assert "Before=k3s.service" in kubelet
+    assert "Requires=var-lib-containerd.mount" in containerd
+    assert "Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount" in kubeadm
+    assert "Where=/var/lib/containerd" in containerd_mount
+    assert "Where=/var/lib/etcd" in etcd_mount
+    assert "Where=/var/lib/kubelet" in kubelet_mount
+    assert "Before=containerd.service" in containerd_mount
+    assert "Before=eph-kubeadm-init.service" in etcd_mount
 
 
 def test_bootstrap_config_accepts_pinned_image_and_https_endpoint():
@@ -102,7 +104,7 @@ def test_systemd_starts_k3s_and_bootstrap_from_multi_user_target():
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
     )
     content = dropin.read_text(encoding="utf-8")
-    assert "k3s.service eph-bootstrap.service" in content
+    assert "eph-kubeadm-init.service eph-bootstrap.service" in content
 
 
 def test_bootstrap_agent_manifest_is_bundled_into_iso():
@@ -139,7 +141,7 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "RestartSec=30s" in service
     assert "TimeoutStartSec=40min" in service
     assert "StartLimitBurst=10" in service
-    assert "k3s.service eph-bootstrap.service" in multi_user
+    assert "eph-kubeadm-init.service eph-bootstrap.service" in multi_user
     assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
         ROOT / "eph-iso/bootstrap.py"
     ).read_text(encoding="utf-8")
@@ -417,10 +419,9 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
 
     assert events[0] == ("api_ready",)
     assert events[1][0:2] == ("run", [
-        "k3s",
         "kubectl",
         "--kubeconfig",
-        "/etc/rancher/k3s/k3s.yaml",
+        "/etc/kubernetes/admin.conf",
         "wait",
         "--for=condition=Ready",
         "nodes",
@@ -428,19 +429,17 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
         "--timeout=300s",
     ])
     assert events[2][0:2] == ("run", [
-        "k3s",
         "kubectl",
         "--kubeconfig",
-        "/etc/rancher/k3s/k3s.yaml",
+        "/etc/kubernetes/admin.conf",
         "apply",
         "-f",
         str(tmp_path / "manifests" / "namespace.yaml"),
     ])
     assert events[3][0:2] == ("run", [
-        "k3s",
         "kubectl",
         "--kubeconfig",
-        "/etc/rancher/k3s/k3s.yaml",
+        "/etc/kubernetes/admin.conf",
         "apply",
         "-f",
         str(tmp_path / "manifests" / "rbac.yaml"),
@@ -581,12 +580,12 @@ def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "path: /usr/local/sbin/eph-ci-smoke.sh" in workflow
     assert "set -eu" in workflow
-    assert 'k3s kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s' in workflow
+    assert 'kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s' in workflow
     assert "rollout status deployment/workload-smoke --timeout=180s" in workflow
     assert "wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s" in workflow
     assert "test -n \"$READY_PODS\"" in workflow
-    assert "K3S_API_READY=true" in workflow
-    assert "K3S_WORKLOAD_SMOKE_READY=true" in workflow
+    assert "KUBEADM_API_READY=true" in workflow
+    assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED" in workflow
     callback = "curl --fail --silent --show-error --max-time 10 "
     callback += "http://10.0.2.2:18080/cloud-init-ready"
