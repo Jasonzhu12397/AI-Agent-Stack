@@ -83,6 +83,7 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         ),
         (
             {"agent_ca_certificate": "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"},
+            {"agent_ca_certificate": "-----BEGIN CERTIFICATE-----\nCONTROL\nCA\n-----END CERTIFICATE-----"},
             "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
         ),
     ],
