@@ -24,10 +24,13 @@ def valid_config():
                 }
             },
         },
-        "ca_certificate": "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----",
-        "agent_ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\\nINDEPENDENT AGENT CA\\n-----END CERTIFICATE-----"
+        "ca_certificate": (
+            "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
         ),
+        "agent_ca_certificate": (
+            "-----BEGIN CERTIFICATE-----\nINDEPENDENT AGENT CA\n-----END CERTIFICATE-----"
+        ),
+    }
 
 
 def test_render_nocloud_seed_creates_all_three_datasource_files():
@@ -45,7 +48,8 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
     assert not any("tls.key" in item["path"] for item in user_data["write_files"])
     assert not any("tls.crt" in item["path"] for item in user_data["write_files"])
     agent_ca = next(
-        item for item in user_data["write_files"]
+        item
+        for item in user_data["write_files"]
         if item["path"].endswith("/tls/agent-ca.crt")
     )
     assert "INDEPENDENT AGENT CA" in agent_ca["content"]
@@ -86,10 +90,9 @@ def test_seed_secrets_are_written_with_root_only_permissions():
             "EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate",
         ),
         (
-        (
             {
                 "agent_ca_certificate": (
-                    "-----BEGIN CERTIFICATE-----\\nCONTROL CA\\n-----END CERTIFICATE-----"
+                    "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
                 )
             },
             "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
@@ -97,11 +100,10 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         (
             {
                 "agent_ca_certificate": (
-                    "-----BEGIN CERTIFICATE-----\\nCONTROL\\nCA\\n-----END CERTIFICATE-----"
+                    "-----BEGIN CERTIFICATE-----\nCONTROL\nCA\n-----END CERTIFICATE-----"
                 )
             },
             "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
-        ),
         ),
     ],
 )
@@ -117,7 +119,10 @@ def test_seed_requires_independent_agent_issuer_ca():
     config = valid_config()
     del config["agent_ca_certificate"]
 
-    with pytest.raises(EPHSeedError, match="EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate"):
+    with pytest.raises(
+        EPHSeedError,
+        match="EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate",
+    ):
         render_nocloud_seed(config)
 
 
