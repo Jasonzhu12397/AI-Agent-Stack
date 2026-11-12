@@ -295,6 +295,9 @@ def bootstrap():
         control_ca_path = secret_dir / "ca.crt"
         _copy_secret_file("tls/ca.crt", control_ca_path)
         tls_files = _request_client_certificate(config, secret_dir, control_ca_path)
+        client_ca_path = secret_dir / "client-ca.crt"
+        _copy_secret_file("tls/agent-ca.crt", client_ca_path)
+        tls_files["client-ca.crt"] = client_ca_path
         token_path = secret_dir / "token"
         token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
         os.chmod(str(token_path), 0o600)
