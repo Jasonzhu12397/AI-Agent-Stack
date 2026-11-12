@@ -1,8 +1,8 @@
 [Unit]
 Description=Enroll EPH Agent into the temporary Kubernetes cluster
 Wants=network-online.target cloud-init.target
-After=cloud-init.target network-online.target k3s.service
-Requires=k3s.service
+After=cloud-init.target network-online.target eph-kubeadm-init.service
+Requires=eph-kubeadm-init.service
 StartLimitIntervalSec=15min
 StartLimitBurst=10
 
