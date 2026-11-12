@@ -6,7 +6,7 @@ MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap/network")
 TARGET_ROOT = pathlib.Path("/etc/systemd/network")
 ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
 REQUIRED_SECTIONS = {
-    ".network": {"Match"},
+    ".network": {"Match", "Network"},
     ".netdev": {"NetDev"},
     ".link": {"Match", "Link"},
 }
