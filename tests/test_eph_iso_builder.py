@@ -533,6 +533,9 @@ def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
     assert "rollout status deployment/workload-smoke --timeout=180s" in workflow
     assert "wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s" in workflow
     assert "test -n \"$READY_PODS\"" in workflow
+    assert "K3S_API_READY=true" in workflow
+    assert "K3S_WORKLOAD_SMOKE_READY=true" in workflow
+    assert "EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED" in workflow
     callback = "curl --fail --silent --show-error --max-time 10 "
     callback += "http://10.0.2.2:18080/cloud-init-ready"
     assert callback in workflow
