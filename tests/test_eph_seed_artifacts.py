@@ -143,6 +143,22 @@ def test_seed_artifact_rejects_invalid_enrollment_token(seed_workspace):
 
 
 @pytest.mark.django_db
+def test_seed_artifact_requires_independent_agent_issuer_ca(seed_workspace):
+    tenant, project, client, enrollment = seed_workspace
+
+    response = create_seed(
+        client,
+        tenant,
+        project,
+        enrollment,
+        agent_ca_certificate=None,
+    )
+
+    assert response.status_code == 400
+    assert EPHSeedArtifact.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_seed_artifact_requires_encryption_key(seed_workspace, settings):
     tenant, project, client, enrollment = seed_workspace
     settings.EPH_SEED_ENCRYPTION_KEY = ""
