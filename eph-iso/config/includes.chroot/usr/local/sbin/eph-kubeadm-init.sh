@@ -4,7 +4,7 @@ set -euo pipefail
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-}"
 POD_CIDR="${EPH_POD_CIDR:-10.244.0.0/16}"
 CRI_SOCKET="unix:///run/containerd/containerd.sock"
-FLANNEL_MANIFEST="/usr/share/ai-agent-studio/kube-flannel.yml"
+CALICO_MANIFEST="/usr/share/ai-agent-studio/calico.yaml"
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -16,7 +16,9 @@ command -v kubeadm >/dev/null 2>&1 || fail "KUBEADM_BINARY_MISSING"
 command -v kubectl >/dev/null 2>&1 || fail "KUBECTL_BINARY_MISSING"
 command -v kubelet >/dev/null 2>&1 || fail "KUBELET_BINARY_MISSING"
 command -v containerd >/dev/null 2>&1 || fail "CONTAINERD_BINARY_MISSING"
-[ -s "$FLANNEL_MANIFEST" ] || fail "FLANNEL_MANIFEST_MISSING"
+[ -s "$CALICO_MANIFEST" ] || fail "CALICO_MANIFEST_MISSING"
+grep -q "192.168.0.0/16" "$CALICO_MANIFEST" || fail "CALICO_DEFAULT_POOL_CIDR_NOT_FOUND"
+sed -i "s#192.168.0.0/16#$POD_CIDR#g" "$CALICO_MANIFEST"
 [ -x /usr/lib/cni/bridge ] || fail "CNI_BRIDGE_PLUGIN_MISSING"
 [ -x /usr/lib/cni/host-local ] || fail "CNI_HOST_LOCAL_PLUGIN_MISSING"
 [ -x /usr/lib/cni/loopback ] || fail "CNI_LOOPBACK_PLUGIN_MISSING"
@@ -59,6 +61,8 @@ for attempt in $(seq 1 60); do
     sleep 5
 done
 
-kubectl apply -f "$FLANNEL_MANIFEST"
+kubectl apply -f "$CALICO_MANIFEST"
+kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
+kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
