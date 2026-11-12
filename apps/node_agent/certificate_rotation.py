@@ -149,7 +149,7 @@ def validate_issued_certificate(
         if _certificate_time(certificate.not_valid_after) <= now:
             raise CertificateRotationError("AGENT_TLS_ROTATION_CERTIFICATE_EXPIRED")
         chain = _load_certificates(ca_chain_pem.encode("ascii"))
-        trust_bundle = _load_certificates(trusted_certificate_bundle)
+        _load_certificates(trusted_certificate_bundle)
     except (OSError, UnicodeError, ValueError, AttributeError) as exc:
         if isinstance(exc, CertificateRotationError):
             raise
