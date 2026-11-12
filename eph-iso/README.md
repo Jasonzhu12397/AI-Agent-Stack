@@ -1,6 +1,6 @@
 # EPH Live ISO
 
-The EPH runtime is a reusable Debian 12 Live ISO that boots entirely into RAM (toram), starts a single-node K3s Kubernetes cluster, and runs the EPH Agent as a Kubernetes Deployment Pod. It does not install an operating system to local disk.
+The EPH runtime is a reusable Debian 12 Live ISO that boots entirely into RAM (toram), starts a single-node Kubernetes cluster with kubeadm, kubelet, and containerd, and runs the EPH Agent as a Kubernetes Deployment Pod. It does not install an operating system to local disk.
 
 The BIOS ISOLINUX menu automatically starts the default Live entry after five seconds, so unattended and headless boots do not wait for keyboard input. CI verifies this setting in the built ISO before starting the QEMU boot smoke test.
 
@@ -15,7 +15,7 @@ sudo env \
   bash eph-iso/build.sh
 ~~~
 
-The builder supports amd64 and Kubernetes minors v1.33, v1.34, v1.35, and v1.36. Pin the K3s release and verify its official SHA-256 independently. The output directory receives the ISO, SHA-256 sidecar, and release metadata JSON.
+The builder supports amd64 and Kubernetes minors v1.33, v1.34, v1.35, and v1.36. It downloads kubeadm, kubelet, and kubectl from the official Kubernetes release endpoint and verifies each binary against its published SHA-256 file. The output directory receives the ISO, SHA-256 sidecar, and release metadata JSON.
 
 ## Per-node configuration with cloud-init NoCloud
 
@@ -63,11 +63,11 @@ Use cloud-init's NoCloud network-config to configure DHCP or static addressing, 
 
 - Debian Live root filesystem: toram; no local-disk installation.
 - cloud-init: NoCloud datasource from a per-node CIDATA seed.
-- K3s server: systemd service; one-node Kubernetes control plane.
-- /var/lib/rancher/k3s and /var/lib/kubelet: tmpfs; cluster state is disposable.
+- kubeadm: initializes the one-node Kubernetes control plane; kubelet and containerd run as systemd services.
+- /var/lib/containerd, /var/lib/etcd, and /var/lib/kubelet: tmpfs; cluster state is disposable.
 - EPH Agent: Kubernetes Deployment Pod in ai-agent-system; not Docker Compose and not a host process.
 - Container image: immutable SHA-256 digest.
-- CNI: K3s default Flannel, independent of the target cluster's Calico/Multus/OVS/SR-IOV design.
+- CNI: pinned Flannel manifest for the temporary EPH cluster, independent of the target cluster's Calico/Multus/OVS/SR-IOV design.
 
 ## Safety and limitations
 
