@@ -167,3 +167,14 @@ the old active certificate untouched. The API's pending activation expires
 after ten minutes, so the agent can safely request a fresh certificate after
 the old pending record expires. If Cloud signing, Kubernetes Secret access, or
 the new mTLS handshake fails, the agent does not promote the new certificate.
+
+### EPH node-side renewal trust validation
+
+Before staging a renewed client certificate, the EPH Agent validates the
+certificate subject, local private-key match, validity window, issuer signature,
+and every CA signature in the returned chain. Every CA must assert
+`BasicConstraints(ca=true)` and `KeyUsage(keyCertSign=true)`; the terminal
+root must be a valid self-signed CA and match a self-signed CA root already
+present in the active certificate bundle. An active client leaf certificate is
+never accepted as a trust anchor. The agent also enforces CA path-length
+constraints and rejects expired or not-yet-valid CA certificates.
