@@ -164,8 +164,23 @@ jobs:
               permissions: '0755'
               content: |
                 #!/bin/bash
-                set -eu
+                set -Eeuo pipefail
                 export KUBECONFIG=/etc/kubernetes/admin.conf
+                on_error() {
+                  status=$?
+                  trap - ERR
+                  printf 'EPH_GUEST_SMOKE_FAILED exit=%s\n' "$status" >&2
+                  for unit in containerd kubelet eph-kubeadm-init; do
+                    systemctl --no-pager --full status "$unit" >&2 || true
+                    journalctl -b -u "$unit" --no-pager -n 120 >&2 || true
+                  done
+                  kubectl get nodes -o wide >&2 || true
+                  kubectl get pods --all-namespaces -o wide >&2 || true
+                  kubectl get events --all-namespaces --sort-by=.lastTimestamp >&2 || true
+                  findmnt >&2 || true
+                  exit "$status"
+                }
+                trap on_error ERR
                 grep -Eq '(^|[[:space:]])toram([[:space:]]|$)' /proc/cmdline
                 test "$(swapon --show --noheadings | wc -l)" -eq 0
                 for mountpoint in /var/lib/containerd /var/lib/etcd /var/lib/kubelet; do
@@ -206,6 +221,13 @@ jobs:
                 test -n "$POD_IP"
                 test "$POD_NODE" = "$NODE_NAME"
                 test "$POD_READY" = true
+                printf 'EPH_NODE_COUNT=%s\n' "$NODE_COUNT"
+                printf 'EPH_NODE_NAME=%s\n' "$NODE_NAME"
+                printf 'EPH_CNI_DAEMONSET_READY=true\n'
+                printf 'EPH_POD_IP=%s\n' "$POD_IP"
+                printf 'EPH_POD_NODE=%s\n' "$POD_NODE"
+                printf 'EPH_POD_READY=%s\n' "$POD_READY"
+                printf 'EPH_RAM_BACKED_RUNTIME_STATE=true\n'
                 curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
           runcmd:
             - [bash, /usr/local/sbin/eph-ci-smoke.sh]
