@@ -13,7 +13,7 @@ from cryptography.x509.oid import NameOID
 from core.eph_seed import EPHSeedError, render_nocloud_seed
 
 
-def make_ca_certificate(common_name):
+def make_ca_certificate(common_name, expired=False):
     key = ec.generate_private_key(ec.SECP256R1())
     now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
@@ -23,8 +23,10 @@ def make_ca_certificate(common_name):
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(days=365))
+        .not_valid_before(now - timedelta(days=2 if expired else 1))
+        .not_valid_after(
+            now - timedelta(days=1) if expired else now + timedelta(days=365)
+        )
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
@@ -200,4 +202,15 @@ def test_seed_does_not_accept_missing_network_configuration():
     del config["network_config"]
 
     with pytest.raises(EPHSeedError, match="EPH_SEED_NETWORK_CONFIG_INVALID"):
+        render_nocloud_seed(config)
+
+
+def test_seed_rejects_expired_ca_certificate():
+    config = valid_config()
+    config["agent_ca_certificate"] = make_ca_certificate("expired-agent-ca", expired=True)
+
+    with pytest.raises(
+        EPHSeedError,
+        match="EPH_SEED_CA_CERTIFICATE_INVALID:agent_ca_certificate",
+    ):
         render_nocloud_seed(config)
