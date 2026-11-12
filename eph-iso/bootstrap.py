@@ -280,10 +280,9 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
 
 def _wait_for_kubernetes_api():
     command = [
-        "k3s",
         "kubectl",
         "--kubeconfig",
-        "/etc/rancher/k3s/k3s.yaml",
+        "/etc/kubernetes/admin.conf",
         "get",
         "--raw=/readyz",
     ]
@@ -300,7 +299,7 @@ def _wait_for_kubernetes_api():
 
 def _create_secret(name, namespace, files):
     command = [
-        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
         "--namespace", namespace, "create", "secret", "generic", name,
     ]
     for key, path in files.items():
@@ -310,7 +309,7 @@ def _create_secret(name, namespace, files):
         command, check=True, text=True, capture_output=True
     ).stdout
     _run([
-        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
         "apply", "-f", "-"
     ], rendered)
 
@@ -323,17 +322,16 @@ def _apply_file(path, image=None):
             raise BootstrapError("EPH_AGENT_IMAGE_PLACEHOLDER_INVALID")
         content = content.replace(placeholder, image)
     _run([
-        "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
         "apply", "-f", "-"
     ], content)
 
 
 def _wait_for_agent_pod():
     kubectl = [
-        "k3s",
         "kubectl",
         "--kubeconfig",
-        "/etc/rancher/k3s/k3s.yaml",
+        "/etc/kubernetes/admin.conf",
         "--namespace",
         "ai-agent-system",
     ]
@@ -369,10 +367,9 @@ def bootstrap():
     with tempfile.TemporaryDirectory(prefix="eph-bootstrap-") as temporary:
         _wait_for_kubernetes_api()
         _run([
-            "k3s",
             "kubectl",
             "--kubeconfig",
-            "/etc/rancher/k3s/k3s.yaml",
+            "/etc/kubernetes/admin.conf",
             "wait",
             "--for=condition=Ready",
             "nodes",
@@ -417,9 +414,9 @@ def bootstrap():
                 _copy_secret_file(source, path)
                 capi_files[key] = path
 
-        _run(["k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        _run(["kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
               "apply", "-f", str(MANIFEST_ROOT / "namespace.yaml")])
-        _run(["k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+        _run(["kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
               "apply", "-f", str(MANIFEST_ROOT / "rbac.yaml")])
         _create_secret("eph-node-agent-credentials", "ai-agent-system", credential_files)
         _create_secret("agent-control-plane-mtls", "ai-agent-system", tls_files)
@@ -427,7 +424,7 @@ def bootstrap():
             _create_secret("capi-pivot-kubeconfigs", "ai-agent-system", capi_files)
         _apply_file(MANIFEST_ROOT / "eph-node-agent.yaml", config["agent_image"])
         _run([
-            "k3s", "kubectl", "--kubeconfig", "/etc/rancher/k3s/k3s.yaml",
+            "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
             "--namespace", "ai-agent-system", "rollout", "status",
             "deployment/eph-node-agent", "--timeout=10m"
         ])
