@@ -462,7 +462,10 @@ class AgentNodeListCreateView(APIView):
             "Store this token securely; it is shown only once. "
             "Use TLS for agent communication."
         )
-        return Response(data, status=status.HTTP_201_CREATED)
+        response = Response(data, status=status.HTTP_201_CREATED)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class FleetMachineInventoryView(APIView):
