@@ -138,14 +138,15 @@ jobs:
 
       - name: Validate EPH BIOS boot configuration
         run: |
-          xorriso -osirrox on -indev "${{ steps.build.outputs.iso_file }}" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
+          mkdir -p "$RUNNER_TEMP/isolinux"
+          xorriso -osirrox on -indev "${{ steps.build.outputs.iso_file }}" -extract /isolinux "$RUNNER_TEMP/isolinux"
           printf '%s\n' '=== BIOS boot configuration ==='
-          cat "$RUNNER_TEMP/isolinux.cfg"
-          if ! grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"; then
+          find "$RUNNER_TEMP/isolinux" -maxdepth 2 -type f -print -exec cat {} \;
+          if ! grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux/isolinux.cfg"; then
             echo "EPH_BIOS_BOOT_TIMEOUT_MISSING" >&2
             exit 1
           fi
-          if ! grep -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux.cfg"; then
+          if ! grep -R -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux"; then
             echo "EPH_BIOS_SERIAL_CONSOLE_ARGUMENT_MISSING" >&2
             exit 1
           fi
