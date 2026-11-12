@@ -1912,7 +1912,7 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 },
             )
 
-        return Response(
+        response = Response(
             {
                 "node_id": str(node.id),
                 "client_certificate": issued["client_certificate"],
@@ -1924,6 +1924,9 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
             },
             status=200,
         )
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentRuntimeEPHCertificateRenewalView(APIView):
@@ -2019,7 +2022,7 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
                     "issuer": "vault_pki",
                 },
             )
-        return Response({
+        response = Response({
             "node_id": str(node.id),
             "client_certificate": issued["client_certificate"],
             "ca_chain": issued["ca_chain"],
@@ -2027,6 +2030,9 @@ class AgentRuntimeEPHCertificateRenewalView(APIView):
             "activation_required": True,
             "private_key_returned": False,
         }, status=200)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentRuntimeEPHCertificateActivationView(APIView):
