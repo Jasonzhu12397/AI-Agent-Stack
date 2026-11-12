@@ -487,3 +487,5 @@ def test_eph_network_config_runs_before_systemd_networkd():
     assert "Before=systemd-networkd.service" in service
     assert "Requires=eph-network-config.service" in drop_in
     assert "After=eph-network-config.service" in drop_in
+    mount = (root / "mnt-eph\\x2dbootstrap.mount").read_text(encoding="utf-8")
+    assert "x-systemd.device-timeout=10s" in mount
