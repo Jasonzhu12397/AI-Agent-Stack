@@ -78,7 +78,10 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     kubelet_mount = (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
 
     assert "Requires=var-lib-containerd.mount" in containerd
-    assert "Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount" in kubeadm
+    assert (
+        "Requires=containerd.service var-lib-containerd.mount "
+        "var-lib-kubelet.mount var-lib-etcd.mount"
+    ) in kubeadm
     assert "Where=/var/lib/containerd" in containerd_mount
     assert "Where=/var/lib/etcd" in etcd_mount
     assert "Where=/var/lib/kubelet" in kubelet_mount
