@@ -82,6 +82,52 @@ def _verify_signature(certificate, issuer):
         raise CertificateRotationError("AGENT_TLS_ROTATION_CERTIFICATE_SIGNATURE_INVALID") from exc
 
 
+def _is_ca_certificate(certificate):
+    try:
+        constraints = certificate.extensions.get_extension_for_class(
+            x509.BasicConstraints
+        ).value
+        usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        return False
+    return constraints.ca and usage.key_cert_sign
+
+
+def _is_trusted_ca_certificate(certificate):
+    try:
+        constraints = certificate.extensions.get_extension_for_class(
+            x509.BasicConstraints
+        ).value
+        usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        return False
+    if not constraints.ca or not usage.key_cert_sign:
+        return False
+    if certificate.subject != certificate.issuer:
+        return False
+    try:
+        _verify_signature(certificate, certificate)
+    except CertificateRotationError:
+        return False
+    now = _utc_now()
+    return (
+        _certificate_time(certificate.not_valid_before) <= now
+        and _certificate_time(certificate.not_valid_after) > now
+    )
+
+
+def _trusted_root_bundle_from_active_chain(pem_data):
+    certificates = _load_certificates(pem_data)
+    roots = [
+        certificate
+        for certificate in certificates
+        if _is_trusted_ca_certificate(certificate)
+    ]
+    if not roots:
+        raise CertificateRotationError("AGENT_TLS_ROTATION_NO_TRUSTED_ROOT_IN_ACTIVE_CHAIN")
+    return roots
+
+
 def validate_issued_certificate(
     certificate_pem,
     ca_chain_pem,
@@ -112,16 +158,32 @@ def validate_issued_certificate(
     if certificate.issuer != issuer.subject:
         raise CertificateRotationError("AGENT_TLS_ROTATION_ISSUER_MISMATCH")
     _verify_signature(certificate, issuer)
-    for index in range(len(chain) - 1):
-        current = chain[index]
-        parent = chain[index + 1]
-        if current.issuer != parent.subject:
+    now = _utc_now()
+    for index, current in enumerate(chain):
+        if not _is_ca_certificate(current):
             raise CertificateRotationError("AGENT_TLS_ROTATION_CA_CHAIN_INVALID")
-        _verify_signature(current, parent)
+        if (
+            _certificate_time(current.not_valid_before) > now
+            or _certificate_time(current.not_valid_after) <= now
+        ):
+            raise CertificateRotationError("AGENT_TLS_ROTATION_CA_CERTIFICATE_EXPIRED")
+        if index < len(chain) - 1:
+            parent = chain[index + 1]
+            if current.issuer != parent.subject:
+                raise CertificateRotationError("AGENT_TLS_ROTATION_CA_CHAIN_INVALID")
+            _verify_signature(current, parent)
+            path_length = current.extensions.get_extension_for_class(
+                x509.BasicConstraints
+            ).value.path_length
+            if path_length is not None and index > path_length:
+                raise CertificateRotationError("AGENT_TLS_ROTATION_CA_PATH_LENGTH_INVALID")
     last = chain[-1]
+    if not _is_trusted_ca_certificate(last):
+        raise CertificateRotationError("AGENT_TLS_ROTATION_ROOT_NOT_SELF_SIGNED")
+    trusted_roots = _trusted_root_bundle_from_active_chain(trusted_certificate_bundle)
     trusted = {
         item.fingerprint(hashes.SHA256())
-        for item in trust_bundle
+        for item in trusted_roots
     }
     if last.fingerprint(hashes.SHA256()) not in trusted:
         raise CertificateRotationError("AGENT_TLS_ROTATION_UNTRUSTED_CA")
