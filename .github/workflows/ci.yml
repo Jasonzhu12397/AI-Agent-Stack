@@ -163,7 +163,7 @@ jobs:
               content: |
                 #!/bin/bash
                 set -eu
-                export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                export KUBECONFIG=/etc/kubernetes/admin.conf
                 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
                 test -n "$NODE_NAME"
                 kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
