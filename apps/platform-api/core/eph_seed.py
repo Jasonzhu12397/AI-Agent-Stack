@@ -111,6 +111,13 @@ def render_nocloud_seed(config):
     ca_certificate = _validate_pem(
         config.get("ca_certificate"), "ca_certificate", "CERTIFICATE"
     )
+    agent_ca_certificate = _validate_pem(
+        config.get("agent_ca_certificate"),
+        "agent_ca_certificate",
+        "CERTIFICATE",
+    )
+    if agent_ca_certificate.strip() == ca_certificate.strip():
+        raise EPHSeedError("EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT")
     bootstrap_config = {
         "control_url": control_url,
         "node_id": node_id,
@@ -129,6 +136,12 @@ def render_nocloud_seed(config):
             "owner": "root:root",
             "permissions": "0600",
             "content": ca_certificate,
+        },
+        {
+            "path": "/etc/ai-agent-studio/eph-bootstrap/tls/agent-ca.crt",
+            "owner": "root:root",
+            "permissions": "0600",
+            "content": agent_ca_certificate,
         },
     ]
     user_data = {
