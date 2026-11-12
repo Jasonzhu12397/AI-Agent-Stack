@@ -82,6 +82,7 @@ class EPHSeedArtifactCreateView(APIView):
             "hostname",
             "network_config",
             "ca_certificate",
+            "agent_ca_certificate",
             "expires_in_seconds",
         }
         if set(request.data) - allowed:
@@ -123,6 +124,7 @@ class EPHSeedArtifactCreateView(APIView):
             "hostname": request.data.get("hostname", node.name),
             "network_config": request.data.get("network_config"),
             "ca_certificate": request.data.get("ca_certificate"),
+            "agent_ca_certificate": request.data.get("agent_ca_certificate"),
         }
         try:
             seed = render_nocloud_seed(seed_config)
