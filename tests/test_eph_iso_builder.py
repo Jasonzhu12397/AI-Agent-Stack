@@ -240,10 +240,11 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
             BOOTSTRAP["ssl"].PROTOCOL_TLS_CLIENT
         ),
     )
+    captured["handlers"] = []
     monkeypatch.setattr(
         BOOTSTRAP["urllib"].request,
         "build_opener",
-        lambda *handlers: FakeOpener(),
+        lambda *handlers: captured["handlers"].extend(handlers) or FakeOpener(),
     )
 
     control_ca_path = tmp_path / "control-ca.crt"
@@ -259,6 +260,13 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
 
     request = captured["request"]
     payload = json.loads(request.data)
+    redirect_handler = next(
+        handler for handler in captured["handlers"]
+        if isinstance(handler, BOOTSTRAP["_NoRedirectHandler"])
+    )
+    assert redirect_handler.redirect_request(
+        None, None, 302, "Found", {}, "https://attacker.example/"
+    ) is None
     assert request.full_url.endswith(
         "/api/v1/agent-runtime/nodes/{}/certificate/".format(config["node_id"])
     )
