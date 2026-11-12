@@ -147,6 +147,12 @@ permission to list or read other Secrets. The pending key is retained in that
 EPH-local Secret so a container restart can resume activation. It is never
 sent to the Cloud Agent or certificate issuer.
 
+The EPH NoCloud seed must separately provide `tls/agent-ca.crt`, an
+independently provisioned PEM trust anchor for the client-certificate issuing
+hierarchy. Bootstrap copies it into the mTLS Secret as `client-ca.crt`; it is
+not derived from the certificate chain returned by Vault. The control-plane
+HTTPS CA (`ca.crt`) remains a separate trust store.
+
 The agent establishes the activation request using a fresh TLS context loaded
 from the pending certificate and private key. Only after the activation API
 confirms the new mTLS identity does it promote the pending keypair to the
@@ -175,6 +181,10 @@ certificate subject, local private-key match, validity window, issuer signature,
 and every CA signature in the returned chain. Every CA must assert
 `BasicConstraints(ca=true)` and `KeyUsage(keyCertSign=true)`; the terminal
 root must be a valid self-signed CA and match a self-signed CA root already
-present in the active certificate bundle. An active client leaf certificate is
-never accepted as a trust anchor. The agent also enforces CA path-length
+present in the separately provisioned `client-ca.crt` trust bundle. This
+bundle is mounted read-only into the Agent Pod and is independent of the
+active client certificate and the returned CA chain. An active client leaf
+certificate is never accepted as a trust anchor. If the independent bundle is
+missing or invalid, renewal fails closed and the current certificate remains
+active. The agent also enforces CA path-length
 constraints and rejects expired or not-yet-valid CA certificates.
