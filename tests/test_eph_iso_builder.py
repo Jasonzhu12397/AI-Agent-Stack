@@ -183,7 +183,10 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     key_path = tmp_path / "tls.key"
     csr_path = tmp_path / "tls.csr"
 
+    captured_commands = []
+
     def fake_run(arguments, input_text=None):
+        captured_commands.append(list(arguments))
         if arguments[1] == "genpkey":
             key_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
         elif arguments[1] == "req":
@@ -242,6 +245,13 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     assert payload["csr_pem"].startswith("-----BEGIN CERTIFICATE REQUEST-----")
     assert "LOCAL PRIVATE KEY" not in request.data.decode("utf-8")
     assert result["agent_token"] == "b" * 64
+    assert any(
+        command[:2] == ["openssl", "verify"]
+        and "-purpose" in command
+        and "sslclient" in command
+        and str(issuer_ca_path) in command
+        for command in captured_commands
+    )
     assert result["tls.key"] == key_path
     assert result["tls.crt"].read_text(encoding="ascii") == certificate + certificate
     assert key_path.stat().st_mode & 0o777 == 0o600
