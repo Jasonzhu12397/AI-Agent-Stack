@@ -24,6 +24,8 @@ def test_eph_iso_builder_pins_k3s_and_verifies_checksum():
     assert "K3S_SHA256_AMD64_INVALID" in script
     assert "sha256sum -c -" in script
     assert "boot=live components toram" in script
+    assert "console=ttyS0,115200n8" in script
+    assert "systemd.show_status=1" in script
     assert "iso-hybrid" in script
     assert "v1.33|v1.34|v1.35|v1.36" in script
     assert "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED" in script
