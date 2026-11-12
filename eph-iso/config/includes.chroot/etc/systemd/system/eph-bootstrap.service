@@ -3,12 +3,16 @@ Description=Enroll EPH Agent into the temporary Kubernetes cluster
 Wants=network-online.target cloud-init.target
 After=cloud-init.target network-online.target k3s.service
 Requires=k3s.service
+StartLimitIntervalSec=15min
+StartLimitBurst=10
 
 [Service]
 Type=oneshot
 ExecStartPre=/usr/bin/cloud-init status --wait
 ExecStart=/usr/bin/python3 /usr/local/lib/eph-bootstrap.py
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30s
 TimeoutStartSec=15min
 
 [Install]
