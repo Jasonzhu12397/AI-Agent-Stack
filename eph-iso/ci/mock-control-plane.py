@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import pathlib
 import re
@@ -60,13 +59,13 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 text=True,
             )
             certificate = cert_path.read_text(encoding="ascii")
-        fingerprint_output = subprocess.run(
-            ["openssl", "x509", "-in", str(cert_path), "-noout", "-fingerprint", "-sha256"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        fingerprint = fingerprint_output.split("=", 1)[-1].replace(":", "").lower()
+            fingerprint_output = subprocess.run(
+                ["openssl", "x509", "-in", str(cert_path), "-noout", "-fingerprint", "-sha256"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            fingerprint = fingerprint_output.split("=", 1)[-1].replace(":", "").lower()
         return certificate, pathlib.Path(self.server.agent_ca).read_text(encoding="ascii"), fingerprint
 
     def do_POST(self):
