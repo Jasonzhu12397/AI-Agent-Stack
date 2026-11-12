@@ -98,7 +98,7 @@ def test_validate_issued_certificate_requires_matching_identity_key_and_trusted_
         ca_pem.decode("ascii"),
         key,
         "node-1",
-        certificate_pem + ca_pem,
+        ca_pem,
     )
 
     assert actual == fingerprint
@@ -125,7 +125,7 @@ def test_validate_issued_certificate_rejects_wrong_node_identity():
             ca_pem.decode("ascii"),
             key,
             "node-1",
-            certificate_pem + ca_pem,
+            ca_pem,
         )
 
 
@@ -168,6 +168,8 @@ def test_eph_agent_stages_and_activates_certificate_using_node_generated_key(
     cert_path = tmp_path / "active.crt"
     key_path = tmp_path / "active.key"
     ca_path.write_bytes(ca_pem)
+    trusted_ca_path = tmp_path / "trusted-agent-ca.pem"
+    trusted_ca_path.write_bytes(ca_pem)
     cert_path.write_bytes(old_cert_pem + ca_pem)
     key_path.write_bytes(old_key_pem)
     secret = {"data": _secret_data(old_cert_pem + ca_pem, old_key_pem)}
@@ -176,6 +178,8 @@ def test_eph_agent_stages_and_activates_certificate_using_node_generated_key(
     monkeypatch.setenv("AGENT_TLS_CERT_FILE", str(cert_path))
     monkeypatch.setenv("AGENT_TLS_KEY_FILE", str(key_path))
     monkeypatch.setenv("AGENT_TLS_CA_FILE", str(ca_path))
+    monkeypatch.setenv("AGENT_TLS_ROTATION_TRUSTED_CA_FILE", str(trusted_ca_path))
+    monkeypatch.setenv("AGENT_TLS_ROTATION_TRUSTED_CA_FILE", str(trusted_ca_path))
     monkeypatch.setenv("AGENT_TLS_ROTATION_RENEW_BEFORE_HOURS", "6")
 
     class FakeClient:
@@ -266,6 +270,8 @@ def test_eph_agent_recovers_pending_certificate_after_process_restart(
     cert_path = tmp_path / "active.crt"
     key_path = tmp_path / "active.key"
     ca_path.write_bytes(ca_pem)
+    trusted_ca_path = tmp_path / "trusted-agent-ca.pem"
+    trusted_ca_path.write_bytes(ca_pem)
     cert_path.write_bytes(old_cert_pem + ca_pem)
     key_path.write_bytes(old_key_pem)
     secret = {
@@ -334,6 +340,8 @@ def test_eph_agent_discards_expired_pending_certificate_without_replacing_active
     cert_path = tmp_path / "active.crt"
     key_path = tmp_path / "active.key"
     ca_path.write_bytes(ca_pem)
+    trusted_ca_path = tmp_path / "trusted-agent-ca.pem"
+    trusted_ca_path.write_bytes(ca_pem)
     cert_path.write_bytes(active_cert_pem + ca_pem)
     key_path.write_bytes(active_key_pem)
     secret = {
@@ -472,6 +480,6 @@ def test_validate_issued_certificate_does_not_trust_active_leaf_as_ca():
             active_pem.decode("ascii"),
             forged_key,
             "node-1",
-            active_pem + ca_certificate.public_bytes(serialization.Encoding.PEM),
+            ca_certificate.public_bytes(serialization.Encoding.PEM),
         )
     assert forged_key_pem.startswith(b"-----BEGIN PRIVATE KEY-----")
