@@ -493,15 +493,20 @@ def test_bootstrap_requires_explicit_agent_pod_readiness(monkeypatch):
     BOOTSTRAP["_wait_for_agent_pod"]()
 
     assert commands[0][-5:] == [
+        "wait",
+        "--for=condition=Ready",
         "pod",
         "--selector=app.kubernetes.io/name=eph-node-agent",
         "--timeout=300s",
-    ][-5:]
-    assert commands[1][-4:] == [
+    ]
+    assert commands[1][-6:] == [
+        "get",
+        "pods",
+        "--selector=app.kubernetes.io/name=eph-node-agent",
         "--field-selector=status.phase=Running",
         "-o",
         "jsonpath={.items[?(@.status.conditions[?(@.type==\"Ready\" && @.status==\"True\")])].metadata.name}",
-    ][-4:]
+    ]
 
 
 def test_bootstrap_rejects_agent_pod_without_ready_running_instance(monkeypatch):
