@@ -482,8 +482,8 @@ def test_eph_network_config_runs_before_systemd_networkd():
     drop_in = (
         root / "systemd-networkd.service.d/eph.conf"
     ).read_text(encoding="utf-8")
-    assert "Wants=mnt-eph\\\\x2dbootstrap.mount" in service
-    assert "After=mnt-eph\\\\x2dbootstrap.mount" in service
+    assert "Wants=mnt-eph\\x2dbootstrap.mount" in service
+    assert "After=mnt-eph\\x2dbootstrap.mount" in service
     assert "Before=systemd-networkd.service" in service
     assert "Requires=eph-network-config.service" in drop_in
     assert "After=eph-network-config.service" in drop_in
