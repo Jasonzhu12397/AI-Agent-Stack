@@ -27,11 +27,18 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
 
     def _authorized(self):
         is_enrollment = self.path.endswith("/certificate/")
-        token = self.server.enrollment_token if is_enrollment else self.server.agent_token
+        token = (
+            self.server.enrollment_token
+            if is_enrollment
+            else self.server.agent_token
+        )
         return self.headers.get("Authorization") == "Bearer " + token
 
     def _issue_certificate(self, csr_pem):
-        if not isinstance(csr_pem, str) or not csr_pem.startswith("-----BEGIN CERTIFICATE REQUEST-----"):
+        if (
+            not isinstance(csr_pem, str)
+            or not csr_pem.startswith("-----BEGIN CERTIFICATE REQUEST-----")
+        ):
             raise ValueError("CSR_INVALID")
         with tempfile.TemporaryDirectory(prefix="eph-ci-issuer-") as directory:
             root = pathlib.Path(directory)
@@ -61,13 +68,17 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             )
             certificate = cert_path.read_text(encoding="ascii")
             fingerprint_output = subprocess.run(
-                ["openssl", "x509", "-in", str(cert_path), "-noout", "-fingerprint", "-sha256"],
+                [
+                    "openssl", "x509", "-in", str(cert_path), "-noout",
+                    "-fingerprint", "-sha256",
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
             ).stdout.strip()
             fingerprint = fingerprint_output.split("=", 1)[-1].replace(":", "").lower()
-        return certificate, pathlib.Path(self.server.agent_ca).read_text(encoding="ascii"), fingerprint
+        chain = pathlib.Path(self.server.agent_ca).read_text(encoding="ascii")
+        return certificate, chain, fingerprint
 
     def do_POST(self):
         if not self._authorized():
@@ -75,8 +86,11 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._payload()
-            if re.fullmatch(r"/api/v1/agent-runtime/nodes/[0-9a-f-]{36}/certificate/", self.path):
-                certificate, chain, fingerprint = self._issue_certificate(payload.get("csr_pem"))
+            certificate_path = r"/api/v1/agent-runtime/nodes/[0-9a-f-]{36}/certificate/"
+            if re.fullmatch(certificate_path, self.path):
+                certificate, chain, fingerprint = self._issue_certificate(
+                    payload.get("csr_pem")
+                )
                 print("EPH_CI_AGENT_CERTIFICATE_ISSUED", flush=True)
                 self._send(
                     200,
@@ -106,7 +120,12 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self._send(200, {"command": None})
                 return
             self._send(404, {"detail": "not_found"})
-        except (ValueError, OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        except (
+            ValueError,
+            OSError,
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+        ):
             self._send(400, {"detail": "invalid_request"})
 
     def log_message(self, format_string, *args):
@@ -119,7 +138,6 @@ def main():
     parser.add_argument("--port", type=int, default=18443)
     parser.add_argument("--server-cert", required=True)
     parser.add_argument("--server-key", required=True)
-    parser.add_argument("--control-ca", required=True)
     parser.add_argument("--agent-ca", required=True)
     parser.add_argument("--agent-ca-key", required=True)
     parser.add_argument("--enrollment-token", required=True)
