@@ -1952,6 +1952,37 @@ def test_long_running_command_renews_its_lease(monkeypatch):
     assert all(item == ("command-1", "lease-1") for item in renewals)
 
 
+def test_long_running_command_keeps_agent_readiness_fresh_during_lease_renewal(
+    monkeypatch,
+):
+    health_updates = []
+
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            return {"id": command_id}
+
+    def fake_touch_health_files(readiness=False):
+        health_updates.append(readiness)
+
+    def slow_command(command, node_type, cancellation_event=None):
+        time.sleep(0.06)
+        return {"ready": True}
+
+    monkeypatch.setattr(agent, "touch_health_files", fake_touch_health_files)
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+
+    result = agent.execute_command_with_lease(
+        FakeClient(),
+        {"id": "command-readiness", "lease_token": "lease-readiness"},
+        "eph_node",
+        renew_interval=0.01,
+    )
+
+    assert result == {"ready": True}
+    assert health_updates
+    assert all(health_updates)
+
+
 def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatch):
     class FakeClient:
         def renew_lease(self, command_id, lease_token):
