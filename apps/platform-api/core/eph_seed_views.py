@@ -198,7 +198,7 @@ class EPHSeedArtifactCreateView(APIView):
                 },
             )
 
-        return Response(
+        response = Response(
             {
                 "artifact_id": str(artifact.id),
                 "node_id": str(node.id),
@@ -213,6 +213,9 @@ class EPHSeedArtifactCreateView(APIView):
             },
             status=201,
         )
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class EPHSeedArtifactDownloadView(APIView):
