@@ -160,6 +160,7 @@ kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret gener
   --from-file=node-id=/secure/path/eph-node-id \
   --from-file=token=/secure/path/eph-agent-token
 
+# Optional: create only when both management kubeconfigs are ready.
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret generic capi-pivot-kubeconfigs \
   --from-file=source.kubeconfig=/secure/path/source.kubeconfig \
   --from-file=target.kubeconfig=/secure/path/target.kubeconfig
