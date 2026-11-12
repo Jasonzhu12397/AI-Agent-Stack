@@ -191,7 +191,8 @@ jobs:
                 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
                 test -n "$NODE_NAME"
                 kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
-                kubectl --namespace kube-flannel rollout status daemonset/kube-flannel-ds --timeout=180s
+                kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
+                kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
                 kubectl create namespace eph-ci-smoke --dry-run=client -o yaml | kubectl apply -f -
                 kubectl --namespace eph-ci-smoke apply -f - <<'MANIFEST'
                 apiVersion: apps/v1
@@ -209,11 +210,38 @@ jobs:
                         app: workload-smoke
                     spec:
                       containers:
-                        - name: pause
-                          image: registry.k8s.io/pause:3.10
+                        - name: nginx
+                          image: nginx:1.27.5-alpine
                 MANIFEST
                 kubectl --namespace eph-ci-smoke rollout status deployment/workload-smoke --timeout=180s
                 kubectl --namespace eph-ci-smoke wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s
+                kubectl --namespace eph-ci-smoke apply -f - <<'NETWORK'
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: workload-smoke
+                spec:
+                  selector:
+                    app: workload-smoke
+                  ports:
+                    - port: 80
+                      targetPort: 80
+                ---
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-smoke
+                spec:
+                  backoffLimit: 3
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          command: ["sh", "-c", "wget -qO- http://workload-smoke.eph-ci-smoke.svc.cluster.local | grep -q 'Welcome to nginx'"]
+                NETWORK
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-smoke --timeout=300s
                 READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
                 test -n "$READY_PODS"
                 POD_DETAILS="$(kubectl --namespace eph-ci-smoke get pod "$READY_PODS" -o jsonpath='{.status.podIP}{" "}{.spec.nodeName}{" "}{.status.containerStatuses[0].ready}')"
@@ -223,7 +251,9 @@ jobs:
                 test "$POD_READY" = true
                 printf 'EPH_NODE_COUNT=%s\n' "$NODE_COUNT"
                 printf 'EPH_NODE_NAME=%s\n' "$NODE_NAME"
-                printf 'EPH_CNI_DAEMONSET_READY=true\n'
+                printf 'EPH_CALICO_NODE_READY=true\n'
+                printf 'EPH_CALICO_CONTROLLERS_READY=true\n'
+                printf 'EPH_POD_TO_POD_NETWORK_READY=true\n'
                 printf 'EPH_POD_IP=%s\n' "$POD_IP"
                 printf 'EPH_POD_NODE=%s\n' "$POD_NODE"
                 printf 'EPH_POD_READY=%s\n' "$POD_READY"
@@ -294,6 +324,7 @@ jobs:
           fi
           printf '%s\n' 'KUBEADM_API_READY=true'
           printf '%s\n' 'KUBERNETES_WORKLOAD_SMOKE_READY=true'
+          printf '%s\n' 'EPH_POD_TO_POD_NETWORK_READY=true'
           printf '%s\n' 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED'
 
       - name: Upload EPH QEMU diagnostics
