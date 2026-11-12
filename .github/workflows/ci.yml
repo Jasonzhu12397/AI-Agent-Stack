@@ -447,6 +447,12 @@ jobs:
             ps -fp "$QEMU_PID","$HTTP_PID" || true
             exit 1
           fi
+          for marker in EPH_CI_AGENT_CERTIFICATE_ISSUED EPH_CI_AGENT_MTLS_HEARTBEAT EPH_CI_AGENT_INVENTORY_ACCEPTED EPH_CI_AGENT_COMMAND_POLL; do
+            grep -q "$marker" "$RUNNER_TEMP/eph-mock-control-plane.log"
+          done
+          printf '%s\n' 'EPH_AGENT_MTLS_HEARTBEAT_READY=true'
+          printf '%s\n' 'EPH_AGENT_INVENTORY_READY=true'
+          printf '%s\n' 'EPH_AGENT_COMMAND_POLL_READY=true'
           printf '%s\n' 'KUBEADM_API_READY=true'
           printf '%s\n' 'KUBERNETES_WORKLOAD_SMOKE_READY=true'
           printf '%s\n' 'EPH_POD_TO_POD_NETWORK_READY=true'
