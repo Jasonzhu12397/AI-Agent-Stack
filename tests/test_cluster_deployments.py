@@ -2781,3 +2781,90 @@ def test_terminal_deployment_ignores_late_command_callbacks(
     assert deployment.finished_at == finished_at
     assert (deployment.plan_result or {}).get("postflight") is None
 
+
+
+@pytest.mark.django_db
+def test_checkpoint_restore_fails_closed_after_target_agent_reassignment(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    old_token = "target-checkpoint-old-agent-token"
+    old_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="checkpoint-old-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(old_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="checkpoint-agent-reassignment",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
+    deployment.save(update_fields=["status"])
+    handoff = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
+        {"target_node_id": str(old_node.id)},
+        format="json",
+    )
+    assert handoff.status_code == 202
+
+    old_agent_client = APIClient()
+    checkpoint_url = (
+        f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
+    )
+    old_headers = {"HTTP_AUTHORIZATION": f"Bearer {old_token}"}
+    checkpoint = old_agent_client.post(
+        checkpoint_url,
+        {
+            "node_id": str(old_node.id),
+            "generation": 1,
+            "sequence": 1,
+            "phase": "target_agent_bootstrap",
+            "data": {
+                "cluster_name": "edge-lab",
+                "completed_steps": [],
+                "pending_step": "target_agent_bootstrap",
+            },
+        },
+        format="json",
+        **old_headers,
+    )
+    assert checkpoint.status_code == 201
+
+    replacement_token = "target-checkpoint-replacement-agent-token"
+    replacement_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="checkpoint-replacement-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(replacement_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = replacement_node
+    deployment.save(update_fields=["target_node", "updated_at"])
+
+    replacement_client = APIClient()
+    restored = replacement_client.get(
+        checkpoint_url,
+        {"node_id": str(replacement_node.id)},
+        HTTP_AUTHORIZATION=f"Bearer {replacement_token}",
+    )
+
+    assert restored.status_code == 409
+    assert restored.data["code"] == "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED"
+    assert "data" not in restored.data
+    persisted = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
+    assert persisted.agent_node_id == old_node.id
+    assert persisted.sequence == 1
