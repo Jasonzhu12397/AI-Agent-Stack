@@ -18,7 +18,9 @@ fail() {
 [[ "$KUBERNETES_VERSION" =~ ^v1\.(33|34|35|36)\.[0-9]+$ ]] || fail "KUBERNETES_VERSION_INVALID:$KUBERNETES_VERSION"
 KUBERNETES_MINOR="${KUBERNETES_VERSION%.*}"
 case "$KUBERNETES_MINOR" in
-    v1.33|v1.34|v1.35|v1.36) ;;
+    v1.33) CALICO_VERSION=v3.31.6 ;;
+    v1.34) CALICO_VERSION=v3.32.1 ;;
+    v1.35|v1.36) CALICO_VERSION=v3.33.0 ;;
     *) fail "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED:$KUBERNETES_MINOR" ;;
 esac
 [ "$ARCHITECTURE" = amd64 ] || fail "ARCHITECTURE_NOT_SUPPORTED"
@@ -54,7 +56,7 @@ for binary_name in kubeadm kubelet kubectl; do
 done
 install -d "$BUILD_DIR/config/includes.chroot/etc/default"
 install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio"
-wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" "https://raw.githubusercontent.com/projectcalico/calico/v3.33.0/manifests/calico.yaml"
+wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml"
 printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
@@ -89,8 +91,8 @@ install -m 0644 "$iso_file" "$output_file"
 )
 iso_sha256="$(sha256sum "$output_file" | awk '{print $1}')"
 metadata_file="$output_file.release.json"
-printf '{\n  "kubernetes_version": "%s",\n  "runtime": "kubeadm-containerd",\n  "architecture": "%s",\n  "iso_file": "%s",\n  "sha256": "%s"\n}\n' \
-    "$KUBERNETES_VERSION" "$ARCHITECTURE" \
+printf '{\n  "kubernetes_version": "%s",\n  "calico_version": "%s",\n  "runtime": "kubeadm-containerd",\n  "architecture": "%s",\n  "iso_file": "%s",\n  "sha256": "%s"\n}\n' \
+    "$KUBERNETES_VERSION" "$CALICO_VERSION" "$ARCHITECTURE" \
     "$(basename "$output_file")" "$iso_sha256" > "$metadata_file"
 
 printf 'EPH_ISO=%s\n' "$output_file"
