@@ -135,11 +135,11 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null
           CLUSTERCTL_VERSION=v1.13.8
+          CLUSTERCTL_SHA256=c7301a8515ed329562b06c958463051dd55d9649fac591393f5df54a868fa79b
           KUBECTL_VERSION=v1.35.3
-          curl --fail --location --silent --show-error "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-amd64" -o "$RUNNER_TEMP/clusterctl"
-          curl --fail --location --silent --show-error "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o "$RUNNER_TEMP/kubectl"
-          CLUSTERCTL_SHA256="$(sha256sum "$RUNNER_TEMP/clusterctl" | awk '{print $1}')"
-          KUBECTL_SHA256="$(sha256sum "$RUNNER_TEMP/kubectl" | awk '{print $1}')"
+          curl --fail --location --silent --show-error "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" -o "$RUNNER_TEMP/kubectl.sha256"
+          KUBECTL_SHA256="$(tr -d '[:space:]' < "$RUNNER_TEMP/kubectl.sha256")"
+          [[ "$CLUSTERCTL_SHA256" =~ ^[a-f0-9]{64}$ && "$KUBECTL_SHA256" =~ ^[a-f0-9]{64}$ ]]
           docker build --platform linux/amd64 -f Dockerfile.node-agent \
             --build-arg "CLUSTERCTL_VERSION=$CLUSTERCTL_VERSION" \
             --build-arg "CLUSTERCTL_SHA256_AMD64=$CLUSTERCTL_SHA256" \
