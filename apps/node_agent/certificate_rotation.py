@@ -341,7 +341,10 @@ class CertificateRotationManager:
         if created_at.tzinfo is None:
             raise CertificateRotationError("AGENT_TLS_ROTATION_PENDING_TIMESTAMP_INVALID")
         pending_age = _utc_now() - created_at.astimezone(datetime.UTC)
-        if pending_age >= datetime.timedelta(minutes=9):
+        if (
+            pending_age < -datetime.timedelta(minutes=1)
+            or pending_age >= datetime.timedelta(minutes=9)
+        ):
             self._patch_secret({
                 "pending.tls.crt": None,
                 "pending.tls.key": None,
