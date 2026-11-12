@@ -415,6 +415,7 @@ jobs:
             printf 'QEMU_PID_ALIVE=%s\n' "$(kill -0 "$QEMU_PID" >/dev/null 2>&1 && echo true || echo false)"
             printf 'KUBEADM_API_READY=%s\n' "$ready"
             printf 'CLOUD_INIT_WORKLOAD_SMOKE_READY=%s\n' "$cloud_init_ready"
+            printf 'CLOUD_INIT_WORKLOAD_SMOKE_FAILED=%s\n' "$cloud_init_failed"
             printf '%s\n' '=== QEMU stdout ==='
             cat "$RUNNER_TEMP/qemu.stdout"
             printf '%s\n' '=== Guest serial console ==='
