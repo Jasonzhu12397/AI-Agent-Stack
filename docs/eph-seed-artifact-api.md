@@ -35,9 +35,15 @@ Content-Type: application/json
 \`\`\`
 
 The request contains the one-time enrollment token, HTTPS control URL, pinned
-Agent image digest, hostname, cloud-init v2 network configuration, and the
-Cloud Control Plane CA certificate. The enrollment token is verified against
-the node's stored hash and is not persisted in plaintext by the artifact API.
+Agent image digest, hostname, cloud-init v2 network configuration, the
+Cloud Control Plane HTTPS CA (`ca_certificate`), and an independent
+EPH Agent client-certificate issuer CA (`agent_ca_certificate`).
+Both certificates must be parseable, currently valid X.509 CA certificates
+with `BasicConstraints.ca=true`; if a KeyUsage extension is present,
+it must permit `keyCertSign`. The API compares SHA-256 fingerprints of
+the DER certificates and rejects the same CA even if PEM whitespace differs.
+The enrollment token is verified against the node's stored hash and is not
+persisted in plaintext by the artifact API.
 
 The optional \`expires_in_seconds\` defaults to 1800 and is restricted to
 60–3600 seconds. Only one active undownloaded artifact, or one previously
