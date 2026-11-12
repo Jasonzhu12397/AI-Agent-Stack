@@ -474,3 +474,16 @@ def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
     assert "test -n \"$READY_PODS\"" in workflow
     assert "curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready" in workflow
     assert "- [bash, /usr/local/sbin/eph-ci-smoke.sh]" in workflow
+
+
+def test_eph_network_config_runs_before_systemd_networkd():
+    root = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system"
+    service = (root / "eph-network-config.service").read_text(encoding="utf-8")
+    drop_in = (
+        root / "systemd-networkd.service.d/eph.conf"
+    ).read_text(encoding="utf-8")
+    assert "Wants=mnt-eph\\\\x2dbootstrap.mount" in service
+    assert "After=mnt-eph\\\\x2dbootstrap.mount" in service
+    assert "Before=systemd-networkd.service" in service
+    assert "Requires=eph-network-config.service" in drop_in
+    assert "After=eph-network-config.service" in drop_in
