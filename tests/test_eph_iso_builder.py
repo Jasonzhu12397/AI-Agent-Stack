@@ -669,7 +669,7 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "Dockerfile.node-agent" in workflow
     assert "image_digest" in workflow
     assert (
-        "CLUSTERCTL_SHA256=c7301a8515ed329562b06c958463051dd55d9649fac591393f5df54a868fa79b"
+        "CLUSTERCTL_SHA256=a6759ddb51ca52ff531c1afd87c5851513729e05e27dbad983f74f7422a6887a"
         in workflow
     )
     assert "kubectl.sha256" in workflow
