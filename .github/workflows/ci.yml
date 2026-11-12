@@ -130,6 +130,7 @@ jobs:
           (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Boot ISO and verify single-node Kubernetes API
         run: |
           mkdir -p "$RUNNER_TEMP/eph-seed"
@@ -194,7 +195,7 @@ jobs:
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
             -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
-            -d guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
+            -d int,guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
           trap 'kill "$QEMU_PID" "$HTTP_PID" >/dev/null 2>&1 || true' EXIT
@@ -226,7 +227,9 @@ jobs:
             printf '%s\n' '=== Guest serial console ==='
             cat "$RUNNER_TEMP/eph-qemu.log"
             printf '%s\n' '=== QEMU debug log tail ==='
-            tail -n 200 "$RUNNER_TEMP/qemu-debug.log" || true
+            tail -n 500 "$RUNNER_TEMP/qemu-debug.log" || true
+            printf '%s\\n' '=== ISO boot catalog ==='
+            xorriso -indev "${{ steps.build.outputs.iso_file }}" -report_el_torito plain 2>&1 || true
             printf '%s\n' '=== Cloud-init callback HTTP log ==='
             cat "$RUNNER_TEMP/cloud-init-http.log"
             printf '%s\n' '=== QEMU and HTTP process state ==='
