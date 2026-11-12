@@ -56,8 +56,8 @@ def test_eph_bootstrap_requires_the_actual_read_only_ephboot_mount():
     service = (
         ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
     ).read_text(encoding="utf-8")
-    assert "Requires=eph-kubeadm-init.service mnt-eph\\\\x2dbootstrap.mount" in service
-    assert "After=cloud-init.target network-online.target mnt-eph\\\\x2dbootstrap.mount" in service
+    assert "Requires=eph-kubeadm-init.service mnt-eph\\x2dbootstrap.mount" in service
+    assert "After=cloud-init.target network-online.target mnt-eph\\x2dbootstrap.mount" in service
 
 
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
