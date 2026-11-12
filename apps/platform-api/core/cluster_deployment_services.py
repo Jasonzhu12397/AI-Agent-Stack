@@ -327,6 +327,8 @@ def handle_deployment_command_result(
     result: dict,
     error: dict | None,
 ) -> None:
+    if not isinstance(result, dict):
+        result = {}
     if command.deployment_id is None:
         return
     deployment = ClusterDeployment.objects.select_for_update().get(
