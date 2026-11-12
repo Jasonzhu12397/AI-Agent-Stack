@@ -52,12 +52,13 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "--container-runtime-endpoint=unix:///run/containerd/containerd.sock" in kubelet
 
 
-def test_eph_bootstrap_requires_the_actual_read_only_ephboot_mount():
+def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
     service = (
         ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
     ).read_text(encoding="utf-8")
-    assert "Requires=eph-kubeadm-init.service mnt-eph\\x2dbootstrap.mount" in service
-    assert "After=cloud-init.target network-online.target mnt-eph\\x2dbootstrap.mount" in service
+    assert "Requires=eph-kubeadm-init.service" in service
+    assert "After=cloud-init.target network-online.target eph-kubeadm-init.service" in service
+    assert "mnt-eph" not in service
 
 
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
@@ -103,7 +104,7 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
 
 
 def test_bootstrap_reads_the_actual_ephboot_mount_and_accepts_pinned_image():
-    assert BOOTSTRAP["MEDIA_ROOT"] == pathlib.Path("/mnt/eph-bootstrap")
+    assert BOOTSTRAP["MEDIA_ROOT"] == pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")
     assert BOOTSTRAP["validate_config"](valid_config())["node_id"]
 
 
@@ -654,7 +655,9 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "deployment/eph-node-agent" in workflow
     assert "eph-bootstrap.service" in workflow
     assert "mock-control-plane.py" in workflow
-    assert "eph-bootstrap.img" in workflow
+    assert "/etc/ai-agent-studio/eph-bootstrap/bootstrap.json" in workflow
+    assert "encoding: b64" in workflow
+    assert "base64 -w0" in workflow
     assert "pod-network-smoke" in workflow
     assert "nginx:1.27.5-alpine" in workflow
     assert "busybox:1.36.1" in workflow
