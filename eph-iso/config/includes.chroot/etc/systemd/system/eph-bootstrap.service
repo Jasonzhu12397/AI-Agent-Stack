@@ -1,8 +1,8 @@
 [Unit]
 Description=Enroll EPH Agent into the temporary Kubernetes cluster
-Wants=network-online.target cloud-init.target mnt-eph\\x2dbootstrap.mount
-After=cloud-init.target network-online.target mnt-eph\\x2dbootstrap.mount eph-kubeadm-init.service
-Requires=eph-kubeadm-init.service mnt-eph\\x2dbootstrap.mount
+Wants=network-online.target cloud-init.target mnt-eph\x2dbootstrap.mount
+After=cloud-init.target network-online.target mnt-eph\x2dbootstrap.mount eph-kubeadm-init.service
+Requires=eph-kubeadm-init.service mnt-eph\x2dbootstrap.mount
 StartLimitIntervalSec=15min
 StartLimitBurst=10
 
