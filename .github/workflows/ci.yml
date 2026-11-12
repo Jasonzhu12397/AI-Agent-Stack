@@ -197,12 +197,6 @@ jobs:
           PY
           cp "$CERT_DIR/control-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/ca.crt"
           cp "$CERT_DIR/agent-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/agent-ca.crt"
-          dd if=/dev/zero of="$RUNNER_TEMP/eph-bootstrap.img" bs=1M count=16
-          mkfs.vfat -n EPHBOOT "$RUNNER_TEMP/eph-bootstrap.img"
-          mmd -i "$RUNNER_TEMP/eph-bootstrap.img" ::tls
-          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/bootstrap.json" ::bootstrap.json
-          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/tls/ca.crt" ::tls/ca.crt
-          mcopy -i "$RUNNER_TEMP/eph-bootstrap.img" "$RUNNER_TEMP/eph-bootstrap/tls/agent-ca.crt" ::tls/agent-ca.crt
           nohup python3 eph-iso/ci/mock-control-plane.py --server-cert "$CERT_DIR/server.crt" --server-key "$CERT_DIR/server.key" --agent-ca "$CERT_DIR/agent-ca.crt" --agent-ca-key "$CERT_DIR/agent-ca.key" --enrollment-token "$ENROLLMENT_TOKEN" --agent-token "$AGENT_TOKEN" > "$RUNNER_TEMP/eph-mock-control-plane.log" 2>&1 &
           MOCK_CONTROL_PID=$!
           sleep 2
@@ -211,6 +205,21 @@ jobs:
           #cloud-config
           ssh_pwauth: false
           write_files:
+            - path: /etc/ai-agent-studio/eph-bootstrap/bootstrap.json
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __BOOTSTRAP_CONFIG_B64__
+            - path: /etc/ai-agent-studio/eph-bootstrap/tls/ca.crt
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __CONTROL_CA_B64__
+            - path: /etc/ai-agent-studio/eph-bootstrap/tls/agent-ca.crt
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __AGENT_CA_B64__
             - path: /etc/containerd/certs.d/10.0.2.2:5000/hosts.toml
               owner: root:root
               permissions: '0644'
@@ -349,6 +358,9 @@ jobs:
           runcmd:
             - [bash, -c, "nohup /usr/local/sbin/eph-ci-smoke.sh >/var/log/eph-ci-smoke.log 2>&1 &"]
           EOF
+          sed -i "s#__BOOTSTRAP_CONFIG_B64__#$(base64 -w0 "$RUNNER_TEMP/eph-bootstrap/bootstrap.json")#" "$RUNNER_TEMP/eph-seed/user-data"
+          sed -i "s#__CONTROL_CA_B64__#$(base64 -w0 "$CERT_DIR/control-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
+          sed -i "s#__AGENT_CA_B64__#$(base64 -w0 "$CERT_DIR/agent-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
           touch "$RUNNER_TEMP/cloud-init-ready"
           python3 -m http.server 18080 --bind 0.0.0.0 --directory "$RUNNER_TEMP" > "$RUNNER_TEMP/cloud-init-http.log" 2>&1 &
@@ -364,7 +376,6 @@ jobs:
             -cpu max -m 6144 -smp 4 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
-            -drive "file=$RUNNER_TEMP/eph-bootstrap.img,format=raw,if=virtio" \
             -boot order=d,menu=off \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
