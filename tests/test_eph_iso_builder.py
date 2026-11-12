@@ -595,6 +595,13 @@ def test_bootstrap_creates_capi_pivot_secret_only_when_both_kubeconfigs_exist(
     ) in events
 
 
+def test_ci_qemu_uses_accelerator_properties_not_machine_properties():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "-machine usb=off" in workflow
+    assert "-accel tcg,thread=multi" in workflow
+    assert "-machine accel=tcg,thread=multi" not in workflow
+
+
 def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "path: /usr/local/sbin/eph-ci-smoke.sh" in workflow
