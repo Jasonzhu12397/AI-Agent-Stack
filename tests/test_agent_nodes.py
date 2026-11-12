@@ -213,6 +213,8 @@ def test_eph_node_enrollment_returns_one_time_token_and_stores_only_hash(node_wo
     )
 
     assert response.status_code == 201
+    assert response["Cache-Control"] == "no-store, max-age=0"
+    assert response["Pragma"] == "no-cache"
     node = AgentNode.objects.get(pk=response.data["id"])
     token = response.data["enrollment_token"]
     assert node.created_by == user
