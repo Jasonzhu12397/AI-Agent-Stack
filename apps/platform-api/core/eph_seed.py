@@ -1,4 +1,7 @@
 # ruff: noqa: I001
+import hmac
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 import json
 import re
 import uuid
@@ -64,6 +67,27 @@ def _validate_pem(value, field, expected_type):
     return value.rstrip() + "\n"
 
 
+def _validate_ca_certificate(pem, field):
+    try:
+        certificate = x509.load_pem_x509_certificate(pem.encode("ascii"))
+        constraints = certificate.extensions.get_extension_for_class(
+            x509.BasicConstraints
+        ).value
+    except (ValueError, UnicodeEncodeError, x509.ExtensionNotFound):
+        raise EPHSeedError("EPH_SEED_CA_CERTIFICATE_INVALID:" + field) from None
+    if not constraints.ca:
+        raise EPHSeedError("EPH_SEED_CA_CERTIFICATE_INVALID:" + field)
+    try:
+        key_usage = certificate.extensions.get_extension_for_class(
+            x509.KeyUsage
+        ).value
+    except x509.ExtensionNotFound:
+        key_usage = None
+    if key_usage is not None and not key_usage.key_cert_sign:
+        raise EPHSeedError("EPH_SEED_CA_CERTIFICATE_INVALID:" + field)
+    return certificate.fingerprint(hashes.SHA256())
+
+
 def render_nocloud_seed(config):
     if not isinstance(config, dict):
         raise EPHSeedError("EPH_SEED_CONFIG_INVALID")
@@ -116,9 +140,13 @@ def render_nocloud_seed(config):
         "agent_ca_certificate",
         "CERTIFICATE",
     )
-    normalized_control_ca = re.sub(r"\s+", "", ca_certificate)
-    normalized_agent_ca = re.sub(r"\s+", "", agent_ca_certificate)
-    normalized_agent_ca = re.sub(r"\s+", "", agent_ca_certificate)
+    control_ca_fingerprint = _validate_ca_certificate(
+        ca_certificate, "ca_certificate"
+    )
+    agent_ca_fingerprint = _validate_ca_certificate(
+        agent_ca_certificate, "agent_ca_certificate"
+    )
+    if hmac.compare_digest(agent_ca_fingerprint, control_ca_fingerprint):
         raise EPHSeedError("EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT")
     bootstrap_config = {
         "control_url": control_url,
