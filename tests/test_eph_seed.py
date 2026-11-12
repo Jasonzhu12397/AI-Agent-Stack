@@ -1,10 +1,49 @@
 # ruff: noqa: I001
+import base64
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 import pytest
 
 from core.eph_seed import EPHSeedError, render_nocloud_seed
+
+
+def make_ca_certificate(common_name):
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
 def valid_config():
@@ -52,7 +91,7 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
         for item in user_data["write_files"]
         if item["path"].endswith("/tls/agent-ca.crt")
     )
-    assert "INDEPENDENT AGENT CA" in agent_ca["content"]
+    assert "BEGIN CERTIFICATE" in agent_ca["content"]
 
 
 def test_seed_secrets_are_written_with_root_only_permissions():
@@ -131,4 +170,25 @@ def test_seed_does_not_accept_missing_network_or_control_plane_ca():
     del config["network_config"]
 
     with pytest.raises(EPHSeedError, match="EPH_SEED_NETWORK_CONFIG_INVALID"):
+        render_nocloud_seed(config)
+
+
+def test_seed_rejects_same_ca_with_different_pem_wrapping():
+    config = valid_config()
+    certificate = config["ca_certificate"]
+    encoded = "".join(
+        line for line in certificate.splitlines()
+        if not line.startswith("-----")
+    )
+    wrapped = base64.b64encode(base64.b64decode(encoded)).decode("ascii")
+    config["agent_ca_certificate"] = (
+        "-----BEGIN CERTIFICATE-----\\n"
+        + "\\n".join(wrapped[index:index + 48] for index in range(0, len(wrapped), 48))
+        + "\\n-----END CERTIFICATE-----\\n"
+    )
+
+    with pytest.raises(
+        EPHSeedError,
+        match="EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
+    ):
         render_nocloud_seed(config)
