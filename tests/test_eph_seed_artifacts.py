@@ -64,7 +64,10 @@ def create_seed(client, tenant, project, enrollment, **overrides):
             },
         },
         "ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----"
+            "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
+        ),
+        "agent_ca_certificate": (
+            "-----BEGIN CERTIFICATE-----\nINDEPENDENT AGENT CA\n-----END CERTIFICATE-----"
         ),
     }
     payload.update(overrides)
@@ -109,6 +112,8 @@ def test_seed_artifact_is_encrypted_and_downloaded_once(seed_workspace):
         assert enrollment["enrollment_token"] in user_data
         assert "tls.key" not in user_data
         assert "tls.crt" not in user_data
+        assert "tls/agent-ca.crt" in user_data
+        assert "INDEPENDENT AGENT CA" in user_data
 
     artifact.refresh_from_db()
     assert artifact.downloaded_at is not None
