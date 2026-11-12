@@ -224,10 +224,13 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
 
     control_ca_path = tmp_path / "control-ca.crt"
     control_ca_path.write_text(certificate, encoding="ascii")
+    issuer_ca_path = tmp_path / "issuer-ca.crt"
+    issuer_ca_path.write_text(certificate, encoding="ascii")
     result = BOOTSTRAP["_request_client_certificate"](
         config,
         tmp_path,
         control_ca_path,
+        issuer_ca_path,
     )
 
     request = captured["request"]
@@ -348,7 +351,7 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
     monkeypatch.setitem(
         bootstrap_globals,
         "_request_client_certificate",
-        lambda config, secret_dir, control_ca_path: dict(secret_files),
+        lambda config, secret_dir, control_ca_path, issuer_ca_path: dict(secret_files),
     )
     return events
 
