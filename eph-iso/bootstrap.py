@@ -95,12 +95,13 @@ def _run(arguments, input_text=None):
     )
 
 
-def _run_output(arguments):
+def _run_output(arguments, timeout=None):
     return subprocess.run(
         arguments,
         text=True,
         check=True,
         capture_output=True,
+        timeout=timeout,
     ).stdout
 
 
@@ -282,9 +283,9 @@ def _wait_for_kubernetes_api():
     ]
     for attempt in range(60):
         try:
-            if _run_output(command).strip() == "ok":
+            if _run_output(command, timeout=10).strip() == "ok":
                 return
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
         if attempt < 59:
             time.sleep(5)
