@@ -132,7 +132,7 @@ jobs:
           xorriso -osirrox on -indev "$ISO_FILE" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
           grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"
           grep -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux.cfg"
-          printf '%s\\n' '=== BIOS boot configuration ==='
+          printf '%s\n' '=== BIOS boot configuration ==='
           cat "$RUNNER_TEMP/isolinux.cfg"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
 
@@ -203,7 +203,7 @@ jobs:
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
           qemu-system-x86_64 \
-            -machine accel=tcg,usb=off \
+            -machine accel=tcg,thread=multi,usb=off \
             -cpu max -m 4096 -smp 2 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
@@ -244,7 +244,7 @@ jobs:
             cat "$RUNNER_TEMP/eph-qemu.log"
             printf '%s\n' '=== QEMU debug log tail ==='
             tail -n 500 "$RUNNER_TEMP/qemu-debug.log" || true
-            printf '%s\\n' '=== ISO boot catalog ==='
+            printf '%s\n' '=== ISO boot catalog ==='
             xorriso -indev "${{ steps.build.outputs.iso_file }}" -report_el_torito plain 2>&1 || true
             printf '%s\n' '=== Cloud-init callback HTTP log ==='
             cat "$RUNNER_TEMP/cloud-init-http.log"
