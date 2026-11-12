@@ -505,3 +505,70 @@ def test_validate_issued_certificate_rejects_active_leaf_as_trust_anchor():
             "node-leaf-trust",
             leaf_pem,
         )
+
+def test_eph_agent_discards_future_dated_pending_certificate_without_replacing_active(
+    monkeypatch,
+    tmp_path,
+):
+    ca_key, ca_certificate = _create_ca()
+    _, active_key_pem, _, active_cert_pem, ca_pem, _ = _issue_client_certificate(
+        ca_key,
+        ca_certificate,
+        "node-future",
+    )
+    _, pending_key_pem, _, pending_cert_pem, _, _ = _issue_client_certificate(
+        ca_key,
+        ca_certificate,
+        "node-future",
+    )
+    ca_path = tmp_path / "control-ca.pem"
+    cert_path = tmp_path / "active.crt"
+    key_path = tmp_path / "active.key"
+    ca_path.write_bytes(ca_pem)
+    cert_path.write_bytes(active_cert_pem + ca_pem)
+    key_path.write_bytes(active_key_pem)
+    secret = {
+        "data": {
+            **_secret_data(active_cert_pem + ca_pem, active_key_pem),
+            "pending.tls.crt": base64.b64encode(
+                pending_cert_pem + ca_pem
+            ).decode("ascii"),
+            "pending.tls.key": base64.b64encode(pending_key_pem).decode("ascii"),
+            "pending.created_at": base64.b64encode(
+                (
+                    datetime.datetime.now(datetime.UTC)
+                    + datetime.timedelta(minutes=10)
+                ).isoformat().encode("ascii")
+            ).decode("ascii"),
+        }
+    }
+    monkeypatch.setenv("AGENT_TLS_ROTATION_ENABLED", "true")
+    monkeypatch.setenv("AGENT_TLS_CERT_FILE", str(cert_path))
+    monkeypatch.setenv("AGENT_TLS_KEY_FILE", str(key_path))
+    monkeypatch.setenv("AGENT_TLS_CA_FILE", str(ca_path))
+
+    class FakeClient:
+        node_id = "node-future"
+        tls_context = None
+
+        def request(self, path, payload=None, tls_context=None):
+            raise AssertionError("A future-dated pending certificate must not activate")
+
+    manager = certificate_rotation.CertificateRotationManager(FakeClient())
+    manager._get_secret = lambda: secret
+
+    def patch_secret(data):
+        for key, value in data.items():
+            if value is None:
+                secret["data"].pop(key, None)
+            else:
+                secret["data"][key] = value
+        return secret
+
+    manager._patch_secret = patch_secret
+
+    assert manager.maintain() is False
+    assert "pending.tls.crt" not in secret["data"]
+    assert "pending.tls.key" not in secret["data"]
+    assert base64.b64decode(secret["data"]["tls.crt"]) == active_cert_pem + ca_pem
+
