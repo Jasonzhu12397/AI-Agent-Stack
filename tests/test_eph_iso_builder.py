@@ -595,6 +595,12 @@ def test_bootstrap_creates_capi_pivot_secret_only_when_both_kubeconfigs_exist(
     ) in events
 
 
+def test_ci_qemu_machine_line_uses_single_shell_continuation():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    qemu_line = next(line for line in workflow.splitlines() if "-machine usb=off" in line)
+    assert len(qemu_line) - len(qemu_line.rstrip("\\")) == 1
+
+
 def test_ci_qemu_uses_accelerator_properties_not_machine_properties():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "-machine usb=off" in workflow
