@@ -472,6 +472,7 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
         "deployment/eph-node-agent",
         "--timeout=10m",
     ]
+    assert ("agent_pod_ready",) in events
 
 
 def test_bootstrap_requires_explicit_agent_pod_readiness(monkeypatch):
