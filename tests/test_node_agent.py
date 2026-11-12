@@ -4765,6 +4765,67 @@ def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
     ]
 
 
+def test_lease_loss_takes_precedence_over_cancelled_command_error(monkeypatch):
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            raise agent.NodeAgentError("LEASE_EXPIRED")
+
+    def execute_until_cancelled(command, node_type, cancellation_event=None):
+        assert cancellation_event.wait(1)
+        raise agent.NodeAgentError("CAPI_PIVOT_CANCELLED_DURING_PROCESS")
+
+    monkeypatch.setattr(agent, "execute_command", execute_until_cancelled)
+    monkeypatch.setattr(agent, "touch_health_files", lambda **kwargs: None)
+
+    with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_LOST"):
+        agent.execute_command_with_lease(
+            FakeClient(),
+            {"id": "command-01", "lease_token": "lease-secret"},
+            "target_cluster",
+            renew_interval=0.001,
+        )
+
+
+def test_run_once_does_not_submit_terminal_result_after_lease_loss(monkeypatch):
+    class FakeClient:
+        deployment_checkpoints = {}
+
+        def heartbeat(self, node_type):
+            return {"active_deployments": []}
+
+        def poll(self):
+            return {
+                "command": {
+                    "id": "command-02",
+                    "lease_token": "lease-secret",
+                    "command_type": "node.health",
+                    "payload": {},
+                }
+            }
+
+        def report_inventory(self, inventory):
+            raise AssertionError("inventory should not be reported")
+
+        def submit_result(self, *args, **kwargs):
+            raise AssertionError("expired lease must not submit a terminal result")
+
+    monkeypatch.setattr(
+        agent,
+        "inspect_host_network_hardware",
+        lambda: {"status": "unavailable"},
+    )
+    monkeypatch.setattr(
+        agent,
+        "execute_command_with_lease",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            agent.NodeAgentError("COMMAND_LEASE_LOST")
+        ),
+    )
+    monkeypatch.setattr(agent, "touch_health_files", lambda **kwargs: None)
+
+    assert agent.run_once(FakeClient(), "target_cluster") is True
+
+
 def test_execute_command_rejects_command_when_lease_is_already_cancelled():
     cancellation_event = agent.threading.Event()
     cancellation_event.set()
