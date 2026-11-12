@@ -1,6 +1,12 @@
 # ruff: noqa: I001
 import io
 import zipfile
+from datetime import datetime, timedelta, timezone
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 import pytest
 from django.utils import timezone
@@ -8,6 +14,38 @@ from rest_framework.test import APIClient
 
 from django.contrib.auth import get_user_model
 from core.models import EPHSeedArtifact, Project, ProjectMembership, Tenant, TenantMembership
+
+
+def make_ca_certificate(common_name):
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
 SEED_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
@@ -63,12 +101,8 @@ def create_seed(client, tenant, project, enrollment, **overrides):
                 }
             },
         },
-        "ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----"
-        ),
-        "agent_ca_certificate": (
-            "-----BEGIN CERTIFICATE-----\nINDEPENDENT AGENT CA\n-----END CERTIFICATE-----"
-        ),
+        "ca_certificate": make_ca_certificate("control-ca"),
+        "agent_ca_certificate": make_ca_certificate("agent-ca"),
     }
     payload.update(overrides)
     return client.post(
@@ -113,7 +147,7 @@ def test_seed_artifact_is_encrypted_and_downloaded_once(seed_workspace):
         assert "tls.key" not in user_data
         assert "tls.crt" not in user_data
         assert "tls/agent-ca.crt" in user_data
-        assert "INDEPENDENT AGENT CA" in user_data
+        assert "BEGIN CERTIFICATE" in user_data
 
     artifact.refresh_from_db()
     assert artifact.downloaded_at is not None
