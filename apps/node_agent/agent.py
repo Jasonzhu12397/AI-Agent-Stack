@@ -4516,14 +4516,20 @@ def execute_command_with_lease(
         daemon=True,
     )
     renewer.start()
+    command_error = None
+    result = None
     try:
         result = execute_command(command, node_type, cancellation_event=stop_event)
+    except Exception as exc:
+        command_error = exc
     finally:
         stop_event.set()
         renewer.join()
 
     if renewal_errors:
         raise NodeAgentError("COMMAND_LEASE_LOST") from renewal_errors[0]
+    if command_error is not None:
+        raise command_error
     return result
 
 
@@ -4622,13 +4628,25 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
         result = execute_command_with_lease(client, command, node_type)
         client.submit_result(command_id, lease_token, "succeeded", result)
     except NodeAgentError as exc:
-        client.submit_result(
-            command_id,
-            lease_token,
-            "failed",
-            {},
-            {"code": str(exc), "retryable": False},
-        )
+        if str(exc) == "COMMAND_LEASE_LOST":
+            print(
+                json.dumps(
+                    {
+                        "event": "command_lease_lost",
+                        "command_id": command_id,
+                        "result_submitted": False,
+                    }
+                ),
+                flush=True,
+            )
+        else:
+            client.submit_result(
+                command_id,
+                lease_token,
+                "failed",
+                {},
+                {"code": str(exc), "retryable": False},
+            )
     touch_health_files(readiness=True)
     return True
 
