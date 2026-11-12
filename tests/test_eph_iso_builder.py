@@ -226,6 +226,11 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
     monkeypatch.setitem(
         bootstrap_globals,
+        "_wait_for_kubernetes_api",
+        lambda: events.append(("api_ready",)),
+    )
+    monkeypatch.setitem(
+        bootstrap_globals,
         "_run_output",
         lambda arguments: next(output_values),
     )
@@ -393,7 +398,19 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
 
     BOOTSTRAP["bootstrap"]()
 
-    assert events[0][0:2] == ("run", [
+    assert events[0] == ("api_ready",)
+    assert events[1][0:2] == ("run", [
+        "k3s",
+        "kubectl",
+        "--kubeconfig",
+        "/etc/rancher/k3s/k3s.yaml",
+        "wait",
+        "--for=condition=Ready",
+        "nodes",
+        "--all",
+        "--timeout=300s",
+    ])
+    assert events[2][0:2] == ("run", [
         "k3s",
         "kubectl",
         "--kubeconfig",
@@ -402,7 +419,7 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
         "-f",
         str(tmp_path / "manifests" / "namespace.yaml"),
     ])
-    assert events[1][0:2] == ("run", [
+    assert events[3][0:2] == ("run", [
         "k3s",
         "kubectl",
         "--kubeconfig",
@@ -523,3 +540,21 @@ def test_eph_network_config_runs_before_systemd_networkd():
     assert "After=eph-network-config.service" in drop_in
     mount = (root / "mnt-eph\\x2dbootstrap.mount").read_text(encoding="utf-8")
     assert "x-systemd.device-timeout=10s" in mount
+
+
+def test_bootstrap_waits_for_kubernetes_api_readiness(monkeypatch):
+    bootstrap_globals = BOOTSTRAP["_wait_for_kubernetes_api"].__globals__
+    responses = iter(["not-ready", "ok"])
+    commands = []
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_run_output",
+        lambda command: commands.append(list(command)) or next(responses),
+    )
+    monkeypatch.setattr(bootstrap_globals["time"], "sleep", lambda seconds: None)
+
+    BOOTSTRAP["_wait_for_kubernetes_api"]()
+
+    assert len(commands) == 2
+    assert commands[0][-1] == "--raw=/readyz"
+    assert commands[1][-1] == "--raw=/readyz"
