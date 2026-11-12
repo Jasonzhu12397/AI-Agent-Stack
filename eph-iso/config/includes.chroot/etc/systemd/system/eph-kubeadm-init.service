@@ -1,7 +1,7 @@
 [Unit]
 Description=Initialize the temporary EPH Kubernetes cluster with kubeadm
-Wants=network-online.target containerd.service
-After=network-online.target containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
+Wants=network-online.target cloud-init.target containerd.service
+After=network-online.target cloud-init.target containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 
 [Service]
