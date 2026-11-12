@@ -331,7 +331,93 @@ jobs:
                           command: ["sh", "-c", "wget -qO- http://$SERVER_POD_IP | grep -q 'Welcome to nginx' && wget -qO- http://workload-smoke.eph-ci-smoke.svc.cluster.local | grep -q 'Welcome to nginx'"]
                 NETWORK
                 kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-smoke --timeout=300s
+                kubectl --namespace eph-ci-smoke apply -f - <<'POLICY'
+                apiVersion: networking.k8s.io/v1
+                kind: NetworkPolicy
+                metadata:
+                  name: workload-smoke-ingress
+                spec:
+                  podSelector:
+                    matchLabels:
+                      app: workload-smoke
+                  policyTypes:
+                    - Ingress
+                  ingress:
+                    - from:
+                        - podSelector:
+                            matchLabels:
+                              network-smoke-client: allowed
+                      ports:
+                        - protocol: TCP
+                          port: 80
+                POLICY
+                kubectl --namespace eph-ci-smoke apply -f - <<'DENIED'
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-denied-smoke
+                spec:
+                  backoffLimit: 0
+                  template:
+                    metadata:
+                      labels:
+                        network-smoke-client: denied
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          env:
+                            - name: SERVER_POD_IP
+                              valueFrom:
+                                configMapKeyRef:
+                                  name: workload-smoke-target
+                                  key: server-ip
+                          command:
+                            - sh
+                            - -c
+                            - |
+                              if wget -T 5 -qO- "http://$SERVER_POD_IP" >/dev/null 2>&1; then
+                                echo NETWORK_POLICY_DENY_FAILED
+                                exit 1
+                              fi
+                              echo NETWORK_POLICY_DENY_ENFORCED
+                DENIED
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-denied-smoke --timeout=180s
+                kubectl --namespace eph-ci-smoke apply -f - <<'ALLOWED'
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-allowed-smoke
+                spec:
+                  backoffLimit: 2
+                  template:
+                    metadata:
+                      labels:
+                        network-smoke-client: allowed
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          env:
+                            - name: SERVER_POD_IP
+                              valueFrom:
+                                configMapKeyRef:
+                                  name: workload-smoke-target
+                                  key: server-ip
+                          command:
+                            - sh
+                            - -c
+                            - |
+                              wget -T 10 -qO- "http://$SERVER_POD_IP" | grep -q 'Welcome to nginx'
+                              wget -T 10 -qO- "http://workload-smoke.eph-ci-smoke.svc.cluster.local" | grep -q 'Welcome to nginx'
+                ALLOWED
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-allowed-smoke --timeout=180s
                 printf '%s\\n' 'EPH_DIRECT_POD_NETWORK_READY=true'
+                printf '%s\\n' 'EPH_SERVICE_DNS_NETWORK_READY=true'
+                printf '%s\\n' 'EPH_CALICO_NETWORK_POLICY_DENY_READY=true'
+                printf '%s\\n' 'EPH_CALICO_NETWORK_POLICY_ALLOW_READY=true'
                 printf '%s\\n' 'EPH_SERVICE_DNS_NETWORK_READY=true'
                 for attempt in $(seq 1 180); do
                   if systemctl is-active --quiet eph-bootstrap.service; then break; fi
