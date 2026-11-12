@@ -52,6 +52,14 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "--container-runtime-endpoint=unix:///run/containerd/containerd.sock" in kubelet
 
 
+def test_eph_bootstrap_requires_the_actual_read_only_ephboot_mount():
+    service = (
+        ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
+    ).read_text(encoding="utf-8")
+    assert "Requires=eph-kubeadm-init.service mnt-eph\\\\x2dbootstrap.mount" in service
+    assert "After=cloud-init.target network-online.target mnt-eph\\\\x2dbootstrap.mount" in service
+
+
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
     service_path = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
     service = service_path.read_text(encoding="utf-8")
@@ -654,8 +662,17 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     callback += "http://10.0.2.2:18080/cloud-init-ready"
     assert callback in workflow
     assert "nohup /usr/local/sbin/eph-ci-smoke.sh" in workflow
-    assert "After=cloud-init.target" in workflow
+    assert "10.0.2.2:5000/hosts.toml" in workflow
     assert "calico-node" in workflow
+
+
+def test_eph_ci_control_plane_uses_separate_enrollment_and_agent_tokens():
+    fixture = (ROOT / "eph-iso/ci/mock-control-plane.py").read_text(encoding="utf-8")
+    assert 'is_enrollment = self.path.endswith("/certificate/")' in fixture
+    assert 'self.connection.getpeercert()' in fixture
+    assert "EPH_CI_AGENT_CERTIFICATE_ISSUED" in fixture
+    assert "EPH_CI_AGENT_MTLS_HEARTBEAT" in fixture
+    assert '"token_consumed": True' in fixture
 
 
 def test_eph_network_config_runs_before_systemd_networkd():
