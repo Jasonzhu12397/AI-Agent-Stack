@@ -33,6 +33,20 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "EPH_ISO_METADATA" in script
 
 
+def test_eph_iso_initializes_kubernetes_with_kubeadm_and_flannel():
+    root = ROOT / "eph-iso/config/includes.chroot"
+    initializer = (root / "usr/local/sbin/eph-kubeadm-init.sh").read_text(encoding="utf-8")
+    service = (root / "etc/systemd/system/eph-kubeadm-init.service").read_text(encoding="utf-8")
+    kubelet = (root / "etc/systemd/system/kubelet.service").read_text(encoding="utf-8")
+    assert "kubeadm init" in initializer
+    assert "--cri-socket" in initializer
+    assert "kube-flannel.yml" in initializer
+    assert "kubectl wait --for=condition=Ready nodes --all" in initializer
+    assert "containerd.service" in service
+    assert "/usr/local/bin/kubelet" in kubelet
+    assert "--container-runtime-endpoint=unix:///run/containerd/containerd.sock" in kubelet
+
+
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
     service_path = ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
     service = service_path.read_text(encoding="utf-8")
