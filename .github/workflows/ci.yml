@@ -134,7 +134,7 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null
-          CLUSTERCTL_VERSION=v1.10.6
+          CLUSTERCTL_VERSION=v1.13.8
           KUBECTL_VERSION=v1.35.3
           curl --fail --location --silent --show-error "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-amd64" -o "$RUNNER_TEMP/clusterctl"
           curl --fail --location --silent --show-error "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o "$RUNNER_TEMP/kubectl"
