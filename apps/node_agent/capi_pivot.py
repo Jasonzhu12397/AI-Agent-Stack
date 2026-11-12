@@ -6,7 +6,6 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-
 from typing import Any
 
 
@@ -46,7 +45,7 @@ def _cancellable_process_runner(cancellation_event):
                     pass
                 stdout, stderr = process.communicate()
                 raise CapiPivotError("CAPI_PIVOT_CANCELLED_DURING_PROCESS")
-            remaining = None if deadline is None else deadline - __import__("time").monotonic()
+            remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
