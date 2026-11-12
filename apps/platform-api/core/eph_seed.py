@@ -5,6 +5,7 @@ from cryptography.hazmat.primitives import hashes
 import json
 import re
 import uuid
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 
@@ -75,7 +76,12 @@ def _validate_ca_certificate(pem, field):
         ).value
     except (ValueError, UnicodeEncodeError, x509.ExtensionNotFound):
         raise EPHSeedError("EPH_SEED_CA_CERTIFICATE_INVALID:" + field) from None
-    if not constraints.ca:
+    now = datetime.now(UTC)
+    if (
+        not constraints.ca
+        or certificate.not_valid_before_utc > now
+        or certificate.not_valid_after_utc <= now
+    ):
         raise EPHSeedError("EPH_SEED_CA_CERTIFICATE_INVALID:" + field)
     try:
         key_usage = certificate.extensions.get_extension_for_class(
