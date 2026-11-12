@@ -611,7 +611,7 @@ def test_ci_qemu_uses_accelerator_properties_not_machine_properties():
 def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "path: /usr/local/sbin/eph-ci-smoke.sh" in workflow
-    assert "set -eu" in workflow
+    assert "set -Eeuo pipefail" in workflow
     assert 'kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s' in workflow
     assert "rollout status deployment/workload-smoke --timeout=180s" in workflow
     assert "wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s" in workflow
