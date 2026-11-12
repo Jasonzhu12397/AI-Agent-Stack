@@ -4724,18 +4724,18 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
 
 def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
     cancellation_event = agent.threading.Event()
-    process = type(
-        "FakeProcess",
-        (),
-        {
-            "pid": 12345,
-            "returncode": -9,
-            "communicate": lambda self, timeout=None: (
-                cancellation_event.set(),
-                (_ for _ in ()).throw(agent.subprocess.TimeoutExpired(["kubectl"], timeout)),
-            )[1],
-        },
-    )()
+
+    class FakeProcess:
+        pid = 12345
+        returncode = -9
+
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                cancellation_event.set()
+                raise agent.subprocess.TimeoutExpired(["kubectl"], timeout)
+            return "", ""
+
+    process = FakeProcess()
     killed_process_groups = []
     monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
@@ -4760,7 +4760,9 @@ def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
             env={},
         )
 
-    assert killed_process_groups == [(12345, agent.run_capi_pivot.__globals__["signal"].SIGKILL)]
+    assert killed_process_groups == [
+        (12345, agent.run_capi_pivot.__globals__["signal"].SIGKILL)
+    ]
 
 
 def test_execute_command_rejects_command_when_lease_is_already_cancelled():
