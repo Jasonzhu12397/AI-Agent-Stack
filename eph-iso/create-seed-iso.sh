@@ -12,7 +12,7 @@ input_archive="$1"
 output_iso="$2"
 
 [ -f "$input_archive" ] && [ ! -L "$input_archive" ] || fail "SEED_ARCHIVE_NOT_FOUND"
-[ ! -e "$output_iso" ] || fail "SEED_ISO_OUTPUT_ALREADY_EXISTS"
+[ ! -e "$output_iso" ] && [ ! -L "$output_iso" ] || fail "SEED_ISO_OUTPUT_ALREADY_EXISTS"
 
 for command_name in python3 sha256sum mktemp; do
     command -v "$command_name" >/dev/null 2>&1 || fail "SEED_ISO_DEPENDENCY_MISSING:$command_name"
