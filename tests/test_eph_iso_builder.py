@@ -545,6 +545,27 @@ def test_eph_network_config_runs_before_systemd_networkd():
     assert "x-systemd.device-timeout=10s" in mount
 
 
+
+def test_bootstrap_retries_when_kubernetes_api_probe_times_out(monkeypatch):
+    import subprocess
+
+    bootstrap_globals = BOOTSTRAP["_wait_for_kubernetes_api"].__globals__
+    attempts = []
+
+    def fake_run_output(command, timeout=None):
+        attempts.append((list(command), timeout))
+        if len(attempts) == 1:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return "ok"
+
+    monkeypatch.setitem(bootstrap_globals, "_run_output", fake_run_output)
+    monkeypatch.setattr(bootstrap_globals["time"], "sleep", lambda seconds: None)
+
+    BOOTSTRAP["_wait_for_kubernetes_api"]()
+
+    assert len(attempts) == 2
+    assert all(item[1] == 10 for item in attempts)
+
 def test_bootstrap_waits_for_kubernetes_api_readiness(monkeypatch):
     bootstrap_globals = BOOTSTRAP["_wait_for_kubernetes_api"].__globals__
     responses = iter(["not-ready", "ok"])
