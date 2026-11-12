@@ -129,11 +129,6 @@ jobs:
           test -n "$ISO_FILE"
           (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
-          xorriso -osirrox on -indev "$ISO_FILE" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
-          grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"
-          grep -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux.cfg"
-          printf '%s\n' '=== BIOS boot configuration ==='
-          cat "$RUNNER_TEMP/isolinux.cfg"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload EPH Live ISO artifact
@@ -146,6 +141,20 @@ jobs:
             ${{ steps.build.outputs.iso_file }}.release.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Validate EPH BIOS boot configuration
+        run: |
+          xorriso -osirrox on -indev "${{ steps.build.outputs.iso_file }}" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
+          printf '%s\\n' '=== BIOS boot configuration ==='
+          cat "$RUNNER_TEMP/isolinux.cfg"
+          if ! grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"; then
+            echo "EPH_BIOS_BOOT_TIMEOUT_MISSING" >&2
+            exit 1
+          fi
+          if ! grep -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux.cfg"; then
+            echo "EPH_BIOS_SERIAL_CONSOLE_ARGUMENT_MISSING" >&2
+            exit 1
+          fi
 
       - name: Boot ISO and verify single-node Kubernetes API
         run: |
@@ -266,6 +275,7 @@ jobs:
             ${{ runner.temp }}/qemu.stdout
             ${{ runner.temp }}/qemu-debug.log
             ${{ runner.temp }}/cloud-init-http.log
+            ${{ runner.temp }}/isolinux.cfg
           if-no-files-found: ignore
           retention-days: 7
 
