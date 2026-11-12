@@ -648,3 +648,17 @@ def test_bootstrap_waits_for_kubernetes_api_readiness(monkeypatch):
     assert commands[0][0][-1] == "--raw=/readyz"
     assert commands[1][0][-1] == "--raw=/readyz"
     assert all(command[1] == 10 for command in commands)
+
+
+def test_eph_iso_bios_bootloader_autostarts_without_keyboard():
+    path = ROOT / "eph-iso/config/bootloaders/isolinux/isolinux.cfg"
+    lines = {
+        line.strip().lower()
+        for line in path.read_text(encoding="utf-8").splitlines()
+    }
+    assert {
+        "include menu.cfg",
+        "default vesamenu.c32",
+        "prompt 0",
+        "timeout 50",
+    }.issubset(lines)
