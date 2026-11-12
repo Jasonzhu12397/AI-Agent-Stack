@@ -662,6 +662,15 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "workload-smoke.eph-ci-smoke.svc.cluster.local" in workflow
     assert "EPH_DIRECT_POD_NETWORK_READY=true" in workflow
     assert "EPH_SERVICE_DNS_NETWORK_READY=true" in workflow
+    assert "kind: NetworkPolicy" in workflow
+    assert "workload-smoke-ingress" in workflow
+    assert "network-smoke-client: allowed" in workflow
+    assert "pod-network-denied-smoke" in workflow
+    assert "NETWORK_POLICY_DENY_ENFORCED" in workflow
+    assert "NETWORK_POLICY_DENY_FAILED" in workflow
+    assert "pod-network-allowed-smoke" in workflow
+    assert "EPH_CALICO_NETWORK_POLICY_DENY_READY=true" in workflow
+    assert "EPH_CALICO_NETWORK_POLICY_ALLOW_READY=true" in workflow
     assert "EPH_RAM_BACKED_RUNTIME_STATE=true" in workflow
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=true" in workflow
