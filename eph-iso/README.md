@@ -10,8 +10,7 @@ Build on Debian 12/bookworm with live-build, xorriso, squashfs-tools, wget, ca-c
 
 ~~~bash
 sudo env \
-  K3S_VERSION=v1.35.3+k3s1 \
-  K3S_SHA256_AMD64=<verified-64-character-sha256> \
+  KUBERNETES_VERSION=v1.35.3 \
   bash eph-iso/build.sh
 ~~~
 
