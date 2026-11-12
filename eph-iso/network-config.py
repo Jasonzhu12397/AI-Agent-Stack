@@ -1,9 +1,34 @@
+import configparser
 import pathlib
 import shutil
 
 MEDIA_ROOT = pathlib.Path("/mnt/eph-bootstrap/network")
 TARGET_ROOT = pathlib.Path("/etc/systemd/network")
 ALLOWED_SUFFIXES = {".network", ".netdev", ".link"}
+REQUIRED_SECTIONS = {
+    ".network": {"Match"},
+    ".netdev": {"NetDev"},
+    ".link": {"Match", "Link"},
+}
+
+
+def _validate_network_profile(path):
+    try:
+        content = path.read_text(encoding="utf-8")
+        if not content or "\x00" in content:
+            raise ValueError
+        parser = configparser.ConfigParser(
+            allow_no_value=False,
+            delimiters=("=",),
+            interpolation=None,
+            strict=False,
+        )
+        parser.optionxform = str
+        parser.read_string(content)
+    except (OSError, UnicodeError, configparser.Error, ValueError):
+        raise ValueError("EPH_NETWORK_CONFIG_SYNTAX_INVALID:" + path.name) from None
+    if not REQUIRED_SECTIONS[path.suffix].issubset(parser.sections()):
+        raise ValueError("EPH_NETWORK_CONFIG_SECTIONS_INVALID:" + path.name)
 
 
 def install_network_configuration(media_root=None, target_root=None):
@@ -18,11 +43,11 @@ def install_network_configuration(media_root=None, target_root=None):
     if not target_root.is_dir():
         raise ValueError("EPH_NETWORK_CONFIG_TARGET_INVALID")
     for source in sorted(media_root.iterdir()):
-        if (
-            source.suffix not in ALLOWED_SUFFIXES
-            or source.is_symlink()
-            or not source.is_file()
-        ):
+        if source.suffix not in ALLOWED_SUFFIXES:
+            continue
+        if source.is_symlink():
+            raise ValueError("EPH_NETWORK_CONFIG_SYMLINK_REJECTED:" + source.name)
+        if not source.is_file():
             continue
         resolved = source.resolve(strict=True)
         if (
@@ -30,6 +55,7 @@ def install_network_configuration(media_root=None, target_root=None):
             or resolved.stat().st_size > 32768
         ):
             raise ValueError("EPH_NETWORK_CONFIG_INVALID:" + source.name)
+        _validate_network_profile(resolved)
         destination = target_root / source.name
         try:
             with resolved.open("rb") as source_file:
