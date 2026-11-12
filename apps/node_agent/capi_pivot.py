@@ -4,6 +4,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 from typing import Any
@@ -36,7 +37,7 @@ def _cancellable_process_runner(cancellation_event):
             env=env,
             start_new_session=True,
         )
-        deadline = None if timeout is None else __import__("time").monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             if cancellation_event is not None and cancellation_event.is_set():
                 try:
