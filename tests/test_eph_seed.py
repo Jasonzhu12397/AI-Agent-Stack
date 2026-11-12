@@ -24,7 +24,8 @@ def valid_config():
                 }
             },
         },
-        "ca_certificate": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+        "ca_certificate": "-----BEGIN CERTIFICATE-----\nCONTROL CA\n-----END CERTIFICATE-----",
+        "agent_ca_certificate": "-----BEGIN CERTIFICATE-----\nINDEPENDENT AGENT CA\n-----END CERTIFICATE-----",
     }
 
 
@@ -39,9 +40,11 @@ def test_render_nocloud_seed_creates_all_three_datasource_files():
     assert metadata["instance-id"].startswith("eph-node-")
     assert metadata["local-hostname"] == "eph-node-01"
     assert network["version"] == 2
-    assert len(user_data["write_files"]) == 2
+    assert len(user_data["write_files"]) == 3
     assert not any("tls.key" in item["path"] for item in user_data["write_files"])
     assert not any("tls.crt" in item["path"] for item in user_data["write_files"])
+    agent_ca = next(item for item in user_data["write_files"] if item["path"].endswith("/tls/agent-ca.crt"))
+    assert "INDEPENDENT AGENT CA" in agent_ca["content"]
 
 
 def test_seed_secrets_are_written_with_root_only_permissions():
@@ -73,6 +76,14 @@ def test_seed_secrets_are_written_with_root_only_permissions():
         (
             {"ca_certificate": "not-a-certificate"},
             "EPH_SEED_CREDENTIAL_INVALID:ca_certificate",
+        ),
+        (
+            {"agent_ca_certificate": "not-a-certificate"},
+            "EPH_SEED_CREDENTIAL_INVALID:agent_ca_certificate",
+        ),
+        (
+            {"agent_ca_certificate": "-----BEGIN CERTIFICATE-----\\nCONTROL CA\\n-----END CERTIFICATE-----"},
+            "EPH_SEED_AGENT_CA_MUST_BE_INDEPENDENT",
         ),
     ],
 )
