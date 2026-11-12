@@ -3678,6 +3678,170 @@ def execute_command(
             machine_names.add(machine_name)
             worker_machines.append(machine)
 
+        metal3_worker_status = []
+        if machine_deployment_name:
+            host_namespace = payload.get("baremetal_host_namespace")
+            if (
+                not isinstance(host_namespace, str)
+                or not re.fullmatch(
+                    r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?",
+                    host_namespace,
+                )
+            ):
+                raise NodeAgentError("INVALID_METAL3_POSTFLIGHT_NAMESPACE")
+            metal3_group = next(
+                (
+                    group
+                    for group in api_groups
+                    if isinstance(group, dict)
+                    and group.get("name") == "infrastructure.cluster.x-k8s.io"
+                ),
+                {},
+            )
+            metal3_version = (
+                metal3_group.get("preferredVersion", {}).get("version")
+                if isinstance(metal3_group, dict)
+                else None
+            )
+            if not isinstance(metal3_version, str) or not re.fullmatch(
+                r"v[0-9]+(alpha[0-9]+|beta[0-9]+)?",
+                metal3_version,
+            ):
+                raise NodeAgentError("METAL3_MACHINE_API_UNAVAILABLE")
+            bmh_group = next(
+                (
+                    group
+                    for group in api_groups
+                    if isinstance(group, dict) and group.get("name") == "metal3.io"
+                ),
+                {},
+            )
+            bmh_version = (
+                bmh_group.get("preferredVersion", {}).get("version")
+                if isinstance(bmh_group, dict)
+                else None
+            )
+            if not isinstance(bmh_version, str) or not re.fullmatch(
+                r"v[0-9]+(alpha[0-9]+|beta[0-9]+)?",
+                bmh_version,
+            ):
+                raise NodeAgentError("METAL3_BAREMETALHOST_API_UNAVAILABLE")
+            bmh_items = list_all_kubernetes_items(
+                f"/apis/metal3.io/{bmh_version}/namespaces/"
+                f"{host_namespace}/baremetalhosts",
+                max_items=10000,
+            )
+            bmh_by_consumer = {}
+            for host in bmh_items:
+                host_metadata = host.get("metadata", {})
+                host_spec = host.get("spec", {})
+                host_status = host.get("status", {})
+                consumer_ref = (
+                    host_spec.get("consumerRef")
+                    if isinstance(host_spec, dict)
+                    else None
+                )
+                if not isinstance(consumer_ref, dict):
+                    continue
+                consumer_key = (
+                    consumer_ref.get("namespace", host_namespace),
+                    consumer_ref.get("name"),
+                )
+                if consumer_key in bmh_by_consumer:
+                    raise NodeAgentError("METAL3_BAREMETALHOST_CONSUMER_DUPLICATE")
+                bmh_by_consumer[consumer_key] = {
+                    "metadata": host_metadata,
+                    "spec": host_spec,
+                    "status": host_status,
+                    "consumer_ref": consumer_ref,
+                }
+            for machine in worker_machines:
+                machine_metadata = machine.get("metadata", {})
+                machine_name = machine_metadata["name"]
+                infrastructure_ref = machine.get("spec", {}).get(
+                    "infrastructureRef", {}
+                )
+                if (
+                    not isinstance(infrastructure_ref, dict)
+                    or infrastructure_ref.get("kind") != "Metal3Machine"
+                    or infrastructure_ref.get("apiVersion")
+                    != f"infrastructure.cluster.x-k8s.io/{metal3_version}"
+                    or not isinstance(infrastructure_ref.get("name"), str)
+                ):
+                    raise NodeAgentError("CAPI_WORKER_INFRASTRUCTURE_REF_INVALID")
+                infra_namespace = infrastructure_ref.get("namespace", namespace)
+                if infra_namespace != namespace:
+                    raise NodeAgentError(
+                        "CAPI_WORKER_INFRASTRUCTURE_NAMESPACE_MISMATCH"
+                    )
+                metal3_machine = kubernetes_api_get(
+                    f"/apis/infrastructure.cluster.x-k8s.io/{metal3_version}/"
+                    f"namespaces/{namespace}/metal3machines/"
+                    f"{infrastructure_ref['name']}"
+                )
+                metal3_metadata = metal3_machine.get("metadata", {})
+                metal3_uid = metal3_metadata.get("uid")
+                metal3_owner_references = metal3_metadata.get("ownerReferences", [])
+                machine_uid = machine_metadata.get("uid")
+                if (
+                    not isinstance(metal3_uid, str)
+                    or not metal3_uid
+                    or metal3_machine.get("kind") != "Metal3Machine"
+                    or metal3_machine.get("apiVersion")
+                    != f"infrastructure.cluster.x-k8s.io/{metal3_version}"
+                    or metal3_metadata.get("name") != infrastructure_ref["name"]
+                    or metal3_metadata.get("namespace") != namespace
+                    or not isinstance(machine_uid, str)
+                    or not machine_uid
+                    or not isinstance(metal3_owner_references, list)
+                    or not any(
+                        isinstance(owner, dict)
+                        and owner.get("kind") == "Machine"
+                        and owner.get("name") == machine_name
+                        and owner.get("uid") == machine_uid
+                        for owner in metal3_owner_references
+                    )
+                ):
+                    raise NodeAgentError("METAL3_MACHINE_OWNERSHIP_MISMATCH")
+                host = bmh_by_consumer.get(
+                    (namespace, infrastructure_ref["name"])
+                )
+                if host is None:
+                    raise NodeAgentError("METAL3_BAREMETALHOST_CONSUMER_NOT_FOUND")
+                host_metadata = host["metadata"]
+                host_spec = host["spec"]
+                host_status = host["status"]
+                consumer_ref = host["consumer_ref"]
+                provisioning = host_status.get("provisioning", {})
+                if (
+                    not isinstance(host_metadata.get("name"), str)
+                    or not host_metadata.get("name")
+                    or not isinstance(host_metadata.get("uid"), str)
+                    or not host_metadata.get("uid")
+                    or consumer_ref.get("kind") != "Metal3Machine"
+                    or consumer_ref.get("apiVersion")
+                    != f"infrastructure.cluster.x-k8s.io/{metal3_version}"
+                    or consumer_ref.get("uid") != metal3_uid
+                    or host_spec.get("online") is not True
+                    or provisioning.get("state") != "provisioned"
+                    or host_status.get("operationalStatus") not in (None, "OK")
+                    or host_status.get("error")
+                    or host_status.get("errorMessage")
+                ):
+                    raise NodeAgentError("METAL3_BAREMETALHOST_PROVISIONING_NOT_READY")
+                metal3_worker_status.append(
+                    {
+                        "machine_name": machine_name,
+                        "metal3_machine_name": infrastructure_ref["name"],
+                        "metal3_machine_uid": metal3_uid,
+                        "baremetal_host_name": host_metadata.get("name"),
+                        "baremetal_host_uid": host_metadata.get("uid"),
+                        "consumer_reference_verified": True,
+                        "provisioning_state": provisioning.get("state"),
+                        "hardware_ready": True,
+                    }
+                )
+
         not_ready_workers = []
         ready_worker_node_names = []
         for machine in worker_machines:
@@ -3782,6 +3946,7 @@ def execute_command(
             and len(set(ready_worker_node_names)) == expected_workers
             and (
                 machine_deployment_status["rollout_complete"]
+                and len(metal3_worker_status) == expected_workers
                 if machine_deployment_name
                 else True
             )
@@ -3793,6 +3958,12 @@ def execute_command(
                 "expected_worker_replicas": expected_workers,
                 "machine_deployment_name": machine_deployment_name,
                 "machine_deployment_status": machine_deployment_status,
+                "metal3_worker_status": metal3_worker_status,
+                "metal3_inventory_complete": (
+                    len(metal3_worker_status) == expected_workers
+                    if machine_deployment_name
+                    else None
+                ),
                 "worker_machine_count": len(worker_machines),
                 "ready_worker_machine_count": len(ready_worker_node_names),
                 "not_ready_worker_machine_names": not_ready_workers,

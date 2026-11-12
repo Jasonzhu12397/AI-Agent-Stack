@@ -374,6 +374,41 @@ def test_target_postflight_requires_machine_deployment_rollout_convergence(monke
             "conditions": [{"type": "Ready", "status": "True"}],
         },
     }
+    baremetal_host = {
+        "metadata": {"name": "bmh-worker-01", "uid": "bmh-uid-1"},
+        "spec": {
+            "online": True,
+            "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "namespace": "metal3-system",
+                "name": "metal3-worker-01",
+                "uid": "m3m-uid-1",
+            },
+        },
+        "status": {
+            "operationalStatus": "OK",
+            "provisioning": {"state": "provisioned"},
+        },
+    }
+    metal3_machine = {
+        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+        "kind": "Metal3Machine",
+        "metadata": {
+            "name": "metal3-worker-01",
+            "namespace": "metal3-system",
+            "uid": "m3m-uid-1",
+            "ownerReferences": [
+                {
+                    "apiVersion": "cluster.x-k8s.io/v1beta1",
+                    "kind": "Machine",
+                    "name": "edge-workers-abc",
+                    "uid": "machine-uid-1",
+                    "controller": True,
+                }
+            ],
+        },
+    }
 
     def fake_get(path):
         if path == "/api/v1/nodes":
@@ -391,28 +426,51 @@ def test_target_postflight_requires_machine_deployment_rollout_convergence(monke
                     {
                         "name": "cluster.x-k8s.io",
                         "preferredVersion": {"version": "v1beta1"},
-                    }
+                    },
+                    {
+                        "name": "infrastructure.cluster.x-k8s.io",
+                        "preferredVersion": {"version": "v1beta1"},
+                    },
+                    {
+                        "name": "metal3.io",
+                        "preferredVersion": {"version": "v1alpha1"},
+                    },
                 ]
             }
         if path.endswith("/machinedeployments/edge-workers"):
             return deployment
+        if path.endswith("/metal3machines/metal3-worker-01"):
+            return metal3_machine
         raise AssertionError(path)
 
     def fake_list(path, max_items=100000):
-        assert path.endswith("/namespaces/metal3-system/machines")
-        return [
-            {
-                "metadata": {
-                    "name": "edge-workers-abc",
-                    "labels": {"cluster.x-k8s.io/deployment-name": "edge-workers"},
-                },
-                "spec": {"clusterName": "edge-lab"},
-                "status": {
-                    "conditions": [{"type": "Ready", "status": "True"}],
-                    "nodeRef": {"name": "worker-01"},
-                },
-            }
-        ]
+        if path.endswith("/namespaces/metal3-system/machines"):
+            return [
+                {
+                    "metadata": {
+                        "name": "edge-workers-abc",
+                        "uid": "machine-uid-1",
+                        "labels": {
+                            "cluster.x-k8s.io/deployment-name": "edge-workers"
+                        },
+                    },
+                    "spec": {
+                        "clusterName": "edge-lab",
+                        "infrastructureRef": {
+                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                            "kind": "Metal3Machine",
+                            "name": "metal3-worker-01",
+                        },
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "nodeRef": {"name": "worker-01"},
+                    },
+                }
+            ]
+        if path.endswith("/namespaces/metal3-system/baremetalhosts"):
+            return [baremetal_host]
+        raise AssertionError(path)
 
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
@@ -421,6 +479,7 @@ def test_target_postflight_requires_machine_deployment_rollout_convergence(monke
         "payload": {
             "cluster_name": "edge-lab",
             "namespace": "metal3-system",
+            "baremetal_host_namespace": "metal3-system",
             "expected_worker_replicas": 1,
             "machine_deployment_name": "edge-workers",
         },
@@ -428,22 +487,39 @@ def test_target_postflight_requires_machine_deployment_rollout_convergence(monke
 
     result = agent.execute_command(command, "target_cluster")
 
-    assert result["machine_deployment_status"] == {
-        "requested": True,
-        "found": True,
-        "uid": "md-uid-1",
-        "generation": 4,
-        "observed_generation": 4,
-        "desired_replicas": 1,
-        "updated_replicas": 1,
-        "ready_replicas": 1,
-        "available_replicas": 1,
-        "unavailable_replicas": 0,
-        "rollout_complete": True,
-    }
+    assert result["machine_deployment_status"]["rollout_complete"] is True
+    assert result["metal3_inventory_complete"] is True
+    assert result["metal3_worker_status"] == [
+        {
+            "machine_name": "edge-workers-abc",
+            "metal3_machine_name": "metal3-worker-01",
+            "metal3_machine_uid": "m3m-uid-1",
+            "baremetal_host_name": "bmh-worker-01",
+            "baremetal_host_uid": "bmh-uid-1",
+            "consumer_reference_verified": True,
+            "provisioning_state": "provisioned",
+            "hardware_ready": True,
+        }
+    ]
     assert result["capi_worker_inventory_complete"] is True
     assert result["side_effects"] is False
 
+    metal3_machine["metadata"]["ownerReferences"][0]["uid"] = "stale-machine-uid"
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="METAL3_MACHINE_OWNERSHIP_MISMATCH",
+    ):
+        agent.execute_command(command, "target_cluster")
+    metal3_machine["metadata"]["ownerReferences"][0]["uid"] = "machine-uid-1"
+
+    baremetal_host["status"]["provisioning"]["state"] = "provisioning"
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="METAL3_BAREMETALHOST_PROVISIONING_NOT_READY",
+    ):
+        agent.execute_command(command, "target_cluster")
+
+    baremetal_host["status"]["provisioning"]["state"] = "provisioned"
     deployment["status"]["observedGeneration"] = 3
     result = agent.execute_command(command, "target_cluster")
 
