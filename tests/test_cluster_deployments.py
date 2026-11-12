@@ -2865,6 +2865,28 @@ def test_checkpoint_restore_fails_closed_after_target_agent_reassignment(
     assert restored.status_code == 409
     assert restored.data["code"] == "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED"
     assert "data" not in restored.data
+
+    attempted_write = replacement_client.post(
+        checkpoint_url,
+        {
+            "node_id": str(replacement_node.id),
+            "generation": 1,
+            "sequence": 2,
+            "phase": "target_agent_bootstrap",
+            "data": {
+                "cluster_name": "edge-lab",
+                "completed_steps": ["target_agent_bootstrap"],
+                "pending_step": None,
+            },
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {replacement_token}",
+    )
+    assert attempted_write.status_code == 409
+
     persisted = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
     assert persisted.agent_node_id == old_node.id
     assert persisted.sequence == 1
+    assert persisted.phase == "target_agent_bootstrap"
+    assert persisted.data["completed_steps"] == []
+    assert persisted.data["pending_step"] == "target_agent_bootstrap"
