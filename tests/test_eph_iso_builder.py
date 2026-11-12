@@ -552,12 +552,14 @@ def test_bootstrap_waits_for_kubernetes_api_readiness(monkeypatch):
     monkeypatch.setitem(
         bootstrap_globals,
         "_run_output",
-        lambda command: commands.append(list(command)) or next(responses),
+        lambda command, timeout=None: commands.append((list(command), timeout))
+        or next(responses),
     )
     monkeypatch.setattr(bootstrap_globals["time"], "sleep", lambda seconds: None)
 
     BOOTSTRAP["_wait_for_kubernetes_api"]()
 
     assert len(commands) == 2
-    assert commands[0][-1] == "--raw=/readyz"
-    assert commands[1][-1] == "--raw=/readyz"
+    assert commands[0][0][-1] == "--raw=/readyz"
+    assert commands[1][0][-1] == "--raw=/readyz"
+    assert all(command[1] == 10 for command in commands)
