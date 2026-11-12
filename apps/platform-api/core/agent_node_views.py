@@ -1476,7 +1476,10 @@ class AgentNodeCredentialRotateView(APIView):
             "The previous credential is invalid. Store this new token securely; "
             "it is shown only once. The agent remains offline until restarted with it."
         )
-        return Response(data)
+        response = Response(data)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentNodeClientCertificateView(APIView):
