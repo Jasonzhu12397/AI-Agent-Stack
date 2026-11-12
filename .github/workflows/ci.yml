@@ -129,6 +129,8 @@ jobs:
           test -n "$ISO_FILE"
           (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
+          xorriso -osirrox on -indev "$ISO_FILE" -extract /isolinux/isolinux.cfg "$RUNNER_TEMP/isolinux.cfg"
+          grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux.cfg"
           echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Boot ISO and verify single-node Kubernetes API
