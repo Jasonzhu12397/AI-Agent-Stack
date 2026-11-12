@@ -13,7 +13,7 @@ ExecStart=/usr/bin/python3 /usr/local/lib/eph-bootstrap.py
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=30s
-TimeoutStartSec=15min
+TimeoutStartSec=40min
 
 [Install]
 WantedBy=multi-user.target
