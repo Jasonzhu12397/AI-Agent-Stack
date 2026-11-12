@@ -682,3 +682,9 @@ def test_eph_iso_bios_bootloader_autostarts_without_keyboard():
         "prompt 0",
         "timeout 50",
     }.issubset(lines)
+
+def test_ci_bios_serial_console_check_includes_nested_syslinux_menu_files():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "-extract /isolinux " in workflow
+    assert 'grep -R -Eiq \'console=ttyS0,115200n8\'' in workflow
+    assert 'grep -Eiq \'^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)\'' in workflow
