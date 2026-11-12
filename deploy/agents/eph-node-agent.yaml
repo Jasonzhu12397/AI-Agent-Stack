@@ -41,6 +41,8 @@ spec:
               value: "6"
             - name: AGENT_TLS_ROTATION_SECRET_NAME
               value: agent-control-plane-mtls
+            - name: AGENT_TLS_ROTATION_TRUSTED_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/client-ca.crt
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -138,6 +140,8 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+              - key: client-ca.crt
+                path: client-ca.crt
               - key: tls.crt
                 path: tls.crt
               - key: tls.key
