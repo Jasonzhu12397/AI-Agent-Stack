@@ -2,6 +2,8 @@
 
 The EPH runtime is a reusable Debian 12 Live ISO that boots entirely into RAM (toram), starts a single-node K3s Kubernetes cluster, and runs the EPH Agent as a Kubernetes Deployment Pod. It does not install an operating system to local disk.
 
+The BIOS ISOLINUX menu automatically starts the default Live entry after five seconds, so unattended and headless boots do not wait for keyboard input. CI verifies this setting in the built ISO before starting the QEMU boot smoke test.
+
 ## Build
 
 Build on Debian 12/bookworm with live-build, xorriso, squashfs-tools, wget, ca-certificates, and debootstrap.
