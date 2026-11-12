@@ -529,6 +529,19 @@ def test_agent_health_files_distinguish_process_liveness_from_control_plane_read
     assert agent.health_file_is_fresh("AGENT_READINESS_FILE")
 
 
+def test_agent_health_files_reject_implausible_future_timestamps(
+    monkeypatch,
+    tmp_path,
+):
+    health_file = tmp_path / "agent-live"
+    health_file.touch()
+    future_timestamp = time.time() + 60
+    os.utime(health_file, (future_timestamp, future_timestamp))
+    monkeypatch.setenv("AGENT_LIVENESS_FILE", str(health_file))
+
+    assert not agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
+
+
 def test_metal3_inspection_discovers_version_and_returns_redacted_bmh_summary(monkeypatch):
     def fake_get(path):
         if path == "/apis":
