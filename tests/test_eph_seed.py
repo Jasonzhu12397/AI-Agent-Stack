@@ -172,7 +172,7 @@ def test_seed_rejects_same_ca_with_different_pem_wrapping():
 
 def test_seed_rejects_non_ca_certificate():
     key = ec.generate_private_key(ec.SECP256R1())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "leaf")])
     certificate = (
         x509.CertificateBuilder()
