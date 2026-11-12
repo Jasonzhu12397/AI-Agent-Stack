@@ -462,3 +462,15 @@ def test_bootstrap_creates_capi_pivot_secret_only_when_both_kubeconfigs_exist(
         "ai-agent-system",
         ["source.kubeconfig", "target.kubeconfig"],
     ) in events
+
+
+def test_ci_k3s_smoke_callback_requires_ready_node_and_workload():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "path: /usr/local/sbin/eph-ci-smoke.sh" in workflow
+    assert "set -eu" in workflow
+    assert 'k3s kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s' in workflow
+    assert "rollout status deployment/workload-smoke --timeout=180s" in workflow
+    assert "wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s" in workflow
+    assert "test -n \"$READY_PODS\"" in workflow
+    assert "curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready" in workflow
+    assert "- [bash, /usr/local/sbin/eph-ci-smoke.sh]" in workflow
