@@ -22,3 +22,6 @@ dmidecode
 lshw
 nvme-cli
 jq
+containerd
+runc
+containernetworking-plugins
