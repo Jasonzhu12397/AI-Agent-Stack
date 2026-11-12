@@ -229,11 +229,6 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
     monkeypatch.setitem(
         bootstrap_globals,
-        "_wait_for_kubernetes_api",
-        lambda: events.append(("api_ready",)),
-    )
-    monkeypatch.setitem(
-        bootstrap_globals,
         "_run_output",
         lambda arguments: next(output_values),
     )
@@ -383,6 +378,11 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
     monkeypatch.setitem(bootstrap_globals, "MEDIA_ROOT", media_root)
     monkeypatch.setitem(bootstrap_globals, "MANIFEST_ROOT", manifest_root)
     monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "_wait_for_kubernetes_api",
+        lambda: events.append(("api_ready",)),
+    )
     monkeypatch.setitem(bootstrap_globals, "_create_secret", fake_create_secret)
     monkeypatch.setitem(bootstrap_globals, "_apply_file", fake_apply_file)
     monkeypatch.setitem(
