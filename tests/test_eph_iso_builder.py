@@ -94,7 +94,8 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     assert "Before=eph-kubeadm-init.service" in etcd_mount
 
 
-def test_bootstrap_config_accepts_pinned_image_and_https_endpoint():
+def test_bootstrap_reads_the_actual_ephboot_mount_and_accepts_pinned_image():
+    assert BOOTSTRAP["MEDIA_ROOT"] == pathlib.Path("/mnt/eph-bootstrap")
     assert BOOTSTRAP["validate_config"](valid_config())["node_id"]
 
 
@@ -636,10 +637,19 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "trap on_error ERR" in workflow
     assert "journalctl -b -u" in workflow
     assert "EPH_NODE_COUNT=%s" in workflow
-    assert "EPH_CNI_DAEMONSET_READY=true" in workflow
+    assert "EPH_CALICO_NODE_READY=true" in workflow
+    assert "EPH_CALICO_CONTROLLERS_READY=true" in workflow
+    assert "EPH_POD_TO_POD_NETWORK_READY=true" in workflow
     assert "EPH_RAM_BACKED_RUNTIME_STATE=true" in workflow
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
-    assert "EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED" in workflow
+    assert "EPH_AGENT_POD_READY=true" in workflow
+    assert "deployment/eph-node-agent" in workflow
+    assert "eph-bootstrap.service" in workflow
+    assert "mock-control-plane.py" in workflow
+    assert "eph-bootstrap.img" in workflow
+    assert "pod-network-smoke" in workflow
+    assert "nginx:1.27.5-alpine" in workflow
+    assert "busybox:1.36.1" in workflow
     callback = "curl --fail --silent --show-error --max-time 10 "
     callback += "http://10.0.2.2:18080/cloud-init-ready"
     assert callback in workflow
