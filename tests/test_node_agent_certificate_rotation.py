@@ -28,6 +28,20 @@ def _create_ca():
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + datetime.timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
         .sign(key, hashes.SHA256())
     )
     return key, certificate
@@ -403,3 +417,61 @@ def test_control_plane_request_uses_pending_certificate_tls_context(monkeypatch)
     assert result == {"accepted": True}
     assert captured["url"].endswith("/certificate/activate/")
     assert captured["context"] is pending_context
+
+
+
+def test_validate_issued_certificate_does_not_trust_active_leaf_as_ca():
+    ca_key, ca_certificate = _create_ca()
+    active_key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    active_subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "Existing EPH Agent"),
+    ])
+    active_leaf = (
+        x509.CertificateBuilder()
+        .subject_name(active_subject)
+        .issuer_name(ca_certificate.subject)
+        .public_key(active_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=12))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    forged_key = ec.generate_private_key(ec.SECP256R1())
+    forged_certificate = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([
+            x509.NameAttribute(
+                NameOID.COMMON_NAME,
+                "agent-node-node-1.agents.internal",
+            ),
+        ]))
+        .issuer_name(active_subject)
+        .public_key(forged_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=12))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(active_key, hashes.SHA256())
+    )
+    forged_key_pem = forged_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    forged_pem = forged_certificate.public_bytes(serialization.Encoding.PEM)
+    active_pem = active_leaf.public_bytes(serialization.Encoding.PEM)
+
+    with pytest.raises(
+        certificate_rotation.CertificateRotationError,
+        match="AGENT_TLS_ROTATION_CA_CHAIN_INVALID",
+    ):
+        certificate_rotation.validate_issued_certificate(
+            forged_pem.decode("ascii"),
+            active_pem.decode("ascii"),
+            forged_key,
+            "node-1",
+            active_pem + ca_certificate.public_bytes(serialization.Encoding.PEM),
+        )
+    assert forged_key_pem.startswith(b"-----BEGIN PRIVATE KEY-----")
