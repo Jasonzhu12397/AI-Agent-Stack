@@ -2,8 +2,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
+
 from typing import Any
 
 
@@ -14,6 +16,57 @@ class CapiPivotError(ValueError):
 def _raise_if_cancelled(cancellation_event, error_code: str) -> None:
     if cancellation_event is not None and cancellation_event.is_set():
         raise CapiPivotError(error_code)
+
+
+def _cancellable_process_runner(cancellation_event):
+    def run(command, check=False, capture_output=False, text=False, timeout=None,
+            stdin=None, env=None):
+        _raise_if_cancelled(
+            cancellation_event,
+            "CAPI_PIVOT_CANCELLED_BEFORE_PROCESS",
+        )
+        if not capture_output:
+            raise CapiPivotError("CAPI_PIVOT_PROCESS_CAPTURE_REQUIRED")
+        process = subprocess.Popen(
+            command,
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            env=env,
+            start_new_session=True,
+        )
+        deadline = None if timeout is None else __import__("time").monotonic() + timeout
+        while True:
+            if cancellation_event is not None and cancellation_event.is_set():
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+                raise CapiPivotError("CAPI_PIVOT_CANCELLED_DURING_PROCESS")
+            remaining = None if deadline is None else deadline - __import__("time").monotonic()
+            if remaining is not None and remaining <= 0:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            wait_time = 0.25 if remaining is None else min(0.25, remaining)
+            try:
+                stdout, stderr = process.communicate(timeout=wait_time)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        if check and completed.returncode != 0:
+            raise subprocess.CalledProcessError(
+                completed.returncode, command, output=stdout, stderr=stderr
+            )
+        return completed
+
+    return run
 
 
 def _validate_identifier(value: Any, error_code: str) -> str:
@@ -657,7 +710,7 @@ def run_capi_pivot(
     _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_BEFORE_EXECUTION")
     env = dict(os.environ if environ is None else environ)
     lookup = executable_lookup or shutil.which
-    runner = process_runner or subprocess.run
+    runner = process_runner or _cancellable_process_runner(cancellation_event)
 
     def preflight_runner(*args, **kwargs):
         _raise_if_cancelled(
