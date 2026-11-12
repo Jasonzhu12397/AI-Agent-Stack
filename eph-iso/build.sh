@@ -67,7 +67,7 @@ lb config \
     --archive-areas "main contrib non-free-firmware" \
     --apt-recommends false \
     --debian-installer false \
-    --bootappend-live "boot=live components toram noeject hostname=eph-node" \
+    --bootappend-live "boot=live components toram noeject hostname=eph-node console=tty0 console=ttyS0,115200n8 systemd.show_status=1 loglevel=7" \
     --iso-application "AI Agent Studio EPH Live" \
     --iso-publisher "AI Agent Studio" \
     --iso-volume "AIAgentEPH"
