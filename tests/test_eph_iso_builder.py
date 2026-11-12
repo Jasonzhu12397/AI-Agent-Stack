@@ -626,6 +626,11 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert 'findmnt -n -o FSTYPE --target "$mountpoint")" = tmpfs' in workflow
     assert "rollout status daemonset/kube-flannel-ds" in workflow
     assert "POD_IP" in workflow and "POD_NODE" in workflow and "POD_READY" in workflow
+    assert "trap on_error ERR" in workflow
+    assert "journalctl -b -u" in workflow
+    assert "EPH_NODE_COUNT=%s" in workflow
+    assert "EPH_CNI_DAEMONSET_READY=true" in workflow
+    assert "EPH_RAM_BACKED_RUNTIME_STATE=true" in workflow
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED" in workflow
     callback = "curl --fail --silent --show-error --max-time 10 "
