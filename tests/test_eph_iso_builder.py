@@ -109,7 +109,7 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     assert "Before=eph-kubeadm-init.service" in etcd_mount
 
 
-def test_bootstrap_reads_the_actual_ephboot_mount_and_accepts_pinned_image():
+def test_bootstrap_reads_cloud_init_seed_and_accepts_pinned_image():
     assert BOOTSTRAP["MEDIA_ROOT"] == pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")
     assert BOOTSTRAP["validate_config"](valid_config())["node_id"]
 
@@ -182,9 +182,6 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "TimeoutStartSec=40min" in service
     assert "StartLimitBurst=10" in service
     assert "eph-kubeadm-init.service eph-bootstrap.service" in multi_user
-    assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
-        ROOT / "eph-iso/bootstrap.py"
-    ).read_text(encoding="utf-8")
     for name in ("user-data", "meta-data", "network-config"):
         assert (ROOT / "eph-iso/examples/cloud-init" / name).is_file()
     user_data = (ROOT / "eph-iso/examples/cloud-init/user-data").read_text(encoding="utf-8")
