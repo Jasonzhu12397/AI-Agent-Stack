@@ -51,7 +51,7 @@ For production, the Cloud Control Plane must render a unique NoCloud user-data d
 
 Use cloud-init's NoCloud `network-config` to configure DHCP or static addressing, bonds, VLANs, bridges, and interface matching. Do not assume a fixed interface name or MAC address. Production profiles must be rendered from the site's network inventory and validated against the actual NIC topology.
 
-The temporary EPH Kubernetes cluster uses the pinned Calico v3.31.0 manifest with the Pod CIDR `10.244.0.0/16`. Calico is independent of the eventual target cluster's Calico/Multus/OVS/SR-IOV design. The EPH runtime smoke test checks both Calico DaemonSet and controller Deployment readiness and validates service-DNS and Pod-network connectivity between separate Pods.
+The temporary EPH Kubernetes cluster uses the pinned Calico v3.33.0 manifest with the Pod CIDR `10.244.0.0/16`. Calico is independent of the eventual target cluster's Calico/Multus/OVS/SR-IOV design. The EPH runtime smoke test checks both Calico DaemonSet and controller Deployment readiness and validates service-DNS and Pod-network connectivity between separate Pods.
 
 ## Runtime layout
 
