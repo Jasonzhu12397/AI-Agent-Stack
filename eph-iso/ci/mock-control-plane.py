@@ -124,7 +124,6 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             ValueError,
             OSError,
             subprocess.CalledProcessError,
-            json.JSONDecodeError,
         ):
             self._send(400, {"detail": "invalid_request"})
 
