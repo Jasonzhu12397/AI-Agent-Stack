@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 import base64
+import os
 import datetime
 import hashlib
 import io
