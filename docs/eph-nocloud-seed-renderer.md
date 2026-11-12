@@ -7,8 +7,11 @@ and \`network-config\`.
 
 The renderer requires an HTTPS control-plane URL, a UUID node identity, a
 one-time enrollment token, an immutable Agent image digest, a version 2
-network configuration, and the trusted CA certificate used to verify the
-Cloud Control Plane HTTPS endpoint.
+network configuration, and two distinct CA certificates: the trusted CA certificate used to verify the
+Cloud Control Plane HTTPS endpoint, plus the independent EPH Agent client-certificate
+issuer root written to `tls/agent-ca.crt`. The issuer root must not be the
+Cloud Control Plane TLS CA; the node uses it as the trust anchor when validating
+its node-bound client certificate before creating Kubernetes Secrets.
 
 The seed deliberately does not contain a client certificate or private key.
 After boot, the EPH node generates its own private key and CSR locally. The
