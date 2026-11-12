@@ -17,6 +17,14 @@ command -v kubectl >/dev/null 2>&1 || fail "KUBECTL_BINARY_MISSING"
 command -v kubelet >/dev/null 2>&1 || fail "KUBELET_BINARY_MISSING"
 command -v containerd >/dev/null 2>&1 || fail "CONTAINERD_BINARY_MISSING"
 [ -s "$FLANNEL_MANIFEST" ] || fail "FLANNEL_MANIFEST_MISSING"
+[ -x /usr/lib/cni/bridge ] || fail "CNI_BRIDGE_PLUGIN_MISSING"
+[ -x /usr/lib/cni/host-local ] || fail "CNI_HOST_LOCAL_PLUGIN_MISSING"
+[ -x /usr/lib/cni/loopback ] || fail "CNI_LOOPBACK_PLUGIN_MISSING"
+install -d -m 0755 /opt/cni
+if [ ! -e /opt/cni/bin ]; then
+    ln -s /usr/lib/cni /opt/cni/bin
+fi
+[ -x /opt/cni/bin/bridge ] || fail "CNI_PLUGIN_PATH_INVALID"
 
 swapoff -a
 modprobe overlay
