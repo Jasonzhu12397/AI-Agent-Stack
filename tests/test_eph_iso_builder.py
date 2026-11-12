@@ -31,6 +31,7 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "v1.33|v1.34|v1.35|v1.36" in script
     assert "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED" in script
     assert "EPH_ISO_METADATA" in script
+    assert "projectcalico/calico/v3.31.0/manifests/calico.yaml" in script
 
 
 def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
@@ -44,6 +45,8 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "CALICO_MANIFEST_MISSING" in initializer
     assert "CALICO_IPV4POOL" not in initializer
     assert "192.168.0.0/16" in initializer
+    assert 'sed -i "s#192.168.0.0/16#$POD_CIDR#g"' in initializer
+    assert 'config_path = "/etc/containerd/certs.d"' in initializer
     assert "daemonset/calico-node" in initializer
     assert "deployment/calico-kube-controllers" in initializer
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
@@ -58,6 +61,9 @@ def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
     ).read_text(encoding="utf-8")
     assert "Requires=eph-kubeadm-init.service" in service
     assert "After=cloud-init.target network-online.target eph-kubeadm-init.service" in service
+    assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
+        ROOT / "eph-iso/bootstrap.py"
+    ).read_text(encoding="utf-8")
     assert "mnt-eph" not in service
 
 
@@ -655,6 +661,9 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "deployment/eph-node-agent" in workflow
     assert "eph-bootstrap.service" in workflow
     assert "mock-control-plane.py" in workflow
+    assert "Dockerfile.node-agent" in workflow
+    assert "image_digest" in workflow
+    assert "eph-mock-control-plane.log" in workflow
     assert "/etc/ai-agent-studio/eph-bootstrap/bootstrap.json" in workflow
     assert "encoding: b64" in workflow
     assert "base64 -w0" in workflow
