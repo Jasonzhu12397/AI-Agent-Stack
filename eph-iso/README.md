@@ -14,32 +14,38 @@ sudo env KUBERNETES_VERSION=v1.35.3 bash eph-iso/build.sh
 
 The builder supports amd64 and Kubernetes minors v1.33, v1.34, v1.35, and v1.36. It downloads kubeadm, kubelet, and kubectl from the official Kubernetes release endpoint and verifies each binary against its published SHA-256 file. The output directory receives the ISO, SHA-256 sidecar, and release metadata JSON.
 
-## Per-node configuration
+## Per-node configuration with cloud-init NoCloud
 
-Use one generic ISO for every machine. Do not rebuild the ISO to inject per-node identity, network settings, or credentials. Attach two separate per-node media devices:
+Use one generic ISO for every machine. Do not rebuild the ISO to inject per-node identity, network settings, or credentials. Generate a separate NoCloud seed image for each EPH node and attach it as a second virtual disk/CD-ROM or expose it through approved virtual media.
 
-1. A NoCloud seed with the filesystem label `CIDATA`, containing `user-data`, `meta-data`, and `network-config`. This configures the hostname, cloud-init, and site network settings.
-2. A read-only bootstrap volume with the filesystem label `EPHBOOT`, containing the Agent enrollment document and trust anchors:
+The seed volume must use the filesystem label `CIDATA` and contain these files at its root:
+
+- `user-data`: cloud-config that writes the node bootstrap configuration and both CA trust anchors.
+- `meta-data`: unique instance ID and hostname.
+- `network-config`: cloud-init v2 network configuration for the site's interfaces.
+
+Example source files are in `eph-iso/examples/cloud-init/`. The example `user-data` writes these files with root ownership and restrictive permissions:
 
 ~~~text
-EPHBOOT/
+/etc/ai-agent-studio/eph-bootstrap/
   bootstrap.json
   tls/
     ca.crt
     agent-ca.crt
 ~~~
 
-The EPHBOOT volume is mounted read-only at `/mnt/eph-bootstrap`. The bootstrap service requires this mount and fails closed if the volume or required files are missing. `bootstrap.json` contains the HTTPS control-plane URL, node UUID, one-time enrollment token, and immutable EPH Agent image reference pinned by SHA-256 digest.
+`bootstrap.json` contains the HTTPS control-plane URL, node UUID, one-time enrollment token, and immutable EPH Agent image reference pinned by SHA-256 digest. The two CA files have different purposes:
 
-The two CA files have different purposes:
 - `tls/ca.crt` verifies the Cloud Control Plane HTTPS endpoint.
 - `tls/agent-ca.crt` is the independently provisioned Agent client-certificate issuer trust anchor.
 
-Never derive the Agent issuer root from the returned certificate chain. The EPH node generates its own private key and CSR after boot; the private key never leaves the node and is never stored on either media device. The Cloud Control Plane consumes the one-time enrollment token only after the trusted issuer signs the CSR, then returns a node-bound client certificate and a separate runtime token.
+Never derive the Agent issuer root from the returned certificate chain. The EPH node generates its own private key and CSR after boot; the private key never leaves the node and is never written to the seed. The Cloud Control Plane consumes the one-time enrollment token only after the trusted issuer signs the CSR, then returns a node-bound client certificate and a separate runtime token.
 
-The bootstrap process copies the trust anchors into Kubernetes Secrets, applies the dedicated EPH Agent RBAC and Deployment, and waits for the Deployment rollout and a Running, Ready Agent Pod. Optional CAPI pivot kubeconfigs may be supplied only as a complete source/target pair when the workflow authorizes their use.
+The bootstrap process reads the cloud-init files from `/etc/ai-agent-studio/eph-bootstrap`, copies the trust anchors into Kubernetes Secrets, applies the dedicated EPH Agent RBAC and Deployment, and waits for the Deployment rollout and a Running, Ready Agent Pod. Optional CAPI pivot kubeconfigs may be supplied only as a complete source/target pair when the workflow authorizes their use.
 
-Example NoCloud source files are in `eph-iso/examples/cloud-init/`. The example user-data contains placeholders and is not deployable as-is. Production user-data and EPHBOOT media must be rendered uniquely by the Cloud Control Plane. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Protect EPHBOOT media as secret material and destroy it after provisioning.
+An additional read-only volume labeled `EPHBOOT` is optional. It is used only for site-specific systemd-networkd profiles under `network/*.network`, `network/*.netdev`, and `network/*.link`; it is not the Agent enrollment source. The network configuration service safely skips this media when it is absent.
+
+For production, the Cloud Control Plane must render a unique NoCloud user-data document per node. The example user-data contains placeholders and is not deployable as-is. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Protect the seed as secret material and destroy it after provisioning.
 
 ## Network configuration
 
