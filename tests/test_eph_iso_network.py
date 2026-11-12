@@ -24,7 +24,7 @@ def test_network_profile_installer_copies_only_supported_regular_files(tmp_path)
     with pytest.raises(ValueError, match="EPH_NETWORK_CONFIG_SYMLINK_REJECTED"):
         NETWORK_CONFIG["install_network_configuration"](media, target)
 
-    assert (target / "10-uplink.network").is_file()
+    assert not (target / "10-uplink.network").exists()
     assert not (target / "ignore.txt").exists()
     assert not (target / "99-link.network").exists()
 
@@ -61,6 +61,26 @@ def test_network_profile_installer_rejects_malformed_profiles(
 
     assert not (target / filename).exists()
 
+
+
+def test_network_profile_installer_validates_all_profiles_before_copying(tmp_path):
+    media = tmp_path / "media" / "network"
+    target = tmp_path / "target"
+    media.mkdir(parents=True)
+    (media / "10-valid.network").write_text(
+        "[Match]\\nName=enp5s0\\n[Network]\\nDHCP=ipv4\\n",
+        encoding="utf-8",
+    )
+    (media / "20-invalid.network").write_text(
+        "[Match]\\nName=enp6s0\\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="EPH_NETWORK_CONFIG_SECTIONS_INVALID"):
+        NETWORK_CONFIG["install_network_configuration"](media, target)
+
+    assert not (target / "10-valid.network").exists()
+    assert not (target / "20-invalid.network").exists()
 
 def test_network_profile_installer_does_not_overwrite_existing_networkd_files(
     tmp_path,
