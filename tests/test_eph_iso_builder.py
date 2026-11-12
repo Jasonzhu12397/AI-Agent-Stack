@@ -653,7 +653,9 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     callback = "curl --fail --silent --show-error --max-time 10 "
     callback += "http://10.0.2.2:18080/cloud-init-ready"
     assert callback in workflow
-    assert "- [bash, /usr/local/sbin/eph-ci-smoke.sh]" in workflow
+    assert "nohup /usr/local/sbin/eph-ci-smoke.sh" in workflow
+    assert "After=cloud-init.target" in workflow
+    assert "calico-node" in workflow
 
 
 def test_eph_network_config_runs_before_systemd_networkd():
