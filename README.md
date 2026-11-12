@@ -58,7 +58,7 @@ The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kube
 1. Sign in to the Studio and create/select a tenant and project. The enrolling user must be a tenant owner or tenant administrator; project-only membership is not sufficient.
 2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Node Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
 3. The Studio creates the AgentNode UUID and generates the one-time token server-side with Python `secrets.token_urlsafe(36)`. The API returns the token as `enrollment_token` exactly once; the database stores only its SHA-256 hash. Copy each node UUID and token into your secret manager. If a token is lost, use **Rotate credential**; never reuse EPH credentials for Target.
-4. Prepare the Kubernetes Secrets, mTLS certificates and (for EPH) the source/target CAPI kubeconfigs as described in [Kubernetes Agent deployment](deploy/agents/README.md). Do not place credentials in Compose environment files or Git.
+4. Prepare the Kubernetes Secrets and mTLS certificates as described in [Kubernetes Agent deployment](deploy/agents/README.md). Source/target CAPI kubeconfigs are optional during initial enrollment and are added only when the pivot workflow is ready. Do not place credentials in Compose environment files or Git.
 
 For API-driven enrollment, send two separate requests to
 `POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/`:
