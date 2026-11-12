@@ -28,7 +28,9 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "console=ttyS0,115200n8" in script
     assert "systemd.show_status=1" in script
     assert "iso-hybrid" in script
-    assert "v1.33|v1.34|v1.35|v1.36" in script
+    assert "v1.33) CALICO_VERSION=v3.31.6" in script
+    assert "v1.34) CALICO_VERSION=v3.32.1" in script
+    assert "v1.35|v1.36) CALICO_VERSION=v3.33.0" in script
     assert "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED" in script
     assert "EPH_ISO_METADATA" in script
     assert "v1.33) CALICO_VERSION=v3.31.6" in script
@@ -674,7 +676,7 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     )
     assert "kubectl.sha256" in workflow
     assert "eph-mock-control-plane.log" in workflow
-    assert "EPH_CI_AGENT_MTLS_HEARTBEAT_READY=true" in workflow
+    assert "EPH_AGENT_MTLS_HEARTBEAT_READY=true" in workflow
     assert "EPH_AGENT_INVENTORY_READY=true" in workflow
     assert "EPH_AGENT_COMMAND_POLL_READY=true" in workflow
     assert "/etc/ai-agent-studio/eph-bootstrap/bootstrap.json" in workflow
