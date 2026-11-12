@@ -31,7 +31,7 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "v1.33|v1.34|v1.35|v1.36" in script
     assert "KUBERNETES_MINOR_VERSION_NOT_SUPPORTED" in script
     assert "EPH_ISO_METADATA" in script
-    assert "projectcalico/calico/v3.31.0/manifests/calico.yaml" in script
+    assert "projectcalico/calico/v3.33.0/manifests/calico.yaml" in script
 
 
 def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
@@ -44,8 +44,8 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "calico.yaml" in initializer
     assert "CALICO_MANIFEST_MISSING" in initializer
     assert "CALICO_IPV4POOL" not in initializer
-    assert "192.168.0.0/16" in initializer
-    assert 'sed -i "s#192.168.0.0/16#$POD_CIDR#g"' in initializer
+    assert "POD_CIDR" in initializer
+    assert "--pod-network-cidr" in initializer
     assert 'config_path = "/etc/containerd/certs.d"' in initializer
     assert "daemonset/calico-node" in initializer
     assert "deployment/calico-kube-controllers" in initializer
