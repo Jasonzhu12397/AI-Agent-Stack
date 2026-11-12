@@ -207,7 +207,7 @@ jobs:
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
           qemu-system-x86_64 \
-            -machine usb=off \\
+            -machine usb=off \
             -accel tcg,thread=multi \
             -cpu max -m 4096 -smp 2 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
