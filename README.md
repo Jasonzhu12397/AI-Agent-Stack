@@ -59,6 +59,30 @@ The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kube
 2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Node Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
 3. The Studio creates the AgentNode UUID and generates the one-time token server-side with Python `secrets.token_urlsafe(36)`. The API returns the token as `enrollment_token` exactly once; the database stores only its SHA-256 hash. Copy each node UUID and token into your secret manager. If a token is lost, use **Rotate credential**; never reuse EPH credentials for Target.
 4. Prepare the Kubernetes Secrets, mTLS certificates and (for EPH) the source/target CAPI kubeconfigs as described in [Kubernetes Agent deployment](deploy/agents/README.md). Do not place credentials in Compose environment files or Git.
+
+For API-driven enrollment, send two separate requests to
+`POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/`:
+`{"name":"eph-node-01","node_type":"eph_node"}` and
+`{"name":"target-cluster-agent-01","node_type":"target_cluster"}`.
+Each successful response returns its own `id` and one-time
+`enrollment_token`. Map those values to the runtime variables below; do not
+reuse a token or node ID across the two Agent roles:
+
+```bash
+EPH_AGENT_NODE_ID=<eph-node-uuid>
+EPH_AGENT_TOKEN=<eph-one-time-token>
+TARGET_AGENT_NODE_ID=<target-node-uuid>
+TARGET_AGENT_TOKEN=<target-one-time-token>
+```
+
+The platform generates each UUID and token when the corresponding AgentNode is
+enrolled. The token is generated server-side with
+`secrets.token_urlsafe(36)`, returned only once, and stored in PostgreSQL only
+as a SHA-256 hash. These variables are placeholders for values returned by the
+two enrollment responses, not values to invent locally. If a token is lost,
+rotate that node's credential in the Studio and update the corresponding
+secret; never print tokens in logs or commit them to Git.
+
 5. Build and push the digest-pinned Node Agent image, then deploy it into the two independent Kubernetes contexts:
 
 ```bash
