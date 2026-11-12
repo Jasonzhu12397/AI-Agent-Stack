@@ -4952,3 +4952,41 @@ def test_control_plane_client_rejects_oversized_responses(monkeypatch):
 
     with pytest.raises(agent.NodeAgentError, match="CONTROL_PLANE_RESPONSE_TOO_LARGE"):
         client.request("/api/v1/agent-runtime/heartbeat/")
+
+
+def test_capi_pivot_process_group_is_killed_on_timeout(monkeypatch):
+    class FakeProcess:
+        pid = 54321
+        returncode = -9
+
+        def __init__(self):
+            self.communicate_calls = 0
+
+        def communicate(self, timeout=None):
+            self.communicate_calls += 1
+            return "", ""
+
+    process = FakeProcess()
+    killed_process_groups = []
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        "node_agent.capi_pivot.os.killpg",
+        lambda pid, sig: killed_process_groups.append((pid, sig)),
+    )
+
+    runner = agent.run_capi_pivot.__globals__["_cancellable_process_runner"](None)
+    with pytest.raises(agent.subprocess.TimeoutExpired):
+        runner(
+            ["kubectl", "get", "nodes"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=0,
+            stdin=agent.subprocess.DEVNULL,
+            env={},
+        )
+
+    assert killed_process_groups == [
+        (54321, agent.run_capi_pivot.__globals__["signal"].SIGKILL)
+    ]
+    assert process.communicate_calls == 1
