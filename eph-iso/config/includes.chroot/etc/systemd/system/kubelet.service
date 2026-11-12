@@ -6,7 +6,7 @@ Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount
 StartLimitIntervalSec=0
 
 [Service]
-ExecStart=/usr/local/bin/kubelet --config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --container-runtime-endpoint=unix:///run/containerd/containerd.sock --pod-infra-container-image=registry.k8s.io/pause:3.10
+ExecStart=/usr/local/bin/kubelet --config=/var/lib/kubelet/config.yaml --kubeconfig=/etc/kubernetes/kubelet.conf --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --container-runtime-endpoint=unix:///run/containerd/containerd.sock
 Restart=always
 RestartSec=10
 LimitNOFILE=1048576
