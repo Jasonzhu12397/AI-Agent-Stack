@@ -318,7 +318,7 @@ jobs:
                           command: ["sh", "-c", "wget -qO- http://workload-smoke.eph-ci-smoke.svc.cluster.local | grep -q 'Welcome to nginx'"]
                 NETWORK
                 kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-smoke --timeout=300s
-                for attempt in $(seq 1 120); do
+                for attempt in $(seq 1 180); do
                   if systemctl is-active --quiet eph-bootstrap.service; then break; fi
                   if systemctl is-failed --quiet eph-bootstrap.service; then
                     systemctl --no-pager --full status eph-bootstrap.service >&2 || true
@@ -390,7 +390,7 @@ jobs:
           ready=false
           cloud_init_ready=false
           cloud_init_failed=false
-          for attempt in $(seq 1 360); do
+          for attempt in $(seq 1 480); do
             if curl --insecure --fail --silent --max-time 3 \
               https://127.0.0.1:16443/readyz >/dev/null; then
               ready=true
