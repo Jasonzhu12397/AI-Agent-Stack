@@ -3781,12 +3781,28 @@ def execute_command(
                 )
                 metal3_metadata = metal3_machine.get("metadata", {})
                 metal3_uid = metal3_metadata.get("uid")
+                metal3_owner_references = metal3_metadata.get("ownerReferences", [])
+                machine_uid = machine_metadata.get("uid")
                 if (
                     not isinstance(metal3_uid, str)
                     or not metal3_uid
                     or metal3_machine.get("kind") != "Metal3Machine"
+                    or metal3_machine.get("apiVersion")
+                    != f"infrastructure.cluster.x-k8s.io/{metal3_version}"
+                    or metal3_metadata.get("name") != infrastructure_ref["name"]
+                    or metal3_metadata.get("namespace") != namespace
+                    or not isinstance(machine_uid, str)
+                    or not machine_uid
+                    or not isinstance(metal3_owner_references, list)
+                    or not any(
+                        isinstance(owner, dict)
+                        and owner.get("kind") == "Machine"
+                        and owner.get("name") == machine_name
+                        and owner.get("uid") == machine_uid
+                        for owner in metal3_owner_references
+                    )
                 ):
-                    raise NodeAgentError("METAL3_MACHINE_IDENTITY_INVALID")
+                    raise NodeAgentError("METAL3_MACHINE_OWNERSHIP_MISMATCH")
                 host = bmh_by_consumer.get(
                     (namespace, infrastructure_ref["name"])
                 )
