@@ -2671,6 +2671,8 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
     )
 
     assert response.status_code == 200
+    assert response["Cache-Control"] == "no-store, max-age=0"
+    assert response["Pragma"] == "no-cache"
     assert response.data["node_id"] == node_id
     assert response.data["client_certificate"] == certificate
     assert response.data["ca_chain"] == ca_chain
@@ -2845,6 +2847,8 @@ def test_eph_certificate_renewal_stages_then_activates_only_after_new_mtls_ident
         )
         node.refresh_from_db()
         assert staged.status_code == 200
+        assert staged["Cache-Control"] == "no-store, max-age=0"
+        assert staged["Pragma"] == "no-cache"
         assert staged.data["activation_required"] is True
         assert "agent_token" not in staged.data
         assert node.client_certificate_fingerprint == old_fingerprint
