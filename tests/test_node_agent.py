@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from node_agent import agent, capabilities
+from node_agent import agent, capabilities, capi_pivot
 
 TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
 
@@ -4732,7 +4732,7 @@ def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
         def communicate(self, timeout=None):
             if timeout is not None:
                 cancellation_event.set()
-                raise agent.subprocess.TimeoutExpired(["kubectl"], timeout)
+                raise capi_pivot.subprocess.TimeoutExpired(["kubectl"], timeout)
             return "", ""
 
     process = FakeProcess()
@@ -4756,7 +4756,7 @@ def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
             capture_output=True,
             text=True,
             timeout=10,
-            stdin=agent.subprocess.DEVNULL,
+            stdin=capi_pivot.subprocess.DEVNULL,
             env={},
         )
 
@@ -4975,14 +4975,14 @@ def test_capi_pivot_process_group_is_killed_on_timeout(monkeypatch):
     )
 
     runner = agent.run_capi_pivot.__globals__["_cancellable_process_runner"](None)
-    with pytest.raises(agent.subprocess.TimeoutExpired):
+    with pytest.raises(capi_pivot.subprocess.TimeoutExpired):
         runner(
             ["kubectl", "get", "nodes"],
             check=False,
             capture_output=True,
             text=True,
             timeout=0,
-            stdin=agent.subprocess.DEVNULL,
+            stdin=capi_pivot.subprocess.DEVNULL,
             env={},
         )
 
