@@ -26,8 +26,9 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length))
 
     def _authorized(self):
-        expected = "Bearer " + self.server.enrollment_token
-        return self.headers.get("Authorization") == expected
+        is_enrollment = self.path.endswith("/certificate/")
+        token = self.server.enrollment_token if is_enrollment else self.server.agent_token
+        return self.headers.get("Authorization") == "Bearer " + token
 
     def _issue_certificate(self, csr_pem):
         if not isinstance(csr_pem, str) or not csr_pem.startswith("-----BEGIN CERTIFICATE REQUEST-----"):
@@ -76,6 +77,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             payload = self._payload()
             if re.fullmatch(r"/api/v1/agent-runtime/nodes/[0-9a-f-]{36}/certificate/", self.path):
                 certificate, chain, fingerprint = self._issue_certificate(payload.get("csr_pem"))
+                print("EPH_CI_AGENT_CERTIFICATE_ISSUED", flush=True)
                 self._send(
                     200,
                     {
@@ -92,12 +94,15 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self._send(401, {"detail": "client_certificate_required"})
                 return
             if self.path == "/api/v1/agent-runtime/heartbeat/":
+                print("EPH_CI_AGENT_MTLS_HEARTBEAT", flush=True)
                 self._send(200, {"active_deployments": []})
                 return
             if self.path == "/api/v1/agent-runtime/inventory/":
+                print("EPH_CI_AGENT_INVENTORY_ACCEPTED", flush=True)
                 self._send(200, {"status": "accepted"})
                 return
             if self.path == "/api/v1/agent-runtime/commands/poll/":
+                print("EPH_CI_AGENT_COMMAND_POLL", flush=True)
                 self._send(200, {"command": None})
                 return
             self._send(404, {"detail": "not_found"})
