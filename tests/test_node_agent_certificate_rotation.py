@@ -482,3 +482,26 @@ def test_validate_issued_certificate_does_not_trust_active_leaf_as_ca():
             ca_certificate.public_bytes(serialization.Encoding.PEM),
         )
     assert forged_key_pem.startswith(b"-----BEGIN PRIVATE KEY-----")
+
+
+def test_validate_issued_certificate_rejects_active_leaf_as_trust_anchor():
+    ca_key, ca_certificate = _create_ca()
+    key, _, _, certificate_pem, _, _ = _issue_client_certificate(
+        ca_key,
+        ca_certificate,
+        "node-leaf-trust",
+    )
+    leaf = x509.load_pem_x509_certificate(certificate_pem)
+    leaf_pem = leaf.public_bytes(serialization.Encoding.PEM)
+
+    with pytest.raises(
+        certificate_rotation.CertificateRotationError,
+        match="AGENT_TLS_ROTATION_NO_TRUSTED_ROOT",
+    ):
+        certificate_rotation.validate_issued_certificate(
+            certificate_pem.decode("ascii"),
+            ca_certificate.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+            key,
+            "node-leaf-trust",
+            leaf_pem,
+        )
