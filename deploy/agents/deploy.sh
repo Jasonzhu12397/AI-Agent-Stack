@@ -33,10 +33,16 @@ require_secret_keys() {
 
 validate_optional_pivot_secret() {
     local context="$1"
-    if kubectl --context "$context" --namespace ai-agent-system get secret capi-pivot-kubeconfigs >/dev/null 2>&1; then
+    local result
+    if result="$(kubectl --context "$context" --namespace ai-agent-system get secret capi-pivot-kubeconfigs -o name 2>&1)"; then
         require_secret_keys "$context" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
-    elif [ "$ENABLE_CAPI_PIVOT" = "true" ]; then
-        fail "CAPI_PIVOT_KUBECONFIG_SECRET_REQUIRED"
+    elif [[ "$result" == *"NotFound"* ]]; then
+        if [ "$ENABLE_CAPI_PIVOT" = "true" ]; then
+            fail "CAPI_PIVOT_KUBECONFIG_SECRET_REQUIRED"
+        fi
+    else
+        printf "%s\\n" "$result" >&2
+        fail "CAPI_PIVOT_SECRET_LOOKUP_FAILED"
     fi
 }
 
