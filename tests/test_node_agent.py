@@ -4722,6 +4722,47 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
     )
 
 
+def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
+    cancellation_event = agent.threading.Event()
+    process = type(
+        "FakeProcess",
+        (),
+        {
+            "pid": 12345,
+            "returncode": -9,
+            "communicate": lambda self, timeout=None: (
+                cancellation_event.set(),
+                (_ for _ in ()).throw(agent.subprocess.TimeoutExpired(["kubectl"], timeout)),
+            )[1],
+        },
+    )()
+    killed_process_groups = []
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        "node_agent.capi_pivot.os.killpg",
+        lambda pid, sig: killed_process_groups.append((pid, sig)),
+    )
+
+    runner = agent.run_capi_pivot.__globals__["_cancellable_process_runner"](
+        cancellation_event
+    )
+    with pytest.raises(
+        agent.CapiPivotError,
+        match="CAPI_PIVOT_CANCELLED_DURING_PROCESS",
+    ):
+        runner(
+            ["kubectl", "get", "nodes"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=agent.subprocess.DEVNULL,
+            env={},
+        )
+
+    assert killed_process_groups == [(12345, agent.run_capi_pivot.__globals__["signal"].SIGKILL)]
+
+
 def test_execute_command_rejects_command_when_lease_is_already_cancelled():
     cancellation_event = agent.threading.Event()
     cancellation_event.set()
