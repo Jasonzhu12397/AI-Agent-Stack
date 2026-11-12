@@ -328,6 +328,34 @@ def _apply_file(path, image=None):
     ], content)
 
 
+def _wait_for_agent_pod():
+    kubectl = [
+        "k3s",
+        "kubectl",
+        "--kubeconfig",
+        "/etc/rancher/k3s/k3s.yaml",
+        "--namespace",
+        "ai-agent-system",
+    ]
+    _run(kubectl + [
+        "wait",
+        "--for=condition=Ready",
+        "pod",
+        "--selector=app.kubernetes.io/name=eph-node-agent",
+        "--timeout=300s",
+    ])
+    ready_pods = _run_output(kubectl + [
+        "get",
+        "pods",
+        "--selector=app.kubernetes.io/name=eph-node-agent",
+        "--field-selector=status.phase=Running",
+        "-o",
+        "jsonpath={.items[?(@.status.conditions[?(@.type==\"Ready\" && @.status==\"True\")])].metadata.name}",
+    ], timeout=15).strip()
+    if not ready_pods:
+        raise BootstrapError("EPH_AGENT_POD_NOT_READY")
+
+
 def bootstrap():
     config_path = MEDIA_ROOT / "bootstrap.json"
     if (
@@ -403,6 +431,7 @@ def bootstrap():
             "--namespace", "ai-agent-system", "rollout", "status",
             "deployment/eph-node-agent", "--timeout=10m"
         ])
+        _wait_for_agent_pod()
 
 
 if __name__ == "__main__":
