@@ -4472,7 +4472,8 @@ def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
     path = Path(os.environ.get(name, default_path))
     if not path.is_file():
         return False
-    return time.time() - path.stat().st_mtime <= max_age_seconds
+    age_seconds = time.time() - path.stat().st_mtime
+    return -5 <= age_seconds <= max_age_seconds
 
 
 def execute_command_with_lease(
