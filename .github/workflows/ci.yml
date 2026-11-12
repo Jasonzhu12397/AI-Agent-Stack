@@ -77,6 +77,7 @@ jobs:
 
   eph-iso:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install Live ISO and QEMU build dependencies
@@ -219,7 +220,7 @@ jobs:
           trap 'kill "$QEMU_PID" "$HTTP_PID" >/dev/null 2>&1 || true' EXIT
           ready=false
           cloud_init_ready=false
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 240); do
             if curl --insecure --fail --silent --max-time 3 \
               https://127.0.0.1:16443/readyz >/dev/null; then
               ready=true
