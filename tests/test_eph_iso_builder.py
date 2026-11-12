@@ -33,14 +33,19 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "EPH_ISO_METADATA" in script
 
 
-def test_eph_iso_initializes_kubernetes_with_kubeadm_and_flannel():
+def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     root = ROOT / "eph-iso/config/includes.chroot"
     initializer = (root / "usr/local/sbin/eph-kubeadm-init.sh").read_text(encoding="utf-8")
     service = (root / "etc/systemd/system/eph-kubeadm-init.service").read_text(encoding="utf-8")
     kubelet = (root / "etc/systemd/system/kubelet.service").read_text(encoding="utf-8")
     assert "kubeadm init" in initializer
     assert "--cri-socket" in initializer
-    assert "kube-flannel.yml" in initializer
+    assert "calico.yaml" in initializer
+    assert "CALICO_MANIFEST_MISSING" in initializer
+    assert "CALICO_IPV4POOL" not in initializer
+    assert "192.168.0.0/16" in initializer
+    assert "daemonset/calico-node" in initializer
+    assert "deployment/calico-kube-controllers" in initializer
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
     assert "containerd.service" in service
     assert "/usr/local/bin/kubelet" in kubelet
@@ -624,7 +629,9 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "grep -Eq '(^|[[:space:]])toram" in workflow
     assert "swapon --show --noheadings" in workflow
     assert 'findmnt -n -o FSTYPE --target "$mountpoint")" = tmpfs' in workflow
-    assert "rollout status daemonset/kube-flannel-ds" in workflow
+    assert "rollout status daemonset/calico-node" in workflow
+    assert "rollout status deployment/calico-kube-controllers" in workflow
+    assert "calico" in workflow.lower()
     assert "POD_IP" in workflow and "POD_NODE" in workflow and "POD_READY" in workflow
     assert "trap on_error ERR" in workflow
     assert "journalctl -b -u" in workflow
