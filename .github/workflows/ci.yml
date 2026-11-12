@@ -217,6 +217,7 @@ jobs:
             sleep 5
           done
           if [ "$ready" != true ] || [ "$cloud_init_ready" != true ]; then
+            printf 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED\\n'
             printf 'QEMU_PID_ALIVE=%s\n' "$(kill -0 "$QEMU_PID" >/dev/null 2>&1 && echo true || echo false)"
             printf 'K3S_API_READY=%s\n' "$ready"
             printf 'CLOUD_INIT_WORKLOAD_SMOKE_READY=%s\n' "$cloud_init_ready"
@@ -232,6 +233,9 @@ jobs:
             ps -fp "$QEMU_PID","$HTTP_PID" || true
             exit 1
           fi
+          printf '%s\\n' 'K3S_API_READY=true'
+          printf '%s\\n' 'K3S_WORKLOAD_SMOKE_READY=true'
+          printf '%s\\n' 'EPH_AGENT_POD_READY=NOT_TESTED_NO_ENROLLMENT_SEED'
       - name: Upload EPH Live ISO artifact
         uses: actions/upload-artifact@v4
         with:
