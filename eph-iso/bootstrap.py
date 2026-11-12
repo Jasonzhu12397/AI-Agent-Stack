@@ -24,6 +24,11 @@ class BootstrapError(Exception):
     pass
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 def validate_config(config):
     if not isinstance(config, dict):
         raise BootstrapError("BOOTSTRAP_CONFIG_INVALID")
@@ -178,6 +183,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         urllib.request.HTTPSHandler(context=context),
+        _NoRedirectHandler(),
     )
     try:
         with opener.open(request, timeout=20) as response:
