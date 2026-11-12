@@ -229,7 +229,7 @@ jobs:
                   status=$?
                   trap - ERR
                   printf 'EPH_GUEST_SMOKE_FAILED exit=%s\n' "$status" >&2
-                  for unit in containerd kubelet eph-kubeadm-init; do
+                  for unit in containerd kubelet eph-kubeadm-init eph-bootstrap; do
                     systemctl --no-pager --full status "$unit" >&2 || true
                     journalctl -b -u "$unit" --no-pager -n 120 >&2 || true
                   done
@@ -245,6 +245,11 @@ jobs:
                 for mountpoint in /var/lib/containerd /var/lib/etcd /var/lib/kubelet; do
                   test "$(findmnt -n -o FSTYPE --target "$mountpoint")" = tmpfs
                 done
+                for attempt in $(seq 1 120); do
+                  if kubectl get --raw=/readyz 2>/dev/null | grep -qx ok; then break; fi
+                  sleep 5
+                done
+                kubectl get --raw=/readyz | grep -qx ok
                 NODE_COUNT="$(kubectl get nodes --no-headers | wc -l)"
                 test "$NODE_COUNT" -eq 1
                 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
@@ -321,8 +326,8 @@ jobs:
                 test "$AGENT_NODE" = "$NODE_NAME"
                 test -n "$AGENT_POD_IP"
                 test "$AGENT_READY" = true
-                printf 'EPH_AGENT_POD=%s\\n' "$AGENT_POD"
-                printf 'EPH_AGENT_POD_IP=%s\\n' "$AGENT_POD_IP"
+                printf 'EPH_AGENT_POD=%s\n' "$AGENT_POD"
+                printf 'EPH_AGENT_POD_IP=%s\n' "$AGENT_POD_IP"
                 printf 'EPH_AGENT_POD_READY=true\\n'
                 READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
                 test -n "$READY_PODS"
