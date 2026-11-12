@@ -95,6 +95,7 @@ printf '{\n  "kubernetes_version": "%s",\n  "calico_version": "%s",\n  "runtime"
     "$KUBERNETES_VERSION" "$CALICO_VERSION" "$ARCHITECTURE" \
     "$(basename "$output_file")" "$iso_sha256" > "$metadata_file"
 
+printf 'EPH_CALICO_VERSION=%s\n' "$CALICO_VERSION"
 printf 'EPH_ISO=%s\n' "$output_file"
 printf 'EPH_ISO_SHA256_FILE=%s.sha256\n' "$output_file"
 
