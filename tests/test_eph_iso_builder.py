@@ -123,6 +123,9 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     ).read_text(encoding="utf-8")
     for name in ("user-data", "meta-data", "network-config"):
         assert (ROOT / "eph-iso/examples/cloud-init" / name).is_file()
+    user_data = (ROOT / "eph-iso/examples/cloud-init/user-data").read_text(encoding="utf-8")
+    assert "agent-ca.crt" in user_data
+    assert "REPLACE_WITH_INDEPENDENT_EPH_AGENT_ISSUING_CA_ROOT" in user_data
 
 
 def test_eph_agent_capi_pivot_secret_is_optional_until_target_cluster_exists():
@@ -302,12 +305,17 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
         "CONTROL CA",
         encoding="ascii",
     )
+    (media_root / "tls" / "agent-ca.crt").write_text(
+        "INDEPENDENT AGENT CA",
+        encoding="ascii",
+    )
     for name in ("namespace.yaml", "rbac.yaml", "eph-node-agent.yaml"):
         (manifest_root / name).write_text(name, encoding="utf-8")
 
     secret_files = {}
     for name, content in (
         ("ca.crt", "CONTROL CA"),
+        ("client-ca.crt", "INDEPENDENT AGENT CA"),
         ("tls.crt", "CLIENT CERTIFICATE"),
         ("tls.key", "LOCAL PRIVATE KEY"),
     ):
@@ -376,6 +384,7 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
     ]) in events
     assert ("secret", "agent-control-plane-mtls", "ai-agent-system", [
         "ca.crt",
+        "client-ca.crt",
         "tls.crt",
         "tls.key",
     ]) in events
