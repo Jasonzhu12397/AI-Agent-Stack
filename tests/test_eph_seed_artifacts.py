@@ -122,6 +122,8 @@ def test_seed_artifact_is_encrypted_and_downloaded_once(seed_workspace):
     created = create_seed(client, tenant, project, enrollment)
 
     assert created.status_code == 201
+    assert created["Cache-Control"] == "no-store, max-age=0"
+    assert created["Pragma"] == "no-cache"
     artifact = EPHSeedArtifact.objects.get(pk=created.data["artifact_id"])
     assert enrollment["enrollment_token"] not in artifact.encrypted_payload
     assert "control.example.com" not in artifact.encrypted_payload
