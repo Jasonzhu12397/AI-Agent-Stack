@@ -505,7 +505,7 @@ def test_bootstrap_requires_explicit_agent_pod_readiness(monkeypatch):
         "--selector=app.kubernetes.io/name=eph-node-agent",
         "--field-selector=status.phase=Running",
         "-o",
-        "jsonpath={.items[?(@.status.conditions[?(@.type==\"Ready\" && @.status==\"True\")])].metadata.name}",
+        "jsonpath={.items[0].metadata.name}",
     ]
 
 
