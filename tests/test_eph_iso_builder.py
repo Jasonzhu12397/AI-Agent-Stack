@@ -213,6 +213,7 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
 
     output_values = iter(
         [
+            "subject=CN=agent-node-{}.agents.internal".format(config["node_id"]),
             "sha256 Fingerprint=" + ":".join(
                 fingerprint[index:index + 2].upper()
                 for index in range(0, len(fingerprint), 2)
@@ -265,6 +266,8 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
         command[:2] == ["openssl", "verify"]
         and "-purpose" in command
         and "sslclient" in command
+        and "-x509_strict" in command
+        and "-verify_depth" in command
         and str(issuer_ca_path) in command
         for command in captured_commands
     )
