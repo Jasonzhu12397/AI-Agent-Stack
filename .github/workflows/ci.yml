@@ -233,6 +233,7 @@ jobs:
               content: |
                 #!/bin/bash
                 set -Eeuo pipefail
+                exec > >(tee -a /var/log/eph-ci-smoke.log /dev/ttyS0) 2>&1
                 export KUBECONFIG=/etc/kubernetes/admin.conf
                 on_error() {
                   status=$?
@@ -356,7 +357,7 @@ jobs:
                 printf 'EPH_RAM_BACKED_RUNTIME_STATE=true\n'
                 curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
           runcmd:
-            - [bash, -c, "nohup /usr/local/sbin/eph-ci-smoke.sh >/var/log/eph-ci-smoke.log 2>&1 &"]
+            - [bash, -c, "nohup /usr/local/sbin/eph-ci-smoke.sh >/dev/null 2>&1 &"]
           EOF
           sed -i "s#__BOOTSTRAP_CONFIG_B64__#$(base64 -w0 "$RUNNER_TEMP/eph-bootstrap/bootstrap.json")#" "$RUNNER_TEMP/eph-seed/user-data"
           sed -i "s#__CONTROL_CA_B64__#$(base64 -w0 "$CERT_DIR/control-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
@@ -386,6 +387,7 @@ jobs:
           trap 'kill "$QEMU_PID" "$HTTP_PID" "$MOCK_CONTROL_PID" >/dev/null 2>&1 || true' EXIT
           ready=false
           cloud_init_ready=false
+          cloud_init_failed=false
           for attempt in $(seq 1 360); do
             if curl --insecure --fail --silent --max-time 3 \
               https://127.0.0.1:16443/readyz >/dev/null; then
@@ -393,6 +395,10 @@ jobs:
             fi
             if grep -q 'GET /cloud-init-ready ' "$RUNNER_TEMP/cloud-init-http.log"; then
               cloud_init_ready=true
+            fi
+            if grep -q 'GET /cloud-init-failed' "$RUNNER_TEMP/cloud-init-http.log"; then
+              cloud_init_failed=true
+              break
             fi
             if [ "$ready" = true ] && [ "$cloud_init_ready" = true ]; then
               break
@@ -402,7 +408,7 @@ jobs:
             fi
             sleep 5
           done
-          if [ "$ready" != true ] || [ "$cloud_init_ready" != true ]; then
+          if [ "$ready" != true ] || [ "$cloud_init_ready" != true ] || [ "$cloud_init_failed" = true ]; then
             printf 'EPH_AGENT_POD_READY=false\n'
             printf 'QEMU_PID_ALIVE=%s\n' "$(kill -0 "$QEMU_PID" >/dev/null 2>&1 && echo true || echo false)"
             printf 'KUBEADM_API_READY=%s\n' "$ready"
