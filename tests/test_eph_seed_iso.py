@@ -100,3 +100,24 @@ def test_seed_iso_builder_refuses_to_overwrite_output(tmp_path):
     assert result.returncode != 0
     assert output.read_text(encoding="utf-8") == "existing"
     assert "SEED_ISO_OUTPUT_ALREADY_EXISTS" in result.stderr
+
+
+
+def test_seed_iso_builder_rejects_dangling_output_symlink(tmp_path):
+    archive = tmp_path / "seed.zip"
+    output = tmp_path / "seed.iso"
+    target = tmp_path / "external.iso"
+    create_seed_archive(archive)
+    output.symlink_to(target)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), str(archive), str(output)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert output.is_symlink()
+    assert not target.exists()
+    assert "SEED_ISO_OUTPUT_ALREADY_EXISTS" in result.stderr
