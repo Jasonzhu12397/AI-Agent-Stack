@@ -27,12 +27,13 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
 
     def _authorized(self):
         is_enrollment = self.path.endswith("/certificate/")
-        token = (
-            self.server.enrollment_token
-            if is_enrollment
-            else self.server.agent_token
-        )
-        return self.headers.get("Authorization") == "Bearer " + token
+        if is_enrollment:
+            return (
+                not self.server.enrollment_consumed
+                and self.headers.get("Authorization")
+                == "Bearer " + self.server.enrollment_token
+            )
+        return self.headers.get("Authorization") == "Bearer " + self.server.agent_token
 
     def _issue_certificate(self, csr_pem):
         if (
@@ -91,6 +92,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 certificate, chain, fingerprint = self._issue_certificate(
                     payload.get("csr_pem")
                 )
+                self.server.enrollment_consumed = True
                 print("EPH_CI_AGENT_CERTIFICATE_ISSUED", flush=True)
                 self._send(
                     200,
@@ -144,6 +146,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), ControlPlaneHandler)
     server.enrollment_token = args.enrollment_token
+    server.enrollment_consumed = False
     server.agent_token = args.agent_token
     server.agent_ca = args.agent_ca
     server.agent_ca_key = args.agent_ca_key
