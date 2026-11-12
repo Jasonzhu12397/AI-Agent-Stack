@@ -137,12 +137,44 @@ jobs:
           cat > "$RUNNER_TEMP/eph-seed/user-data" <<'EOF'
           #cloud-config
           ssh_pwauth: false
+          write_files:
+            - path: /usr/local/sbin/eph-ci-smoke.sh
+              owner: root:root
+              permissions: '0755'
+              content: |
+                #!/bin/bash
+                set -eu
+                export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                NODE_NAME="$(k3s kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+                test -n "$NODE_NAME"
+                k3s kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
+                k3s kubectl create namespace eph-ci-smoke --dry-run=client -o yaml | k3s kubectl apply -f -
+                k3s kubectl --namespace eph-ci-smoke apply -f - <<'MANIFEST'
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: workload-smoke
+                spec:
+                  replicas: 1
+                  selector:
+                    matchLabels:
+                      app: workload-smoke
+                  template:
+                    metadata:
+                      labels:
+                        app: workload-smoke
+                    spec:
+                      containers:
+                        - name: pause
+                          image: registry.k8s.io/pause:3.10
+                MANIFEST
+                k3s kubectl --namespace eph-ci-smoke rollout status deployment/workload-smoke --timeout=180s
+                k3s kubectl --namespace eph-ci-smoke wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s
+                READY_PODS="$(k3s kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
+                test -n "$READY_PODS"
+                curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
           runcmd:
-            - [k3s, kubectl, create, namespace, eph-ci-smoke]
-            - [k3s, kubectl, --namespace, eph-ci-smoke, create, deployment, workload-smoke, --image=registry.k8s.io/pause:3.10]
-            - [k3s, kubectl, --namespace, eph-ci-smoke, rollout, status, deployment/workload-smoke, --timeout=180s]
-            - [k3s, kubectl, --namespace, eph-ci-smoke, wait, --for=condition=Ready, pod, --selector=app=workload-smoke, --timeout=180s]
-            - [python3, -c, "import urllib.request; urllib.request.urlopen('http://10.0.2.2:18080/cloud-init-ready', timeout=10).read()"]
+            - [bash, /usr/local/sbin/eph-ci-smoke.sh]
           EOF
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
           touch "$RUNNER_TEMP/cloud-init-ready"
