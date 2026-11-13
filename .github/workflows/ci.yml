@@ -496,7 +496,7 @@ jobs:
             -boot order=d,menu=off \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
-            -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
+            -display none -qmp "unix:$RUNNER_TEMP/qemu-qmp.sock,server=on,wait=off" -serial "file:$RUNNER_TEMP/eph-qemu.log" \
             -d int,guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
@@ -554,6 +554,63 @@ jobs:
             ps -fp "$QEMU_PID","$HTTP_PID" || true
             exit 1
           fi
+          python3 - "$RUNNER_TEMP/qemu-qmp.sock" "$(basename "\${{ steps.build.outputs.iso_file }}")" <<'PY'
+          import json
+          import socket
+          import sys
+          import time
+
+          socket_path, iso_name = sys.argv[1:]
+          connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          connection.settimeout(15)
+          for attempt in range(30):
+              try:
+                  connection.connect(socket_path)
+                  break
+              except OSError:
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          stream = connection.makefile("rwb")
+          greeting = json.loads(stream.readline())
+          if "QMP" not in greeting:
+              raise SystemExit("EPH_QMP_GREETING_INVALID")
+
+          def execute(command, arguments=None):
+              request = {"execute": command}
+              if arguments is not None:
+                  request["arguments"] = arguments
+              stream.write((json.dumps(request) + "\r\n").encode())
+              stream.flush()
+              response = json.loads(stream.readline())
+              if "error" in response:
+                  raise SystemExit("EPH_QMP_COMMAND_FAILED:" + command + ":" + str(response["error"]))
+              return response.get("return")
+
+          execute("qmp_capabilities")
+          blocks = execute("query-block")
+          cdrom = next(
+              (
+                  item for item in blocks
+                  if iso_name in str(item.get("inserted", {}).get("file", ""))
+              ),
+              None,
+          )
+          if not cdrom or not cdrom.get("device"):
+              raise SystemExit("EPH_BOOT_ISO_DEVICE_NOT_FOUND")
+          execute("eject", {"device": cdrom["device"]})
+          remaining = execute("query-block")
+          if any(
+              iso_name in str(item.get("inserted", {}).get("file", ""))
+              for item in remaining
+          ):
+              raise SystemExit("EPH_BOOT_ISO_EJECT_FAILED")
+          print("EPH_BOOT_ISO_EJECTED=true")
+          connection.close()
+          PY
+          curl --insecure --fail --silent --show-error --max-time 10 https://127.0.0.1:16443/readyz | grep -qx ok
+          kill -0 "$QEMU_PID"
+          printf '%s\n' 'EPH_RAM_BOOT_MEDIA_DETACHED=true'
           for marker in EPH_CI_AGENT_CERTIFICATE_ISSUED EPH_CI_AGENT_MTLS_HEARTBEAT EPH_CI_AGENT_INVENTORY_ACCEPTED EPH_CI_AGENT_COMMAND_POLL; do
             grep -q "$marker" "$RUNNER_TEMP/eph-mock-control-plane.log"
           done
