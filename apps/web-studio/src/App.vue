@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import LoginView from "./components/LoginView.vue";
 import WorkspaceView from "./components/WorkspaceView.vue";
 import Metal3FleetView from "./components/Metal3FleetView.vue";
+import InfrastructureAgentsView from "./components/InfrastructureAgentsView.vue";
 import {
   apiBase,
   getCurrentUser,
@@ -11,7 +12,7 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "infrastructure" | "governance" | "audit" | "organization" | "docs";
+type ActiveView = "dashboard" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "infrastructure" | "agent-nodes" | "governance" | "audit" | "organization" | "docs";
 const activeView = ref<ActiveView>("dashboard");
 const navItems: { id: ActiveView; label: string }[] = [
   { id: "dashboard", label: "Overview" },
@@ -21,6 +22,7 @@ const navItems: { id: ActiveView; label: string }[] = [
   { id: "integrations", label: "Integration Hub" },
   { id: "knowledge", label: "Knowledge Bases" },
   { id: "infrastructure", label: "Metal3 Fleet" },
+  { id: "agent-nodes", label: "EPH & Target Agents" },
   { id: "governance", label: "Governance" },
   { id: "audit", label: "Audit & Activity" },
   { id: "organization", label: "Organization" },
@@ -138,10 +140,11 @@ onUnmounted(() => {
       </div>
     </section>
     <WorkspaceView
-      v-if="activeView !== 'infrastructure'"
+      v-if="activeView !== 'infrastructure' && activeView !== 'agent-nodes'"
       :active-section="workspaceSection"
     />
-    <Metal3FleetView v-else />
+    <Metal3FleetView v-else-if="activeView === 'infrastructure'" />
+    <InfrastructureAgentsView v-else />
     <section class="overview">
       <div class="section-heading">
         <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>
