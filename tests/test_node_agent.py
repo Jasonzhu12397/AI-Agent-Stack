@@ -541,7 +541,11 @@ def test_agent_liveness_heartbeat_is_independent_of_control_plane_readiness(
             assert interval == 10
             return next(waits)
 
-    monkeypatch.setattr(agent, "touch_health_files", lambda readiness=False: calls.append(readiness))
+    monkeypatch.setattr(
+        agent,
+        "touch_health_files",
+        lambda readiness=False: calls.append(readiness),
+    )
 
     agent.maintain_liveness(FakeStopEvent())
 
