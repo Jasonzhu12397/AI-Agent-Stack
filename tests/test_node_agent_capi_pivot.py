@@ -481,6 +481,67 @@ def test_pivot_execution_never_starts_mutating_move_after_dry_run(tmp_path):
     assert result["pivot_simulated"] is True
     assert result["side_effects"] is False
 
+@pytest.mark.parametrize(
+    ("malformed_response", "error_code"),
+    [
+        ("api_groups", "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED"),
+        ("api_resources", "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED"),
+        ("controller", "CAPI_PIVOT_TARGET_CONTROLLERS_NOT_READY"),
+        ("cluster_inventory", "CAPI_PIVOT_TARGET_CLUSTER_CHECK_FAILED"),
+    ],
+)
+def test_pivot_preflight_rejects_malformed_target_api_responses(
+    tmp_path, malformed_response, error_code
+):
+    _, base_runner = _pivot_runner_for()
+
+    def runner(command, **kwargs):
+        if command[0].endswith("kubectl"):
+            if "--raw" in command:
+                raw_path = command[command.index("--raw") + 1]
+                if malformed_response == "api_groups" and raw_path == "/apis":
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if (
+                    malformed_response == "api_resources"
+                    and raw_path.startswith("/apis/cluster.x-k8s.io/")
+                ):
+                    return subprocess.CompletedProcess(
+                        command, 0, '{"resources": "invalid"}', ""
+                    )
+            if (
+                malformed_response == "controller"
+                and "deployment" in command
+                and command[command.index("deployment") + 1]
+                == "capi-controller-manager"
+            ):
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({
+                        "metadata": {"generation": 1},
+                        "spec": [],
+                        "status": {"availableReplicas": 1, "observedGeneration": 1},
+                    }),
+                    "",
+                )
+            if (
+                malformed_response == "cluster_inventory"
+                and "clusters.cluster.x-k8s.io" in command
+            ):
+                return subprocess.CompletedProcess(
+                    command, 0, '{"items": [{"metadata": []}]}', ""
+                )
+        return base_runner(command, **kwargs)
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
 def test_pivot_execution_stops_when_target_controller_is_not_ready(tmp_path):
     calls, runner = _pivot_runner_for(target_controller_ready=False)
 
