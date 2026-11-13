@@ -2640,30 +2640,6 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
         ):
             return Response({"detail": "Invalid or stale target agent credential."}, status=401)
-        inventory_completeness = request.data.get("inventory_completeness")
-        if (
-            not isinstance(inventory_completeness, dict)
-            or inventory_completeness.get("complete") is not True
-            or inventory_completeness.get("expected_resource_type_count") != 7
-            or inventory_completeness.get("successful_resource_type_count") != 7
-            or inventory_completeness.get("not_discovered_resource_type_count") != 0
-            or inventory_completeness.get("failed_resource_type_count") != 0
-            or not isinstance(inventory_completeness.get("checks"), list)
-            or len(inventory_completeness["checks"]) != 7
-            or any(
-                not isinstance(check, dict)
-                or check.get("discovery_status") != "discovered"
-                or check.get("list_status") != "success"
-                or not isinstance(check.get("item_count"), int)
-                or isinstance(check.get("item_count"), bool)
-                or check.get("item_count") < 0
-                for check in inventory_completeness["checks"]
-            )
-        ):
-            return Response(
-                {"detail": "A complete CAPI resource discovery and list inventory is required."},
-                status=status.HTTP_409_CONFLICT,
-            )
         with transaction.atomic():
             deployment = ClusterDeployment.objects.select_for_update().filter(
                 pk=deployment_id,
@@ -2698,6 +2674,7 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                             "Automatic checkpoint transfer is disabled; manual recovery "
                             "and explicit checkpoint adoption are required."
                         ),
+                        "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
                         "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
                     },
                     status=409,
