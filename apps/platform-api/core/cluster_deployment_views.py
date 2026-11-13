@@ -309,7 +309,9 @@ class ClusterDeploymentRecoveryReviewView(APIView):
                 )
             plan = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
             reconciliation = plan.get("worker_provisioning_reconciliation", {})
-            report = reconciliation.get("report", {}) if isinstance(reconciliation, dict) else {}
+            if not isinstance(reconciliation, dict):
+                reconciliation = {}
+            report = reconciliation.get("report", {})
             if (
                 reconciliation.get("state") != "evidence_recorded_not_authorized"
                 or not isinstance(report, dict)
@@ -319,7 +321,10 @@ class ClusterDeploymentRecoveryReviewView(APIView):
                     {"detail": "A valid Target Agent reconciliation report is required."},
                     status=409,
                 )
-            expected_uid = plan.get("dual_agent", {}).get("target_agent_cluster_uid")
+            dual_agent = plan.get("dual_agent", {})
+            if not isinstance(dual_agent, dict):
+                dual_agent = {}
+            expected_uid = dual_agent.get("target_agent_cluster_uid")
             observed_uid = report.get("cluster_uid")
             resources = report.get("resources", [])
             cluster_resources = [
@@ -376,7 +381,7 @@ class ClusterDeploymentRecoveryReviewView(APIView):
                     "eph_reclaim_allowed": False,
                 },
                 "dual_agent": {
-                    **plan.get("dual_agent", {}),
+                    **dual_agent,
                     "eph_reclaim_allowed": False,
                 },
             }
