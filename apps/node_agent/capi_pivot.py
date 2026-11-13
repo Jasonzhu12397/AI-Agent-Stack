@@ -673,9 +673,16 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_MISSING:" + name)
         consumer_namespace = consumer.get("namespace")
         consumer_name = consumer.get("name")
+        if (
+            not isinstance(consumer_namespace, str)
+            or not consumer_namespace
+            or not isinstance(consumer_name, str)
+            or not consumer_name
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN:" + name)
         machine = selected_machines.get((consumer_namespace, consumer_name))
         if machine is None:
-            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_MISSING:" + name)
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN:" + name)
         if (
             not isinstance(consumer, dict)
             or consumer.get("apiVersion") != machine["api_version"]
