@@ -1398,6 +1398,102 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
     assert result["side_effects"] is False
 
 
+@pytest.mark.parametrize(
+    ("bad_path", "error_code"),
+    [
+        ("/apis", "INVALID_TARGET_API_DISCOVERY"),
+        (
+            "/apis/cluster.x-k8s.io/v1beta1",
+            "INVALID_TARGET_API_RESOURCE_DISCOVERY",
+        ),
+        (
+            "/apis/apps/v1/namespaces/capi-system/deployments",
+            "INVALID_TARGET_CONTROLLER_INVENTORY",
+        ),
+        (
+            "/apis/cluster.x-k8s.io/v1beta1/namespaces/default/clusters",
+            "INVALID_TARGET_CLUSTER_INVENTORY",
+        ),
+    ],
+)
+def test_target_agent_pivot_preflight_rejects_malformed_inventories(
+    monkeypatch, bad_path, error_code
+):
+    required = {
+        "cluster.x-k8s.io": ["clusters", "machines", "machinesets", "machinedeployments"],
+        "bootstrap.cluster.x-k8s.io": ["kubeadmconfigs", "kubeadmconfigtemplates"],
+        "controlplane.cluster.x-k8s.io": ["kubeadmcontrolplanes"],
+        "infrastructure.cluster.x-k8s.io": [
+            "metal3clusters",
+            "metal3machines",
+            "metal3machinetemplates",
+        ],
+        "metal3.io": ["baremetalhosts"],
+    }
+    responses = {
+        "/apis": {
+            "groups": [
+                {"name": name, "preferredVersion": {"version": "v1beta1"}}
+                for name in required
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1": {
+            "resources": [{"name": name} for name in required["cluster.x-k8s.io"]]
+        },
+        "/apis/bootstrap.cluster.x-k8s.io/v1beta1": {
+            "resources": [
+                {"name": name}
+                for name in required["bootstrap.cluster.x-k8s.io"]
+            ]
+        },
+        "/apis/controlplane.cluster.x-k8s.io/v1beta1": {
+            "resources": [
+                {"name": name}
+                for name in required["controlplane.cluster.x-k8s.io"]
+            ]
+        },
+        "/apis/infrastructure.cluster.x-k8s.io/v1beta1": {
+            "resources": [
+                {"name": name}
+                for name in required["infrastructure.cluster.x-k8s.io"]
+            ]
+        },
+        "/apis/metal3.io/v1beta1": {
+            "resources": [{"name": name} for name in required["metal3.io"]]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/default/clusters": {
+            "items": []
+        },
+    }
+    controller_names = {
+        "capi-system": "capi-controller-manager",
+        "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
+        "capi-kubeadm-control-plane-system": "capi-kubeadm-control-plane-controller-manager",
+        "capm3-system": "capm3-controller-manager",
+    }
+    for namespace, name in controller_names.items():
+        responses[f"/apis/apps/v1/namespaces/{namespace}/deployments"] = {
+            "items": [
+                {
+                    "metadata": {"name": name, "generation": 1},
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "observedGeneration": 1},
+                }
+            ]
+        }
+    responses[bad_path] = []
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+    with pytest.raises(agent.NodeAgentError, match=error_code):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.target.preflight",
+                "payload": {"cluster_name": "edge-lab"},
+            },
+            "target_cluster",
+        )
+
+
 def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch):
     required = {
         "cluster.x-k8s.io": ["clusters", "machines", "machinesets", "machinedeployments"],
