@@ -2985,6 +2985,126 @@ class AgentRuntimeDeploymentReconciliationReportView(APIView):
                 {"detail": "Reconciliation report must not exceed 64 KiB."},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
+        inventory_completeness = request.data.get("inventory_completeness")
+        expected_resource_types = {
+            ("cluster.x-k8s.io", "machines", "Machine"),
+            ("cluster.x-k8s.io", "machinesets", "MachineSet"),
+            ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
+            (
+                "controlplane.cluster.x-k8s.io",
+                "kubeadmcontrolplanes",
+                "KubeadmControlPlane",
+            ),
+            ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
+            ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+            ("metal3.io", "baremetalhosts", "BareMetalHost"),
+        }
+        if not isinstance(inventory_completeness, dict):
+            return Response(
+                {"detail": "A complete CAPI inventory report is required."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        checks = inventory_completeness.get("checks")
+        if not isinstance(checks, list) or len(checks) != len(expected_resource_types):
+            return Response(
+                {"detail": "CAPI inventory checks must cover all seven resource types."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        observed_resource_types = set()
+        successful_checks = 0
+        undiscovered_checks = 0
+        failed_checks = 0
+        for check in checks:
+            if not isinstance(check, dict):
+                return Response(
+                    {"detail": "CAPI inventory check is invalid."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            resource_type = (
+                check.get("group"),
+                check.get("resource"),
+                check.get("kind"),
+            )
+            discovery_status = check.get("discovery_status")
+            list_status = check.get("list_status")
+            item_count = check.get("item_count")
+            if (
+                resource_type not in expected_resource_types
+                or resource_type in observed_resource_types
+                or discovery_status not in {"discovered", "not_discovered"}
+                or list_status not in {"success", "not_attempted", "not_found", "failed"}
+                or (
+                    item_count is not None
+                    and (
+                        not isinstance(item_count, int)
+                        or isinstance(item_count, bool)
+                        or item_count < 0
+                    )
+                )
+            ):
+                return Response(
+                    {"detail": "CAPI inventory check identity or state is invalid."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            observed_resource_types.add(resource_type)
+            if discovery_status == "discovered" and list_status == "success":
+                if (
+                    not isinstance(check.get("api_version"), str)
+                    or not check["api_version"]
+                    or not isinstance(item_count, int)
+                    or isinstance(item_count, bool)
+                    or item_count < 0
+                ):
+                    return Response(
+                        {"detail": "Successful CAPI inventory checks require API version and item count."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                successful_checks += 1
+            elif discovery_status == "not_discovered" and list_status == "not_attempted":
+                if item_count is not None:
+                    return Response(
+                        {"detail": "Undiscovered CAPI resources cannot have an item count."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                undiscovered_checks += 1
+            elif discovery_status == "discovered" and list_status in {"not_found", "failed"}:
+                if item_count is not None:
+                    return Response(
+                        {"detail": "Failed CAPI resource lists cannot have an item count."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                failed_checks += 1
+            else:
+                return Response(
+                    {"detail": "CAPI inventory discovery and list states are inconsistent."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+        if (
+            observed_resource_types != expected_resource_types
+            or inventory_completeness.get("complete") is not True
+            or inventory_completeness.get("expected_resource_type_count") != 7
+            or inventory_completeness.get("successful_resource_type_count") != successful_checks
+            or inventory_completeness.get("not_discovered_resource_type_count") != undiscovered_checks
+            or inventory_completeness.get("failed_resource_type_count") != failed_checks
+            or successful_checks != 7
+            or undiscovered_checks != 0
+            or failed_checks != 0
+        ):
+            return Response(
+                {
+                    "detail": "CAPI reconciliation evidence is incomplete or internally inconsistent.",
+                    "code": "CAPI_INVENTORY_INCOMPLETE",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        inventory_completeness = {
+            "complete": True,
+            "expected_resource_type_count": 7,
+            "successful_resource_type_count": successful_checks,
+            "not_discovered_resource_type_count": undiscovered_checks,
+            "failed_resource_type_count": failed_checks,
+            "checks": checks,
+        }
         normalized = []
         identities = set()
         for resource in resources:
