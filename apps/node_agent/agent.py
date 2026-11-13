@@ -654,6 +654,136 @@ CAPI_PIVOT_TRACKED_OWNER_KINDS = {
 }
 
 
+def _capi_preferred_versions() -> dict[str, str]:
+    discovery = kubernetes_api_get("/apis")
+    groups = discovery.get("groups", [])
+    if not isinstance(groups, list):
+        raise NodeAgentError("CAPI_API_DISCOVERY_INVALID")
+    versions = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        name = group.get("name")
+        preferred = group.get("preferredVersion", {})
+        version = preferred.get("version") if isinstance(preferred, dict) else None
+        if isinstance(name, str) and isinstance(version, str) and version:
+            versions[name] = version
+    return versions
+
+
+def _reconciliation_resource_record(
+    item: dict[str, Any],
+    api_version: str,
+    kind: str,
+) -> dict[str, Any]:
+    metadata = item.get("metadata", {})
+    spec = item.get("spec", {})
+    status = item.get("status", {})
+    if not isinstance(metadata, dict) or not isinstance(spec, dict) or not isinstance(status, dict):
+        raise NodeAgentError("CAPI_RECONCILIATION_RESOURCE_INVALID")
+    name = metadata.get("name")
+    uid = metadata.get("uid")
+    generation = metadata.get("generation")
+    resource_version = metadata.get("resourceVersion")
+    namespace = metadata.get("namespace", "default")
+    if (
+        not isinstance(name, str) or not name
+        or not isinstance(uid, str) or not uid
+        or not isinstance(generation, int) or isinstance(generation, bool) or generation < 1
+        or not isinstance(resource_version, str) or not resource_version
+        or not isinstance(namespace, str)
+    ):
+        raise NodeAgentError("CAPI_RECONCILIATION_METADATA_INVALID")
+    conditions = status.get("conditions", [])
+    normalized_conditions = []
+    if isinstance(conditions, list):
+        for condition in conditions[:50]:
+            if isinstance(condition, dict) and isinstance(condition.get("type"), str):
+                condition_status = condition.get("status")
+                if isinstance(condition_status, (str, bool)):
+                    normalized_conditions.append({
+                        "type": condition["type"][:128],
+                        "status": str(condition_status).lower() if isinstance(condition_status, bool) else condition_status[:32],
+                    })
+    replicas = spec.get("replicas")
+    status_replicas = status.get("replicas")
+    ready_replicas = status.get("readyReplicas")
+    result = {
+        "api_version": api_version,
+        "kind": kind,
+        "namespace": namespace,
+        "name": name,
+        "uid": uid,
+        "generation": generation,
+        "resource_version": resource_version,
+        "conditions": normalized_conditions,
+    }
+    for key, value in (
+        ("spec_replicas", replicas),
+        ("status_replicas", status_replicas),
+        ("ready_replicas", ready_replicas),
+    ):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            result[key] = value
+    return result
+
+
+def collect_capi_reconciliation_inventory(
+    cluster_name: str,
+    namespace: str = "default",
+) -> dict[str, Any]:
+    if (
+        not isinstance(cluster_name, str) or not cluster_name
+        or not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+    ):
+        raise NodeAgentError("CAPI_RECONCILIATION_IDENTITY_INVALID")
+    versions = _capi_preferred_versions()
+    cluster_version = versions.get("cluster.x-k8s.io")
+    if not cluster_version:
+        raise NodeAgentError("CAPI_CLUSTER_API_NOT_DISCOVERED")
+    cluster_path = (
+        f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/"
+        f"{namespace}/clusters/{urllib.parse.quote(cluster_name, safe='')}"
+    )
+    cluster = kubernetes_api_get(cluster_path)
+    resources = [_reconciliation_resource_record(cluster, f"cluster.x-k8s.io/{cluster_version}", "Cluster")]
+    resource_specs = (
+        ("cluster.x-k8s.io", "machines", "Machine"),
+        ("cluster.x-k8s.io", "machinesets", "MachineSet"),
+        ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
+        ("controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "KubeadmControlPlane"),
+        ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
+        ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+        ("metal3.io", "baremetalhosts", "BareMetalHost"),
+    )
+    for group, plural, kind in resource_specs:
+        version = versions.get(group)
+        if not version:
+            continue
+        path = f"/apis/{group}/{version}/namespaces/{namespace}/{plural}"
+        try:
+            items = list_all_kubernetes_items(path, max_items=5000)
+        except NodeAgentError as exc:
+            if str(exc) == "KUBERNETES_API_HTTP_404":
+                continue
+            raise
+        for item in items:
+            metadata = item.get("metadata", {})
+            if isinstance(metadata, dict) and metadata.get("namespace", namespace) == namespace:
+                resources.append(_reconciliation_resource_record(item, f"{group}/{version}", kind))
+                if len(resources) >= 500:
+                    raise NodeAgentError("CAPI_RECONCILIATION_RESOURCE_LIMIT_EXCEEDED")
+    report = {
+        "cluster_name": cluster_name,
+        "cluster_uid": resources[0]["uid"],
+        "resources": resources,
+    }
+    if len(json.dumps(report, separators=(",", ":")).encode("utf-8")) > 60000:
+        raise NodeAgentError("CAPI_RECONCILIATION_REPORT_TOO_LARGE")
+    return report
+
+
 def list_all_kubernetes_items(path: str, max_items: int = 100000) -> list[dict[str, Any]]:
     items = []
     continuation = ""
@@ -4427,6 +4557,18 @@ class ControlPlaneClient:
             {"node_id": self.node_id, "hardware_inventory": inventory},
         )
 
+    def report_reconciliation_inventory(
+        self,
+        deployment_id: str,
+        report: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not deployment_id or not isinstance(report, dict):
+            raise NodeAgentError("RECONCILIATION_REPORT_INVALID")
+        return self.request(
+            f"/api/v1/agent-runtime/deployments/{deployment_id}/reconciliation-report/",
+            {"node_id": self.node_id, **report},
+        )
+
     def poll(self) -> dict[str, Any]:
         return self.request(
             "/api/v1/agent-runtime/commands/poll/",
@@ -4591,6 +4733,36 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     if node_type == "target_cluster":
         for deployment in heartbeat.get("active_deployments", []):
             deployment_id = deployment.get("deployment_id")
+            if (
+                isinstance(deployment_id, str)
+                and deployment_id
+                and deployment.get("status") == "reconciliation_required"
+            ):
+                try:
+                    report = collect_capi_reconciliation_inventory(
+                        deployment.get("cluster_name", ""),
+                        deployment.get("capi_namespace", "default"),
+                    )
+                    client.report_reconciliation_inventory(deployment_id, report)
+                    print(
+                        json.dumps({
+                            "event": "deployment_reconciliation_report_submitted",
+                            "deployment_id": deployment_id,
+                            "resource_count": len(report["resources"]),
+                            "retry_authorized": False,
+                            "eph_reclaim_authorized": False,
+                        }),
+                        flush=True,
+                    )
+                except (NodeAgentError, KeyError, TypeError, ValueError) as exc:
+                    print(
+                        json.dumps({
+                            "event": "deployment_reconciliation_report_deferred",
+                            "deployment_id": deployment_id,
+                            "error": str(exc)[:160],
+                        }),
+                        flush=True,
+                    )
             if isinstance(deployment_id, str) and deployment_id:
                 previous = client.deployment_checkpoints.get(deployment_id)
                 checkpoint = client.restore_deployment_checkpoint(deployment_id)
