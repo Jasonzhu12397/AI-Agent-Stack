@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 
 from core.audit import record_audit_event
 from core.http_connector import execute_http_operation
-from core.tool_router import ToolContext, ToolExecutionError
+from core.tool_router import ToolContext, ToolExecutionError, validate_schema
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from core.models import (
     AuditEvent,
@@ -825,6 +825,111 @@ class PluginConnectionTestView(APIView):
             metadata={"plugin_key": plugin.plugin_key, "connection_name": connection.name},
         )
         return Response(_installation_data(installation))
+
+
+class PluginToolExecuteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, connection_id, tool_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        arguments = request.data.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return Response({"detail": "arguments must be a JSON object."}, status=400)
+        if _contains_sensitive_key(arguments) or _validate_payload({"arguments": arguments}):
+            return Response(
+                {"detail": "Tool arguments must be bounded, non-sensitive JSON."},
+                status=400,
+            )
+        connection = get_object_or_404(
+            PluginConnection.objects.select_related(
+                "installation",
+                "installation__tenant",
+                "installation__project",
+                "installation__plugin",
+            ).filter(installation__tenant__memberships__user=request.user),
+            pk=connection_id,
+        )
+        installation = connection.installation
+        plugin = installation.plugin
+        if not _can_manage_project(
+            request.user,
+            installation.tenant,
+            installation.project,
+        ):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        if installation.status != PluginInstallation.Status.INSTALLED:
+            return Response({"detail": "Plugin installation is not active."}, status=409)
+        if connection.status != PluginConnection.Status.HEALTHY:
+            return Response({"detail": "A healthy connector connection is required."}, status=409)
+        if (
+            plugin.review_status != PluginDefinition.ReviewStatus.APPROVED
+            or not plugin.enabled
+            or plugin.connector_type not in {
+                PluginDefinition.ConnectorType.HTTP,
+                PluginDefinition.ConnectorType.OPENAPI,
+            }
+        ):
+            return Response({"detail": "Approved HTTP connector is required."}, status=409)
+        tool = get_object_or_404(
+            PluginTool.objects.filter(plugin=plugin, enabled=True),
+            pk=tool_id,
+        )
+        required_permissions = set(tool.required_permissions or [])
+        if not required_permissions.issubset(set(installation.granted_permissions or [])):
+            return Response(
+                {"detail": "Required connector permissions have not been granted."},
+                status=403,
+            )
+        if tool.risk_level != PluginTool.RiskLevel.LOW or tool.idempotency_mode != PluginTool.IdempotencyMode.READ_ONLY:
+            return Response(
+                {"detail": "Interactive connector tests are restricted to low-risk read-only tools."},
+                status=403,
+            )
+        try:
+            validate_schema(arguments, tool.input_schema)
+        except ToolExecutionError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        context = ToolContext(
+            tenant_id=str(installation.tenant_id),
+            project_id=str(installation.project_id),
+            installation_id=str(installation.id),
+            plugin_key=plugin.plugin_key,
+            plugin_version=plugin.version,
+            tool_name=tool.name,
+            connection_id=str(connection.id),
+            connection_config=dict(connection.config),
+            connection_auth_type=connection.auth_type,
+            credential_ref=connection.credential_ref,
+            plugin_manifest=plugin.manifest,
+        )
+        try:
+            result = execute_http_operation(arguments, context, tool)
+            validate_schema(result, tool.output_schema)
+            if _contains_sensitive_key(result) or len(str(result).encode("utf-8")) > 65536:
+                raise ToolExecutionError("Connector result is sensitive or exceeds 64 KiB.")
+        except ToolExecutionError as exc:
+            record_audit_event(
+                request,
+                installation.tenant,
+                "connector.tool.test",
+                "plugin_tool",
+                tool.id,
+                project=installation.project,
+                outcome=AuditEvent.Outcome.FAILURE,
+                metadata={"plugin_key": plugin.plugin_key, "tool_name": tool.name},
+            )
+            return Response({"detail": str(exc)}, status=502)
+        record_audit_event(
+            request,
+            installation.tenant,
+            "connector.tool.test",
+            "plugin_tool",
+            tool.id,
+            project=installation.project,
+            metadata={"plugin_key": plugin.plugin_key, "tool_name": tool.name},
+        )
+        return Response({"ok": True, "tool": tool.name, "result": result})
 
 
 class PluginConnectionStatusView(APIView):
