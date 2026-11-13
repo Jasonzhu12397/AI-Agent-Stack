@@ -493,6 +493,74 @@ def _verify_source_metal3_handoff(
     source_env,
     target_env,
 ):
+    machine_list = _kubectl_json(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "metal3machines.infrastructure.cluster.x-k8s.io",
+            "-o",
+            "json",
+        ],
+        source_env,
+        "CAPI_PIVOT_SOURCE_M3M_INVENTORY_FAILED",
+    )
+    machines = machine_list.get("items")
+    if not isinstance(machines, list):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_INVENTORY_INVALID")
+
+    selected_machines = {}
+    machine_names = set()
+    machine_uids = set()
+    host_names = set()
+    for machine in machines:
+        if not isinstance(machine, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_INVENTORY_INVALID")
+        metadata = machine.get("metadata")
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_METADATA_INVALID")
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        if not isinstance(labels, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_LABELS_INVALID")
+        if not isinstance(annotations, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_ANNOTATIONS_INVALID")
+        if labels.get("cluster.x-k8s.io/cluster-name") != cluster_name:
+            continue
+        name = metadata.get("name")
+        uid = metadata.get("uid")
+        machine_namespace = metadata.get("namespace")
+        host_name = annotations.get("metal3.io/BareMetalHost")
+        if (
+            name != metadata.get("name")
+            or not isinstance(name, str)
+            or not name
+            or not isinstance(uid, str)
+            or not uid
+            or name in machine_names
+            or uid in machine_uids
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_IDENTITY_INVALID")
+        if machine_namespace != namespace:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_NAMESPACE_MISMATCH")
+        if not isinstance(host_name, str) or not host_name:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_BMH_REFERENCE_INVALID")
+        if host_name in host_names:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_BMH_REFERENCE_DUPLICATE")
+        machine_names.add(name)
+        machine_uids.add(uid)
+        host_names.add(host_name)
+        selected_machines[(machine_namespace, name)] = {
+            "name": name,
+            "uid": uid,
+            "namespace": machine_namespace,
+            "api_version": machine.get("apiVersion"),
+            "baremetal_host": host_name,
+        }
+
     host_list = _kubectl_json(
         runner,
         kubectl,
@@ -511,7 +579,26 @@ def _verify_source_metal3_handoff(
     hosts = host_list.get("items")
     if not isinstance(hosts, list):
         raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+    hosts_by_name = {}
+    for name, host in selected_hosts_by_name.items():
+        metadata = host.get("metadata")
+        if not isinstance(metadata, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+        host_name = metadata.get("name")
+        if not isinstance(host_name, str) or not host_name:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
+        if host_name in hosts_by_name:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
+        hosts_by_name[host_name] = host
 
+    missing_hosts = host_names - set(hosts_by_name)
+    if missing_hosts:
+        raise CapiPivotError(
+            "CAPI_PIVOT_SOURCE_M3M_BMH_NOT_FOUND:" + ",".join(sorted(missing_hosts)[:20])
+        )
+    selected_hosts_by_name = {
+        name: hosts_by_name[name] for name in sorted(host_names)
+    }
     stable_states = {
         "available",
         "provisioned",
@@ -539,15 +626,19 @@ def _verify_source_metal3_handoff(
         if not isinstance(annotations, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ANNOTATIONS_INVALID")
         consumer = spec.get("consumerRef")
-        associated = (
-            isinstance(consumer, dict)
-            and consumer.get("kind") == "Metal3Machine"
-        ) or (
-            isinstance(labels, dict)
-            and labels.get("cluster.x-k8s.io/cluster-name") == cluster_name
-        )
-        if not associated:
-            continue
+        machine = selected_machines.get((namespace, name))
+        if machine is None:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_MISSING:" + name)
+        if (
+            not isinstance(consumer, dict)
+            or consumer.get("apiVersion") != machine["api_version"]
+            or consumer.get("kind") != "Metal3Machine"
+            or consumer.get("name") != machine["name"]
+            or consumer.get("namespace") != machine["namespace"]
+            or consumer.get("uid") != machine["uid"]
+            or machine["baremetal_host"] != name
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_CONSUMER_REF_MISMATCH:" + name)
         name = metadata.get("name")
         uid = metadata.get("uid")
         if (
