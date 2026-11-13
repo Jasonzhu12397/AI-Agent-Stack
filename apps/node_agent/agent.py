@@ -2903,10 +2903,17 @@ def execute_command(
             "metal3.io": {"baremetalhosts"},
         }
         discovery = kubernetes_api_get("/apis")
+        if not isinstance(discovery, dict):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
+        api_groups = discovery.get("groups")
+        if not isinstance(api_groups, list) or any(
+            not isinstance(item, dict) for item in api_groups
+        ):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
         discovered_groups = {
             item.get("name"): item
-            for item in discovery.get("groups", [])
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            for item in api_groups
+            if isinstance(item.get("name"), str)
         }
         missing_resources = []
         group_versions = {}
