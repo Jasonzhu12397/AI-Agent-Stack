@@ -15,6 +15,7 @@ from core.agent_node_views import (
     FleetMachineBMCConfigView,
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
+    AgentRuntimeDeploymentReconciliationReportView,
     AgentRuntimeHeartbeatView,
     AgentRuntimeEPHCertificateExchangeView,
     AgentRuntimeEPHCertificateRenewalView,
@@ -282,6 +283,11 @@ urlpatterns = [
         "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
         AgentRuntimeDeploymentCheckpointView.as_view(),
         name="agent-runtime-deployment-checkpoint",
+    ),
+    path(
+        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/reconciliation-report/",
+        AgentRuntimeDeploymentReconciliationReportView.as_view(),
+        name="agent-runtime-deployment-reconciliation-report",
     ),
     path(
         "api/v1/agent-runtime/commands/poll/",
