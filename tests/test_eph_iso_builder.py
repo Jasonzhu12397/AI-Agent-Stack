@@ -50,6 +50,11 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "calico.yaml" in initializer
     assert "CALICO_MANIFEST_MISSING" in initializer
     assert "CALICO_IPV4POOL" not in initializer
+    assert 'CALICO_DEFAULT_POD_CIDR="192.168.0.0/16"' in initializer
+    assert "CALICO_DEFAULT_POD_CIDR_NOT_FOUND" in initializer
+    assert 'sed "s|$CALICO_DEFAULT_POD_CIDR|$POD_CIDR|g"' in initializer
+    assert "CALICO_POD_CIDR_CONFIGURATION_FAILED" in initializer
+    assert 'kubectl apply -f "$CALICO_RUNTIME_MANIFEST"' in initializer
     assert "POD_CIDR" in initializer
     assert "--pod-network-cidr" in initializer
     assert 'config_path = "/etc/containerd/certs.d"' in initializer
