@@ -835,9 +835,21 @@ def test_eph_qemu_job_is_not_canceled_by_newer_pushes():
 def test_eph_agent_rbac_covers_runtime_and_network_inventory_reads():
     rbac = (ROOT / "eph-iso/eph-rbac.yaml").read_text(encoding="utf-8")
     required_rules = (
-        ('apiGroups: ["apps"]', 'resources: ["deployments"]', 'verbs: ["get", "list"]'),
-        ('apiGroups: ["apiextensions.k8s.io"]', 'resources: ["customresourcedefinitions"]', 'verbs: ["get"]'),
-        ('apiGroups: ["k8s.cni.cncf.io"]', 'resources: ["network-attachment-definitions"]', 'verbs: ["get", "list"]'),
+        (
+            'apiGroups: ["apps"]',
+            'resources: ["deployments"]',
+            'verbs: ["get", "list"]',
+        ),
+        (
+            'apiGroups: ["apiextensions.k8s.io"]',
+            'resources: ["customresourcedefinitions"]',
+            'verbs: ["get"]',
+        ),
+        (
+            'apiGroups: ["k8s.cni.cncf.io"]',
+            'resources: ["network-attachment-definitions"]',
+            'verbs: ["get", "list"]',
+        ),
     )
     for api_group, resources, verbs in required_rules:
         assert api_group in rbac
