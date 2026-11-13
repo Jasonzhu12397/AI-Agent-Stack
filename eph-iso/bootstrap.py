@@ -359,6 +359,77 @@ def _create_secret(name, namespace, files):
     ], rendered)
 
 
+def _read_secret_files(name, namespace, keys, directory):
+    command = [
+        "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
+        "--namespace", namespace, "get", "secret", name, "-o", "json",
+    ]
+    result = subprocess.run(command, check=False, text=True, capture_output=True)
+    if result.returncode:
+        if "notfound" in result.stderr.lower():
+            return None
+        raise BootstrapError("KUBERNETES_SECRET_READ_FAILED:" + name)
+    try:
+        payload = json.loads(result.stdout)
+        data = payload["data"]
+        if not isinstance(data, dict):
+            raise ValueError("Secret data is invalid.")
+        files = {}
+        for key in keys:
+            encoded = data.get(key)
+            if not isinstance(encoded, str):
+                raise ValueError("Secret key is missing.")
+            content = base64.b64decode(encoded, validate=True)
+            if not content or len(content) > 1048576:
+                raise ValueError("Secret value is invalid.")
+            path = directory / (name + "-" + key.replace("/", "_"))
+            path.write_bytes(content)
+            os.chmod(str(path), 0o600)
+            files[key] = path
+        return files
+    except (KeyError, TypeError, ValueError, base64.binascii.Error):
+        raise BootstrapError("KUBERNETES_SECRET_DATA_INVALID:" + name) from None
+
+
+def _validate_persisted_client_credentials(files, issuer_ca_path, directory, node_id):
+    certificate_data = files["tls.crt"].read_text(encoding="ascii")
+    blocks = re.findall(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+        certificate_data,
+        re.DOTALL,
+    )
+    if len(blocks) < 1 or "".join(blocks).strip() != certificate_data.strip():
+        raise BootstrapError("PERSISTED_CLIENT_CERTIFICATE_INVALID")
+    leaf_path = directory / "persisted-client-leaf.crt"
+    chain_path = directory / "persisted-client-chain.crt"
+    leaf_path.write_text(blocks[0] + "\\n", encoding="ascii")
+    chain_path.write_text("".join(block + "\\n" for block in blocks[1:]), encoding="ascii")
+    expected_subject = "subject=CN=agent-node-" + node_id + ".agents.internal"
+    try:
+        _run([
+            "openssl", "verify", "-x509_strict", "-purpose", "sslclient",
+            "-verify_depth", "8", "-CAfile", str(issuer_ca_path),
+            "-untrusted", str(chain_path), str(leaf_path),
+        ])
+        subject = _run_output([
+            "openssl", "x509", "-in", str(leaf_path), "-noout",
+            "-subject", "-nameopt", "RFC2253",
+        ]).strip()
+        certificate_public_key = _run_output([
+            "openssl", "x509", "-in", str(leaf_path), "-pubkey", "-noout",
+        ]).strip()
+        private_public_key = _run_output([
+            "openssl", "pkey", "-in", str(files["tls.key"]), "-pubout",
+        ]).strip()
+    except subprocess.CalledProcessError:
+        raise BootstrapError("PERSISTED_CLIENT_CERTIFICATE_VALIDATION_FAILED") from None
+    if (
+        not hmac.compare_digest(subject, expected_subject)
+        or not hmac.compare_digest(certificate_public_key, private_public_key)
+    ):
+        raise BootstrapError("PERSISTED_CLIENT_CERTIFICATE_IDENTITY_INVALID")
+
+
 def _apply_file(path, image=None):
     content = path.read_text(encoding="utf-8")
     if image:
@@ -422,6 +493,17 @@ def bootstrap():
             "--timeout=300s",
         ])
         secret_dir = pathlib.Path(temporary)
+        namespace_manifest = MANIFEST_ROOT / "namespace.yaml"
+        rbac_manifest = MANIFEST_ROOT / "rbac.yaml"
+        _run([
+            "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
+            "apply", "-f", str(namespace_manifest),
+        ])
+        _run([
+            "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
+            "apply", "-f", str(rbac_manifest),
+        ])
+
         credential_files = {}
         for key, value in (
             ("control-url", config["control_url"]),
@@ -436,17 +518,36 @@ def bootstrap():
         _copy_secret_file("tls/ca.crt", control_ca_path)
         client_ca_path = secret_dir / "client-ca.crt"
         _copy_secret_file("tls/agent-ca.crt", client_ca_path)
-        tls_files = _request_client_certificate(
-            config, secret_dir, control_ca_path, client_ca_path
+
+        existing_credentials = _read_secret_files(
+            "eph-node-agent-credentials", "ai-agent-system", ("token",), secret_dir
         )
-        tls_files["client-ca.crt"] = client_ca_path
-        token_path = secret_dir / "token"
-        token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
-        os.chmod(str(token_path), 0o600)
+        existing_tls = _read_secret_files(
+            "agent-control-plane-mtls",
+            "ai-agent-system",
+            ("ca.crt", "tls.crt", "tls.key"),
+            secret_dir,
+        )
+        if (existing_credentials is None) != (existing_tls is None):
+            raise BootstrapError("EPH_AGENT_CREDENTIAL_SECRET_SET_INCOMPLETE")
+        if existing_credentials is not None:
+            tls_files = existing_tls
+            token_path = existing_credentials["token"]
+            if not TOKEN_PATTERN.fullmatch(token_path.read_text(encoding="ascii")):
+                raise BootstrapError("PERSISTED_AGENT_TOKEN_INVALID")
+            _validate_persisted_client_credentials(
+                tls_files, client_ca_path, secret_dir, config["node_id"]
+            )
+        else:
+            tls_files = _request_client_certificate(
+                config, secret_dir, control_ca_path, client_ca_path
+            )
+            token_path = secret_dir / "token"
+            token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
+            os.chmod(str(token_path), 0o600)
         credential_files["token"] = token_path
 
-        capi_files = {}
-        capi_sources = (
+        capi_files = {}        capi_sources = (
             ("source.kubeconfig", "capi/source.kubeconfig"),
             ("target.kubeconfig", "capi/target.kubeconfig"),
         )
@@ -459,10 +560,6 @@ def bootstrap():
                 _copy_secret_file(source, path)
                 capi_files[key] = path
 
-        _run(["kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
-              "apply", "-f", str(MANIFEST_ROOT / "namespace.yaml")])
-        _run(["kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
-              "apply", "-f", str(MANIFEST_ROOT / "rbac.yaml")])
         _create_secret("eph-node-agent-credentials", "ai-agent-system", credential_files)
         _create_secret("agent-control-plane-mtls", "ai-agent-system", tls_files)
         if capi_files:
