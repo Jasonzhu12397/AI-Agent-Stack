@@ -724,7 +724,7 @@ def test_eph_network_config_runs_before_systemd_networkd():
     ).read_text(encoding="utf-8")
     assert "DefaultDependencies=no" in service
     assert "After=local-fs.target" in service
-    assert "ExecStartPre=/usr/local/sbin/eph-bootstrap-mount.sh" in service
+    assert "ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-bootstrap-mount.sh" in service
     assert "Before=systemd-networkd.service" in service
     assert "Requires=eph-network-config.service" in drop_in
     assert "After=eph-network-config.service" in drop_in
