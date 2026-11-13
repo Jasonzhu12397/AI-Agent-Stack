@@ -1089,7 +1089,12 @@ def run_capi_pivot_postflight(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_FOUND:" + m3m_name + ":" + host_name
             )
         m3m_uid = m3m.get("metadata", {}).get("uid")
-        consumer_ref = host.get("spec", {}).get("consumerRef")
+        host_spec = host.get("spec")
+        if not isinstance(host_spec, dict):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID:" + host_name
+            )
+        consumer_ref = host_spec.get("consumerRef")
         if (
             not isinstance(consumer_ref, dict)
             or consumer_ref.get("apiVersion") != infrastructure_api_versions[m3m_name]
@@ -1112,12 +1117,7 @@ def run_capi_pivot_postflight(
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_RECONSTRUCTION_PENDING:" + host_name
             )
-        host_spec = host.get("spec")
         status = host.get("status")
-        if not isinstance(host_spec, dict):
-            raise CapiPivotError(
-                "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID:" + host_name
-            )
         if not isinstance(status, dict):
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_INVALID:" + host_name
