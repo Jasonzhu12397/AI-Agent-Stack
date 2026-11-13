@@ -58,7 +58,7 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
     assert "containerd.service" in service
     assert "cloud-config.service" in service
-    assert "cloud-init status --wait" in service
+    assert "cloud-init status --wait" not in service
     assert "cloud-init.target" not in service
     assert "/usr/local/bin/kubelet" in kubelet
     assert "--container-runtime-endpoint=unix:///run/containerd/containerd.sock" in kubelet
@@ -70,7 +70,7 @@ def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
     ).read_text(encoding="utf-8")
     assert "Requires=eph-kubeadm-init.service" in service
     assert "After=cloud-config.service network-online.target eph-kubeadm-init.service" in service
-    assert "cloud-init status --wait" in service
+    assert "cloud-init status --wait" not in service
     assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
         ROOT / "eph-iso/bootstrap.py"
     ).read_text(encoding="utf-8")
