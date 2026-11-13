@@ -611,6 +611,21 @@ def test_read_only_connector_tool_can_be_executed_after_healthy_connection(
 ):
     _, tenant, project, client = plugin_workspace
     payload = plugin_payload(tenant)
+    payload["tools"][0]["output_schema"] = {
+        "type": "object",
+        "properties": {
+            "repositories": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "additionalProperties": False,
+    }
     payload["manifest"] = {
         "http": {
             "base_url": "https://api.example.com",
@@ -681,7 +696,6 @@ def test_read_only_connector_tool_can_be_executed_after_healthy_connection(
 @pytest.mark.django_db
 def test_connector_tool_execution_rejects_unhealthy_connection(plugin_workspace):
     _, tenant, project, client = plugin_workspace
-    payload = plugin_payload(tenant)
     registered = register_plugin(client, tenant)
     client.post(
         f"/api/v1/connectors/{registered.data['id']}/approve/",
