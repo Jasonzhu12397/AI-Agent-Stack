@@ -807,3 +807,18 @@ def test_ci_bios_serial_console_check_includes_nested_syslinux_menu_files():
     assert "-extract /isolinux " in workflow
     assert 'grep -R -Eiq \'console=ttyS0,115200n8\'' in workflow
     assert 'grep -Eiq \'^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)\'' in workflow
+
+
+
+def test_eph_qemu_job_is_not_canceled_by_newer_pushes():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    assert not any(line == "concurrency:" for line in lines[:lines.index("jobs:")])
+    eph_job = lines[lines.index("  eph-iso:"):]
+    eph_job_text = "\n".join(eph_job[:eph_job.index("  compose:")])
+    assert "cancel-in-progress: false" in eph_job_text
+    assert "timeout-minutes: 90" in eph_job_text
+    assert "eph-iso-" in eph_job_text
+    assert "cancel-in-progress: true" not in eph_job_text
+    assert "Boot ISO and verify single-node Kubernetes API" in eph_job_text
+    assert "Upload EPH QEMU diagnostics" in eph_job_text
