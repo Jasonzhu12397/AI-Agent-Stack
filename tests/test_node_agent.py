@@ -530,6 +530,55 @@ def test_agent_health_files_distinguish_process_liveness_from_control_plane_read
     assert agent.health_file_is_fresh("AGENT_READINESS_FILE")
 
 
+def test_agent_liveness_heartbeat_is_independent_of_control_plane_readiness(
+    monkeypatch,
+):
+    calls = []
+    waits = iter([False, False, True])
+
+    class FakeStopEvent:
+        def wait(self, interval):
+            assert interval == 10
+            return next(waits)
+
+    monkeypatch.setattr(agent, "touch_health_files", lambda readiness=False: calls.append(readiness))
+
+    agent.maintain_liveness(FakeStopEvent())
+
+    assert calls == [False, False]
+
+
+def test_agent_liveness_heartbeat_continues_after_transient_filesystem_error(
+    monkeypatch,
+):
+    calls = []
+    waits = iter([False, False, True])
+
+    class FakeStopEvent:
+        def wait(self, interval):
+            return next(waits)
+
+    def touch(readiness=False):
+        calls.append(readiness)
+        if len(calls) == 1:
+            raise OSError("temporary filesystem error")
+
+    monkeypatch.setattr(agent, "touch_health_files", touch)
+
+    agent.maintain_liveness(FakeStopEvent(), interval_seconds=2)
+
+    assert calls == [False, False]
+
+
+def test_agent_liveness_heartbeat_rejects_invalid_interval():
+    class FakeStopEvent:
+        def wait(self, interval):
+            return True
+
+    with pytest.raises(agent.NodeAgentError, match="INVALID_LIVENESS_INTERVAL"):
+        agent.maintain_liveness(FakeStopEvent(), interval_seconds=0)
+
+
 def test_agent_health_files_reject_implausible_future_timestamps(
     monkeypatch,
     tmp_path,
