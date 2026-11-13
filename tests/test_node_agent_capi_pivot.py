@@ -884,20 +884,36 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "error_code"),
+    ("resource", "field", "value", "error_code"),
     [
-        ("spec", [], "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID"),
-        ("status", [], "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_INVALID"),
+        (
+            "baremetalhosts.metal3.io",
+            "spec",
+            [],
+            "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID",
+        ),
+        (
+            "baremetalhosts.metal3.io",
+            "status",
+            [],
+            "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_INVALID",
+        ),
+        (
+            "machines.cluster.x-k8s.io",
+            "spec",
+            [],
+            "CAPI_PIVOT_POSTFLIGHT_MACHINE_SPEC_INVALID",
+        ),
     ],
 )
-def test_pivot_postflight_rejects_malformed_bmh_objects(
-    tmp_path, field, value, error_code
+def test_pivot_postflight_rejects_malformed_resource_objects(
+    tmp_path, resource, field, value, error_code
 ):
     _, base_runner = _postflight_runner()
 
     def runner(command, **kwargs):
         completed = base_runner(command, **kwargs)
-        if "baremetalhosts.metal3.io" in command:
+        if resource in command:
             document = json.loads(completed.stdout)
             document["items"][0][field] = value
             return subprocess.CompletedProcess(
