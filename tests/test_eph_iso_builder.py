@@ -832,8 +832,14 @@ def test_eph_qemu_job_is_not_canceled_by_newer_pushes():
     assert "Boot ISO and verify single-node Kubernetes API" in eph_job_text
     assert "Upload EPH QEMU diagnostics" in eph_job_text
 
-def test_eph_agent_rbac_can_read_multus_network_attachment_definitions():
+def test_eph_agent_rbac_covers_runtime_and_network_inventory_reads():
     rbac = (ROOT / "eph-iso/eph-rbac.yaml").read_text(encoding="utf-8")
-    assert 'apiGroups: ["k8s.cni.cncf.io"]' in rbac
-    assert 'resources: ["network-attachment-definitions"]' in rbac
-    assert 'verbs: ["get", "list"]' in rbac
+    required_rules = (
+        ('apiGroups: ["apps"]', 'resources: ["deployments"]', 'verbs: ["get", "list"]'),
+        ('apiGroups: ["apiextensions.k8s.io"]', 'resources: ["customresourcedefinitions"]', 'verbs: ["get"]'),
+        ('apiGroups: ["k8s.cni.cncf.io"]', 'resources: ["network-attachment-definitions"]', 'verbs: ["get", "list"]'),
+    )
+    for api_group, resources, verbs in required_rules:
+        assert api_group in rbac
+        assert resources in rbac
+        assert verbs in rbac
