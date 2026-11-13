@@ -113,6 +113,29 @@ def _pivot_runner_for(
             else:
                 kubeconfig = ""
             if kubeconfig.endswith("source.kubeconfig"):
+                if "metal3machines.infrastructure.cluster.x-k8s.io" in command:
+                    machines = []
+                    for host in bmh_items or []:
+                        host_metadata = host.get("metadata", {})
+                        host_name = host_metadata.get("name")
+                        machines.append({
+                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                            "kind": "Metal3Machine",
+                            "metadata": {
+                                "name": host_name,
+                                "namespace": "metal3",
+                                "uid": "metal3machine-uid",
+                                "labels": {
+                                    "cluster.x-k8s.io/cluster-name": "target-cluster"
+                                },
+                                "annotations": {
+                                    "metal3.io/BareMetalHost": host_name
+                                },
+                            },
+                        })
+                    return subprocess.CompletedProcess(
+                        command, 0, json.dumps({"items": machines}), ""
+                    )
                 if "baremetalhosts.metal3.io" in command:
                     return subprocess.CompletedProcess(
                         command,
@@ -613,8 +636,12 @@ def test_pivot_execution_requires_metal3_bmh_handoff_metadata(
         },
         "spec": {
             "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+
                 "kind": "Metal3Machine",
                 "name": "worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
             },
         },
         "status": status,
@@ -668,8 +695,12 @@ def test_pivot_execution_rejects_malformed_source_bmh_inventory(
         },
         "spec": {
             "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+
                 "kind": "Metal3Machine",
                 "name": "worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
             },
         },
         "status": status,
@@ -720,8 +751,12 @@ def test_pivot_execution_accepts_fully_prepared_metal3_bmh(tmp_path):
         },
         "spec": {
             "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+
                 "kind": "Metal3Machine",
                 "name": "worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
             },
         },
         "status": status,
@@ -755,7 +790,7 @@ def test_pivot_execution_rejects_bmh_in_transient_provisioning_state(tmp_path):
             "annotations": {},
             "labels": {},
         },
-        "spec": {"consumerRef": {"kind": "Metal3Machine", "name": "worker-01"}},
+        "spec": {"consumerRef": {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-01", "namespace": "metal3", "uid": "metal3machine-uid"}},
         "status": {
             "operationalStatus": "OK",
             "provisioning": {"state": "provisioning"},
@@ -922,8 +957,12 @@ def _postflight_runner(
                 "spec": {
                     "infrastructureRef": {
                         "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+
                         "kind": "Metal3Machine",
                         "name": "worker-01",
+                        "namespace": "metal3",
+                        "uid": "metal3machine-uid",
                     }
                 },
             }]}
@@ -958,8 +997,12 @@ def _postflight_runner(
                                 if consumer_ref_api_version_valid
                                 else "infrastructure.cluster.x-k8s.io/v1beta2"
                             ),
+                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+
                             "kind": "Metal3Machine",
                             "name": "worker-01",
+                            "namespace": "metal3",
+                            "uid": "metal3machine-uid",
                             "namespace": (
                                 "metal3"
                                 if consumer_ref_namespace_valid
