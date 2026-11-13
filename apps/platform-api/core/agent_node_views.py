@@ -2197,9 +2197,28 @@ class AgentRuntimeHeartbeatView(APIView):
                         f"/api/v1/agent-runtime/deployments/{deployment.id}/reconciliation-report/"
                     ),
                     "capi_namespace": (
-                        deployment.spec.get("capi_namespace", "default")
-                        if isinstance(deployment.spec, dict)
-                        else "default"
+                        deployment.plan_result.get(
+                            "capi_pivot_source_preflight", {}
+                        ).get("source_cluster_identity", {}).get("namespace")
+                        if isinstance(deployment.plan_result, dict)
+                        and isinstance(
+                            deployment.plan_result.get("capi_pivot_source_preflight", {}),
+                            dict,
+                        )
+                        and isinstance(
+                            deployment.plan_result.get(
+                                "capi_pivot_source_preflight", {}
+                            ).get("source_cluster_identity", {}),
+                            dict,
+                        )
+                        and deployment.plan_result.get(
+                            "capi_pivot_source_preflight", {}
+                        ).get("source_cluster_identity", {}).get("namespace")
+                        else (
+                            deployment.spec.get("capi_namespace", "default")
+                            if isinstance(deployment.spec, dict)
+                            else "default"
+                        )
                     ),
                 }
                 for deployment in ClusterDeployment.objects.filter(
