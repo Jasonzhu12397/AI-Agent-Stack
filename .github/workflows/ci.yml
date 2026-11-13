@@ -580,7 +580,7 @@ jobs:
               request = {"execute": command, "id": command}
               if arguments is not None:
                   request["arguments"] = arguments
-              stream.write((json.dumps(request) + "\\r\\n").encode())
+              stream.write((json.dumps(request) + "\r\n").encode())
               stream.flush()
               while True:
                   response = json.loads(stream.readline())
