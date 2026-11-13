@@ -520,16 +520,24 @@ def _verify_source_metal3_handoff(
         "ready",
     }
     selected_hosts = []
+    selected_names = set()
+    selected_uids = set()
     blockers = []
     for host in hosts:
         if not isinstance(host, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
-        metadata = host.get("metadata", {})
+        metadata = host.get("metadata")
         if not isinstance(metadata, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
         labels = metadata.get("labels", {})
         annotations = metadata.get("annotations", {})
-        spec = host.get("spec", {})
+        spec = host.get("spec")
+        if not isinstance(labels, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_LABELS_INVALID")
+        if not isinstance(spec, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_SPEC_INVALID")
+        if not isinstance(annotations, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ANNOTATIONS_INVALID")
         consumer = spec.get("consumerRef")
         associated = (
             isinstance(consumer, dict)
@@ -541,10 +549,20 @@ def _verify_source_metal3_handoff(
         if not associated:
             continue
         name = metadata.get("name")
-        if not isinstance(name, str) or not name:
+        uid = metadata.get("uid")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(uid, str)
+            or not uid
+            or name in selected_names
+            or uid in selected_uids
+        ):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
-        if not isinstance(annotations, dict):
-            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ANNOTATIONS_INVALID")
+        if metadata.get("namespace") != namespace:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_NAMESPACE_MISMATCH")
+        selected_names.add(name)
+        selected_uids.add(uid)
         if "clusterctl.cluster.x-k8s.io/block-move" in annotations:
             blockers.append("bmh_block_move_annotation_present:" + name)
         status = host.get("status", {})
