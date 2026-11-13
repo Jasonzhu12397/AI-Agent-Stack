@@ -3055,11 +3055,23 @@ def test_target_agent_reconciliation_report_records_inventory_without_unlocking_
             "failed_resource_type_count": 0,
             "checks": [
                 {
+                    "group": group,
+                    "resource": resource,
+                    "kind": kind,
+                    "api_version": f"{group}/v1beta1",
                     "discovery_status": "discovered",
                     "list_status": "success",
                     "item_count": 0,
                 }
-                for _ in range(7)
+                for group, resource, kind in (
+                    ("cluster.x-k8s.io", "machines", "Machine"),
+                    ("cluster.x-k8s.io", "machinesets", "MachineSet"),
+                    ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
+                    ("controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "KubeadmControlPlane"),
+                    ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
+                    ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+                    ("metal3.io", "baremetalhosts", "BareMetalHost"),
+                )
             ],
         },
         "resources": [
