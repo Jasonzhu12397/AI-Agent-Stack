@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import importlib.util
 import pathlib
 import uuid
