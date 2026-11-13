@@ -725,3 +725,77 @@ def test_connector_tool_execution_rejects_unhealthy_connection(plugin_workspace)
 
     assert response.status_code == 409
     assert "healthy connector connection" in response.data["detail"]
+
+
+@pytest.mark.django_db
+def test_connector_tool_execution_enforces_permissions_risk_and_input_schema(
+    plugin_workspace,
+):
+    _, tenant, project, client = plugin_workspace
+    registered = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {"name": "guarded", "auth_type": "none", "credential_ref": "", "config": {}},
+        format="json",
+    )
+    connection_record = PluginConnection.objects.get(pk=connection.data["id"])
+    connection_record.status = PluginConnection.Status.HEALTHY
+    connection_record.save(update_fields=["status"])
+    endpoint = (
+        f"/api/v1/plugin-connections/{connection.data['id']}/tools/"
+        f"{registered.data['tools'][0]['id']}/execute/"
+    )
+    payload = {"arguments": {"owner": "platform-team"}}
+    installation = PluginInstallation.objects.get(pk=installed.data["id"])
+    installation.granted_permissions = []
+    installation.save(update_fields=["granted_permissions"])
+
+    denied_permission = client.post(endpoint, payload, format="json")
+
+    assert denied_permission.status_code == 403
+    assert "permissions" in denied_permission.data["detail"]
+
+    installation.granted_permissions = ["github:repo:read"]
+    installation.save(update_fields=["granted_permissions"])
+    tool = PluginDefinition.objects.get(pk=registered.data["id"]).tools.get()
+    tool.risk_level = "high"
+    tool.save(update_fields=["risk_level"])
+
+    denied_risk = client.post(endpoint, payload, format="json")
+
+    assert denied_risk.status_code == 403
+    assert "low-risk" in denied_risk.data["detail"]
+
+    tool.risk_level = "low"
+    tool.idempotency_mode = "none"
+    tool.save(update_fields=["risk_level", "idempotency_mode"])
+
+    denied_idempotency = client.post(endpoint, payload, format="json")
+
+    assert denied_idempotency.status_code == 403
+    assert "low-risk" in denied_idempotency.data["detail"]
+
+    tool.idempotency_mode = "read_only"
+    tool.save(update_fields=["idempotency_mode"])
+    invalid_arguments = client.post(
+        endpoint,
+        {"arguments": {}},
+        format="json",
+    )
+
+    assert invalid_arguments.status_code == 400
+    assert "owner" in invalid_arguments.data["detail"]
