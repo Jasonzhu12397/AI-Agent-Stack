@@ -855,3 +855,6 @@ def test_eph_agent_rbac_covers_runtime_and_network_inventory_reads():
         assert api_group in rbac
         assert resources in rbac
         assert verbs in rbac
+    assert "name: eph-node-agent-inventory-readonly" in rbac
+    assert "namespace: ai-agent-inventory" in rbac
+    assert 'resources: ["configmaps"]' in rbac
