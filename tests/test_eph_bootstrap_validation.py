@@ -1,5 +1,7 @@
 # ruff: noqa: I001
+import base64
 import importlib.util
+import json
 import pathlib
 import uuid
 
@@ -116,3 +118,91 @@ def test_certificate_exchange_response_rejects_invalid_fields(field, value):
         match="CLIENT_CERTIFICATE_RESPONSE_INVALID",
     ):
         BOOTSTRAP._validate_certificate_exchange_response(response, node_id)
+
+
+
+def test_read_secret_files_returns_persisted_values(tmp_path, monkeypatch):
+    token = "B" * 48
+    payload = {"data": {"token": base64.b64encode(token.encode("ascii")).decode("ascii")}}
+
+    def run(command, check, text, capture_output):
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", run)
+    files = BOOTSTRAP._read_secret_files(
+        "eph-node-agent-credentials",
+        "ai-agent-system",
+        ("token",),
+        tmp_path,
+    )
+
+    assert files["token"].read_text(encoding="ascii") == token
+    assert files["token"].stat().st_mode & 0o777 == 0o600
+
+
+def test_read_secret_files_returns_none_only_for_not_found(tmp_path, monkeypatch):
+    def run(command, check, text, capture_output):
+        return type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "Error from server (NotFound)"},
+        )()
+
+    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", run)
+
+    assert BOOTSTRAP._read_secret_files(
+        "eph-node-agent-credentials",
+        "ai-agent-system",
+        ("token",),
+        tmp_path,
+    ) is None
+
+
+def test_read_secret_files_rejects_other_kubectl_errors(tmp_path, monkeypatch):
+    def run(command, check, text, capture_output):
+        return type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "connection refused"},
+        )()
+
+    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", run)
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="KUBERNETES_SECRET_READ_FAILED",
+    ):
+        BOOTSTRAP._read_secret_files(
+            "eph-node-agent-credentials",
+            "ai-agent-system",
+            ("token",),
+            tmp_path,
+        )
+
+
+def test_read_secret_files_rejects_invalid_secret_data(tmp_path, monkeypatch):
+    payload = {"data": {"token": "not-base64"}}
+
+    def run(command, check, text, capture_output):
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", run)
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="KUBERNETES_SECRET_DATA_INVALID",
+    ):
+        BOOTSTRAP._read_secret_files(
+            "eph-node-agent-credentials",
+            "ai-agent-system",
+            ("token",),
+            tmp_path,
+        )
