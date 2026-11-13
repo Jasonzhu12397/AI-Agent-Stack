@@ -790,7 +790,15 @@ def test_pivot_execution_rejects_bmh_in_transient_provisioning_state(tmp_path):
             "annotations": {},
             "labels": {},
         },
-        "spec": {"consumerRef": {"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1", "kind": "Metal3Machine", "name": "worker-01", "namespace": "metal3", "uid": "metal3machine-uid"}},
+        "spec": {
+            "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "name": "worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
+            }
+        },
         "status": {
             "operationalStatus": "OK",
             "provisioning": {"state": "provisioning"},
@@ -956,9 +964,6 @@ def _postflight_runner(
                 },
                 "spec": {
                     "infrastructureRef": {
-                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-
                         "kind": "Metal3Machine",
                         "name": "worker-01",
                         "namespace": "metal3",
@@ -997,12 +1002,8 @@ def _postflight_runner(
                                 if consumer_ref_api_version_valid
                                 else "infrastructure.cluster.x-k8s.io/v1beta2"
                             ),
-                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-
                             "kind": "Metal3Machine",
                             "name": "worker-01",
-                            "namespace": "metal3",
-                            "uid": "metal3machine-uid",
                             "namespace": (
                                 "metal3"
                                 if consumer_ref_namespace_valid
