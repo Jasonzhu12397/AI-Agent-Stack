@@ -264,6 +264,151 @@ class ClusterDeploymentCancelView(APIView):
         return Response(_deployment_data(deployment))
 
 
+class ClusterDeploymentRecoveryReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        is_tenant_admin = TenantMembership.objects.filter(
+            tenant=deployment.tenant,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        if not is_tenant_admin:
+            return Response(
+                {"detail": "Tenant owner or administrator permission required."},
+                status=403,
+            )
+        if request.data.get("confirmation") != "review_recovery_evidence":
+            return Response(
+                {"detail": "Explicit review_recovery_evidence confirmation is required."},
+                status=400,
+            )
+        reason = request.data.get("reason")
+        if not isinstance(reason, str) or not 20 <= len(reason.strip()) <= 500:
+            return Response(
+                {"detail": "A review reason between 20 and 500 characters is required."},
+                status=400,
+            )
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status != ClusterDeployment.Status.RECONCILIATION_REQUIRED:
+                return Response(
+                    {"detail": "Deployment is not awaiting reconciliation review."},
+                    status=409,
+                )
+            if deployment.requested_by_id == request.user.pk:
+                return Response(
+                    {"detail": "The original requester cannot approve their own recovery review."},
+                    status=403,
+                )
+            plan = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+            reconciliation = plan.get("worker_provisioning_reconciliation", {})
+            report = reconciliation.get("report", {}) if isinstance(reconciliation, dict) else {}
+            if (
+                reconciliation.get("state") != "evidence_recorded_not_authorized"
+                or not isinstance(report, dict)
+                or not isinstance(report.get("resources"), list)
+            ):
+                return Response(
+                    {"detail": "A valid Target Agent reconciliation report is required."},
+                    status=409,
+                )
+            expected_uid = plan.get("dual_agent", {}).get("target_agent_cluster_uid")
+            observed_uid = report.get("cluster_uid")
+            resources = report.get("resources", [])
+            cluster_resources = [
+                item for item in resources
+                if isinstance(item, dict)
+                and item.get("kind") == "Cluster"
+                and item.get("name") == deployment.cluster_name
+            ]
+            if (
+                not isinstance(observed_uid, str)
+                or not observed_uid
+                or (expected_uid and expected_uid != observed_uid)
+                or len(cluster_resources) != 1
+                or cluster_resources[0].get("uid") != observed_uid
+            ):
+                return Response(
+                    {"detail": "Cluster identity evidence is missing or inconsistent."},
+                    status=409,
+                )
+            received_at = report.get("received_at")
+            try:
+                report_time = datetime.datetime.fromisoformat(received_at)
+                if timezone.is_naive(report_time):
+                    report_time = timezone.make_aware(report_time, timezone.get_current_timezone())
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Reconciliation report timestamp is invalid."},
+                    status=409,
+                )
+            report_age = (timezone.now() - report_time).total_seconds()
+            if report_age < -30 or report_age > 900:
+                return Response(
+                    {"detail": "A reconciliation report no older than 15 minutes is required."},
+                    status=409,
+                )
+            review = {
+                "status": "approved_for_manual_recovery_planning",
+                "reviewed_by": str(request.user.pk),
+                "reviewed_at": timezone.now().isoformat(),
+                "reason": reason.strip(),
+                "cluster_uid": observed_uid,
+                "report_received_at": received_at,
+                "recovery_execution_authorized": False,
+                "worker_retry_authorized": False,
+                "eph_reclaim_authorized": False,
+            }
+            deployment.plan_result = {
+                **plan,
+                "worker_provisioning_reconciliation": {
+                    **reconciliation,
+                    "operator_review": review,
+                    "state": "operator_reviewed_manual_recovery_planning",
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **plan.get("dual_agent", {}),
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(update_fields=["plan_result", "updated_at"])
+            record_audit_event(
+                request,
+                deployment.tenant,
+                "cluster_deployment.recovery_review_approved",
+                "cluster_deployment",
+                resource_id=deployment.id,
+                project=deployment.project,
+                metadata={
+                    "cluster_name": deployment.cluster_name,
+                    "cluster_uid": observed_uid,
+                    "reason": reason.strip(),
+                    "recovery_execution_authorized": False,
+                    "worker_retry_authorized": False,
+                    "eph_reclaim_authorized": False,
+                },
+            )
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "review_status": "approved_for_manual_recovery_planning",
+                "recovery_execution_authorized": False,
+                "worker_retry_authorized": False,
+                "eph_reclaim_authorized": False,
+            },
+            status=202,
+        )
+
+
 
 class ClusterDeploymentTargetAgentHandoffView(APIView):
     permission_classes = [IsAuthenticated]
