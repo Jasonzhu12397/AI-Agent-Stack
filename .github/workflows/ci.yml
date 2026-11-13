@@ -577,15 +577,18 @@ jobs:
               raise SystemExit("EPH_QMP_GREETING_INVALID")
 
           def execute(command, arguments=None):
-              request = {"execute": command}
+              request = {"execute": command, "id": command}
               if arguments is not None:
                   request["arguments"] = arguments
-              stream.write((json.dumps(request) + "\r\n").encode())
+              stream.write((json.dumps(request) + "\\r\\n").encode())
               stream.flush()
-              response = json.loads(stream.readline())
-              if "error" in response:
-                  raise SystemExit("EPH_QMP_COMMAND_FAILED:" + command + ":" + str(response["error"]))
-              return response.get("return")
+              while True:
+                  response = json.loads(stream.readline())
+                  if response.get("id") != command:
+                      continue
+                  if "error" in response:
+                      raise SystemExit("EPH_QMP_COMMAND_FAILED:" + command + ":" + str(response["error"]))
+                  return response.get("return")
 
           execute("qmp_capabilities")
           blocks = execute("query-block")
