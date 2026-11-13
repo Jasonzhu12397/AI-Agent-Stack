@@ -2706,25 +2706,43 @@ def execute_command(
         if not isinstance(expected_uid, str) or not expected_uid:
             raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
         discovery = kubernetes_api_get("/apis")
+        if not isinstance(discovery, dict):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
+        api_groups = discovery.get("groups")
+        if not isinstance(api_groups, list) or any(
+            not isinstance(item, dict) for item in api_groups
+        ):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
         cluster_group = next(
             (
-                item for item in discovery.get("groups", [])
+                item for item in api_groups
                 if item.get("name") == "cluster.x-k8s.io"
             ),
             None,
         )
-        version = (
-            cluster_group.get("preferredVersion", {}).get("version")
+        preferred_version = (
+            cluster_group.get("preferredVersion")
             if isinstance(cluster_group, dict)
             else None
         )
-        if not isinstance(version, str):
+        version = (
+            preferred_version.get("version")
+            if isinstance(preferred_version, dict)
+            else None
+        )
+        if not isinstance(version, str) or not re.fullmatch(
+            r"v[0-9]+(?:alpha|beta)[0-9]+|v[0-9]+", version
+        ):
             raise NodeAgentError("TARGET_CAPI_API_NOT_DISCOVERED")
         cluster = kubernetes_api_get(
             f"/apis/cluster.x-k8s.io/{version}"
             f"/namespaces/{namespace}/clusters/{cluster_name}"
         )
-        metadata = cluster.get("metadata", {})
+        if not isinstance(cluster, dict):
+            raise NodeAgentError("INVALID_TARGET_CLUSTER_OBJECT")
+        metadata = cluster.get("metadata")
+        if not isinstance(metadata, dict):
+            raise NodeAgentError("INVALID_TARGET_CLUSTER_METADATA")
         actual_uid = metadata.get("uid")
         if actual_uid != expected_uid:
             raise NodeAgentError("TARGET_CLUSTER_UID_MISMATCH")
@@ -2732,7 +2750,9 @@ def execute_command(
             f"/apis/cluster.x-k8s.io/{version}"
             f"/namespaces/{namespace}/machines"
         )
-        machine_items = machines.get("items", [])
+        if not isinstance(machines, dict):
+            raise NodeAgentError("INVALID_TARGET_MACHINE_INVENTORY")
+        machine_items = machines.get("items")
         if not isinstance(machine_items, list):
             raise NodeAgentError("INVALID_TARGET_MACHINE_INVENTORY")
         if any(not isinstance(item, dict) for item in machine_items):
@@ -2785,10 +2805,24 @@ def execute_command(
                 f"/apis/apps/v1/namespaces/{controller_namespace}"
                 f"/deployments/{deployment_name}"
             )
-            desired = deployment.get("spec", {}).get("replicas", 1)
-            available = deployment.get("status", {}).get("availableReplicas", 0)
-            observed = deployment.get("status", {}).get("observedGeneration", 0)
-            generation = deployment.get("metadata", {}).get("generation", 1)
+            if not isinstance(deployment, dict):
+                raise NodeAgentError("INVALID_TARGET_CONTROLLER_DEPLOYMENT")
+            deployment_spec = deployment.get("spec")
+            deployment_status = deployment.get("status")
+            deployment_metadata = deployment.get("metadata")
+            if not all(
+                isinstance(value, dict)
+                for value in (
+                    deployment_spec,
+                    deployment_status,
+                    deployment_metadata,
+                )
+            ):
+                raise NodeAgentError("INVALID_TARGET_CONTROLLER_DEPLOYMENT")
+            desired = deployment_spec.get("replicas", 1)
+            available = deployment_status.get("availableReplicas", 0)
+            observed = deployment_status.get("observedGeneration", 0)
+            generation = deployment_metadata.get("generation", 1)
             ready = (
                 isinstance(desired, int)
                 and not isinstance(desired, bool)
