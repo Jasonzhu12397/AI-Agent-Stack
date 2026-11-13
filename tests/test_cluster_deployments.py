@@ -565,6 +565,10 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
             "checkpoint_endpoint": (
                 f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
             ),
+            "reconciliation_report_endpoint": (
+                f"/api/v1/agent-runtime/deployments/{deployment.id}/reconciliation-report/"
+            ),
+            "capi_namespace": "default",
         }
     ]
 
