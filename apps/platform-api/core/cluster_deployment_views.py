@@ -349,6 +349,30 @@ class ClusterDeploymentRecoveryReviewView(APIView):
                     {"detail": "Cluster identity evidence is missing or inconsistent."},
                     status=409,
                 )
+            inventory_completeness = report.get("inventory_completeness")
+            if (
+                not isinstance(inventory_completeness, dict)
+                or inventory_completeness.get("complete") is not True
+                or inventory_completeness.get("expected_resource_type_count") != 7
+                or inventory_completeness.get("successful_resource_type_count") != 7
+                or inventory_completeness.get("not_discovered_resource_type_count") != 0
+                or inventory_completeness.get("failed_resource_type_count") != 0
+                or not isinstance(inventory_completeness.get("checks"), list)
+                or len(inventory_completeness["checks"]) != 7
+                or any(
+                    not isinstance(check, dict)
+                    or check.get("discovery_status") != "discovered"
+                    or check.get("list_status") != "success"
+                    or not isinstance(check.get("item_count"), int)
+                    or isinstance(check.get("item_count"), bool)
+                    or check.get("item_count") < 0
+                    for check in inventory_completeness["checks"]
+                )
+            ):
+                return Response(
+                    {"detail": "A complete CAPI resource inventory is required before review."},
+                    status=409,
+                )
             received_at = report.get("received_at")
             try:
                 report_time = datetime.datetime.fromisoformat(received_at)
