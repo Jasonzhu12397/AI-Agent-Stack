@@ -530,7 +530,6 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_ANNOTATIONS_INVALID")
         if labels.get("cluster.x-k8s.io/cluster-name") != cluster_name:
             continue
-        name = metadata.get("name")
         uid = metadata.get("uid")
         machine_namespace = metadata.get("namespace")
         host_name = annotations.get("metal3.io/BareMetalHost")
@@ -610,9 +609,7 @@ def _verify_source_metal3_handoff(
     selected_names = set()
     selected_uids = set()
     blockers = []
-    for host in hosts:
-        if not isinstance(host, dict):
-            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
+    for name, host in selected_hosts_by_name.items():
         metadata = host.get("metadata")
         if not isinstance(metadata, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
