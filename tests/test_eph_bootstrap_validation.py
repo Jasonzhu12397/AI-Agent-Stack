@@ -1,0 +1,109 @@
+import importlib.util
+import pathlib
+import uuid
+
+import pytest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+BOOTSTRAP_PATH = ROOT / "eph-iso" / "bootstrap.py"
+SPEC = importlib.util.spec_from_file_location("eph_bootstrap", BOOTSTRAP_PATH)
+BOOTSTRAP = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BOOTSTRAP)
+
+
+@pytest.fixture
+def valid_config():
+    return {
+        "control_url": "https://control.example.test",
+        "node_id": str(uuid.uuid4()),
+        "enrollment_token": "A" * 48,
+        "agent_image": "registry.example.test/ai-agent/node-agent@sha256:" + "a" * 64,
+    }
+
+
+def test_validate_config_accepts_digest_pinned_agent_image(valid_config):
+    assert BOOTSTRAP.validate_config(valid_config) == valid_config
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("control_url", "http://control.example.test", "CONTROL_URL_INVALID"),
+        ("control_url", "https://user:pass@control.example.test", "CONTROL_URL_INVALID"),
+        ("control_url", "https://control.example.test/api", "CONTROL_URL_INVALID"),
+        ("control_url", "https://control.example.test?token=x", "CONTROL_URL_INVALID"),
+        ("node_id", "not-a-uuid", "NODE_ID_INVALID"),
+        ("enrollment_token", "short", "ENROLLMENT_TOKEN_INVALID"),
+        ("agent_image", "registry.example.test/node-agent:latest", "AGENT_IMAGE_NOT_PINNED_BY_DIGEST"),
+    ],
+)
+def test_validate_config_rejects_unsafe_values(valid_config, field, value, error):
+    valid_config[field] = value
+
+    with pytest.raises(BOOTSTRAP.BootstrapError, match=error):
+        BOOTSTRAP.validate_config(valid_config)
+
+
+@pytest.mark.parametrize("value", [None, [], "not-an-object"])
+def test_validate_config_rejects_non_object_config(value):
+    with pytest.raises(BOOTSTRAP.BootstrapError, match="BOOTSTRAP_CONFIG_INVALID"):
+        BOOTSTRAP.validate_config(value)
+
+
+def test_validate_config_rejects_missing_required_fields(valid_config):
+    del valid_config["agent_image"]
+
+    with pytest.raises(BOOTSTRAP.BootstrapError, match="BOOTSTRAP_CONFIG_FIELDS_MISSING"):
+        BOOTSTRAP.validate_config(valid_config)
+
+
+def test_certificate_exchange_response_requires_consumed_token_and_matching_identity():
+    node_id = str(uuid.uuid4())
+    response = {
+        "agent_token": "B" * 48,
+        "client_certificate": "-----BEGIN CERTIFICATE-----\\nleaf\\n",
+        "ca_chain": "-----BEGIN CERTIFICATE-----\\nca\\n",
+        "fingerprint_sha256": "c" * 64,
+        "node_id": node_id,
+        "token_consumed": True,
+    }
+
+    result = BOOTSTRAP._validate_certificate_exchange_response(response, node_id)
+
+    assert result == (
+        response["agent_token"],
+        response["client_certificate"],
+        response["ca_chain"],
+        response["fingerprint_sha256"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("node_id", str(uuid.uuid4())),
+        ("token_consumed", False),
+        ("fingerprint_sha256", "invalid"),
+        ("agent_token", "short"),
+        ("client_certificate", ""),
+        ("ca_chain", ""),
+    ],
+)
+def test_certificate_exchange_response_rejects_invalid_fields(field, value):
+    node_id = str(uuid.uuid4())
+    response = {
+        "agent_token": "B" * 48,
+        "client_certificate": "leaf-certificate",
+        "ca_chain": "issuer-certificate",
+        "fingerprint_sha256": "c" * 64,
+        "node_id": node_id,
+        "token_consumed": True,
+    }
+    response[field] = value
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="CLIENT_CERTIFICATE_RESPONSE_INVALID",
+    ):
+        BOOTSTRAP._validate_certificate_exchange_response(response, node_id)
