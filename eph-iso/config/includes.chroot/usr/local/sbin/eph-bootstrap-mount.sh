@@ -12,9 +12,9 @@ for attempt in $(seq 1 5); do
     sleep 2
 done
 
-[ -n "$device" ] || {
-    printf '%s\n' "EPH_BOOTSTRAP_MEDIA_NOT_FOUND" >&2
-    exit 1
+if [ -z "$device" ]; then
+    printf '%s\n' "EPH_BOOTSTRAP_MEDIA_NOT_PRESENT; continuing without optional media"
+    exit 0
 }
 install -d -m 0700 /mnt/eph-bootstrap
 mount -o ro,nosuid,nodev,noexec "$device" /mnt/eph-bootstrap
