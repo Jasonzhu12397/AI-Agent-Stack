@@ -64,6 +64,7 @@ from core.plugin_views import (
     PluginConnectionListCreateView,
     PluginConnectionTestView,
     PluginConnectionStatusView,
+    PluginToolExecuteView,
     PluginDetailView,
     PluginInstallationListCreateView,
     PluginInstallationStatusView,
@@ -155,6 +156,11 @@ urlpatterns = [
         "api/v1/plugin-connections/<uuid:connection_id>/test/",
         PluginConnectionTestView.as_view(),
         name="plugin-connection-test",
+    ),
+    path(
+        "api/v1/plugin-connections/<uuid:connection_id>/tools/<uuid:tool_id>/execute/",
+        PluginToolExecuteView.as_view(),
+        name="plugin-tool-execute",
     ),
     path(
         "api/v1/plugin-connections/<uuid:connection_id>/status/",
