@@ -3059,7 +3059,12 @@ class AgentRuntimeDeploymentReconciliationReportView(APIView):
                     or item_count < 0
                 ):
                     return Response(
-                        {"detail": "Successful CAPI inventory checks require API version and item count."},
+                        {
+                            "detail": (
+                                "Successful CAPI inventory checks require API version "
+                                "and item count."
+                            )
+                        },
                         status=status.HTTP_409_CONFLICT,
                     )
                 successful_checks += 1
@@ -3086,8 +3091,10 @@ class AgentRuntimeDeploymentReconciliationReportView(APIView):
             observed_resource_types != expected_resource_types
             or inventory_completeness.get("complete") is not True
             or inventory_completeness.get("expected_resource_type_count") != 7
-            or inventory_completeness.get("successful_resource_type_count") != successful_checks
-            or inventory_completeness.get("not_discovered_resource_type_count") != undiscovered_checks
+            or inventory_completeness.get("successful_resource_type_count")
+            != successful_checks
+            or inventory_completeness.get("not_discovered_resource_type_count")
+            != undiscovered_checks
             or inventory_completeness.get("failed_resource_type_count") != failed_checks
             or successful_checks != 7
             or undiscovered_checks != 0
@@ -3095,7 +3102,10 @@ class AgentRuntimeDeploymentReconciliationReportView(APIView):
         ):
             return Response(
                 {
-                    "detail": "CAPI reconciliation evidence is incomplete or internally inconsistent.",
+                    "detail": (
+                        "CAPI reconciliation evidence is incomplete or "
+                        "internally inconsistent."
+                    ),
                     "code": "CAPI_INVENTORY_INCOMPLETE",
                 },
                 status=status.HTTP_409_CONFLICT,
