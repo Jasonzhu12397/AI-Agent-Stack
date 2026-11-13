@@ -8,7 +8,6 @@ StartLimitBurst=10
 
 [Service]
 Type=oneshot
-ExecStartPre=/usr/bin/cloud-init status --wait
 ExecStart=/usr/bin/python3 /usr/local/lib/eph-bootstrap.py
 RemainAfterExit=yes
 Restart=on-failure
