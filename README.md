@@ -147,6 +147,30 @@ The EPH runner currently supports:
 
 Kubernetes Deployment/RBAC templates for running both agent roles as pods are in `deploy/agents/`.
 
+### Ambiguous worker-provisioning reconciliation and operator review
+
+When a worker-provisioning command has an unknown outcome, the deployment enters
+`reconciliation_required`. The Target Agent receives that deployment in its heartbeat
+response, reads the namespaced CAPI Cluster and available Machine, MachineSet,
+MachineDeployment, KubeadmControlPlane, Metal3Cluster, Metal3Machine and BareMetalHost
+objects through the Kubernetes read-only API, and submits the bounded inventory to:
+
+`POST /api/v1/agent-runtime/deployments/{deployment_id}/reconciliation-report/`
+
+The report is evidence only. It does not retry provisioning, transfer checkpoint ownership,
+or permit EPH reclamation. An operator can record a separate review through:
+
+`POST /api/v1/cluster-deployments/{deployment_id}/recovery-review/`
+
+The request must contain
+`{"confirmation":"review_recovery_evidence","reason":"..."}`, with a 20–500 character
+reason. Only a tenant owner or administrator may approve; the original deployment requester
+cannot approve their own review. The API verifies the recent report and Cluster UID, then
+writes a hash-chained audit event. This approval is for manual recovery planning only:
+`recovery_execution_authorized`, `worker_retry_authorized` and
+`eph_reclaim_authorized` remain false. Actual recovery execution requires a separately
+reviewed, fail-closed executor and is not enabled by this endpoint.
+
 The Target Cluster Agent must be installed on a target control-plane node immediately after the first Control Plane is Ready, before Data Plane workers are provisioned. Its Deployment uses a control-plane node selector and tolerates the standard control-plane NoSchedule taint so it can run when no workers exist. It resumes the same logical deployment/task from the central Supervisor using a separate target-cluster identity; this is a new Pod/process, not a live memory transfer. If CAPI controllers and Cluster API objects were hosted by the EPH bootstrap cluster, pivot them into the target cluster and verify reconciliation before stopping EPH or creating workers. The Target Agent then coordinates remaining Control Plane replicas and Data Plane workers. Production node identity should move to mTLS/short-lived workload identity; the current one-time bearer token is the initial development enrollment mechanism.
 
 **Not yet enabled:** actual CAPI Cluster/MachineDeployment creation, Metal3 BareMetalHost writes, Ironic/BMC operations, target-agent installation, arbitrary manifest apply and day-2 mutation. These require a verified management/target Kubernetes + CAPI + Metal3 + Ironic + IPA compatibility matrix, scoped credentials and an execution adapter. A command marked approved is not proof that provisioning occurred.
