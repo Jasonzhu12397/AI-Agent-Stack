@@ -1374,6 +1374,7 @@ def test_target_agent_capi_pivot_preflight_requires_apis_controllers_and_no_clus
             "items": [
                 {
                     "metadata": {"name": name, "generation": 1},
+                    "spec": {"replicas": 1},
                     "status": {"availableReplicas": 1, "observedGeneration": 1},
                 }
             ]
@@ -1449,6 +1450,7 @@ def test_target_agent_capi_pivot_preflight_blocks_missing_controller(monkeypatch
             "items": [
                 {
                     "metadata": {"name": name, "generation": 1},
+                    "spec": {"replicas": 1},
                     "status": {
                         "availableReplicas": 0 if namespace == "capm3-system" else 1,
                         "observedGeneration": 1,
