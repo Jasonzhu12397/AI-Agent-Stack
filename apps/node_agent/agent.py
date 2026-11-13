@@ -770,32 +770,80 @@ def collect_capi_reconciliation_inventory(
         ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
         ("metal3.io", "baremetalhosts", "BareMetalHost"),
     )
+    inventory_checks = []
     for group, plural, kind in resource_specs:
         version = versions.get(group)
         if not version:
+            inventory_checks.append({
+                "group": group,
+                "resource": plural,
+                "kind": kind,
+                "discovery_status": "not_discovered",
+                "list_status": "not_attempted",
+                "item_count": None,
+            })
             continue
         path = f"/apis/{group}/{version}/namespaces/{namespace}/{plural}"
+        check = {
+            "group": group,
+            "resource": plural,
+            "kind": kind,
+            "api_version": f"{group}/{version}",
+            "discovery_status": "discovered",
+            "list_status": "failed",
+            "item_count": None,
+        }
         try:
             items = list_all_kubernetes_items(path, max_items=5000)
         except NodeAgentError as exc:
-            if str(exc) == "KUBERNETES_API_HTTP_404":
-                continue
-            raise
+            error_code = str(exc)[:96]
+            check["error_code"] = error_code
+            if error_code == "KUBERNETES_API_HTTP_404":
+                check["list_status"] = "not_found"
+            inventory_checks.append(check)
+            continue
+        check["list_status"] = "success"
+        check["item_count"] = len(items)
+        inventory_checks.append(check)
         for item in items:
             metadata = item.get("metadata", {})
             if isinstance(metadata, dict) and metadata.get("namespace", namespace) == namespace:
-                resources.append(_reconciliation_resource_record(item, f"{group}/{version}", kind))
+                resources.append(
+                    _reconciliation_resource_record(item, f"{group}/{version}", kind)
+                )
                 if len(resources) >= 500:
                     raise NodeAgentError("CAPI_RECONCILIATION_RESOURCE_LIMIT_EXCEEDED")
+    successful = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] == "discovered"
+        and check["list_status"] == "success"
+    )
+    unavailable = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] != "discovered"
+    )
+    failed = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] == "discovered"
+        and check["list_status"] != "success"
+    )
+    completeness = {
+        "complete": successful == len(resource_specs),
+        "expected_resource_type_count": len(resource_specs),
+        "successful_resource_type_count": successful,
+        "not_discovered_resource_type_count": unavailable,
+        "failed_resource_type_count": failed,
+        "checks": inventory_checks,
+    }
     report = {
         "cluster_name": cluster_name,
         "cluster_uid": resources[0]["uid"],
         "resources": resources,
+        "inventory_completeness": completeness,
     }
     if len(json.dumps(report, separators=(",", ":")).encode("utf-8")) > 60000:
         raise NodeAgentError("CAPI_RECONCILIATION_REPORT_TOO_LARGE")
     return report
-
 
 def list_all_kubernetes_items(path: str, max_items: int = 100000) -> list[dict[str, Any]]:
     items = []
