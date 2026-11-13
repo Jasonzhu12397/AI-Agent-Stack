@@ -639,6 +639,12 @@ def test_ci_qemu_uses_accelerator_properties_not_machine_properties():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "-machine usb=off" in workflow
     assert "-accel tcg,thread=multi" in workflow
+    assert "-accel kvm" in workflow
+    assert "QEMU_ACCEL_ARGS[@]" in workflow
+    assert "EPH_QEMU_ACCELERATOR=kvm" in workflow
+    assert "EPH_QEMU_ACCELERATOR=tcg" in workflow
+    assert "EPH_QEMU_WAIT elapsed_seconds=%s" in workflow
+    assert "tail -n 25" in workflow
     assert "-machine accel=tcg,thread=multi" not in workflow
 
 
