@@ -1350,3 +1350,85 @@ def test_pivot_execution_never_invokes_clusterctl_move_without_dry_run(tmp_path)
     assert all("--dry-run" in item[0] for item in clusterctl_calls)
     assert result["pivot_simulated"] is True
     assert result["side_effects"] is False
+
+
+@pytest.mark.parametrize(
+    ("resource", "mutation", "error_code"),
+    [
+        (
+            "metal3machines.infrastructure.cluster.x-k8s.io",
+            "api_version",
+            "CAPI_PIVOT_SOURCE_M3M_API_VERSION_INVALID",
+        ),
+        (
+            "metal3machines.infrastructure.cluster.x-k8s.io",
+            "kind",
+            "CAPI_PIVOT_SOURCE_M3M_API_VERSION_INVALID",
+        ),
+        (
+            "baremetalhosts.metal3.io",
+            "unknown_consumer_name",
+            "CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN",
+        ),
+        (
+            "baremetalhosts.metal3.io",
+            "missing_consumer_namespace",
+            "CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN",
+        ),
+    ],
+)
+def test_pivot_execution_rejects_untrusted_source_m3m_references(
+    tmp_path, resource, mutation, error_code
+):
+    status = {
+        "operationalStatus": "OK",
+        "provisioning": {"state": "provisioned"},
+    }
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": {
+                "baremetalhost.metal3.io/paused": "metal3.io/capm3",
+                "baremetalhost.metal3.io/status": json.dumps(status),
+            },
+            "labels": {"clusterctl.cluster.x-k8s.io/move": ""},
+        },
+        "spec": {
+            "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "name": "worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
+            },
+        },
+        "status": status,
+    }
+    _, base_runner = _pivot_runner_for(bmh_items=[bmh])
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        if resource not in command:
+            return completed
+        document = json.loads(completed.stdout)
+        if mutation == "api_version":
+            document["items"][0]["apiVersion"] = "infrastructure.other.io/v1beta1"
+        elif mutation == "kind":
+            document["items"][0]["kind"] = "Machine"
+        elif mutation == "unknown_consumer_name":
+            document["items"][0]["spec"]["consumerRef"]["name"] = "other-machine"
+        elif mutation == "missing_consumer_namespace":
+            document["items"][0]["spec"]["consumerRef"].pop("namespace")
+        return subprocess.CompletedProcess(
+            command, completed.returncode, json.dumps(document), completed.stderr
+        )
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
