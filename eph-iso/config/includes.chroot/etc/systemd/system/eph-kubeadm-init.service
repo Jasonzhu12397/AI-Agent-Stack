@@ -6,7 +6,6 @@ Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-l
 
 [Service]
 Type=oneshot
-ExecStartPre=/usr/bin/cloud-init status --wait
 EnvironmentFile=-/etc/default/eph-node
 ExecStart=/usr/bin/bash /usr/local/sbin/eph-kubeadm-init.sh
 RemainAfterExit=yes
