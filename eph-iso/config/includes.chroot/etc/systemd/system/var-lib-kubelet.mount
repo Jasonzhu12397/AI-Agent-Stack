@@ -6,7 +6,7 @@ Before=kubelet.service
 What=tmpfs
 Where=/var/lib/kubelet
 Type=tmpfs
-Options=mode=0750,size=15%,nosuid,nodev
+Options=mode=0750,size=10%,nosuid,nodev
 
 [Install]
 WantedBy=multi-user.target
