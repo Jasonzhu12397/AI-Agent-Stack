@@ -28,6 +28,9 @@ rules:
   - apiGroups: ["metal3.io"]
     resources: ["baremetalhosts"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list"]
   - nonResourceURLs: ["/version", "/api", "/apis", "/apis/*"]
     verbs: ["get"]
 ---
