@@ -524,8 +524,15 @@ def test_pivot_preflight_rejects_malformed_target_api_responses(
                     }),
                     "",
                 )
+            target_configured = (
+                "--kubeconfig" in command
+                and command[command.index("--kubeconfig") + 1].endswith(
+                    "target.kubeconfig"
+                )
+            )
             if (
                 malformed_response == "cluster_inventory"
+                and target_configured
                 and "clusters.cluster.x-k8s.io" in command
             ):
                 return subprocess.CompletedProcess(
