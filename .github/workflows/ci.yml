@@ -79,7 +79,7 @@ jobs:
 
   eph-iso:
     concurrency:
-      group: ${{ github.workflow }}-eph-iso-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+      group: ${{ github.workflow }}-eph-iso-v2-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 90
