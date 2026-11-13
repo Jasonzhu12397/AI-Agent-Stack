@@ -468,6 +468,11 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
     monkeypatch.setitem(bootstrap_globals, "_create_secret", fake_create_secret)
     monkeypatch.setitem(
         bootstrap_globals,
+        "_read_secret_files",
+        lambda name, namespace, keys, directory: None,
+    )
+    monkeypatch.setitem(
+        bootstrap_globals,
         "_wait_for_agent_pod",
         lambda: events.append(("agent_pod_ready",)),
     )
