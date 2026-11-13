@@ -701,10 +701,17 @@ def _reconciliation_resource_record(
             if isinstance(condition, dict) and isinstance(condition.get("type"), str):
                 condition_status = condition.get("status")
                 if isinstance(condition_status, (str, bool)):
-                    normalized_conditions.append({
-                        "type": condition["type"][:128],
-                        "status": str(condition_status).lower() if isinstance(condition_status, bool) else condition_status[:32],
-                    })
+                    normalized_status = (
+                        str(condition_status).lower()
+                        if isinstance(condition_status, bool)
+                        else condition_status[:32]
+                    )
+                    normalized_conditions.append(
+                        {
+                            "type": condition["type"][:128],
+                            "status": normalized_status,
+                        }
+                    )
     replicas = spec.get("replicas")
     status_replicas = status.get("replicas")
     ready_replicas = status.get("readyReplicas")
@@ -747,7 +754,13 @@ def collect_capi_reconciliation_inventory(
         f"{namespace}/clusters/{urllib.parse.quote(cluster_name, safe='')}"
     )
     cluster = kubernetes_api_get(cluster_path)
-    resources = [_reconciliation_resource_record(cluster, f"cluster.x-k8s.io/{cluster_version}", "Cluster")]
+    resources = [
+        _reconciliation_resource_record(
+            cluster,
+            f"cluster.x-k8s.io/{cluster_version}",
+            "Cluster",
+        )
+    ]
     resource_specs = (
         ("cluster.x-k8s.io", "machines", "Machine"),
         ("cluster.x-k8s.io", "machinesets", "MachineSet"),
