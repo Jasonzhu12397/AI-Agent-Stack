@@ -3029,9 +3029,12 @@ class AgentRuntimeDeploymentReconciliationReportView(APIView):
             list_status = check.get("list_status")
             item_count = check.get("item_count")
             if (
-                resource_type not in expected_resource_types
+                any(not isinstance(value, str) for value in resource_type)
+                or resource_type not in expected_resource_types
                 or resource_type in observed_resource_types
+                or not isinstance(discovery_status, str)
                 or discovery_status not in {"discovered", "not_discovered"}
+                or not isinstance(list_status, str)
                 or list_status not in {"success", "not_attempted", "not_found", "failed"}
                 or (
                     item_count is not None
