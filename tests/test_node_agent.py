@@ -1966,7 +1966,7 @@ def test_long_running_command_renews_its_lease(monkeypatch):
     assert all(item == ("command-1", "lease-1") for item in renewals)
 
 
-def test_long_running_command_keeps_agent_readiness_fresh_during_lease_renewal(
+def test_long_running_command_keeps_liveness_fresh_without_refreshing_readiness(
     monkeypatch,
 ):
     health_updates = []
@@ -1994,7 +1994,7 @@ def test_long_running_command_keeps_agent_readiness_fresh_during_lease_renewal(
 
     assert result == {"ready": True}
     assert health_updates
-    assert all(health_updates)
+    assert all(readiness is False for readiness in health_updates)
 
 
 def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatch):
@@ -4737,7 +4737,7 @@ def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
 
     process = FakeProcess()
     killed_process_groups = []
-    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(capi_pivot.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
         "node_agent.capi_pivot.os.killpg",
         lambda pid, sig: killed_process_groups.append((pid, sig)),
@@ -4968,7 +4968,7 @@ def test_capi_pivot_process_group_is_killed_on_timeout(monkeypatch):
 
     process = FakeProcess()
     killed_process_groups = []
-    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(capi_pivot.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
         "node_agent.capi_pivot.os.killpg",
         lambda pid, sig: killed_process_groups.append((pid, sig)),
