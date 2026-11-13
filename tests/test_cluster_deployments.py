@@ -8,6 +8,7 @@ import pytest
 from core.models import (
     AgentCommand,
     AgentNode,
+    AuditEvent,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
     Project,
@@ -3160,3 +3161,145 @@ def test_target_agent_reconciliation_report_rejects_cluster_uid_mismatch(
         deployment.plan_result["worker_provisioning_reconciliation"]["state"]
         == "outcome_unknown"
     )
+
+
+@pytest.mark.django_db
+def test_tenant_admin_can_approve_manual_recovery_review_with_audit(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-recovery-review-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-recovery-review-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="worker-recovery-review",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    deployment.plan_result = {
+        "dual_agent": {
+            "target_agent_cluster_uid": "target-cluster-uid",
+            "eph_reclaim_allowed": False,
+        },
+        "worker_provisioning_reconciliation": {
+            "state": "evidence_recorded_not_authorized",
+            "retry_allowed": False,
+            "eph_reclaim_allowed": False,
+            "report": {
+                "cluster_uid": "target-cluster-uid",
+                "received_at": timezone.now().isoformat(),
+                "resources": [{
+                    "kind": "Cluster",
+                    "name": "edge-lab",
+                    "uid": "target-cluster-uid",
+                }],
+            },
+        },
+    }
+    deployment.save(update_fields=["target_node", "status", "plan_result"])
+    reviewer = get_user_model().objects.create_user(
+        username="cluster-recovery-reviewer",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=reviewer,
+        role=TenantMembership.Role.ADMIN,
+    )
+    review_client = APIClient()
+    review_client.force_authenticate(user=reviewer)
+
+    response = review_client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/recovery-review/",
+        {
+            "confirmation": "review_recovery_evidence",
+            "reason": "Reviewed the observed CAPI cluster identity and worker inventory.",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 202
+    assert response.data["review_status"] == "approved_for_manual_recovery_planning"
+    assert response.data["recovery_execution_authorized"] is False
+    assert response.data["worker_retry_authorized"] is False
+    assert response.data["eph_reclaim_authorized"] is False
+    deployment.refresh_from_db()
+    reconciliation = deployment.plan_result["worker_provisioning_reconciliation"]
+    assert reconciliation["state"] == "operator_reviewed_manual_recovery_planning"
+    assert reconciliation["operator_review"]["reviewed_by"] == str(reviewer.pk)
+    assert reconciliation["retry_allowed"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    event = AuditEvent.objects.get(
+        tenant=tenant,
+        event_type="cluster_deployment.recovery_review_approved",
+        resource_id=str(deployment.id),
+    )
+    assert event.actor_id == reviewer.pk
+    assert event.metadata["recovery_execution_authorized"] is False
+
+
+@pytest.mark.django_db
+def test_original_requester_cannot_approve_recovery_review(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="worker-recovery-review-self-approval",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    deployment.plan_result = {
+        "worker_provisioning_reconciliation": {
+            "state": "evidence_recorded_not_authorized",
+            "report": {
+                "cluster_uid": "target-cluster-uid",
+                "received_at": timezone.now().isoformat(),
+                "resources": [{
+                    "kind": "Cluster",
+                    "name": "edge-lab",
+                    "uid": "target-cluster-uid",
+                }],
+            },
+        },
+        "dual_agent": {"target_agent_cluster_uid": "target-cluster-uid"},
+    }
+    deployment.save(update_fields=["status", "plan_result"])
+
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/recovery-review/",
+        {
+            "confirmation": "review_recovery_evidence",
+            "reason": "Reviewed the observed CAPI cluster identity and worker inventory.",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 403
+    deployment.refresh_from_db()
+    assert (
+        deployment.plan_result["worker_provisioning_reconciliation"]["state"]
+        == "evidence_recorded_not_authorized"
+    )
+    assert not AuditEvent.objects.filter(
+        tenant=tenant,
+        event_type="cluster_deployment.recovery_review_approved",
+        resource_id=str(deployment.id),
+    ).exists()
