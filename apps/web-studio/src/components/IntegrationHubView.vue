@@ -9,6 +9,7 @@ import { validatePluginConnectionInput } from "../domain/pluginConnection";
 import {
   approvePlugin,
   createPluginConnection,
+  executePluginTool,
   getPluginCatalog,
   getPluginInstallations,
   installPlugin,
@@ -18,6 +19,7 @@ import {
   setPluginConnectionStatus,
   type PluginDefinition,
   type PluginInstallation,
+  type PluginTool,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
@@ -34,6 +36,23 @@ const submitting = ref(false);
 const error = ref("");
 const info = ref("");
 const selectedTemplateId = ref("open-meteo");
+const selectedToolId = ref("");
+const toolArgumentsJson = ref("{}");
+const toolResult = ref<unknown>(null);
+const selectedHealthyConnection = computed(
+  () => selectedInstallation.value?.connections.find((connection) => connection.status === "healthy") ?? null,
+);
+const installedPlugin = computed(
+  () => catalog.value.find((plugin) => plugin.id === selectedInstallation.value?.plugin_id) ?? null,
+);
+const executableTools = computed(
+  () => installedPlugin.value?.tools.filter(
+    (tool) => tool.enabled && tool.risk_level === "low" && tool.idempotency_mode === "read_only",
+  ) ?? [],
+);
+const selectedTool = computed(
+  () => executableTools.value.find((tool) => tool.id === selectedToolId.value) ?? executableTools.value[0] ?? null,
+);
 const pluginJson = ref(JSON.stringify({
   plugin_key: "example-readonly",
   name: "Example Read-only Connector",
@@ -304,6 +323,29 @@ async function addConnection(): Promise<void> {
   }
 }
 
+async function executeSelectedTool(): Promise<void> {
+  const connection = selectedHealthyConnection.value;
+  const tool = selectedTool.value;
+  if (!connection || !tool) return;
+  submitting.value = true;
+  error.value = "";
+  info.value = "";
+  toolResult.value = null;
+  try {
+    const argumentsValue = JSON.parse(toolArgumentsJson.value) as Record<string, unknown>;
+    if (!argumentsValue || Array.isArray(argumentsValue) || typeof argumentsValue !== "object") {
+      throw new Error("Tool arguments must be a JSON object.");
+    }
+    const response = await executePluginTool(connection.id, tool.id, argumentsValue);
+    toolResult.value = response.result;
+    info.value = "Read-only tool executed successfully: " + response.tool;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Connector tool execution failed.";
+  } finally {
+    submitting.value = false;
+  }
+}
+
 function riskTag(risk: string): "success" | "warning" | "danger" | "info" {
   if (risk === "low") return "success";
   if (risk === "medium") return "warning";
@@ -527,6 +569,52 @@ onMounted(() => void refresh());
         {{ selectedConnectionTemplate.summary }} Allowed host: {{ selectedConnectionTemplate.host }}; add this host to PLUGIN_HTTP_ALLOWED_HOSTS. {{ selectedConnectionTemplate.credentialHint }} Store only a Secret Manager reference here, never the API key, access token or webhook URL itself.
       </p>
       <p v-else class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>
+    </section>
+    <section
+      v-if="selectedInstallation && selectedInstallation.status === 'installed'"
+      class="integration-panel connection-panel"
+    >
+      <div class="integration-panel-title">
+        <h3>Read-only tool test</h3>
+        <span>Low risk · explicit permission · healthy connection</span>
+      </div>
+      <el-alert
+        v-if="!selectedHealthyConnection"
+        title="Run a successful connection health check before testing tools."
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <template v-else>
+        <el-select v-model="selectedToolId" placeholder="Select a read-only tool">
+          <el-option
+            v-for="tool in executableTools"
+            :key="tool.id"
+            :label="tool.name"
+            :value="tool.id"
+          />
+        </el-select>
+        <p v-if="selectedTool">{{ selectedTool.description }}</p>
+        <p v-if="selectedTool" class="integration-safety-note">
+          Required permissions: {{ selectedTool.required_permissions.join(", ") || "none" }}.
+          Only enabled low-risk read-only tools are available in this manual test panel.
+        </p>
+        <el-input
+          v-model="toolArgumentsJson"
+          type="textarea"
+          :rows="8"
+          spellcheck="false"
+          aria-label="Connector tool arguments JSON"
+        />
+        <el-button
+          type="primary"
+          :disabled="!selectedTool || !selectedTool.required_permissions.every((permission) => selectedInstallation?.granted_permissions.includes(permission))"
+          :loading="submitting"
+          @click="executeSelectedTool"
+        >Execute read-only tool</el-button>
+        <el-empty v-if="!executableTools.length" description="No enabled low-risk read-only tools are available." :image-size="56" />
+        <pre v-if="toolResult !== null" class="tool-result-output">{{ JSON.stringify(toolResult, null, 2) }}</pre>
+      </template>
     </section>
   </section>
 </template>
