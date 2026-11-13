@@ -1600,6 +1600,122 @@ def test_control_plane_client_rejects_invalid_checkpoint_generation_and_phase():
         )
 
 
+def test_collect_capi_reconciliation_inventory_records_cluster_and_observed_machines(monkeypatch):
+    versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1beta1",
+        "metal3.io": "v1alpha1",
+    }
+    cluster = {
+        "metadata": {
+            "name": "edge-lab",
+            "namespace": "capi-system",
+            "uid": "cluster-uid",
+            "generation": 2,
+            "resourceVersion": "17",
+        },
+        "spec": {},
+        "status": {"conditions": [{"type": "ControlPlaneReady", "status": "True"}]},
+    }
+    machine = {
+        "metadata": {
+            "name": "edge-lab-worker-0",
+            "namespace": "capi-system",
+            "uid": "machine-uid",
+            "generation": 1,
+            "resourceVersion": "21",
+        },
+        "spec": {},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: {"groups": [
+            {"name": name, "preferredVersion": {"version": version}}
+            for name, version in versions.items()
+        ]} if path == "/apis" else cluster,
+    )
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: [machine] if path.endswith("/machines") else [],
+    )
+
+    report = agent.collect_capi_reconciliation_inventory("edge-lab", "capi-system")
+
+    assert report["cluster_name"] == "edge-lab"
+    assert report["cluster_uid"] == "cluster-uid"
+    assert [item["kind"] for item in report["resources"]] == ["Cluster", "Machine"]
+    assert report["resources"][1]["uid"] == "machine-uid"
+    assert report["resources"][0]["conditions"] == [
+        {"type": "ControlPlaneReady", "status": "True"}
+    ]
+
+
+def test_target_agent_submits_reconciliation_evidence_without_authorizing_recovery(
+    monkeypatch,
+    capsys,
+):
+    class FakeClient:
+        deployment_checkpoints = {}
+
+        def __init__(self):
+            self.submitted = []
+
+        def heartbeat(self, node_type):
+            return {
+                "active_deployments": [{
+                    "deployment_id": "deployment-456",
+                    "cluster_name": "edge-lab",
+                    "capi_namespace": "capi-system",
+                    "status": "reconciliation_required",
+                }]
+            }
+
+        def report_inventory(self, inventory):
+            return {}
+
+        def report_reconciliation_inventory(self, deployment_id, report):
+            self.submitted.append((deployment_id, report))
+            return {"reconciliation_state": "evidence_recorded_not_authorized"}
+
+        def restore_deployment_checkpoint(self, deployment_id):
+            checkpoint = {
+                "deployment_id": deployment_id,
+                "phase": "worker_provisioning",
+                "sequence": 4,
+                "resume_available": False,
+            }
+            self.deployment_checkpoints[deployment_id] = checkpoint
+            return checkpoint
+
+        def poll(self):
+            return {"command": None}
+
+    client = FakeClient()
+    monkeypatch.setattr(agent, "inspect_host_network_hardware", lambda: {"status": "unavailable"})
+    monkeypatch.setattr(
+        agent,
+        "collect_capi_reconciliation_inventory",
+        lambda cluster_name, namespace: {
+            "cluster_name": cluster_name,
+            "cluster_uid": "cluster-uid",
+            "resources": [{"kind": "Cluster"}],
+        },
+    )
+    monkeypatch.setattr(agent, "touch_health_files", lambda readiness=False: None)
+
+    assert agent.run_once(client, "target_cluster") is False
+    assert len(client.submitted) == 1
+    assert client.submitted[0][0] == "deployment-456"
+    output = json.loads(capsys.readouterr().out.strip())
+    assert output["event"] == "deployment_reconciliation_report_submitted"
+    assert output["retry_authorized"] is False
+    assert output["eph_reclaim_authorized"] is False
+
+
 def test_target_agent_restores_assigned_deployment_checkpoint_before_polling(
     monkeypatch,
     capsys,
