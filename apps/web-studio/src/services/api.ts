@@ -773,6 +773,20 @@ export function testPluginConnection(connectionId: string): Promise<PluginInstal
   );
 }
 
+export function executePluginTool(
+  connectionId: string,
+  toolId: string,
+  argumentsValue: Record<string, unknown>,
+): Promise<{ ok: boolean; tool: string; result: unknown }> {
+  return request(
+    "/api/v1/plugin-connections/" + connectionId + "/tools/" + toolId + "/execute/",
+    {
+      method: "POST",
+      body: JSON.stringify({ arguments: argumentsValue }),
+    },
+  );
+}
+
 export function setPluginConnectionStatus(
   connectionId: string,
   status: "pending" | "disabled",
