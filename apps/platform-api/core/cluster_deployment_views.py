@@ -312,6 +312,11 @@ class ClusterDeploymentRecoveryReviewView(APIView):
             if not isinstance(reconciliation, dict):
                 reconciliation = {}
             report = reconciliation.get("report", {})
+            if reconciliation.get("operator_review"):
+                return Response(
+                    {"detail": "A recovery review has already been recorded."},
+                    status=409,
+                )
             if (
                 reconciliation.get("state") != "evidence_recorded_not_authorized"
                 or not isinstance(report, dict)
