@@ -6,7 +6,7 @@ if mountpoint -q /mnt/eph-bootstrap; then
 fi
 
 device=""
-for attempt in $(seq 1 60); do
+for attempt in $(seq 1 5); do
     device="$(blkid -L EPHBOOT 2>/dev/null || true)"
     [ -n "$device" ] && break
     sleep 2
