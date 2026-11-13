@@ -669,7 +669,11 @@ def _verify_source_metal3_handoff(
         if not isinstance(annotations, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ANNOTATIONS_INVALID")
         consumer = spec.get("consumerRef")
-        machine = selected_machines.get((namespace, name))
+        if not isinstance(consumer, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_MISSING:" + name)
+        consumer_namespace = consumer.get("namespace")
+        consumer_name = consumer.get("name")
+        machine = selected_machines.get((consumer_namespace, consumer_name))
         if machine is None:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_MISSING:" + name)
         if (
