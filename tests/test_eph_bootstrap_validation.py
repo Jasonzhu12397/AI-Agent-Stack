@@ -103,8 +103,8 @@ def test_certificate_exchange_response_rejects_invalid_fields(field, value):
     node_id = str(uuid.uuid4())
     response = {
         "agent_token": "B" * 48,
-        "client_certificate": "leaf-certificate",
-        "ca_chain": "issuer-certificate",
+        "client_certificate": "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n",
+        "ca_chain": "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n",
         "fingerprint_sha256": "c" * 64,
         "node_id": node_id,
         "token_consumed": True,
