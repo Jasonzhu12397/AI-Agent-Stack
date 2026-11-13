@@ -2675,7 +2675,6 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                             "and explicit checkpoint adoption are required."
                         ),
                         "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
-                        "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
                     },
                     status=409,
                 )
