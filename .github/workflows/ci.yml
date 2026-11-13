@@ -554,7 +554,7 @@ jobs:
             ps -fp "$QEMU_PID","$HTTP_PID" || true
             exit 1
           fi
-          python3 - "$RUNNER_TEMP/qemu-qmp.sock" "$(basename "\${{ steps.build.outputs.iso_file }}")" <<'PY'
+          python3 - "$RUNNER_TEMP/qemu-qmp.sock" "$(basename "${{ steps.build.outputs.iso_file }}")" <<'PY'
           import json
           import socket
           import sys
