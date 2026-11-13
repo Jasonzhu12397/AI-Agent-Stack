@@ -63,6 +63,10 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert 'kubectl --request-timeout=5s get --raw=/readyz' in initializer
     assert "containerd.service" in service
     assert "cloud-config.service" in service
+    assert "StartLimitIntervalSec=30min" in service
+    assert "StartLimitBurst=5" in service
+    assert "Restart=on-failure" in service
+    assert "RestartSec=30s" in service
     assert "cloud-init status --wait" not in service
     assert "cloud-init.target" not in service
     assert "/usr/local/bin/kubelet" in kubelet
