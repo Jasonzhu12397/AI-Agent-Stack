@@ -2943,3 +2943,52 @@ def test_checkpoint_restore_fails_closed_after_target_agent_reassignment(
     assert persisted.phase == "target_agent_bootstrap"
     assert persisted.data["completed_steps"] == []
     assert persisted.data["pending_step"] == "target_agent_bootstrap"
+
+
+@pytest.mark.django_db
+def test_worker_provisioning_command_failure_requires_reconciliation_without_retry(
+    cluster_delivery_workspace,
+):
+    deployment, preflight_command, preflight_result = _worker_preflight_fixture(
+        cluster_delivery_workspace,
+        "worker-provisioning-ambiguous-outcome",
+    )
+    handle_deployment_command_result(
+        preflight_command,
+        "succeeded",
+        preflight_result,
+        None,
+    )
+    provision_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.worker.provision",
+    )
+
+    handle_deployment_command_result(
+        provision_command,
+        "failed",
+        {},
+        {"code": "AGENT_CONNECTION_LOST"},
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == "WORKER_PROVISIONING_OUTCOME_UNKNOWN"
+    assert deployment.error["retry_allowed"] is False
+    reconciliation = deployment.plan_result["worker_provisioning_reconciliation"]
+    assert reconciliation["state"] == "outcome_unknown"
+    assert reconciliation["command_id"] == str(provision_command.id)
+    assert reconciliation["side_effects"] == "unknown"
+    assert reconciliation["retry_allowed"] is False
+    assert reconciliation["eph_reclaim_allowed"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+    handle_deployment_command_result(
+        provision_command,
+        "succeeded",
+        {"created": False, "side_effects": False},
+        None,
+    )
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.plan_result["worker_provisioning_reconciliation"]["state"] == "outcome_unknown"
