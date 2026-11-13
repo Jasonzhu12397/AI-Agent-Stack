@@ -2417,6 +2417,94 @@ def test_target_agent_rejects_malformed_machine_inventory(
         )
 
 
+@pytest.mark.parametrize(
+    ("malformed_path", "error_code"),
+    [
+        ("/apis", "INVALID_TARGET_API_DISCOVERY"),
+        (
+            "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab",
+            "INVALID_TARGET_CLUSTER_METADATA",
+        ),
+        (
+            "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines",
+            "INVALID_TARGET_MACHINE_INVENTORY",
+        ),
+        (
+            "/apis/apps/v1/namespaces/capi-system/deployments/capi-controller-manager",
+            "INVALID_TARGET_CONTROLLER_DEPLOYMENT",
+        ),
+    ],
+)
+def test_target_agent_rejects_malformed_capi_api_responses(
+    monkeypatch, malformed_path, error_code
+):
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": "cluster.x-k8s.io",
+                    "preferredVersion": {"version": "v1beta1"},
+                }
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
+            "metadata": {"uid": "source-uid"}
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
+            "items": [
+                {
+                    "metadata": {"name": "edge-lab-control-plane-0"},
+                    "spec": {"clusterName": "edge-lab"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                }
+            ]
+        },
+        "/apis/apps/v1/namespaces/capi-system/deployments/capi-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-bootstrap-system/deployments/"
+            "capi-kubeadm-bootstrap-controller-manager"
+        ): {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        (
+            "/apis/apps/v1/namespaces/capi-kubeadm-control-plane-system/deployments/"
+            "capi-kubeadm-control-plane-controller-manager"
+        ): {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+        "/apis/apps/v1/namespaces/capm3-system/deployments/capm3-controller-manager": {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"availableReplicas": 1, "observedGeneration": 1},
+        },
+    }
+    responses[malformed_path] = []
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
+    with pytest.raises(agent.NodeAgentError, match=error_code):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.target.verify",
+                "payload": {
+                    "cluster_name": "edge-lab",
+                    "namespace": "metal3",
+                    "expected_cluster_uid": "source-uid",
+                },
+            },
+            "target_cluster",
+        )
+
+
 def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch):
     responses = {
         "/apis": {
