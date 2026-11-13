@@ -57,6 +57,9 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "deployment/calico-kube-controllers" in initializer
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
     assert "containerd.service" in service
+    assert "cloud-config.service" in service
+    assert "cloud-init status --wait" in service
+    assert "cloud-init.target" not in service
     assert "/usr/local/bin/kubelet" in kubelet
     assert "--container-runtime-endpoint=unix:///run/containerd/containerd.sock" in kubelet
 
@@ -725,8 +728,12 @@ def test_eph_network_config_runs_before_systemd_networkd():
     assert "Before=systemd-networkd.service" in service
     assert "Requires=eph-network-config.service" in drop_in
     assert "After=eph-network-config.service" in drop_in
-    mount = (root / "mnt-eph\\x2dbootstrap.mount").read_text(encoding="utf-8")
+    mount_script = (
+        ROOT
+        / "eph-iso/config/includes.chroot/usr/local/sbin/eph-bootstrap-mount.sh"
+    ).read_text(encoding="utf-8")
     assert "EPH_BOOTSTRAP_MEDIA_NOT_PRESENT" in mount_script
+    assert "seq 1 5" in mount_script
 
 
 
