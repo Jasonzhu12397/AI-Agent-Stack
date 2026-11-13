@@ -3067,9 +3067,21 @@ def test_target_agent_reconciliation_report_records_inventory_without_unlocking_
                     ("cluster.x-k8s.io", "machines", "Machine"),
                     ("cluster.x-k8s.io", "machinesets", "MachineSet"),
                     ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
-                    ("controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "KubeadmControlPlane"),
-                    ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
-                    ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+                    (
+                        "controlplane.cluster.x-k8s.io",
+                        "kubeadmcontrolplanes",
+                        "KubeadmControlPlane",
+                    ),
+                    (
+                        "infrastructure.cluster.x-k8s.io",
+                        "metal3clusters",
+                        "Metal3Cluster",
+                    ),
+                    (
+                        "infrastructure.cluster.x-k8s.io",
+                        "metal3machines",
+                        "Metal3Machine",
+                    ),
                     ("metal3.io", "baremetalhosts", "BareMetalHost"),
                 )
             ],
