@@ -105,6 +105,9 @@ def test_eph_containerd_etcd_and_kubelet_state_are_ram_backed():
         content = (root / name).read_text(encoding="utf-8")
         assert "What=tmpfs" in content
         assert "Type=tmpfs" in content
+    assert "size=40%" in (root / "var-lib-containerd.mount").read_text(encoding="utf-8")
+    assert "size=10%" in (root / "var-lib-etcd.mount").read_text(encoding="utf-8")
+    assert "size=10%" in (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
     kubeadm = (root / "eph-kubeadm-init.service").read_text(encoding="utf-8")
     assert "eph-kubeadm-init.sh" in kubeadm
     assert "WantedBy=multi-user.target" in kubeadm
@@ -127,6 +130,9 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     assert "Where=/var/lib/containerd" in containerd_mount
     assert "Where=/var/lib/etcd" in etcd_mount
     assert "Where=/var/lib/kubelet" in kubelet_mount
+    assert "size=40%" in containerd_mount
+    assert "size=10%" in etcd_mount
+    assert "size=10%" in kubelet_mount
     assert "Before=containerd.service" in containerd_mount
     assert "Before=eph-kubeadm-init.service" in etcd_mount
 
