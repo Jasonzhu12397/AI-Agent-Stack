@@ -366,7 +366,7 @@ def _read_secret_files(name, namespace, keys, directory):
     ]
     result = subprocess.run(command, check=False, text=True, capture_output=True)
     if result.returncode:
-        if "notfound" in result.stderr.lower():
+        if re.search(r"\(NotFound\)", result.stderr):
             return None
         raise BootstrapError("KUBERNETES_SECRET_READ_FAILED:" + name)
     try:
