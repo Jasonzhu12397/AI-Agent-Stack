@@ -34,11 +34,7 @@ sysctl -w net.bridge.bridge-nf-call-ip6tables=1
 sysctl -w net.ipv4.ip_forward=1
 
 install -d -m 0755 /etc/containerd /etc/containerd/certs.d /etc/kubernetes
-containerd config default > /etc/containerd/config.toml
-sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|' /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-sed -i -E 's#sandbox_image = "registry.k8s.io/pause:[^"]+"#sandbox_image = "registry.k8s.io/pause:3.10"#' /etc/containerd/config.toml
-systemctl restart containerd
+systemctl is-active --quiet containerd || fail "CONTAINERD_NOT_ACTIVE"
 systemctl enable containerd kubelet
 
 api_is_ready() {
