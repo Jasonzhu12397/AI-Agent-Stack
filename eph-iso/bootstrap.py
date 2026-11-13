@@ -77,7 +77,7 @@ def _is_pem_certificate_bundle(value):
     if not isinstance(value, str) or not value.strip():
         return False
     pattern = re.compile(
-        r"-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+/=\\s]+?)\\s*-----END CERTIFICATE-----"
+        r"-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+?)\s*-----END CERTIFICATE-----"
     )
     matches = list(pattern.finditer(value))
     if not matches:
@@ -86,7 +86,7 @@ def _is_pem_certificate_bundle(value):
     if remainder.strip():
         return False
     try:
-        return all(base64.b64decode(match.group(1), validate=True) for match in matches)
+        return all(base64.b64decode(re.sub(r"\s+", "", match.group(1)), validate=True) for match in matches)
     except (ValueError, base64.binascii.Error):
         return False
 
