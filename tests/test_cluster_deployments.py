@@ -3047,6 +3047,21 @@ def test_target_agent_reconciliation_report_records_inventory_without_unlocking_
         "node_id": str(target_node.id),
         "cluster_name": "edge-lab",
         "cluster_uid": "target-cluster-uid",
+        "inventory_completeness": {
+            "complete": True,
+            "expected_resource_type_count": 7,
+            "successful_resource_type_count": 7,
+            "not_discovered_resource_type_count": 0,
+            "failed_resource_type_count": 0,
+            "checks": [
+                {
+                    "discovery_status": "discovered",
+                    "list_status": "success",
+                    "item_count": 0,
+                }
+                for _ in range(7)
+            ],
+        },
         "resources": [
             {
                 "api_version": "cluster.x-k8s.io/v1beta1",
@@ -3202,6 +3217,21 @@ def test_tenant_admin_can_approve_manual_recovery_review_with_audit(
             "report": {
                 "cluster_uid": "target-cluster-uid",
                 "received_at": timezone.now().isoformat(),
+                "inventory_completeness": {
+                    "complete": True,
+                    "expected_resource_type_count": 7,
+                    "successful_resource_type_count": 7,
+                    "not_discovered_resource_type_count": 0,
+                    "failed_resource_type_count": 0,
+                    "checks": [
+                        {
+                            "discovery_status": "discovered",
+                            "list_status": "success",
+                            "item_count": 0,
+                        }
+                        for _ in range(7)
+                    ],
+                },
                 "resources": [{
                     "kind": "Cluster",
                     "name": "edge-lab",
@@ -3272,6 +3302,21 @@ def test_original_requester_cannot_approve_recovery_review(
             "report": {
                 "cluster_uid": "target-cluster-uid",
                 "received_at": timezone.now().isoformat(),
+                "inventory_completeness": {
+                    "complete": True,
+                    "expected_resource_type_count": 7,
+                    "successful_resource_type_count": 7,
+                    "not_discovered_resource_type_count": 0,
+                    "failed_resource_type_count": 0,
+                    "checks": [
+                        {
+                            "discovery_status": "discovered",
+                            "list_status": "success",
+                            "item_count": 0,
+                        }
+                        for _ in range(7)
+                    ],
+                },
                 "resources": [{
                     "kind": "Cluster",
                     "name": "edge-lab",
