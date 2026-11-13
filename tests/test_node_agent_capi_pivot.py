@@ -69,6 +69,7 @@ def _pivot_runner_for(
     source_ironic_ready_replicas=0,
     source_ironic_updated_replicas=0,
     source_ironic_terminating_replicas=0,
+    m3m_name_by_host=None,
 ):
     calls = []
     groups = [
@@ -122,7 +123,9 @@ def _pivot_runner_for(
                             "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                             "kind": "Metal3Machine",
                             "metadata": {
-                                "name": host_name,
+                                "name": (m3m_name_by_host or {}).get(
+                                    host_name, host_name
+                                ),
                                 "namespace": "metal3",
                                 "uid": "metal3machine-uid",
                                 "labels": {
@@ -1433,3 +1436,46 @@ def test_pivot_execution_rejects_untrusted_source_m3m_references(
             executable_lookup=lambda name: f"/usr/bin/{name}",
             process_runner=runner,
         )
+
+
+def test_pivot_execution_resolves_m3m_by_consumer_ref_not_bmh_name(tmp_path):
+    status = {
+        "operationalStatus": "OK",
+        "provisioning": {"state": "provisioned"},
+    }
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": {
+                "baremetalhost.metal3.io/paused": "metal3.io/capm3",
+                "baremetalhost.metal3.io/status": json.dumps(status),
+            },
+            "labels": {"clusterctl.cluster.x-k8s.io/move": ""},
+        },
+        "spec": {
+            "consumerRef": {
+                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                "kind": "Metal3Machine",
+                "name": "m3m-worker-01",
+                "namespace": "metal3",
+                "uid": "metal3machine-uid",
+            }
+        },
+        "status": status,
+    }
+    calls, runner = _pivot_runner_for(
+        bmh_items=[bmh],
+        m3m_name_by_host={"worker-01": "m3m-worker-01"},
+    )
+
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert result["pivot_simulated"] is True
+    assert result["side_effects"] is False
