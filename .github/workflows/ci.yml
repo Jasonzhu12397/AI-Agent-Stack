@@ -475,10 +475,17 @@ jobs:
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/meta-data" ::meta-data
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
           mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
+          QEMU_ACCEL_ARGS=(-accel tcg,thread=multi -cpu max)
+          if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            QEMU_ACCEL_ARGS=(-accel kvm -cpu host)
+            printf '%s\n' 'EPH_QEMU_ACCELERATOR=kvm'
+          else
+            printf '%s\n' 'EPH_QEMU_ACCELERATOR=tcg'
+          fi
           qemu-system-x86_64 \
             -machine usb=off \
-            -accel tcg,thread=multi \
-            -cpu max -m 6144 -smp 4 \
+            "${QEMU_ACCEL_ARGS[@]}" \
+            -m 6144 -smp 4 \
             -cdrom "${{ steps.build.outputs.iso_file }}" \
             -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
             -boot order=d,menu=off \
@@ -493,6 +500,14 @@ jobs:
           cloud_init_ready=false
           cloud_init_failed=false
           for attempt in $(seq 1 480); do
+            if (( attempt % 12 == 0 )); then
+              printf 'EPH_QEMU_WAIT elapsed_seconds=%s api_ready=%s cloud_init_ready=%s\n' \
+                "$((attempt * 5))" "$ready" "$cloud_init_ready"
+              ps -o pid,etime,%cpu,%mem,stat,cmd -p "$QEMU_PID" || true
+              if [ -f "$RUNNER_TEMP/eph-qemu.log" ]; then
+                tail -n 25 "$RUNNER_TEMP/eph-qemu.log"
+              fi
+            fi
             if curl --insecure --fail --silent --max-time 3 \
               https://127.0.0.1:16443/readyz >/dev/null; then
               ready=true
