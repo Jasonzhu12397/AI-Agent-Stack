@@ -547,7 +547,8 @@ def bootstrap():
             os.chmod(str(token_path), 0o600)
         credential_files["token"] = token_path
 
-        capi_files = {}        capi_sources = (
+        capi_files = {}
+        capi_sources = (
             ("source.kubeconfig", "capi/source.kubeconfig"),
             ("target.kubeconfig", "capi/target.kubeconfig"),
         )
