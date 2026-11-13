@@ -402,8 +402,8 @@ def _validate_persisted_client_credentials(files, issuer_ca_path, directory, nod
         raise BootstrapError("PERSISTED_CLIENT_CERTIFICATE_INVALID")
     leaf_path = directory / "persisted-client-leaf.crt"
     chain_path = directory / "persisted-client-chain.crt"
-    leaf_path.write_text(blocks[0] + "\\n", encoding="ascii")
-    chain_path.write_text("".join(block + "\\n" for block in blocks[1:]), encoding="ascii")
+    leaf_path.write_text(blocks[0] + "\n", encoding="ascii")
+    chain_path.write_text("".join(block + "\n" for block in blocks[1:]), encoding="ascii")
     expected_subject = "subject=CN=agent-node-" + node_id + ".agents.internal"
     try:
         _run([
