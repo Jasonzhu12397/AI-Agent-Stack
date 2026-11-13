@@ -883,6 +883,37 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
     assert bmh_command[bmh_command.index("--namespace") + 1] == "metal3-hosts"
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "error_code"),
+    [
+        ("spec", [], "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID"),
+        ("status", [], "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_INVALID"),
+    ],
+)
+def test_pivot_postflight_rejects_malformed_bmh_objects(
+    tmp_path, field, value, error_code
+):
+    _, base_runner = _postflight_runner()
+
+    def runner(command, **kwargs):
+        completed = base_runner(command, **kwargs)
+        if "baremetalhosts.metal3.io" in command:
+            document = json.loads(completed.stdout)
+            document["items"][0][field] = value
+            return subprocess.CompletedProcess(
+                command, completed.returncode, json.dumps(document), completed.stderr
+            )
+        return completed
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+
 def test_pivot_postflight_rejects_unconsumed_bmh_status_annotation(tmp_path):
     _, runner = _postflight_runner(annotation_present=True)
 
