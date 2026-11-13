@@ -6,7 +6,7 @@ Before=containerd.service
 What=tmpfs
 Where=/var/lib/containerd
 Type=tmpfs
-Options=mode=0750,size=25%,nosuid,nodev
+Options=mode=0750,size=40%,nosuid,nodev
 
 [Install]
 WantedBy=multi-user.target
