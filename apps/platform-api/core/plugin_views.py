@@ -881,9 +881,17 @@ class PluginToolExecuteView(APIView):
                 {"detail": "Required connector permissions have not been granted."},
                 status=403,
             )
-        if tool.risk_level != PluginTool.RiskLevel.LOW or tool.idempotency_mode != PluginTool.IdempotencyMode.READ_ONLY:
+        if (
+            tool.risk_level != PluginTool.RiskLevel.LOW
+            or tool.idempotency_mode != PluginTool.IdempotencyMode.READ_ONLY
+        ):
             return Response(
-                {"detail": "Interactive connector tests are restricted to low-risk read-only tools."},
+                {
+                    "detail": (
+                        "Interactive connector tests are restricted to low-risk "
+                        "read-only tools."
+                    )
+                },
                 status=403,
             )
         try:
