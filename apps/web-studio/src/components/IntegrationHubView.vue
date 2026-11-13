@@ -19,7 +19,6 @@ import {
   setPluginConnectionStatus,
   type PluginDefinition,
   type PluginInstallation,
-  type PluginTool,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
@@ -53,6 +52,11 @@ const executableTools = computed(
 const selectedTool = computed(
   () => executableTools.value.find((tool) => tool.id === selectedToolId.value) ?? executableTools.value[0] ?? null,
 );
+watch(executableTools, (tools) => {
+  if (!tools.some((tool) => tool.id === selectedToolId.value)) {
+    selectedToolId.value = tools[0]?.id ?? "";
+  }
+}, { immediate: true });
 const pluginJson = ref(JSON.stringify({
   plugin_key: "example-readonly",
   name: "Example Read-only Connector",
