@@ -4670,6 +4670,16 @@ def touch_health_files(readiness: bool = False) -> None:
         Path(os.environ.get("AGENT_READINESS_FILE", "/tmp/agent-readiness")).touch()
 
 
+def maintain_liveness(stop_event: threading.Event, interval_seconds: int = 10) -> None:
+    if not isinstance(interval_seconds, int) or interval_seconds < 1:
+        raise NodeAgentError("INVALID_LIVENESS_INTERVAL")
+    while not stop_event.wait(interval_seconds):
+        try:
+            touch_health_files()
+        except OSError:
+            continue
+
+
 def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
     default_path = (
         "/tmp/agent-liveness"
@@ -4951,19 +4961,32 @@ def main() -> None:
         raise SystemExit("Production node agents require HTTPS.")
     client = ControlPlaneClient(base_url, node_id, token)
     runtime = create_agent(client, node_type)
-    for _iteration in count():
-        try:
-            processed = runtime.run_once()
-            if args.once:
-                break
-            if not processed:
+    touch_health_files()
+    liveness_stop_event = threading.Event()
+    liveness_thread = threading.Thread(
+        target=maintain_liveness,
+        args=(liveness_stop_event,),
+        name="agent-liveness",
+        daemon=True,
+    )
+    liveness_thread.start()
+    try:
+        for _iteration in count():
+            try:
+                processed = runtime.run_once()
+                if args.once:
+                    break
+                if not processed:
+                    time.sleep(args.poll_seconds)
+            except NodeAgentError as exc:
+                touch_health_files()
+                print(json.dumps({"event": "control_plane_error", "code": str(exc)}), flush=True)
+                if args.once:
+                    raise SystemExit(1) from exc
                 time.sleep(args.poll_seconds)
-        except NodeAgentError as exc:
-            touch_health_files()
-            print(json.dumps({"event": "control_plane_error", "code": str(exc)}), flush=True)
-            if args.once:
-                raise SystemExit(1) from exc
-            time.sleep(args.poll_seconds)
+    finally:
+        liveness_stop_event.set()
+        liveness_thread.join(timeout=1)
 
 
 if __name__ == "__main__":
