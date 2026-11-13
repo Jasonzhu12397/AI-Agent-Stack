@@ -56,6 +56,11 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "daemonset/calico-node" in initializer
     assert "deployment/calico-kube-controllers" in initializer
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
+    assert "api_is_ready()" in initializer
+    assert 'if [ -s /etc/kubernetes/admin.conf ] && ! api_is_ready; then' in initializer
+    assert 'kubeadm reset --force --cri-socket "$CRI_SOCKET"' in initializer
+    assert 'rm -f /etc/kubernetes/admin.conf' in initializer
+    assert 'kubectl --request-timeout=5s get --raw=/readyz' in initializer
     assert "containerd.service" in service
     assert "cloud-config.service" in service
     assert "cloud-init status --wait" not in service
