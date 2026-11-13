@@ -43,6 +43,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
     ClusterDeploymentTargetAgentHandoffView,
+    ClusterDeploymentRecoveryReviewView,
     ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
@@ -179,6 +180,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/target-agent/handoff/",
         ClusterDeploymentTargetAgentHandoffView.as_view(),
         name="cluster-deployment-target-agent-handoff",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/recovery-review/",
+        ClusterDeploymentRecoveryReviewView.as_view(),
+        name="cluster-deployment-recovery-review",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
