@@ -2993,3 +2993,166 @@ def test_worker_provisioning_command_failure_requires_reconciliation_without_ret
     assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
     reconciliation = deployment.plan_result["worker_provisioning_reconciliation"]
     assert reconciliation["state"] == "outcome_unknown"
+
+
+@pytest.mark.django_db
+def test_target_agent_reconciliation_report_records_inventory_without_unlocking_retry(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-reconciliation-report-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-reconciliation-report-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="worker-reconciliation-report",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    deployment.plan_result = {
+        "dual_agent": {
+            "target_agent_cluster_uid": "target-cluster-uid",
+            "eph_reclaim_allowed": False,
+        },
+        "worker_provisioning_reconciliation": {
+            "state": "outcome_unknown",
+            "retry_allowed": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["target_node", "status", "plan_result"])
+    url = (
+        f"/api/v1/agent-runtime/deployments/{deployment.id}/"
+        "reconciliation-report/"
+    )
+    payload = {
+        "node_id": str(target_node.id),
+        "cluster_name": "edge-lab",
+        "cluster_uid": "target-cluster-uid",
+        "resources": [
+            {
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "kind": "Cluster",
+                "namespace": "default",
+                "name": "edge-lab",
+                "uid": "target-cluster-uid",
+                "generation": 3,
+                "resource_version": "120",
+                "spec_replicas": None,
+                "status_replicas": None,
+                "ready_replicas": None,
+                "conditions": [{"type": "ControlPlaneReady", "status": "True"}],
+            },
+            {
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "kind": "MachineDeployment",
+                "namespace": "default",
+                "name": "edge-workers",
+                "uid": "machine-deployment-uid",
+                "generation": 2,
+                "resource_version": "121",
+                "spec_replicas": 4,
+                "status_replicas": 3,
+                "ready_replicas": 3,
+                "conditions": [{"type": "Available", "status": "False"}],
+            },
+        ],
+    }
+    response = APIClient().post(
+        url,
+        payload,
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+
+    assert response.status_code == 202
+    assert response.data["reconciliation_state"] == "evidence_recorded_not_authorized"
+    assert response.data["resource_count"] == 2
+    assert response.data["retry_allowed"] is False
+    assert response.data["eph_reclaim_allowed"] is False
+    deployment.refresh_from_db()
+    reconciliation = deployment.plan_result["worker_provisioning_reconciliation"]
+    assert reconciliation["state"] == "evidence_recorded_not_authorized"
+    assert reconciliation["report"]["cluster_uid"] == "target-cluster-uid"
+    assert reconciliation["report"]["resources"][1]["ready_replicas"] == 3
+    assert reconciliation["retry_allowed"] is False
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
+@pytest.mark.django_db
+def test_target_agent_reconciliation_report_rejects_cluster_uid_mismatch(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    target_token = "target-reconciliation-mismatch-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-reconciliation-mismatch-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="worker-reconciliation-uid-mismatch",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    deployment.plan_result = {
+        "dual_agent": {"target_agent_cluster_uid": "expected-cluster-uid"},
+        "worker_provisioning_reconciliation": {"state": "outcome_unknown"},
+    }
+    deployment.save(update_fields=["target_node", "status", "plan_result"])
+    response = APIClient().post(
+        (
+            f"/api/v1/agent-runtime/deployments/{deployment.id}/"
+            "reconciliation-report/"
+        ),
+        {
+            "node_id": str(target_node.id),
+            "cluster_name": "edge-lab",
+            "cluster_uid": "unexpected-cluster-uid",
+            "resources": [
+                {
+                    "api_version": "cluster.x-k8s.io/v1beta1",
+                    "kind": "Cluster",
+                    "namespace": "default",
+                    "name": "edge-lab",
+                    "uid": "unexpected-cluster-uid",
+                    "generation": 1,
+                    "resource_version": "1",
+                    "conditions": [],
+                }
+            ],
+        },
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {target_token}",
+    )
+
+    assert response.status_code == 409
+    deployment.refresh_from_db()
+    assert (
+        deployment.plan_result["worker_provisioning_reconciliation"]["state"]
+        == "outcome_unknown"
+    )
