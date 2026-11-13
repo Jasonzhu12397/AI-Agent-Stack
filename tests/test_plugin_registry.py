@@ -602,3 +602,112 @@ def test_plugin_connection_can_only_be_disabled_or_reenabled_pending(plugin_work
     assert reenabled.status_code == 200
     assert reenabled.data["connections"][0]["status"] == "pending"
     assert forced_healthy.status_code == 400
+
+
+@pytest.mark.django_db
+def test_read_only_connector_tool_can_be_executed_after_healthy_connection(
+    plugin_workspace,
+    monkeypatch,
+):
+    _, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    payload["manifest"] = {
+        "http": {
+            "base_url": "https://api.example.com",
+            "auth_required": False,
+            "health_check": {"method": "GET", "path": "/health"},
+            "operations": {
+                "list-repositories": {
+                    "method": "GET",
+                    "path": "/v1/repositories",
+                    "path_params": {},
+                    "query_params": {"owner": "owner"},
+                }
+            },
+        }
+    }
+    registered = client.post("/api/v1/connectors/", payload, format="json")
+    assert registered.status_code == 201
+    tool_id = registered.data["tools"][0]["id"]
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {"name": "test", "auth_type": "none", "credential_ref": "", "config": {}},
+        format="json",
+    )
+    connection_record = PluginConnection.objects.get(pk=connection.data["id"])
+    connection_record.status = PluginConnection.Status.HEALTHY
+    connection_record.save(update_fields=["status"])
+
+    from core import plugin_views
+
+    calls = []
+
+    def fake_execute(arguments, context, tool):
+        calls.append((arguments, context.tool_name, tool.name))
+        return {"repositories": [{"name": "platform"}]}
+
+    monkeypatch.setattr(plugin_views, "execute_http_operation", fake_execute)
+    response = client.post(
+        f"/api/v1/plugin-connections/{connection.data['id']}/tools/{tool_id}/execute/",
+        {"arguments": {"owner": "platform-team"}},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data == {
+        "ok": True,
+        "tool": "list-repositories",
+        "result": {"repositories": [{"name": "platform"}]},
+    }
+    assert calls == [
+        ({"owner": "platform-team"}, "list-repositories", "list-repositories")
+    ]
+
+
+@pytest.mark.django_db
+def test_connector_tool_execution_rejects_unhealthy_connection(plugin_workspace):
+    _, tenant, project, client = plugin_workspace
+    payload = plugin_payload(tenant)
+    registered = register_plugin(client, tenant)
+    client.post(
+        f"/api/v1/connectors/{registered.data['id']}/approve/",
+        {},
+        format="json",
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/plugin-installations/",
+        {
+            "plugin_id": registered.data["id"],
+            "granted_permissions": ["github:repo:read"],
+            "config": {},
+        },
+        format="json",
+    )
+    connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {"name": "pending", "auth_type": "none", "credential_ref": "", "config": {}},
+        format="json",
+    )
+
+    response = client.post(
+        f"/api/v1/plugin-connections/{connection.data['id']}/tools/{registered.data['tools'][0]['id']}/execute/",
+        {"arguments": {"owner": "platform-team"}},
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert "healthy connector connection" in response.data["detail"]
