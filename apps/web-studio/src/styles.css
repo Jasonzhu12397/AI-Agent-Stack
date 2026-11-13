@@ -282,3 +282,17 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-edge-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .workflow-edge-list span { padding: 5px 8px; border: 1px solid #28364d; border-radius: 6px; color: #9eabc1; background: #080d18; font: 10px "DM Mono", monospace; }
 .workflow-validation-result { margin-top: 14px; padding: 12px; border: 1px solid #34435c; border-radius: 9px; background: #080d18; }
+
+
+.tool-result-output {
+  max-height: 28rem;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--el-border-color);
+  border-radius: 0.75rem;
+  background: var(--el-fill-color-darker);
+  color: var(--el-text-color-primary);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
