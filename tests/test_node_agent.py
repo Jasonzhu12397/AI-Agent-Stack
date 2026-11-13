@@ -1710,8 +1710,16 @@ def test_target_agent_submits_reconciliation_evidence_without_authorizing_recove
     assert agent.run_once(client, "target_cluster") is False
     assert len(client.submitted) == 1
     assert client.submitted[0][0] == "deployment-456"
-    output = json.loads(capsys.readouterr().out.strip())
-    assert output["event"] == "deployment_reconciliation_report_submitted"
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    output = next(
+        event
+        for event in events
+        if event.get("event") == "deployment_reconciliation_report_submitted"
+    )
     assert output["retry_authorized"] is False
     assert output["eph_reclaim_authorized"] is False
 
