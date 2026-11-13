@@ -162,6 +162,41 @@ def test_read_secret_files_returns_none_only_for_not_found(tmp_path, monkeypatch
     ) is None
 
 
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "connection refused",
+        "connection refused: NotFound appears in unrelated diagnostic text",
+        "forbidden: user is not allowed to read this resource",
+    ],
+)
+def test_read_secret_files_does_not_treat_unrelated_errors_as_not_found(
+    tmp_path,
+    monkeypatch,
+    stderr,
+):
+    def run(command, check, text, capture_output):
+        return type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": stderr},
+        )()
+
+    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", run)
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="KUBERNETES_SECRET_READ_FAILED",
+    ):
+        BOOTSTRAP._read_secret_files(
+            "eph-node-agent-credentials",
+            "ai-agent-system",
+            ("token",),
+            tmp_path,
+        )
+
+
 def test_read_secret_files_rejects_other_kubectl_errors(tmp_path, monkeypatch):
     def run(command, check, text, capture_output):
         return type(
