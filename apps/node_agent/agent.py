@@ -2475,10 +2475,17 @@ def execute_command(
             "metal3.io": ["baremetalhosts"],
         }
         discovery = kubernetes_api_get("/apis")
+        if not isinstance(discovery, dict):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
+        api_groups = discovery.get("groups")
+        if not isinstance(api_groups, list) or any(
+            not isinstance(item, dict) for item in api_groups
+        ):
+            raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
         discovered_groups = {
             item.get("name"): item
-            for item in discovery.get("groups", [])
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            for item in api_groups
+            if isinstance(item.get("name"), str)
         }
         missing_resources = []
         provider_versions = {}
@@ -2905,19 +2912,32 @@ def execute_command(
         group_versions = {}
         for group_name, expected_resources in required_resources.items():
             group = discovered_groups.get(group_name)
-            preferred = group.get("preferredVersion", {}) if group else {}
-            version = preferred.get("version")
-            if not isinstance(version, str):
+            preferred = group.get("preferredVersion") if group else None
+            version = (
+                preferred.get("version")
+                if isinstance(preferred, dict)
+                else None
+            )
+            if not isinstance(version, str) or not re.fullmatch(
+                r"v[0-9]+(?:alpha|beta)[0-9]+|v[0-9]+", version
+            ):
                 missing_resources.extend(
                     f"{group_name}/{resource}" for resource in sorted(expected_resources)
                 )
                 continue
             group_versions[group_name] = version
             version_data = kubernetes_api_get(f"/apis/{group_name}/{version}")
+            if not isinstance(version_data, dict):
+                raise NodeAgentError("INVALID_TARGET_API_RESOURCE_DISCOVERY")
+            api_resources = version_data.get("resources")
+            if not isinstance(api_resources, list) or any(
+                not isinstance(item, dict) for item in api_resources
+            ):
+                raise NodeAgentError("INVALID_TARGET_API_RESOURCE_DISCOVERY")
             available = {
                 item.get("name")
-                for item in version_data.get("resources", [])
-                if isinstance(item, dict) and isinstance(item.get("name"), str)
+                for item in api_resources
+                if isinstance(item.get("name"), str)
             }
             missing_resources.extend(
                 f"{group_name}/{resource}"
@@ -2941,18 +2961,37 @@ def execute_command(
                 if str(exc) != "KUBERNETES_API_HTTP_404":
                     raise
                 deployments = {"items": []}
+            if not isinstance(deployments, dict):
+                raise NodeAgentError("INVALID_TARGET_CONTROLLER_INVENTORY")
+            deployment_items = deployments.get("items")
+            if not isinstance(deployment_items, list) or any(
+                not isinstance(item, dict) for item in deployment_items
+            ):
+                raise NodeAgentError("INVALID_TARGET_CONTROLLER_INVENTORY")
             deployment = next(
                 (
                     item
-                    for item in deployments.get("items", [])
-                    if item.get("metadata", {}).get("name") == deployment_name
+                    for item in deployment_items
+                    if isinstance(item.get("metadata"), dict)
+                    and item["metadata"].get("name") == deployment_name
                 ),
                 {},
             )
-            metadata = deployment.get("metadata", {})
-            status_data = deployment.get("status", {})
+            metadata = deployment.get("metadata")
+            status_data = deployment.get("status")
+            deployment_spec = deployment.get("spec")
+            if deployment and not all(
+                isinstance(value, dict)
+                for value in (metadata, status_data, deployment_spec)
+            ):
+                raise NodeAgentError("INVALID_TARGET_CONTROLLER_DEPLOYMENT")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            status_data = status_data if isinstance(status_data, dict) else {}
+            deployment_spec = (
+                deployment_spec if isinstance(deployment_spec, dict) else {}
+            )
             available_replicas = status_data.get("availableReplicas")
-            desired_replicas = deployment.get("spec", {}).get("replicas", 1)
+            desired_replicas = deployment_spec.get("replicas", 1)
             observed_generation = status_data.get("observedGeneration", 0)
             generation = metadata.get("generation", 1)
             ready = (
@@ -2987,10 +3026,21 @@ def execute_command(
                 if str(exc) != "KUBERNETES_API_HTTP_404":
                     raise
                 clusters = {"items": []}
+            if not isinstance(clusters, dict):
+                raise NodeAgentError("INVALID_TARGET_CLUSTER_INVENTORY")
+            cluster_items = clusters.get("items")
+            if not isinstance(cluster_items, list) or any(
+                not isinstance(item, dict) for item in cluster_items
+            ):
+                raise NodeAgentError("INVALID_TARGET_CLUSTER_INVENTORY")
+            for item in cluster_items:
+                item_metadata = item.get("metadata")
+                if not isinstance(item_metadata, dict):
+                    raise NodeAgentError("INVALID_TARGET_CLUSTER_INVENTORY")
             cluster_conflicts = [
-                item.get("metadata", {}).get("name")
-                for item in clusters.get("items", [])
-                if item.get("metadata", {}).get("name") == cluster_name
+                item["metadata"]["name"]
+                for item in cluster_items
+                if item["metadata"].get("name") == cluster_name
             ]
         controllers_ready = all(item["ready"] for item in controller_states)
         target_ready = (
