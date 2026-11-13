@@ -186,7 +186,13 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "CIDATA" in datasource
     assert "cloud-init.target" not in service
     assert "After=cloud-config.service" in service
-    assert "cloud-init status --wait" in service
+    assert "cloud-init status --wait" not in service
+    kubeadm_service = (
+        ROOT
+        / "eph-iso/config/includes.chroot/etc/systemd/system/eph-kubeadm-init.service"
+    ).read_text(encoding="utf-8")
+    assert "After=cloud-config.service" in kubeadm_service
+    assert "cloud-init status --wait" not in kubeadm_service
     assert "Restart=on-failure" in service
     assert "RestartSec=30s" in service
     assert "TimeoutStartSec=40min" in service
