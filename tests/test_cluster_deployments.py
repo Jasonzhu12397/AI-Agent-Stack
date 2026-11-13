@@ -2991,4 +2991,5 @@ def test_worker_provisioning_command_failure_requires_reconciliation_without_ret
     )
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
-    assert deployment.plan_result["worker_provisioning_reconciliation"]["state"] == "outcome_unknown"
+    reconciliation = deployment.plan_result["worker_provisioning_reconciliation"]
+    assert reconciliation["state"] == "outcome_unknown"
