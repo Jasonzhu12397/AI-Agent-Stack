@@ -41,6 +41,16 @@ sed -i -E 's#sandbox_image = "registry.k8s.io/pause:[^"]+"#sandbox_image = "regi
 systemctl restart containerd
 systemctl enable containerd kubelet
 
+api_is_ready() {
+    [ -s /etc/kubernetes/admin.conf ] &&
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=5s get --raw=/readyz 2>/dev/null | grep -qx ok
+}
+
+if [ -s /etc/kubernetes/admin.conf ] && ! api_is_ready; then
+    kubeadm reset --force --cri-socket "$CRI_SOCKET"
+    rm -f /etc/kubernetes/admin.conf
+fi
+
 if [ ! -s /etc/kubernetes/admin.conf ]; then
     kubeadm init \
         --kubernetes-version "$KUBERNETES_VERSION" \
@@ -51,7 +61,7 @@ fi
 
 export KUBECONFIG=/etc/kubernetes/admin.conf
 for attempt in $(seq 1 60); do
-    if kubectl get --raw=/readyz 2>/dev/null | grep -qx ok; then
+    if kubectl --request-timeout=5s get --raw=/readyz 2>/dev/null | grep -qx ok; then
         break
     fi
     if [ "$attempt" -eq 60 ]; then
