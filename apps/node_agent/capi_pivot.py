@@ -530,12 +530,12 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_ANNOTATIONS_INVALID")
         if labels.get("cluster.x-k8s.io/cluster-name") != cluster_name:
             continue
+        name = metadata.get("name")
         uid = metadata.get("uid")
         machine_namespace = metadata.get("namespace")
         host_name = annotations.get("metal3.io/BareMetalHost")
         if (
-            name != metadata.get("name")
-            or not isinstance(name, str)
+            not isinstance(name, str)
             or not name
             or not isinstance(uid, str)
             or not uid
@@ -579,7 +579,9 @@ def _verify_source_metal3_handoff(
     if not isinstance(hosts, list):
         raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
     hosts_by_name = {}
-    for name, host in selected_hosts_by_name.items():
+    for host in hosts:
+        if not isinstance(host, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
         metadata = host.get("metadata")
         if not isinstance(metadata, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
@@ -636,10 +638,10 @@ def _verify_source_metal3_handoff(
             or machine["baremetal_host"] != name
         ):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_CONSUMER_REF_MISMATCH:" + name)
-        name = metadata.get("name")
         uid = metadata.get("uid")
         if (
-            not isinstance(name, str)
+            name != metadata.get("name")
+            or not isinstance(name, str)
             or not name
             or not isinstance(uid, str)
             or not uid
