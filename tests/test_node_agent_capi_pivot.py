@@ -1380,6 +1380,21 @@ def test_pivot_execution_never_invokes_clusterctl_move_without_dry_run(tmp_path)
             "missing_consumer_namespace",
             "CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN",
         ),
+        (
+            "baremetalhosts.metal3.io",
+            "missing_consumer_name",
+            "CAPI_PIVOT_SOURCE_BMH_M3M_REFERENCE_UNKNOWN",
+        ),
+        (
+            "baremetalhosts.metal3.io",
+            "consumer_kind",
+            "CAPI_PIVOT_SOURCE_BMH_CONSUMER_REF_MISMATCH",
+        ),
+        (
+            "baremetalhosts.metal3.io",
+            "missing_consumer_api_version",
+            "CAPI_PIVOT_SOURCE_BMH_CONSUMER_REF_MISMATCH",
+        ),
     ],
 )
 def test_pivot_execution_rejects_untrusted_source_m3m_references(
@@ -1426,6 +1441,12 @@ def test_pivot_execution_rejects_untrusted_source_m3m_references(
             document["items"][0]["spec"]["consumerRef"]["name"] = "other-machine"
         elif mutation == "missing_consumer_namespace":
             document["items"][0]["spec"]["consumerRef"].pop("namespace")
+        elif mutation == "missing_consumer_name":
+            document["items"][0]["spec"]["consumerRef"].pop("name")
+        elif mutation == "consumer_kind":
+            document["items"][0]["spec"]["consumerRef"]["kind"] = "Machine"
+        elif mutation == "missing_consumer_api_version":
+            document["items"][0]["spec"]["consumerRef"].pop("apiVersion")
         return subprocess.CompletedProcess(
             command, completed.returncode, json.dumps(document), completed.stderr
         )
