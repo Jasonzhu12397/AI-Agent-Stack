@@ -58,7 +58,31 @@ The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kube
 1. Sign in to the Studio and create/select a tenant and project. The enrolling user must be a tenant owner or tenant administrator; project-only membership is not sufficient.
 2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Node Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
 3. The Studio creates the AgentNode UUID and generates the one-time token server-side with Python `secrets.token_urlsafe(36)`. The API returns the token as `enrollment_token` exactly once; the database stores only its SHA-256 hash. Copy each node UUID and token into your secret manager. If a token is lost, use **Rotate credential**; never reuse EPH credentials for Target.
-4. Prepare the Kubernetes Secrets, mTLS certificates and (for EPH) the source/target CAPI kubeconfigs as described in [Kubernetes Agent deployment](deploy/agents/README.md). Do not place credentials in Compose environment files or Git.
+4. Prepare the Kubernetes Secrets and mTLS certificates as described in [Kubernetes Agent deployment](deploy/agents/README.md). Source/target CAPI kubeconfigs are optional during initial enrollment and are added only when the pivot workflow is ready. Do not place credentials in Compose environment files or Git.
+
+For API-driven enrollment, send two separate requests to
+`POST /api/v1/tenants/{tenant_id}/projects/{project_id}/agent-nodes/`:
+`{"name":"eph-node-01","node_type":"eph_node"}` and
+`{"name":"target-cluster-agent-01","node_type":"target_cluster"}`.
+Each successful response returns its own `id` and one-time
+`enrollment_token`. Map those values to the runtime variables below; do not
+reuse a token or node ID across the two Agent roles:
+
+```bash
+EPH_AGENT_NODE_ID=<eph-node-uuid>
+EPH_AGENT_TOKEN=<eph-one-time-token>
+TARGET_AGENT_NODE_ID=<target-node-uuid>
+TARGET_AGENT_TOKEN=<target-one-time-token>
+```
+
+The platform generates each UUID and token when the corresponding AgentNode is
+enrolled. The token is generated server-side with
+`secrets.token_urlsafe(36)`, returned only once, and stored in PostgreSQL only
+as a SHA-256 hash. These variables are placeholders for values returned by the
+two enrollment responses, not values to invent locally. If a token is lost,
+rotate that node's credential in the Studio and update the corresponding
+secret; never print tokens in logs or commit them to Git.
+
 5. Build and push the digest-pinned Node Agent image, then deploy it into the two independent Kubernetes contexts:
 
 ```bash
@@ -122,6 +146,30 @@ The EPH runner currently supports:
 - `cluster.capi.pivot.dry-run` (EPH-only; invokes `clusterctl move --dry-run` using source and target kubeconfigs mounted from a Kubernetes Secret; reports namespace-wide scope and never mutates resources).
 
 Kubernetes Deployment/RBAC templates for running both agent roles as pods are in `deploy/agents/`.
+
+### Ambiguous worker-provisioning reconciliation and operator review
+
+When a worker-provisioning command has an unknown outcome, the deployment enters
+`reconciliation_required`. The Target Agent receives that deployment in its heartbeat
+response, reads the namespaced CAPI Cluster and available Machine, MachineSet,
+MachineDeployment, KubeadmControlPlane, Metal3Cluster, Metal3Machine and BareMetalHost
+objects through the Kubernetes read-only API, and submits the bounded inventory to:
+
+`POST /api/v1/agent-runtime/deployments/{deployment_id}/reconciliation-report/`
+
+The report is evidence only. It does not retry provisioning, transfer checkpoint ownership,
+or permit EPH reclamation. An operator can record a separate review through:
+
+`POST /api/v1/cluster-deployments/{deployment_id}/recovery-review/`
+
+The request must contain
+`{"confirmation":"review_recovery_evidence","reason":"..."}`, with a 20–500 character
+reason. Only a tenant owner or administrator may approve; the original deployment requester
+cannot approve their own review. The API verifies the recent report and Cluster UID, then
+writes a hash-chained audit event. This approval is for manual recovery planning only:
+`recovery_execution_authorized`, `worker_retry_authorized` and
+`eph_reclaim_authorized` remain false. Actual recovery execution requires a separately
+reviewed, fail-closed executor and is not enabled by this endpoint.
 
 The Target Cluster Agent must be installed on a target control-plane node immediately after the first Control Plane is Ready, before Data Plane workers are provisioned. Its Deployment uses a control-plane node selector and tolerates the standard control-plane NoSchedule taint so it can run when no workers exist. It resumes the same logical deployment/task from the central Supervisor using a separate target-cluster identity; this is a new Pod/process, not a live memory transfer. If CAPI controllers and Cluster API objects were hosted by the EPH bootstrap cluster, pivot them into the target cluster and verify reconciliation before stopping EPH or creating workers. The Target Agent then coordinates remaining Control Plane replicas and Data Plane workers. Production node identity should move to mTLS/short-lived workload identity; the current one-time bearer token is the initial development enrollment mechanism.
 

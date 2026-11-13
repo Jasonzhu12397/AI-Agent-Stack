@@ -28,6 +28,10 @@ from .capi_pivot import (
     run_capi_pivot_dry_run,
     run_capi_pivot_postflight,
 )
+from .certificate_rotation import (
+    CertificateRotationError,
+    CertificateRotationManager,
+)
 from .ironic_client import (
     IronicObservationError,
     get_ironic_node,
@@ -649,6 +653,197 @@ CAPI_PIVOT_TRACKED_OWNER_KINDS = {
     "BareMetalHost",
 }
 
+
+def _capi_preferred_versions() -> dict[str, str]:
+    discovery = kubernetes_api_get("/apis")
+    groups = discovery.get("groups", [])
+    if not isinstance(groups, list):
+        raise NodeAgentError("CAPI_API_DISCOVERY_INVALID")
+    versions = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        name = group.get("name")
+        preferred = group.get("preferredVersion", {})
+        version = preferred.get("version") if isinstance(preferred, dict) else None
+        if isinstance(name, str) and isinstance(version, str) and version:
+            versions[name] = version
+    return versions
+
+
+def _reconciliation_resource_record(
+    item: dict[str, Any],
+    api_version: str,
+    kind: str,
+) -> dict[str, Any]:
+    metadata = item.get("metadata", {})
+    spec = item.get("spec", {})
+    status = item.get("status", {})
+    if not isinstance(metadata, dict) or not isinstance(spec, dict) or not isinstance(status, dict):
+        raise NodeAgentError("CAPI_RECONCILIATION_RESOURCE_INVALID")
+    name = metadata.get("name")
+    uid = metadata.get("uid")
+    generation = metadata.get("generation")
+    resource_version = metadata.get("resourceVersion")
+    namespace = metadata.get("namespace", "default")
+    if (
+        not isinstance(name, str) or not name
+        or not isinstance(uid, str) or not uid
+        or not isinstance(generation, int) or isinstance(generation, bool) or generation < 1
+        or not isinstance(resource_version, str) or not resource_version
+        or not isinstance(namespace, str)
+    ):
+        raise NodeAgentError("CAPI_RECONCILIATION_METADATA_INVALID")
+    conditions = status.get("conditions", [])
+    normalized_conditions = []
+    if isinstance(conditions, list):
+        for condition in conditions[:50]:
+            if isinstance(condition, dict) and isinstance(condition.get("type"), str):
+                condition_status = condition.get("status")
+                if isinstance(condition_status, (str, bool)):
+                    normalized_status = (
+                        str(condition_status).lower()
+                        if isinstance(condition_status, bool)
+                        else condition_status[:32]
+                    )
+                    normalized_conditions.append(
+                        {
+                            "type": condition["type"][:128],
+                            "status": normalized_status,
+                        }
+                    )
+    replicas = spec.get("replicas")
+    status_replicas = status.get("replicas")
+    ready_replicas = status.get("readyReplicas")
+    result = {
+        "api_version": api_version,
+        "kind": kind,
+        "namespace": namespace,
+        "name": name,
+        "uid": uid,
+        "generation": generation,
+        "resource_version": resource_version,
+        "conditions": normalized_conditions,
+    }
+    for key, value in (
+        ("spec_replicas", replicas),
+        ("status_replicas", status_replicas),
+        ("ready_replicas", ready_replicas),
+    ):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            result[key] = value
+    return result
+
+
+def collect_capi_reconciliation_inventory(
+    cluster_name: str,
+    namespace: str = "default",
+) -> dict[str, Any]:
+    if (
+        not isinstance(cluster_name, str) or not cluster_name
+        or not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+    ):
+        raise NodeAgentError("CAPI_RECONCILIATION_IDENTITY_INVALID")
+    versions = _capi_preferred_versions()
+    cluster_version = versions.get("cluster.x-k8s.io")
+    if not cluster_version:
+        raise NodeAgentError("CAPI_CLUSTER_API_NOT_DISCOVERED")
+    cluster_path = (
+        f"/apis/cluster.x-k8s.io/{cluster_version}/namespaces/"
+        f"{namespace}/clusters/{urllib.parse.quote(cluster_name, safe='')}"
+    )
+    cluster = kubernetes_api_get(cluster_path)
+    resources = [
+        _reconciliation_resource_record(
+            cluster,
+            f"cluster.x-k8s.io/{cluster_version}",
+            "Cluster",
+        )
+    ]
+    resource_specs = (
+        ("cluster.x-k8s.io", "machines", "Machine"),
+        ("cluster.x-k8s.io", "machinesets", "MachineSet"),
+        ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
+        ("controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "KubeadmControlPlane"),
+        ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
+        ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+        ("metal3.io", "baremetalhosts", "BareMetalHost"),
+    )
+    inventory_checks = []
+    for group, plural, kind in resource_specs:
+        version = versions.get(group)
+        if not version:
+            inventory_checks.append({
+                "group": group,
+                "resource": plural,
+                "kind": kind,
+                "discovery_status": "not_discovered",
+                "list_status": "not_attempted",
+                "item_count": None,
+            })
+            continue
+        path = f"/apis/{group}/{version}/namespaces/{namespace}/{plural}"
+        check = {
+            "group": group,
+            "resource": plural,
+            "kind": kind,
+            "api_version": f"{group}/{version}",
+            "discovery_status": "discovered",
+            "list_status": "failed",
+            "item_count": None,
+        }
+        try:
+            items = list_all_kubernetes_items(path, max_items=5000)
+        except NodeAgentError as exc:
+            error_code = str(exc)[:96]
+            check["error_code"] = error_code
+            if error_code == "KUBERNETES_API_HTTP_404":
+                check["list_status"] = "not_found"
+            inventory_checks.append(check)
+            continue
+        check["list_status"] = "success"
+        check["item_count"] = len(items)
+        inventory_checks.append(check)
+        for item in items:
+            metadata = item.get("metadata", {})
+            if isinstance(metadata, dict) and metadata.get("namespace", namespace) == namespace:
+                resources.append(
+                    _reconciliation_resource_record(item, f"{group}/{version}", kind)
+                )
+                if len(resources) >= 500:
+                    raise NodeAgentError("CAPI_RECONCILIATION_RESOURCE_LIMIT_EXCEEDED")
+    successful = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] == "discovered"
+        and check["list_status"] == "success"
+    )
+    unavailable = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] != "discovered"
+    )
+    failed = sum(
+        1 for check in inventory_checks
+        if check["discovery_status"] == "discovered"
+        and check["list_status"] != "success"
+    )
+    completeness = {
+        "complete": successful == len(resource_specs),
+        "expected_resource_type_count": len(resource_specs),
+        "successful_resource_type_count": successful,
+        "not_discovered_resource_type_count": unavailable,
+        "failed_resource_type_count": failed,
+        "checks": inventory_checks,
+    }
+    report = {
+        "cluster_name": cluster_name,
+        "cluster_uid": resources[0]["uid"],
+        "resources": resources,
+        "inventory_completeness": completeness,
+    }
+    if len(json.dumps(report, separators=(",", ":")).encode("utf-8")) > 60000:
+        raise NodeAgentError("CAPI_RECONCILIATION_REPORT_TOO_LARGE")
+    return report
 
 def list_all_kubernetes_items(path: str, max_items: int = 100000) -> list[dict[str, Any]]:
     items = []
@@ -2071,6 +2266,8 @@ def execute_command(
     payload = command.get("payload", {})
     if not isinstance(payload, dict):
         raise NodeAgentError("INVALID_PAYLOAD")
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise NodeAgentError("AGENT_COMMAND_CANCELLED")
     if contains_forbidden_fields(payload):
         raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
     if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
@@ -3856,6 +4053,8 @@ def execute_command(
     if command_type == "cluster.capi.pivot.postflight":
         try:
             result = run_capi_pivot_postflight(payload)
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise NodeAgentError("AGENT_COMMAND_CANCELLED")
             ironic_lookup = get_ironic_node if ironic_api_configured() else None
             metal3_result = observe_cluster_metal3(
                 payload,
@@ -4267,6 +4466,7 @@ class ControlPlaneClient:
         ):
             raise NodeAgentError("AGENT_TLS_CONFIGURATION_REQUIRES_HTTPS")
         self.tls_context = build_control_plane_tls_context()
+        self.certificate_rotation = CertificateRotationManager(self)
         self.deployment_checkpoints: dict[str, dict[str, Any]] = {}
 
     def request(
@@ -4275,6 +4475,7 @@ class ControlPlaneClient:
         payload: dict[str, Any] | None = None,
         lease_token: str = "",
         method: str = "POST",
+        tls_context: ssl.SSLContext | None = None,
     ) -> dict[str, Any]:
         if method not in {"GET", "POST"}:
             raise NodeAgentError("UNSUPPORTED_CONTROL_PLANE_METHOD")
@@ -4299,16 +4500,26 @@ class ControlPlaneClient:
             method=method,
         )
         try:
-            if self.tls_context is None:
+            request_tls_context = tls_context or self.tls_context
+            if request_tls_context is None:
                 response_context = urllib.request.urlopen(request, timeout=self.timeout)
             else:
                 response_context = urllib.request.urlopen(
                     request,
                     timeout=self.timeout,
-                    context=self.tls_context,
+                    context=request_tls_context,
                 )
             with response_context as response:
-                return json.loads(response.read().decode("utf-8"))
+                response_body = response.read(4 * 1024 * 1024 + 1)
+            if len(response_body) > 4 * 1024 * 1024:
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_TOO_LARGE")
+            try:
+                document = json.loads(response_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_INVALID") from None
+            if not isinstance(document, dict):
+                raise NodeAgentError("CONTROL_PLANE_RESPONSE_INVALID")
+            return document
         except urllib.error.HTTPError as exc:
             raise NodeAgentError(f"CONTROL_PLANE_HTTP_{exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -4407,6 +4618,18 @@ class ControlPlaneClient:
             {"node_id": self.node_id, "hardware_inventory": inventory},
         )
 
+    def report_reconciliation_inventory(
+        self,
+        deployment_id: str,
+        report: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not deployment_id or not isinstance(report, dict):
+            raise NodeAgentError("RECONCILIATION_REPORT_INVALID")
+        return self.request(
+            f"/api/v1/agent-runtime/deployments/{deployment_id}/reconciliation-report/",
+            {"node_id": self.node_id, **report},
+        )
+
     def poll(self) -> dict[str, Any]:
         return self.request(
             "/api/v1/agent-runtime/commands/poll/",
@@ -4456,7 +4679,8 @@ def health_file_is_fresh(name: str, max_age_seconds: int = 45) -> bool:
     path = Path(os.environ.get(name, default_path))
     if not path.is_file():
         return False
-    return time.time() - path.stat().st_mtime <= max_age_seconds
+    age_seconds = time.time() - path.stat().st_mtime
+    return -5 <= age_seconds <= max_age_seconds
 
 
 def execute_command_with_lease(
@@ -4479,6 +4703,7 @@ def execute_command_with_lease(
         while not stop_event.wait(renew_interval):
             try:
                 client.renew_lease(command_id, lease_token)
+                touch_health_files()
             except NodeAgentError as exc:
                 renewal_errors.append(exc)
                 stop_event.set()
@@ -4494,14 +4719,20 @@ def execute_command_with_lease(
         daemon=True,
     )
     renewer.start()
+    command_error = None
+    result = None
     try:
         result = execute_command(command, node_type, cancellation_event=stop_event)
+    except Exception as exc:
+        command_error = exc
     finally:
         stop_event.set()
         renewer.join()
 
     if renewal_errors:
         raise NodeAgentError("COMMAND_LEASE_LOST") from renewal_errors[0]
+    if command_error is not None:
+        raise command_error
     return result
 
 
@@ -4551,6 +4782,11 @@ def validate_deployment_checkpoint_for_command(
 
 
 def run_once(client: ControlPlaneClient, node_type: str) -> bool:
+    if node_type == "eph_node":
+        try:
+            client.certificate_rotation.maintain()
+        except CertificateRotationError as exc:
+            raise NodeAgentError(str(exc)) from exc
     heartbeat = client.heartbeat(node_type)
     inventory = inspect_host_network_hardware()
     if inventory.get("status") == "observed":
@@ -4558,6 +4794,36 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
     if node_type == "target_cluster":
         for deployment in heartbeat.get("active_deployments", []):
             deployment_id = deployment.get("deployment_id")
+            if (
+                isinstance(deployment_id, str)
+                and deployment_id
+                and deployment.get("status") == "reconciliation_required"
+            ):
+                try:
+                    report = collect_capi_reconciliation_inventory(
+                        deployment.get("cluster_name", ""),
+                        deployment.get("capi_namespace", "default"),
+                    )
+                    client.report_reconciliation_inventory(deployment_id, report)
+                    print(
+                        json.dumps({
+                            "event": "deployment_reconciliation_report_submitted",
+                            "deployment_id": deployment_id,
+                            "resource_count": len(report["resources"]),
+                            "retry_authorized": False,
+                            "eph_reclaim_authorized": False,
+                        }),
+                        flush=True,
+                    )
+                except (NodeAgentError, KeyError, TypeError, ValueError) as exc:
+                    print(
+                        json.dumps({
+                            "event": "deployment_reconciliation_report_deferred",
+                            "deployment_id": deployment_id,
+                            "error": str(exc)[:160],
+                        }),
+                        flush=True,
+                    )
             if isinstance(deployment_id, str) and deployment_id:
                 previous = client.deployment_checkpoints.get(deployment_id)
                 checkpoint = client.restore_deployment_checkpoint(deployment_id)
@@ -4595,13 +4861,25 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
         result = execute_command_with_lease(client, command, node_type)
         client.submit_result(command_id, lease_token, "succeeded", result)
     except NodeAgentError as exc:
-        client.submit_result(
-            command_id,
-            lease_token,
-            "failed",
-            {},
-            {"code": str(exc), "retryable": False},
-        )
+        if str(exc) == "COMMAND_LEASE_LOST":
+            print(
+                json.dumps(
+                    {
+                        "event": "command_lease_lost",
+                        "command_id": command_id,
+                        "result_submitted": False,
+                    }
+                ),
+                flush=True,
+            )
+        else:
+            client.submit_result(
+                command_id,
+                lease_token,
+                "failed",
+                {},
+                {"code": str(exc), "retryable": False},
+            )
     touch_health_files(readiness=True)
     return True
 

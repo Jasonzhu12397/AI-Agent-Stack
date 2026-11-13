@@ -15,11 +15,20 @@ from core.agent_node_views import (
     FleetMachineBMCConfigView,
     AgentNodeRevokeView,
     AgentRuntimeDeploymentCheckpointView,
+    AgentRuntimeDeploymentReconciliationReportView,
     AgentRuntimeHeartbeatView,
+    AgentRuntimeEPHCertificateExchangeView,
+    AgentRuntimeEPHCertificateRenewalView,
+    AgentRuntimeEPHCertificateActivationView,
     AgentRuntimeInventoryReportView,
     AgentRuntimeLeaseRenewView,
     AgentRuntimePollView,
     AgentRuntimeResultView,
+)
+from core.eph_seed_views import (
+    EPHSeedArtifactCreateView,
+    EPHSeedArtifactDownloadView,
+    EPHSeedArtifactRevokeView,
 )
 from core.agent_views import (
     AgentDetailView,
@@ -34,6 +43,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
     ClusterDeploymentTargetAgentHandoffView,
+    ClusterDeploymentRecoveryReviewView,
     ClusterDeploymentTargetPostflightView,
 )
 from core.knowledge_views import (
@@ -172,6 +182,11 @@ urlpatterns = [
         name="cluster-deployment-target-agent-handoff",
     ),
     path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/recovery-review/",
+        ClusterDeploymentRecoveryReviewView.as_view(),
+        name="cluster-deployment-recovery-review",
+    ),
+    path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
         ClusterDeploymentTargetPostflightView.as_view(),
         name="cluster-deployment-target-postflight",
@@ -234,6 +249,38 @@ urlpatterns = [
         name="agent-runtime-inventory",
     ),
     path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "agent-nodes/<uuid:node_id>/seed-artifacts/",
+        EPHSeedArtifactCreateView.as_view(),
+        name="eph-seed-artifact-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "agent-nodes/<uuid:node_id>/seed-artifacts/<uuid:artifact_id>/revoke/",
+        EPHSeedArtifactRevokeView.as_view(),
+        name="eph-seed-artifact-revoke",
+    ),
+    path(
+        "api/v1/agent-runtime/seed-artifacts/<uuid:artifact_id>/download/",
+        EPHSeedArtifactDownloadView.as_view(),
+        name="eph-seed-artifact-download",
+    ),
+    path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/",
+        AgentRuntimeEPHCertificateExchangeView.as_view(),
+        name="agent-runtime-eph-certificate-exchange",
+    ),
+    path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/renew/",
+        AgentRuntimeEPHCertificateRenewalView.as_view(),
+        name="agent-runtime-eph-certificate-renewal",
+    ),
+    path(
+        "api/v1/agent-runtime/nodes/<uuid:node_id>/certificate/activate/",
+        AgentRuntimeEPHCertificateActivationView.as_view(),
+        name="agent-runtime-eph-certificate-activation",
+    ),
+    path(
         "api/v1/agent-runtime/heartbeat/",
         AgentRuntimeHeartbeatView.as_view(),
         name="agent-runtime-heartbeat",
@@ -242,6 +289,11 @@ urlpatterns = [
         "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
         AgentRuntimeDeploymentCheckpointView.as_view(),
         name="agent-runtime-deployment-checkpoint",
+    ),
+    path(
+        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/reconciliation-report/",
+        AgentRuntimeDeploymentReconciliationReportView.as_view(),
+        name="agent-runtime-deployment-reconciliation-report",
     ),
     path(
         "api/v1/agent-runtime/commands/poll/",

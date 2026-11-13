@@ -1,0 +1,11 @@
+[Unit]
+Description=Install per-node systemd-networkd configuration from optional EPHBOOT media
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-bootstrap-mount.sh
+ExecStart=/usr/bin/python3 /usr/local/lib/eph-network-config.py
+RemainAfterExit=yes

@@ -327,6 +327,8 @@ def handle_deployment_command_result(
     result: dict,
     error: dict | None,
 ) -> None:
+    if not isinstance(result, dict):
+        result = {}
     if command.deployment_id is None:
         return
     deployment = ClusterDeployment.objects.select_for_update().get(
@@ -336,11 +338,46 @@ def handle_deployment_command_result(
         ClusterDeployment.Status.CANCELLED,
         ClusterDeployment.Status.SUCCEEDED,
         ClusterDeployment.Status.FAILED,
+        ClusterDeployment.Status.RECONCILIATION_REQUIRED,
     }:
         return
     if deployment.started_at is None:
         deployment.started_at = timezone.now()
     if outcome == "failed":
+        if command.command_type == "cluster.capi.worker.provision":
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "worker_provisioning_reconciliation": {
+                    "state": "outcome_unknown",
+                    "command_id": str(command.id),
+                    "error": error or {"code": "AGENT_COMMAND_FAILED"},
+                    "side_effects": "unknown",
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "worker_provisioning_completed": False,
+                    "worker_provisioning_simulated": False,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.error = {
+                "code": "WORKER_PROVISIONING_OUTCOME_UNKNOWN",
+                "reconciliation_required": True,
+                "retry_allowed": False,
+            }
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "plan_result",
+                    "error",
+                    "started_at",
+                    "updated_at",
+                ],
+            )
+            return
         deployment.status = ClusterDeployment.Status.FAILED
         deployment.error = error or {"code": "AGENT_COMMAND_FAILED"}
         deployment.finished_at = timezone.now()

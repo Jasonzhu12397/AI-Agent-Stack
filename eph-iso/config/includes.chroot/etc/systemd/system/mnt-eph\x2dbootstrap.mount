@@ -1,0 +1,9 @@
+[Unit]
+Description=Read-only EPH boot configuration media
+Before=local-fs.target
+
+[Mount]
+What=/dev/disk/by-label/EPHBOOT
+Where=/mnt/eph-bootstrap
+Type=auto
+Options=ro,nosuid,nodev,noexec,x-systemd.device-timeout=10s

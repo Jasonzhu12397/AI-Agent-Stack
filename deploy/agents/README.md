@@ -39,7 +39,7 @@ The build script pushes the image and prints an immutable AGENT_IMAGE_REF=reposi
 
 Do not guess the Cluster API version or checksum. The image build fails if either argument is missing or the checksum does not match. Use this image in both node-agent Deployment templates when enabling pivot preflight, execution and postflight. The kubectl version must be compatible with the target cluster API server (prefer the same minor version); do not use an unverified latest download.
 
-The EPH Agent's optional `cluster.capi.pivot.dry-run` command requires a Secret named `capi-pivot-kubeconfigs` in `ai-agent-system` with keys `source.kubeconfig` and `target.kubeconfig`. These are mounted read-only under `/var/run/secrets/ai-agent/capi-pivot`; the source file identifies the temporary EPH management cluster and the target file identifies the target management cluster. Grant only the Kubernetes permissions required for discovery and CAPI move dry-run. Do not place kubeconfig contents in command payloads or Git.
+The EPH Agent's optional `cluster.capi.pivot.dry-run` command requires a Secret named `capi-pivot-kubeconfigs` in `ai-agent-system` with keys `source.kubeconfig` and `target.kubeconfig`. These are mounted read-only under `/var/run/secrets/ai-agent/capi-pivot`; the source file identifies the temporary EPH management cluster and the target file identifies the target management cluster. Grant only the Kubernetes permissions required for discovery and CAPI move dry-run. Do not place kubeconfig contents in command payloads or Git. The dual-agent deployment helper treats this Secret as optional during initial EPH/Target Agent installation; when it is present, both keys are mandatory and validated. Set `ENABLE_CAPI_PIVOT=true` when you want the deployment helper to require that Secret before proceeding; this flag is a deployment precondition, not a runtime feature toggle. The default is `false`; a missing Secret does not block initial Agent installation, while lookup errors other than NotFound fail closed. When the Secret is present, the Agent can use the mounted kubeconfigs for the separately authorized pivot dry-run.
 
 The dry-run invokes `clusterctl move --dry-run` only. It reports that the namespace scope includes all CAPI objects in the selected namespace; it does not perform a move, install providers, bootstrap the Target Agent, or authorize worker provisioning. A successful dry-run is not proof that a real pivot is safe.
 
@@ -117,7 +117,7 @@ Content-Type: application/json
 
 Use a client certificate signed by the CA configured on the cloud HAProxy ingress. Bind the SHA-256 fingerprint of each certificate's DER encoding to its enrolled Agent node through the tenant-admin client-certificate API before starting the Agent. The cloud ingress verifies the certificate during the TLS handshake and forwards only its computed SHA-256 fingerprint to Django; the API also checks that the request came from the dedicated ingress IP and that the fingerprint matches the node binding. The Agent sets `AGENT_TLS_CLIENT_CERT_REQUIRED=true` and fails at startup if its certificate/key pair is absent or incomplete. TLS server verification remains enabled; do not use self-signed untrusted leaf certificates, disable hostname verification, or route around the dedicated mTLS ingress.
 
-For certificate rotation, issue a new certificate, update the Secret, bind the new DER SHA-256 fingerprint to the node, and restart/roll out the Agent. The old certificate is rejected immediately after the binding changes. Revoke the node binding when retiring an Agent. Keep CA private keys and client private keys in an external secret manager; only the public CA certificate and node-specific client credentials belong in the Kubernetes Secret. Restrict Secret read access to cluster operators and the Agent Pod's volume mount.
+For EPH certificate rotation, the EPH Agent automatically generates a replacement P-256 private key and CSR locally when the active certificate has six hours or less remaining. The Cloud API stages the signed certificate without changing the active fingerprint. The Agent stores the pending keypair only in the local `agent-control-plane-mtls` Secret, establishes a new mTLS connection, and activates the certificate before promoting the Secret data. The EPH ServiceAccount can get, patch and update only that named Secret; it cannot read other Secrets. A failed activation leaves the old certificate active. The ten-minute server-side pending window and idempotent activation endpoint support recovery after Agent process restarts. Target Agent certificates continue to use their separately managed lifecycle. Revoke the node binding when retiring an Agent. Keep CA private keys and client private keys out of the Cloud Control Plane and Git.
 
 ## Security and operation
 
@@ -127,7 +127,7 @@ For certificate rotation, issue a new certificate, update the Secret, bind the n
 - Readiness requires a successful control-plane heartbeat/poll. Liveness checks that the process loop is still running.
 - Agents initiate outbound HTTPS; no inbound Service or SSH listener is exposed.
 - Create credentials with an external Secret Manager / External Secrets integration in production. Do not commit token values or plaintext Secret manifests.
-- The EPH RBAC remains read-only. The Target Agent has only the namespaced CAPI MachineDeployment create permission described above; Metal3 BMH access is read-only. Do not add `cluster-admin` as a workaround.
+- The EPH Agent's CAPI, Metal3 and node-discovery permissions remain read-only. Its only write exception is a namespaced Role limited to `get`, `patch` and `update` on the single `agent-control-plane-mtls` Secret for staged certificate rotation. The Target Agent has only the namespaced CAPI MachineDeployment create permission described above; Metal3 BMH access is read-only. Do not add `cluster-admin` as a workaround.
 - The initial bearer token is a development enrollment mechanism. Production must replace it with mTLS or short-lived workload identity before broad deployment.
 
 
@@ -160,6 +160,7 @@ kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret gener
   --from-file=node-id=/secure/path/eph-node-id \
   --from-file=token=/secure/path/eph-agent-token
 
+# Optional: create only when both management kubeconfigs are ready.
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system create secret generic capi-pivot-kubeconfigs \
   --from-file=source.kubeconfig=/secure/path/source.kubeconfig \
   --from-file=target.kubeconfig=/secure/path/target.kubeconfig

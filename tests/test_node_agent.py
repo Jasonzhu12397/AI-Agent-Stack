@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 import base64
+import os
 import datetime
 import hashlib
 import io
@@ -8,7 +9,7 @@ import time
 
 import pytest
 
-from node_agent import agent, capabilities
+from node_agent import agent, capabilities, capi_pivot
 
 TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
 
@@ -527,6 +528,19 @@ def test_agent_health_files_distinguish_process_liveness_from_control_plane_read
     agent.touch_health_files(readiness=True)
     assert agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
     assert agent.health_file_is_fresh("AGENT_READINESS_FILE")
+
+
+def test_agent_health_files_reject_implausible_future_timestamps(
+    monkeypatch,
+    tmp_path,
+):
+    health_file = tmp_path / "agent-live"
+    health_file.touch()
+    future_timestamp = time.time() + 60
+    os.utime(health_file, (future_timestamp, future_timestamp))
+    monkeypatch.setenv("AGENT_LIVENESS_FILE", str(health_file))
+
+    assert not agent.health_file_is_fresh("AGENT_LIVENESS_FILE")
 
 
 def test_metal3_inspection_discovers_version_and_returns_redacted_bmh_summary(monkeypatch):
@@ -1483,7 +1497,7 @@ def test_control_plane_client_restores_durable_deployment_checkpoint(monkeypatch
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return json.dumps(
                 {
                     "deployment_id": "deployment-123",
@@ -1525,7 +1539,7 @@ def test_control_plane_client_saves_checkpoint_without_credentials(monkeypatch):
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"sequence":5,"idempotent":false}'
 
     def fake_urlopen(request, timeout):
@@ -1584,6 +1598,188 @@ def test_control_plane_client_rejects_invalid_checkpoint_generation_and_phase():
             "unknown_phase",
             {},
         )
+
+
+def test_collect_capi_reconciliation_inventory_records_cluster_and_observed_machines(monkeypatch):
+    versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1beta1",
+        "metal3.io": "v1alpha1",
+    }
+    cluster = {
+        "metadata": {
+            "name": "edge-lab",
+            "namespace": "capi-system",
+            "uid": "cluster-uid",
+            "generation": 2,
+            "resourceVersion": "17",
+        },
+        "spec": {},
+        "status": {"conditions": [{"type": "ControlPlaneReady", "status": "True"}]},
+    }
+    machine = {
+        "metadata": {
+            "name": "edge-lab-worker-0",
+            "namespace": "capi-system",
+            "uid": "machine-uid",
+            "generation": 1,
+            "resourceVersion": "21",
+        },
+        "spec": {},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_get",
+        lambda path: {"groups": [
+            {"name": name, "preferredVersion": {"version": version}}
+            for name, version in versions.items()
+        ]} if path == "/apis" else cluster,
+    )
+    monkeypatch.setattr(
+        agent,
+        "list_all_kubernetes_items",
+        lambda path, max_items=100000: [machine] if path.endswith("/machines") else [],
+    )
+
+    report = agent.collect_capi_reconciliation_inventory("edge-lab", "capi-system")
+
+    assert report["cluster_name"] == "edge-lab"
+    assert report["cluster_uid"] == "cluster-uid"
+    assert [item["kind"] for item in report["resources"]] == ["Cluster", "Machine"]
+    assert report["resources"][1]["uid"] == "machine-uid"
+    assert report["resources"][0]["conditions"] == [
+        {"type": "ControlPlaneReady", "status": "True"}
+    ]
+    assert report["inventory_completeness"]["complete"] is True
+    assert report["inventory_completeness"]["expected_resource_type_count"] == 7
+    assert report["inventory_completeness"]["successful_resource_type_count"] == 7
+
+
+def test_collect_capi_reconciliation_inventory_marks_missing_and_unavailable_apis(
+    monkeypatch,
+):
+    versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1alpha1",
+    }
+    cluster = {
+        "metadata": {
+            "name": "edge-lab",
+            "namespace": "capi-system",
+            "uid": "cluster-uid",
+            "generation": 1,
+            "resourceVersion": "17",
+        },
+        "spec": {},
+        "status": {},
+    }
+
+    def fake_get(path):
+        if path == "/apis":
+            return {
+                "groups": [
+                    {"name": name, "preferredVersion": {"version": version}}
+                    for name, version in versions.items()
+                ]
+            }
+        return cluster
+
+    def fake_list(path, max_items=100000):
+        if path.endswith("/machines"):
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        return []
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+
+    report = agent.collect_capi_reconciliation_inventory("edge-lab", "capi-system")
+
+    completeness = report["inventory_completeness"]
+    assert completeness["complete"] is False
+    assert completeness["not_discovered_resource_type_count"] == 1
+    assert completeness["failed_resource_type_count"] == 1
+    machines = next(check for check in completeness["checks"] if check["resource"] == "machines")
+    assert machines["discovery_status"] == "discovered"
+    assert machines["list_status"] == "not_found"
+    baremetalhosts = next(
+        check for check in completeness["checks"]
+        if check["resource"] == "baremetalhosts"
+    )
+    assert baremetalhosts["discovery_status"] == "not_discovered"
+    assert baremetalhosts["list_status"] == "not_attempted"
+
+
+def test_target_agent_submits_reconciliation_evidence_without_authorizing_recovery(
+    monkeypatch,
+    capsys,
+):
+    class FakeClient:
+        deployment_checkpoints = {}
+
+        def __init__(self):
+            self.submitted = []
+
+        def heartbeat(self, node_type):
+            return {
+                "active_deployments": [{
+                    "deployment_id": "deployment-456",
+                    "cluster_name": "edge-lab",
+                    "capi_namespace": "capi-system",
+                    "status": "reconciliation_required",
+                }]
+            }
+
+        def report_inventory(self, inventory):
+            return {}
+
+        def report_reconciliation_inventory(self, deployment_id, report):
+            self.submitted.append((deployment_id, report))
+            return {"reconciliation_state": "evidence_recorded_not_authorized"}
+
+        def restore_deployment_checkpoint(self, deployment_id):
+            checkpoint = {
+                "deployment_id": deployment_id,
+                "phase": "worker_provisioning",
+                "sequence": 4,
+                "resume_available": False,
+            }
+            self.deployment_checkpoints[deployment_id] = checkpoint
+            return checkpoint
+
+        def poll(self):
+            return {"command": None}
+
+    client = FakeClient()
+    monkeypatch.setattr(agent, "inspect_host_network_hardware", lambda: {"status": "unavailable"})
+    monkeypatch.setattr(
+        agent,
+        "collect_capi_reconciliation_inventory",
+        lambda cluster_name, namespace: {
+            "cluster_name": cluster_name,
+            "cluster_uid": "cluster-uid",
+            "resources": [{"kind": "Cluster"}],
+        },
+    )
+    monkeypatch.setattr(agent, "touch_health_files", lambda readiness=False: None)
+
+    assert agent.run_once(client, "target_cluster") is False
+    assert len(client.submitted) == 1
+    assert client.submitted[0][0] == "deployment-456"
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    output = next(
+        event
+        for event in events
+        if event.get("event") == "deployment_reconciliation_report_submitted"
+    )
+    assert output["retry_authorized"] is False
+    assert output["eph_reclaim_authorized"] is False
 
 
 def test_target_agent_restores_assigned_deployment_checkpoint_before_polling(
@@ -1950,6 +2146,37 @@ def test_long_running_command_renews_its_lease(monkeypatch):
     assert result == {"ready": True}
     assert renewals
     assert all(item == ("command-1", "lease-1") for item in renewals)
+
+
+def test_long_running_command_keeps_liveness_fresh_without_refreshing_readiness(
+    monkeypatch,
+):
+    health_updates = []
+
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            return {"id": command_id}
+
+    def fake_touch_health_files(readiness=False):
+        health_updates.append(readiness)
+
+    def slow_command(command, node_type, cancellation_event=None):
+        time.sleep(0.06)
+        return {"ready": True}
+
+    monkeypatch.setattr(agent, "touch_health_files", fake_touch_health_files)
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+
+    result = agent.execute_command_with_lease(
+        FakeClient(),
+        {"id": "command-readiness", "lease_token": "lease-readiness"},
+        "eph_node",
+        renew_interval=0.01,
+    )
+
+    assert result == {"ready": True}
+    assert health_updates
+    assert all(readiness is False for readiness in health_updates)
 
 
 def test_command_is_not_reported_successful_after_lease_renewal_fails(monkeypatch):
@@ -4427,7 +4654,7 @@ def test_control_plane_client_reports_host_inventory(monkeypatch):
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"identity_status":"candidate"}'
 
     def fake_urlopen(request, timeout):
@@ -4465,7 +4692,7 @@ def test_control_plane_client_uses_verified_tls_and_optional_client_certificate(
         def __exit__(self, exc_type, exc_value, traceback):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"ok":true}'
 
     def fake_create_default_context(cafile=None):
@@ -4675,3 +4902,273 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
         "eph_node",
         {},
     )
+
+
+def test_capi_pivot_process_is_killed_when_lease_is_cancelled(monkeypatch):
+    cancellation_event = agent.threading.Event()
+
+    class FakeProcess:
+        pid = 12345
+        returncode = -9
+
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                cancellation_event.set()
+                raise capi_pivot.subprocess.TimeoutExpired(["kubectl"], timeout)
+            return "", ""
+
+    process = FakeProcess()
+    killed_process_groups = []
+    monkeypatch.setattr(capi_pivot.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        "node_agent.capi_pivot.os.killpg",
+        lambda pid, sig: killed_process_groups.append((pid, sig)),
+    )
+
+    runner = agent.run_capi_pivot.__globals__["_cancellable_process_runner"](
+        cancellation_event
+    )
+    with pytest.raises(
+        agent.CapiPivotError,
+        match="CAPI_PIVOT_CANCELLED_DURING_PROCESS",
+    ):
+        runner(
+            ["kubectl", "get", "nodes"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=capi_pivot.subprocess.DEVNULL,
+            env={},
+        )
+
+    assert killed_process_groups == [
+        (12345, agent.run_capi_pivot.__globals__["signal"].SIGKILL)
+    ]
+
+
+def test_lease_loss_takes_precedence_over_cancelled_command_error(monkeypatch):
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            raise agent.NodeAgentError("LEASE_EXPIRED")
+
+    def execute_until_cancelled(command, node_type, cancellation_event=None):
+        assert cancellation_event.wait(1)
+        raise agent.NodeAgentError("CAPI_PIVOT_CANCELLED_DURING_PROCESS")
+
+    monkeypatch.setattr(agent, "execute_command", execute_until_cancelled)
+    monkeypatch.setattr(agent, "touch_health_files", lambda **kwargs: None)
+
+    with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_LOST"):
+        agent.execute_command_with_lease(
+            FakeClient(),
+            {"id": "command-01", "lease_token": "lease-secret"},
+            "target_cluster",
+            renew_interval=0.001,
+        )
+
+
+def test_run_once_does_not_submit_terminal_result_after_lease_loss(monkeypatch):
+    class FakeClient:
+        deployment_checkpoints = {}
+
+        def heartbeat(self, node_type):
+            return {"active_deployments": []}
+
+        def poll(self):
+            return {
+                "command": {
+                    "id": "command-02",
+                    "lease_token": "lease-secret",
+                    "command_type": "node.health",
+                    "payload": {},
+                }
+            }
+
+        def report_inventory(self, inventory):
+            raise AssertionError("inventory should not be reported")
+
+        def submit_result(self, *args, **kwargs):
+            raise AssertionError("expired lease must not submit a terminal result")
+
+    monkeypatch.setattr(
+        agent,
+        "inspect_host_network_hardware",
+        lambda: {"status": "unavailable"},
+    )
+    monkeypatch.setattr(
+        agent,
+        "execute_command_with_lease",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            agent.NodeAgentError("COMMAND_LEASE_LOST")
+        ),
+    )
+    monkeypatch.setattr(agent, "touch_health_files", lambda **kwargs: None)
+
+    assert agent.run_once(FakeClient(), "target_cluster") is True
+
+
+def test_execute_command_rejects_command_when_lease_is_already_cancelled():
+    cancellation_event = agent.threading.Event()
+    cancellation_event.set()
+
+    with pytest.raises(agent.NodeAgentError, match="AGENT_COMMAND_CANCELLED"):
+        agent.execute_command(
+            {"command_type": "node.health", "payload": {}},
+            "eph_node",
+            cancellation_event=cancellation_event,
+        )
+
+
+def test_capi_postflight_stops_before_observation_after_lease_cancellation(monkeypatch):
+    cancellation_event = agent.threading.Event()
+
+    def cancel_during_postflight(payload):
+        cancellation_event.set()
+        return {"postflight_passed": True, "side_effects": False}
+
+    monkeypatch.setattr(agent, "run_capi_pivot_postflight", cancel_during_postflight)
+    monkeypatch.setattr(agent, "ironic_api_configured", lambda: False)
+    observation_calls = []
+    monkeypatch.setattr(
+        agent,
+        "observe_cluster_metal3",
+        lambda *args, **kwargs: observation_calls.append(True),
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="AGENT_COMMAND_CANCELLED"):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.postflight",
+                "payload": {"cluster_name": "edge-lab", "namespace": "default"},
+            },
+            "target_cluster",
+            cancellation_event=cancellation_event,
+        )
+
+    assert observation_calls == []
+
+
+def test_long_running_leased_command_keeps_agent_liveness_fresh(monkeypatch):
+    liveness_updates = []
+
+    class FakeClient:
+        def renew_lease(self, command_id, lease_token):
+            return {"id": command_id}
+
+    def slow_command(command, node_type, cancellation_event=None):
+        time.sleep(0.06)
+        return {"ready": True}
+
+    monkeypatch.setattr(agent, "execute_command", slow_command)
+    monkeypatch.setattr(
+        agent,
+        "touch_health_files",
+        lambda readiness=False: liveness_updates.append(readiness),
+    )
+
+    result = agent.execute_command_with_lease(
+        FakeClient(),
+        {"id": "command-liveness", "lease_token": "lease-liveness"},
+        "eph_node",
+        renew_interval=0.01,
+    )
+
+    assert result == {"ready": True}
+    assert liveness_updates
+    assert all(readiness is False for readiness in liveness_updates)
+
+
+@pytest.mark.parametrize("response_body", [b"[]", b'"not-an-object"', b"null", b"invalid-json"])
+def test_control_plane_client_rejects_non_object_or_invalid_json_responses(
+    monkeypatch,
+    response_body,
+):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size=-1):
+            return response_body
+
+    monkeypatch.setattr(
+        agent.urllib.request,
+        "urlopen",
+        lambda request, timeout: Response(),
+    )
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-response-validation",
+        "agent-token",
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="CONTROL_PLANE_RESPONSE_INVALID"):
+        client.request("/api/v1/agent-runtime/heartbeat/")
+
+
+def test_control_plane_client_rejects_oversized_responses(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self, size=-1):
+            assert size == 4 * 1024 * 1024 + 1
+            return b"x" * size
+
+    monkeypatch.setattr(
+        agent.urllib.request,
+        "urlopen",
+        lambda request, timeout: Response(),
+    )
+    client = agent.ControlPlaneClient(
+        "https://control.example",
+        "node-response-size",
+        "agent-token",
+    )
+
+    with pytest.raises(agent.NodeAgentError, match="CONTROL_PLANE_RESPONSE_TOO_LARGE"):
+        client.request("/api/v1/agent-runtime/heartbeat/")
+
+
+def test_capi_pivot_process_group_is_killed_on_timeout(monkeypatch):
+    class FakeProcess:
+        pid = 54321
+        returncode = -9
+
+        def __init__(self):
+            self.communicate_calls = 0
+
+        def communicate(self, timeout=None):
+            self.communicate_calls += 1
+            return "", ""
+
+    process = FakeProcess()
+    killed_process_groups = []
+    monkeypatch.setattr(capi_pivot.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        "node_agent.capi_pivot.os.killpg",
+        lambda pid, sig: killed_process_groups.append((pid, sig)),
+    )
+
+    runner = agent.run_capi_pivot.__globals__["_cancellable_process_runner"](None)
+    with pytest.raises(capi_pivot.subprocess.TimeoutExpired):
+        runner(
+            ["kubectl", "get", "nodes"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=0,
+            stdin=capi_pivot.subprocess.DEVNULL,
+            env={},
+        )
+
+    assert killed_process_groups == [
+        (54321, agent.run_capi_pivot.__globals__["signal"].SIGKILL)
+    ]
+    assert process.communicate_calls == 1

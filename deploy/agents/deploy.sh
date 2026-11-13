@@ -6,6 +6,7 @@ EPH_CONTEXT="${EPH_CONTEXT:-}"
 TARGET_CONTEXT="${TARGET_CONTEXT:-}"
 AGENT_IMAGE="${AGENT_IMAGE:-}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-10m}"
+ENABLE_CAPI_PIVOT="${ENABLE_CAPI_PIVOT:-false}"
 IMAGE_PATTERN='^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$'
 
 fail() {
@@ -28,6 +29,21 @@ require_secret_keys() {
     for key in "$@"; do
         printf '%s\n' "$keys" | grep -Fxq "$key" || fail "REQUIRED_SECRET_KEY_MISSING:$context:$secret:$key"
     done
+}
+
+validate_optional_pivot_secret() {
+    local context="$1"
+    local result
+    if result="$(kubectl --context "$context" --namespace ai-agent-system get secret capi-pivot-kubeconfigs -o name 2>&1)"; then
+        require_secret_keys "$context" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
+    elif [[ "$result" == *"NotFound"* ]]; then
+        if [ "$ENABLE_CAPI_PIVOT" = "true" ]; then
+            fail "CAPI_PIVOT_KUBECONFIG_SECRET_REQUIRED"
+        fi
+    else
+        printf "%s\\n" "$result" >&2
+        fail "CAPI_PIVOT_SECRET_LOOKUP_FAILED"
+    fi
 }
 
 apply_common_resources() {
@@ -54,6 +70,7 @@ rendered_apply() {
 [ -n "$TARGET_CONTEXT" ] || fail "TARGET_CONTEXT_REQUIRED"
 [ "$EPH_CONTEXT" != "$TARGET_CONTEXT" ] || fail "EPH_AND_TARGET_CONTEXTS_MUST_DIFFER"
 [[ "$AGENT_IMAGE" =~ $IMAGE_PATTERN ]] || fail "AGENT_IMAGE_MUST_BE_PINNED_BY_SHA256_DIGEST"
+case "$ENABLE_CAPI_PIVOT" in true|false) ;; *) fail "ENABLE_CAPI_PIVOT_MUST_BE_TRUE_OR_FALSE" ;; esac
 
 require_context "$EPH_CONTEXT"
 require_context "$TARGET_CONTEXT"
@@ -61,7 +78,7 @@ kubectl --context "$EPH_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
 kubectl --context "$TARGET_CONTEXT" apply -f "$SCRIPT_DIR/namespace.yaml"
 require_secret_keys "$EPH_CONTEXT" eph-node-agent-credentials control-url node-id token
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
-require_secret_keys "$EPH_CONTEXT" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
+validate_optional_pivot_secret "$EPH_CONTEXT"
 require_secret_keys "$TARGET_CONTEXT" target-cluster-agent-credentials control-url node-id token
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 

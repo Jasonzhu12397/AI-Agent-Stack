@@ -1,7 +1,7 @@
 name: CI
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 on:
@@ -42,7 +42,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Validate deployment script syntax
-        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh && bash -n deploy/cloud-control-plane/deploy.sh
+        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh && bash -n deploy/cloud-control-plane/deploy.sh && bash -n eph-iso/build.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-bootstrap-mount.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-kubeadm-init.sh
+      - name: Show lint auto-fix suggestions
+        run: ruff check --fix --diff eph-iso/bootstrap.py eph-iso/network-config.py tests/test_eph_iso_builder.py tests/test_eph_iso_network.py || true
       - name: Lint
         run: ruff check .
       - name: Django system checks
@@ -72,6 +74,506 @@ jobs:
         run: npm test
       - name: Build Vue Studio
         run: npm run build
+
+  eph-iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Live ISO and QEMU build dependencies
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get \
+              -o Acquire::Retries=5 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
+              update; then
+              if sudo apt-get \
+                -o Acquire::Retries=5 \
+                -o Acquire::http::Timeout=20 \
+                -o Acquire::https::Timeout=20 \
+                install --no-install-recommends -y \
+                qemu-system-x86 qemu-utils dosfstools mtools xorriso curl; then
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep 15
+            fi
+          done
+          echo "Unable to install EPH ISO build dependencies after five attempts" >&2
+          exit 1
+      - name: Build pinned EPH Live ISO
+        id: build
+        run: |
+          KUBERNETES_VERSION="v1.35.3"
+          mkdir -p "$RUNNER_TEMP/eph-iso-out"
+          docker run --rm --pull=always --privileged \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$RUNNER_TEMP/eph-iso-out:/output" \
+            -w /workspace \
+            -e KUBERNETES_VERSION="$KUBERNETES_VERSION" \
+            -e OUTPUT_DIR=/output \
+            debian:bookworm bash -ec '
+              apt-get update
+              apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates debian-archive-keyring
+              bash eph-iso/build.sh
+            '
+          ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
+          test -n "$ISO_FILE"
+          (cd "$RUNNER_TEMP/eph-iso-out" && sha256sum --check "$(basename "$ISO_FILE").sha256")
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["kubernetes_version"] == "v1.35.3"; assert d["calico_version"] == "v3.33.0"; assert d["runtime"] == "kubeadm-containerd"; assert d["architecture"] == "amd64"; assert len(d["sha256"]) == 64' "$ISO_FILE.release.json"
+          echo "iso_file=$ISO_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish the EPH Agent image to the CI registry
+        id: agent-image
+        run: |
+          docker run -d --name eph-ci-registry -p 5000:5000 registry:2
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null
+          CLUSTERCTL_VERSION=v1.13.8
+          CLUSTERCTL_SHA256=a6759ddb51ca52ff531c1afd87c5851513729e05e27dbad983f74f7422a6887a
+          KUBECTL_VERSION=v1.35.3
+          curl --fail --location --silent --show-error "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" -o "$RUNNER_TEMP/kubectl.sha256"
+          KUBECTL_SHA256="$(tr -d '[:space:]' < "$RUNNER_TEMP/kubectl.sha256")"
+          [[ "$CLUSTERCTL_SHA256" =~ ^[a-f0-9]{64}$ && "$KUBECTL_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          docker build --platform linux/amd64 -f Dockerfile.node-agent \
+            --build-arg "CLUSTERCTL_VERSION=$CLUSTERCTL_VERSION" \
+            --build-arg "CLUSTERCTL_SHA256_AMD64=$CLUSTERCTL_SHA256" \
+            --build-arg "KUBECTL_VERSION=$KUBECTL_VERSION" \
+            --build-arg "KUBECTL_SHA256_AMD64=$KUBECTL_SHA256" \
+            -t localhost:5000/ai-agent-node-agent:ci .
+          docker push localhost:5000/ai-agent-node-agent:ci
+          ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+          AGENT_DIGEST="$(curl --fail --silent --show-error --head -H "Accept: $ACCEPT" http://127.0.0.1:5000/v2/ai-agent-node-agent/manifests/ci | awk -F ': ' 'tolower($1)=="docker-content-digest" {gsub("\\r", "", $2); print $2}')"
+          [[ "$AGENT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image_digest=$AGENT_DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Upload EPH Live ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agent-eph-live-v1.35.3-amd64
+          path: |
+            ${{ steps.build.outputs.iso_file }}
+            ${{ steps.build.outputs.iso_file }}.sha256
+            ${{ steps.build.outputs.iso_file }}.release.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate EPH BIOS boot configuration
+        run: |
+          mkdir -p "$RUNNER_TEMP/isolinux"
+          xorriso -osirrox on -indev "${{ steps.build.outputs.iso_file }}" -extract /isolinux "$RUNNER_TEMP/isolinux"
+          printf '%s\n' '=== BIOS boot configuration ==='
+          find "$RUNNER_TEMP/isolinux" -maxdepth 2 -type f -print -exec cat {} \;
+          if ! grep -Eiq '^[[:space:]]*timeout[[:space:]]+50([[:space:]]|$)' "$RUNNER_TEMP/isolinux/isolinux.cfg"; then
+            echo "EPH_BIOS_BOOT_TIMEOUT_MISSING" >&2
+            exit 1
+          fi
+          if ! grep -R -Eiq 'console=ttyS0,115200n8' "$RUNNER_TEMP/isolinux"; then
+            echo "EPH_BIOS_SERIAL_CONSOLE_ARGUMENT_MISSING" >&2
+            exit 1
+          fi
+
+      - name: Boot ISO and verify single-node Kubernetes API
+        run: |
+          mkdir -p "$RUNNER_TEMP/eph-seed"
+          printf '%s\n' 'instance-id: ci-eph-node' 'local-hostname: eph-node' > "$RUNNER_TEMP/eph-seed/meta-data"
+          CERT_DIR="$RUNNER_TEMP/eph-certs"
+          mkdir -p "$CERT_DIR" "$RUNNER_TEMP/eph-bootstrap/tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$CERT_DIR/control-ca.key" -out "$CERT_DIR/control-ca.crt" -subj "/CN=EPH CI Control CA" -days 2 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash"
+          openssl req -newkey rsa:2048 -nodes -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.csr" -subj "/CN=10.0.2.2"
+          printf '%s\n' 'subjectAltName=IP:10.0.2.2' 'extendedKeyUsage=serverAuth' 'keyUsage=critical,digitalSignature,keyEncipherment' 'basicConstraints=critical,CA:FALSE' 'subjectKeyIdentifier=hash' 'authorityKeyIdentifier=keyid,issuer' > "$CERT_DIR/server.ext"
+          openssl x509 -req -in "$CERT_DIR/server.csr" -CA "$CERT_DIR/control-ca.crt" -CAkey "$CERT_DIR/control-ca.key" -CAcreateserial -out "$CERT_DIR/server.crt" -days 2 -sha256 -extfile "$CERT_DIR/server.ext"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$CERT_DIR/agent-ca.key" -out "$CERT_DIR/agent-ca.crt" -subj "/CN=EPH CI Agent Issuer" -days 2 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -addext "subjectKeyIdentifier=hash"
+          ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
+          AGENT_TOKEN="$(openssl rand -hex 32)"
+          NODE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+          python3 - "$RUNNER_TEMP/eph-bootstrap/bootstrap.json" "$NODE_ID" "$ENROLLMENT_TOKEN" "10.0.2.2:5000/ai-agent-node-agent@${{ steps.agent-image.outputs.image_digest }}" <<'PY'
+          import json, pathlib, sys
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"control_url":"https://10.0.2.2:18443","node_id":sys.argv[2],"enrollment_token":sys.argv[3],"agent_image":sys.argv[4]}), encoding="utf-8")
+          PY
+          cp "$CERT_DIR/control-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/ca.crt"
+          cp "$CERT_DIR/agent-ca.crt" "$RUNNER_TEMP/eph-bootstrap/tls/agent-ca.crt"
+          nohup python3 eph-iso/ci/mock-control-plane.py --server-cert "$CERT_DIR/server.crt" --server-key "$CERT_DIR/server.key" --agent-ca "$CERT_DIR/agent-ca.crt" --agent-ca-key "$CERT_DIR/agent-ca.key" --enrollment-token "$ENROLLMENT_TOKEN" --agent-token "$AGENT_TOKEN" > "$RUNNER_TEMP/eph-mock-control-plane.log" 2>&1 &
+          MOCK_CONTROL_PID=$!
+          for attempt in $(seq 1 20); do
+            if curl --insecure --silent --output /dev/null https://127.0.0.1:18443/; then break; fi
+            sleep 1
+          done
+          curl --insecure --silent --output /dev/null https://127.0.0.1:18443/
+          kill -0 "$MOCK_CONTROL_PID"
+          cat > "$RUNNER_TEMP/eph-seed/user-data" <<'EOF'
+          #cloud-config
+          ssh_pwauth: false
+          write_files:
+            - path: /etc/ai-agent-studio/eph-bootstrap/bootstrap.json
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __BOOTSTRAP_CONFIG_B64__
+            - path: /etc/ai-agent-studio/eph-bootstrap/tls/ca.crt
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __CONTROL_CA_B64__
+            - path: /etc/ai-agent-studio/eph-bootstrap/tls/agent-ca.crt
+              owner: root:root
+              permissions: '0600'
+              encoding: b64
+              content: __AGENT_CA_B64__
+            - path: /etc/containerd/certs.d/10.0.2.2:5000/hosts.toml
+              owner: root:root
+              permissions: '0644'
+              content: |
+                server = "http://10.0.2.2:5000"
+                [host."http://10.0.2.2:5000"]
+                capabilities = ["pull", "resolve"]
+            - path: /usr/local/sbin/eph-ci-smoke.sh
+              owner: root:root
+              permissions: '0755'
+              content: |
+                #!/bin/bash
+                set -Eeuo pipefail
+                exec > >(tee -a /var/log/eph-ci-smoke.log /dev/ttyS0) 2>&1
+                export KUBECONFIG=/etc/kubernetes/admin.conf
+                on_error() {
+                  status=$?
+                  trap - ERR
+                  printf 'EPH_GUEST_SMOKE_FAILED exit=%s\n' "$status" >&2
+                  for unit in containerd kubelet eph-kubeadm-init eph-bootstrap; do
+                    systemctl --no-pager --full status "$unit" >&2 || true
+                    journalctl -b -u "$unit" --no-pager -n 120 >&2 || true
+                  done
+                  kubectl get nodes -o wide >&2 || true
+                  kubectl get pods --all-namespaces -o wide >&2 || true
+                  kubectl get events --all-namespaces --sort-by=.lastTimestamp >&2 || true
+                  kubectl --namespace ai-agent-system logs deployment/eph-node-agent --all-containers=true --tail=200 >&2 || true
+                  findmnt >&2 || true
+                  curl --silent --max-time 5 "http://10.0.2.2:18080/cloud-init-failed?status=$status" || true
+                  exit "$status"
+                }
+                trap on_error ERR
+                grep -Eq '(^|[[:space:]])toram([[:space:]]|$)' /proc/cmdline
+                test "$(swapon --show --noheadings | wc -l)" -eq 0
+                for mountpoint in /var/lib/containerd /var/lib/etcd /var/lib/kubelet; do
+                  test "$(findmnt -n -o FSTYPE --target "$mountpoint")" = tmpfs
+                done
+                for attempt in $(seq 1 180); do
+                  if kubectl get --raw=/readyz 2>/dev/null | grep -qx ok; then break; fi
+                  sleep 5
+                done
+                kubectl get --raw=/readyz | grep -qx ok
+                NODE_COUNT="$(kubectl get nodes --no-headers | wc -l)"
+                test "$NODE_COUNT" -eq 1
+                NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+                test -n "$NODE_NAME"
+                kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
+                kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
+                kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
+                kubectl create namespace eph-ci-smoke --dry-run=client -o yaml | kubectl apply -f -
+                kubectl --namespace eph-ci-smoke apply -f - <<'MANIFEST'
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: workload-smoke
+                spec:
+                  replicas: 1
+                  selector:
+                    matchLabels:
+                      app: workload-smoke
+                  template:
+                    metadata:
+                      labels:
+                        app: workload-smoke
+                    spec:
+                      containers:
+                        - name: nginx
+                          image: nginx:1.27.5-alpine
+                MANIFEST
+                kubectl --namespace eph-ci-smoke rollout status deployment/workload-smoke --timeout=180s
+                kubectl --namespace eph-ci-smoke wait --for=condition=Ready pod --selector=app=workload-smoke --timeout=180s
+                SERVER_POD_IP="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[0].status.podIP}')"
+                test -n "$SERVER_POD_IP"
+                kubectl --namespace eph-ci-smoke create configmap workload-smoke-target --from-literal=server-ip="$SERVER_POD_IP" --dry-run=client -o yaml | kubectl apply -f -
+                kubectl --namespace eph-ci-smoke apply -f - <<'NETWORK'
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: workload-smoke
+                spec:
+                  selector:
+                    app: workload-smoke
+                  ports:
+                    - port: 80
+                      targetPort: 80
+                ---
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-smoke
+                spec:
+                  backoffLimit: 3
+                  template:
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          env:
+                            - name: SERVER_POD_IP
+                              valueFrom:
+                                configMapKeyRef:
+                                  name: workload-smoke-target
+                                  key: server-ip
+                          command: ["sh", "-c", "wget -qO- http://$SERVER_POD_IP | grep -q 'Welcome to nginx' && wget -qO- http://workload-smoke.eph-ci-smoke.svc.cluster.local | grep -q 'Welcome to nginx'"]
+                NETWORK
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-smoke --timeout=300s
+                kubectl --namespace eph-ci-smoke apply -f - <<'POLICY'
+                apiVersion: networking.k8s.io/v1
+                kind: NetworkPolicy
+                metadata:
+                  name: workload-smoke-ingress
+                spec:
+                  podSelector:
+                    matchLabels:
+                      app: workload-smoke
+                  policyTypes:
+                    - Ingress
+                  ingress:
+                    - from:
+                        - podSelector:
+                            matchLabels:
+                              network-smoke-client: allowed
+                      ports:
+                        - protocol: TCP
+                          port: 80
+                POLICY
+                kubectl --namespace eph-ci-smoke apply -f - <<'DENIED'
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-denied-smoke
+                spec:
+                  backoffLimit: 0
+                  template:
+                    metadata:
+                      labels:
+                        network-smoke-client: denied
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          env:
+                            - name: SERVER_POD_IP
+                              valueFrom:
+                                configMapKeyRef:
+                                  name: workload-smoke-target
+                                  key: server-ip
+                          command:
+                            - sh
+                            - -c
+                            - |
+                              if wget -T 5 -qO- "http://$SERVER_POD_IP" >/dev/null 2>&1; then
+                                echo NETWORK_POLICY_DENY_FAILED
+                                exit 1
+                              fi
+                              echo NETWORK_POLICY_DENY_ENFORCED
+                DENIED
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-denied-smoke --timeout=180s
+                kubectl --namespace eph-ci-smoke apply -f - <<'ALLOWED'
+                apiVersion: batch/v1
+                kind: Job
+                metadata:
+                  name: pod-network-allowed-smoke
+                spec:
+                  backoffLimit: 2
+                  template:
+                    metadata:
+                      labels:
+                        network-smoke-client: allowed
+                    spec:
+                      restartPolicy: Never
+                      containers:
+                        - name: client
+                          image: busybox:1.36.1
+                          env:
+                            - name: SERVER_POD_IP
+                              valueFrom:
+                                configMapKeyRef:
+                                  name: workload-smoke-target
+                                  key: server-ip
+                          command:
+                            - sh
+                            - -c
+                            - |
+                              wget -T 10 -qO- "http://$SERVER_POD_IP" | grep -q 'Welcome to nginx'
+                              wget -T 10 -qO- "http://workload-smoke.eph-ci-smoke.svc.cluster.local" | grep -q 'Welcome to nginx'
+                ALLOWED
+                kubectl --namespace eph-ci-smoke wait --for=condition=complete job/pod-network-allowed-smoke --timeout=180s
+                printf '%s\\n' 'EPH_DIRECT_POD_NETWORK_READY=true'
+                printf '%s\\n' 'EPH_SERVICE_DNS_NETWORK_READY=true'
+                printf '%s\\n' 'EPH_CALICO_NETWORK_POLICY_DENY_READY=true'
+                printf '%s\\n' 'EPH_CALICO_NETWORK_POLICY_ALLOW_READY=true'
+                printf '%s\\n' 'EPH_SERVICE_DNS_NETWORK_READY=true'
+                for attempt in $(seq 1 180); do
+                  if systemctl is-active --quiet eph-bootstrap.service; then break; fi
+                  if systemctl is-failed --quiet eph-bootstrap.service; then
+                    systemctl --no-pager --full status eph-bootstrap.service >&2 || true
+                    journalctl -b -u eph-bootstrap.service --no-pager -n 200 >&2 || true
+                    curl --silent --max-time 5 "http://10.0.2.2:18080/cloud-init-failed?status=1" || true
+                    exit 1
+                  fi
+                  sleep 5
+                done
+                systemctl is-active --quiet eph-bootstrap.service
+                kubectl --namespace ai-agent-system rollout status deployment/eph-node-agent --timeout=600s
+                kubectl --namespace ai-agent-system wait --for=condition=Ready pod --selector=app.kubernetes.io/name=eph-node-agent --timeout=300s
+                AGENT_POD="$(kubectl --namespace ai-agent-system get pods -l app.kubernetes.io/name=eph-node-agent -o jsonpath='{.items[0].metadata.name}')"
+                test -n "$AGENT_POD"
+                AGENT_DETAILS="$(kubectl --namespace ai-agent-system get pod "$AGENT_POD" -o jsonpath='{.status.phase}{" "}{.spec.nodeName}{" "}{.status.podIP}{" "}{.status.containerStatuses[0].ready}')"
+                read -r AGENT_PHASE AGENT_NODE AGENT_POD_IP AGENT_READY <<< "$AGENT_DETAILS"
+                test "$AGENT_PHASE" = Running
+                test "$AGENT_NODE" = "$NODE_NAME"
+                test -n "$AGENT_POD_IP"
+                test "$AGENT_READY" = true
+                printf 'EPH_AGENT_POD=%s\n' "$AGENT_POD"
+                printf 'EPH_AGENT_POD_IP=%s\n' "$AGENT_POD_IP"
+                printf 'EPH_AGENT_POD_READY=true\n'
+                READY_PODS="$(kubectl --namespace eph-ci-smoke get pods -l app=workload-smoke -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')"
+                test -n "$READY_PODS"
+                POD_DETAILS="$(kubectl --namespace eph-ci-smoke get pod "$READY_PODS" -o jsonpath='{.status.podIP}{" "}{.spec.nodeName}{" "}{.status.containerStatuses[0].ready}')"
+                read -r POD_IP POD_NODE POD_READY <<< "$POD_DETAILS"
+                test -n "$POD_IP"
+                test "$POD_NODE" = "$NODE_NAME"
+                test "$POD_READY" = true
+                printf 'EPH_NODE_COUNT=%s\n' "$NODE_COUNT"
+                printf 'EPH_NODE_NAME=%s\n' "$NODE_NAME"
+                printf 'EPH_CALICO_NODE_READY=true\n'
+                printf 'EPH_CALICO_CONTROLLERS_READY=true\n'
+                printf 'EPH_POD_TO_POD_NETWORK_READY=true\n'
+                printf 'EPH_POD_IP=%s\n' "$POD_IP"
+                printf 'EPH_POD_NODE=%s\n' "$POD_NODE"
+                printf 'EPH_POD_READY=%s\n' "$POD_READY"
+                printf 'EPH_RAM_BACKED_RUNTIME_STATE=true\n'
+                curl --fail --silent --show-error --max-time 10 http://10.0.2.2:18080/cloud-init-ready
+          runcmd:
+            - [bash, -c, "nohup /usr/local/sbin/eph-ci-smoke.sh >/dev/null 2>&1 &"]
+          EOF
+          sed -i "s#__BOOTSTRAP_CONFIG_B64__#$(base64 -w0 "$RUNNER_TEMP/eph-bootstrap/bootstrap.json")#" "$RUNNER_TEMP/eph-seed/user-data"
+          sed -i "s#__CONTROL_CA_B64__#$(base64 -w0 "$CERT_DIR/control-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
+          sed -i "s#__AGENT_CA_B64__#$(base64 -w0 "$CERT_DIR/agent-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
+          cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
+          touch "$RUNNER_TEMP/cloud-init-ready"
+          python3 -m http.server 18080 --bind 0.0.0.0 --directory "$RUNNER_TEMP" > "$RUNNER_TEMP/cloud-init-http.log" 2>&1 &
+          HTTP_PID=$!
+          dd if=/dev/zero of="$RUNNER_TEMP/eph-seed.img" bs=1M count=64
+          mkfs.vfat -n CIDATA "$RUNNER_TEMP/eph-seed.img"
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/meta-data" ::meta-data
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/user-data" ::user-data
+          mcopy -i "$RUNNER_TEMP/eph-seed.img" "$RUNNER_TEMP/eph-seed/network-config" ::network-config
+          QEMU_ACCEL_ARGS=(-accel tcg,thread=multi -cpu max)
+          if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            QEMU_ACCEL_ARGS=(-accel kvm -cpu host)
+            printf '%s\n' 'EPH_QEMU_ACCELERATOR=kvm'
+          else
+            printf '%s\n' 'EPH_QEMU_ACCELERATOR=tcg'
+          fi
+          qemu-system-x86_64 \
+            -machine usb=off \
+            "${QEMU_ACCEL_ARGS[@]}" \
+            -m 6144 -smp 4 \
+            -cdrom "${{ steps.build.outputs.iso_file }}" \
+            -drive "file=$RUNNER_TEMP/eph-seed.img,format=raw,if=virtio" \
+            -boot order=d,menu=off \
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
+            -device virtio-net-pci,netdev=net0 \
+            -display none -monitor none -serial "file:$RUNNER_TEMP/eph-qemu.log" \
+            -d int,guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
+            -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
+          QEMU_PID=$!
+          trap 'kill "$QEMU_PID" "$HTTP_PID" "$MOCK_CONTROL_PID" >/dev/null 2>&1 || true' EXIT
+          ready=false
+          cloud_init_ready=false
+          cloud_init_failed=false
+          for attempt in $(seq 1 480); do
+            if (( attempt % 12 == 0 )); then
+              printf 'EPH_QEMU_WAIT elapsed_seconds=%s api_ready=%s cloud_init_ready=%s\n' \
+                "$((attempt * 5))" "$ready" "$cloud_init_ready"
+              ps -o pid,etime,%cpu,%mem,stat,cmd -p "$QEMU_PID" || true
+              if [ -f "$RUNNER_TEMP/eph-qemu.log" ]; then
+                tail -n 25 "$RUNNER_TEMP/eph-qemu.log"
+              fi
+            fi
+            if curl --insecure --fail --silent --max-time 3 \
+              https://127.0.0.1:16443/readyz >/dev/null; then
+              ready=true
+            fi
+            if grep -q 'GET /cloud-init-ready ' "$RUNNER_TEMP/cloud-init-http.log"; then
+              cloud_init_ready=true
+            fi
+            if grep -q 'GET /cloud-init-failed' "$RUNNER_TEMP/cloud-init-http.log"; then
+              cloud_init_failed=true
+              break
+            fi
+            if [ "$ready" = true ] && [ "$cloud_init_ready" = true ]; then
+              break
+            fi
+            if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ready" != true ] || [ "$cloud_init_ready" != true ] || [ "$cloud_init_failed" = true ]; then
+            printf 'EPH_AGENT_POD_READY=false\n'
+            printf 'QEMU_PID_ALIVE=%s\n' "$(kill -0 "$QEMU_PID" >/dev/null 2>&1 && echo true || echo false)"
+            printf 'KUBEADM_API_READY=%s\n' "$ready"
+            printf 'CLOUD_INIT_WORKLOAD_SMOKE_READY=%s\n' "$cloud_init_ready"
+            printf 'CLOUD_INIT_WORKLOAD_SMOKE_FAILED=%s\n' "$cloud_init_failed"
+            printf '%s\n' '=== QEMU stdout ==='
+            cat "$RUNNER_TEMP/qemu.stdout"
+            printf '%s\n' '=== Guest serial console ==='
+            if [ -f "$RUNNER_TEMP/eph-qemu.log" ]; then cat "$RUNNER_TEMP/eph-qemu.log"; else echo "QEMU_SERIAL_LOG_NOT_CREATED"; fi
+            printf '%s\n' '=== QEMU debug log tail ==='
+            tail -n 500 "$RUNNER_TEMP/qemu-debug.log" || true
+            printf '%s\n' '=== ISO boot catalog ==='
+            xorriso -indev "${{ steps.build.outputs.iso_file }}" -report_el_torito plain 2>&1 || true
+            printf '%s\n' '=== EPH mock control-plane log ==='
+            cat "$RUNNER_TEMP/eph-mock-control-plane.log" || true
+            printf '%s\n' '=== Cloud-init callback HTTP log ==='
+            cat "$RUNNER_TEMP/cloud-init-http.log"
+            printf '%s\n' '=== QEMU and HTTP process state ==='
+            ps -fp "$QEMU_PID","$HTTP_PID" || true
+            exit 1
+          fi
+          for marker in EPH_CI_AGENT_CERTIFICATE_ISSUED EPH_CI_AGENT_MTLS_HEARTBEAT EPH_CI_AGENT_INVENTORY_ACCEPTED EPH_CI_AGENT_COMMAND_POLL; do
+            grep -q "$marker" "$RUNNER_TEMP/eph-mock-control-plane.log"
+          done
+          printf '%s\n' 'EPH_AGENT_MTLS_HEARTBEAT_READY=true'
+          printf '%s\n' 'EPH_AGENT_INVENTORY_READY=true'
+          printf '%s\n' 'EPH_AGENT_COMMAND_POLL_READY=true'
+          printf '%s\n' 'KUBEADM_API_READY=true'
+          printf '%s\n' 'KUBERNETES_WORKLOAD_SMOKE_READY=true'
+          printf '%s\n' 'EPH_POD_TO_POD_NETWORK_READY=true'
+          printf '%s\n' 'EPH_AGENT_POD_READY=true'
+
+      - name: Upload EPH QEMU diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eph-qemu-diagnostics-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/eph-qemu.log
+            ${{ runner.temp }}/qemu.stdout
+            ${{ runner.temp }}/qemu-debug.log
+            ${{ runner.temp }}/cloud-init-http.log
+            ${{ runner.temp }}/eph-mock-control-plane.log
+            ${{ runner.temp }}/isolinux.cfg
+          if-no-files-found: ignore
+          retention-days: 7
 
   compose:
     runs-on: ubuntu-latest

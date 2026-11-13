@@ -1,0 +1,12 @@
+[Unit]
+Description=RAM-backed kubelet state
+Before=kubelet.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/kubelet
+Type=tmpfs
+Options=mode=0750,size=15%,nosuid,nodev
+
+[Install]
+WantedBy=multi-user.target

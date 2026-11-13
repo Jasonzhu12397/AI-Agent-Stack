@@ -432,6 +432,9 @@ class AgentNode(models.Model):
     client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
     client_certificate_bound_at = models.DateTimeField(null=True, blank=True)
     client_certificate_revoked_at = models.DateTimeField(null=True, blank=True)
+    pending_client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
+    pending_client_certificate_bound_at = models.DateTimeField(null=True, blank=True)
+    last_activated_client_certificate_fingerprint = models.CharField(max_length=64, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.OFFLINE)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_seen_ip = models.GenericIPAddressField(null=True, blank=True)
@@ -595,6 +598,7 @@ class ClusterDeployment(models.Model):
         WORKERS_READY = "workers_ready", "Workers ready"
         TARGET_AGENT_PENDING = "target_agent_pending", "Target agent pending"
         POSTFLIGHT = "postflight", "Postflight"
+        RECONCILIATION_REQUIRED = "reconciliation_required", "Reconciliation required"
         SUCCEEDED = "succeeded", "Succeeded"
         FAILED = "failed", "Failed"
         CANCELLED = "cancelled", "Cancelled"
@@ -1012,6 +1016,35 @@ class AuditEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Audit events cannot be deleted through the model API.")
+
+
+class EPHSeedArtifact(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    agent_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.CASCADE,
+        related_name="seed_artifacts",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_eph_seed_artifacts",
+    )
+    encrypted_payload = models.TextField()
+    download_token_hash = models.CharField(max_length=64)
+    expires_at = models.DateTimeField()
+    downloaded_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["agent_node", "expires_at", "downloaded_at"],
+                name="eph_seed_lifecycle_idx",
+            ),
+        ]
 
 
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401

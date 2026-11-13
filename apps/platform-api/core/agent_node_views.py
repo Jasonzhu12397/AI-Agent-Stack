@@ -23,11 +23,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.audit import record_audit_event
+from core.eph_pki import (
+    EPHCertificateError,
+    EPHCertificateSignerUnavailable,
+    sign_eph_csr,
+)
 from core.cluster_deployment_services import handle_deployment_command_result
 from core.models import (
     AgentCommand,
     AgentMachine,
     AgentNode,
+    EPHSeedArtifact,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
     Project,
@@ -318,7 +324,7 @@ def _validate_payload(payload):
     return None
 
 
-def _authenticate_node(request, node_id):
+def _authenticate_node(request, node_id, allow_pending_certificate=False):
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token or len(token) > 512:
@@ -335,6 +341,7 @@ def _authenticate_node(request, node_id):
     ):
         return None
     expected_fingerprint = node.client_certificate_fingerprint
+    pending_fingerprint = node.pending_client_certificate_fingerprint
     if getattr(settings, "AGENT_MTLS_REQUIRED", False) and not expected_fingerprint:
         return None
     if expected_fingerprint:
@@ -364,7 +371,14 @@ def _authenticate_node(request, node_id):
         ).strip().lower()
         if (
             not re.fullmatch(r"[0-9a-f]{64}", verified_fingerprint)
-            or not hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+            or not (
+                hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+                or (
+                    allow_pending_certificate
+                    and pending_fingerprint
+                    and hmac.compare_digest(verified_fingerprint, pending_fingerprint)
+                )
+            )
         ):
             return None
     supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -448,7 +462,10 @@ class AgentNodeListCreateView(APIView):
             "Store this token securely; it is shown only once. "
             "Use TLS for agent communication."
         )
-        return Response(data, status=status.HTTP_201_CREATED)
+        response = Response(data, status=status.HTTP_201_CREATED)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class FleetMachineInventoryView(APIView):
@@ -1354,6 +1371,11 @@ class AgentNodeRevokeView(APIView):
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
+            EPHSeedArtifact.objects.filter(
+                agent_node=node,
+                downloaded_at__isnull=True,
+                revoked_at__isnull=True,
+            ).update(revoked_at=timezone.now(), encrypted_payload="")
             _cancel_agent_commands(
                 AgentCommand.objects.filter(
                     node=node,
@@ -1424,6 +1446,11 @@ class AgentNodeCredentialRotateView(APIView):
             node.status = AgentNode.Status.OFFLINE
             node.last_seen_at = None
             node.last_seen_ip = None
+            EPHSeedArtifact.objects.filter(
+                agent_node=node,
+                downloaded_at__isnull=True,
+                revoked_at__isnull=True,
+            ).update(revoked_at=timezone.now(), encrypted_payload="")
             node.save(
                 update_fields=[
                     "credential_hash",
@@ -1449,7 +1476,10 @@ class AgentNodeCredentialRotateView(APIView):
             "The previous credential is invalid. Store this new token securely; "
             "it is shown only once. The agent remains offline until restarted with it."
         )
-        return Response(data)
+        response = Response(data)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 class AgentNodeClientCertificateView(APIView):
@@ -1787,6 +1817,304 @@ class AgentCommandApproveView(APIView):
             return Response(_command_data(command))
 
 
+
+
+class AgentRuntimeEPHCertificateExchangeView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or set(request.data) != {"csr_pem"}:
+            return Response(
+                {"detail": "Only csr_pem is accepted for EPH certificate exchange."},
+                status=400,
+            )
+        csr_pem = request.data.get("csr_pem")
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token or len(token) > 512:
+            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+        if not isinstance(csr_pem, str) or len(csr_pem) > 16384:
+            return Response({"detail": "csr_pem must be a PEM CSR under 16 KiB."}, status=400)
+
+        try:
+            parsed_node_id = uuid.UUID(str(node_id))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "Invalid EPH node identity."}, status=400)
+
+        with transaction.atomic():
+            node = AgentNode.objects.select_for_update().filter(pk=parsed_node_id).first()
+            if (
+                node is None
+                or node.node_type != AgentNode.NodeType.EPH_NODE
+                or node.status == AgentNode.Status.REVOKED
+                or node.revoked_at is not None
+            ):
+                return Response({"detail": "Invalid or revoked EPH node identity."}, status=401)
+            supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(supplied_hash, node.credential_hash):
+                return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            if node.client_certificate_fingerprint and node.client_certificate_revoked_at is None:
+                return Response(
+                    {"detail": "An active client certificate is already bound to this node."},
+                    status=409,
+                )
+
+            try:
+                issued = sign_eph_csr(
+                    csr_pem=csr_pem,
+                    node_id=str(node.id),
+                    tenant_id=str(node.tenant_id),
+                    project_id=str(node.project_id),
+                )
+            except EPHCertificateSignerUnavailable:
+                return Response(
+                    {
+                        "detail": (
+                            "EPH certificate signer is unavailable; enrollment remains pending."
+                        )
+                    },
+                    status=503,
+                )
+            except EPHCertificateError:
+                return Response(
+                    {"detail": "EPH certificate signing response or CSR is invalid."},
+                    status=400,
+                )
+
+            agent_token = secrets.token_urlsafe(48)
+            node.credential_hash = hashlib.sha256(
+                agent_token.encode("utf-8")
+            ).hexdigest()
+            node.client_certificate_fingerprint = issued["fingerprint_sha256"]
+            node.client_certificate_bound_at = timezone.now()
+            node.client_certificate_revoked_at = None
+            node.save(
+                update_fields=[
+                    "credential_hash",
+                    "client_certificate_fingerprint",
+                    "client_certificate_bound_at",
+                    "client_certificate_revoked_at",
+                    "updated_at",
+                ]
+            )
+            record_audit_event(
+                request,
+                node.tenant,
+                "agent.node.eph_certificate_issued",
+                "agent_node",
+                node.id,
+                project=node.project,
+                metadata={
+                    "fingerprint_sha256": issued["fingerprint_sha256"],
+                    "common_name": issued["common_name"],
+                    "issuer": "vault_pki",
+                },
+            )
+
+        response = Response(
+            {
+                "node_id": str(node.id),
+                "client_certificate": issued["client_certificate"],
+                "ca_chain": issued["ca_chain"],
+                "fingerprint_sha256": issued["fingerprint_sha256"],
+                "token_consumed": True,
+                "agent_token": agent_token,
+                "private_key_returned": False,
+            },
+            status=200,
+        )
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
+
+
+class AgentRuntimeEPHCertificateRenewalView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or set(request.data) != {"csr_pem"}:
+            return Response(
+                {"detail": "Only csr_pem is accepted for certificate renewal."},
+                status=400,
+            )
+        csr_pem = request.data.get("csr_pem")
+        if not isinstance(csr_pem, str) or len(csr_pem) > 16384:
+            return Response({"detail": "csr_pem must be a PEM CSR under 16 KiB."}, status=400)
+        node = _authenticate_node(request, node_id)
+        if node is None or node.node_type != AgentNode.NodeType.EPH_NODE:
+            return Response({"detail": "An active EPH node identity is required."}, status=401)
+        if not node.client_certificate_fingerprint:
+            return Response(
+                {"detail": "An active client certificate is required for renewal."},
+                status=409,
+            )
+        now = timezone.now()
+        if (
+            node.pending_client_certificate_fingerprint
+            and node.pending_client_certificate_bound_at
+            and node.pending_client_certificate_bound_at + datetime.timedelta(minutes=10) > now
+        ):
+            return Response(
+                {"detail": "A certificate renewal is already pending activation."},
+                status=409,
+            )
+        try:
+            issued = sign_eph_csr(
+                csr_pem=csr_pem,
+                node_id=str(node.id),
+                tenant_id=str(node.tenant_id),
+                project_id=str(node.project_id),
+            )
+        except EPHCertificateSignerUnavailable:
+            return Response({"detail": "EPH certificate signer is unavailable."}, status=503)
+        except EPHCertificateError:
+            return Response(
+                {"detail": "EPH certificate signing response or CSR is invalid."},
+                status=400,
+            )
+
+        with transaction.atomic():
+            locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
+            if (
+                locked is None
+                or locked.status == AgentNode.Status.REVOKED
+                or locked.revoked_at is not None
+                or locked.client_certificate_revoked_at is not None
+                or not hmac.compare_digest(
+                    locked.client_certificate_fingerprint,
+                    node.client_certificate_fingerprint,
+                )
+                or not hmac.compare_digest(locked.credential_hash, node.credential_hash)
+            ):
+                return Response(
+                    {"detail": "EPH node identity changed during certificate renewal."},
+                    status=409,
+                )
+            if (
+                locked.pending_client_certificate_fingerprint
+                and locked.pending_client_certificate_bound_at
+                and locked.pending_client_certificate_bound_at
+                + datetime.timedelta(minutes=10)
+                > timezone.now()
+            ):
+                return Response(
+                    {"detail": "A certificate renewal is already pending activation."},
+                    status=409,
+                )
+            locked.pending_client_certificate_fingerprint = issued["fingerprint_sha256"]
+            locked.pending_client_certificate_bound_at = timezone.now()
+            locked.save(update_fields=[
+                "pending_client_certificate_fingerprint",
+                "pending_client_certificate_bound_at",
+                "updated_at",
+            ])
+            record_audit_event(
+                request,
+                locked.tenant,
+                "agent.node.eph_certificate_renewal_staged",
+                "agent_node",
+                locked.id,
+                project=locked.project,
+                metadata={
+                    "fingerprint_sha256": issued["fingerprint_sha256"],
+                    "issuer": "vault_pki",
+                },
+            )
+        response = Response({
+            "node_id": str(node.id),
+            "client_certificate": issued["client_certificate"],
+            "ca_chain": issued["ca_chain"],
+            "fingerprint_sha256": issued["fingerprint_sha256"],
+            "activation_required": True,
+            "private_key_returned": False,
+        }, status=200)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
+
+
+class AgentRuntimeEPHCertificateActivationView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, node_id):
+        if not isinstance(request.data, dict) or request.data:
+            return Response({"detail": "An empty JSON object is required."}, status=400)
+        node = _authenticate_node(request, node_id, allow_pending_certificate=True)
+        if node is None or node.node_type != AgentNode.NodeType.EPH_NODE:
+            return Response({"detail": "A valid EPH node identity is required."}, status=401)
+        verified_fingerprint = request.headers.get(
+            "X-Verified-Client-Cert-SHA256", ""
+        ).strip().lower()
+        with transaction.atomic():
+            locked = AgentNode.objects.select_for_update().filter(pk=node.pk).first()
+            if (
+                locked is None
+                or locked.status == AgentNode.Status.REVOKED
+                or locked.revoked_at is not None
+                or locked.client_certificate_revoked_at is not None
+                or not hmac.compare_digest(locked.credential_hash, node.credential_hash)
+            ):
+                return Response({"detail": "EPH node identity is revoked."}, status=401)
+            if (
+                verified_fingerprint
+                and locked.client_certificate_fingerprint
+                and hmac.compare_digest(verified_fingerprint, locked.client_certificate_fingerprint)
+                and locked.last_activated_client_certificate_fingerprint
+                and hmac.compare_digest(
+                    verified_fingerprint,
+                    locked.last_activated_client_certificate_fingerprint,
+                )
+                and not locked.pending_client_certificate_fingerprint
+            ):
+                return Response(
+                    {"node_id": str(locked.id), "activated": True, "idempotent": True},
+                    status=200,
+                )
+            pending_fingerprint = locked.pending_client_certificate_fingerprint
+            pending_at = locked.pending_client_certificate_bound_at
+            if (
+                not pending_fingerprint
+                or pending_at is None
+                or pending_at + datetime.timedelta(minutes=10) <= timezone.now()
+                or not hmac.compare_digest(verified_fingerprint, pending_fingerprint)
+            ):
+                return Response(
+                    {"detail": "Pending certificate is missing, expired, or not presented."},
+                    status=409,
+                )
+            locked.client_certificate_fingerprint = pending_fingerprint
+            locked.last_activated_client_certificate_fingerprint = pending_fingerprint
+            locked.client_certificate_bound_at = pending_at
+            locked.client_certificate_revoked_at = None
+            locked.pending_client_certificate_fingerprint = ""
+            locked.pending_client_certificate_bound_at = None
+            locked.save(update_fields=[
+                "client_certificate_fingerprint",
+                "last_activated_client_certificate_fingerprint",
+                "client_certificate_bound_at",
+                "client_certificate_revoked_at",
+                "pending_client_certificate_fingerprint",
+                "pending_client_certificate_bound_at",
+                "updated_at",
+            ])
+            record_audit_event(
+                request,
+                locked.tenant,
+                "agent.node.eph_certificate_activated",
+                "agent_node",
+                locked.id,
+                project=locked.project,
+                metadata={"fingerprint_sha256": pending_fingerprint},
+            )
+        return Response(
+            {"node_id": str(locked.id), "activated": True, "idempotent": False},
+            status=200,
+        )
+
+
 class AgentRuntimeHeartbeatView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -1865,6 +2193,33 @@ class AgentRuntimeHeartbeatView(APIView):
                     "checkpoint_endpoint": (
                         f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
                     ),
+                    "reconciliation_report_endpoint": (
+                        f"/api/v1/agent-runtime/deployments/{deployment.id}/reconciliation-report/"
+                    ),
+                    "capi_namespace": (
+                        deployment.plan_result.get(
+                            "capi_pivot_source_preflight", {}
+                        ).get("source_cluster_identity", {}).get("namespace")
+                        if isinstance(deployment.plan_result, dict)
+                        and isinstance(
+                            deployment.plan_result.get("capi_pivot_source_preflight", {}),
+                            dict,
+                        )
+                        and isinstance(
+                            deployment.plan_result.get(
+                                "capi_pivot_source_preflight", {}
+                            ).get("source_cluster_identity", {}),
+                            dict,
+                        )
+                        and deployment.plan_result.get(
+                            "capi_pivot_source_preflight", {}
+                        ).get("source_cluster_identity", {}).get("namespace")
+                        else (
+                            deployment.spec.get("capi_namespace", "default")
+                            if isinstance(deployment.spec, dict)
+                            else "default"
+                        )
+                    ),
                 }
                 for deployment in ClusterDeployment.objects.filter(
                     target_node=node,
@@ -1874,6 +2229,7 @@ class AgentRuntimeHeartbeatView(APIView):
                         ClusterDeployment.Status.PROVISIONING,
                         ClusterDeployment.Status.WAITING_APPROVAL,
                         ClusterDeployment.Status.POSTFLIGHT,
+                        ClusterDeployment.Status.RECONCILIATION_REQUIRED,
                     ],
                 ).order_by("created_at")
             ]
@@ -2284,51 +2640,66 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
         ):
             return Response({"detail": "Invalid or stale target agent credential."}, status=401)
-        deployment = ClusterDeployment.objects.filter(
-            pk=deployment_id,
-            tenant=node.tenant,
-            project=node.project,
-            target_node=node,
-        ).first()
-        if deployment is None:
-            return Response(
-                {"detail": "Deployment is not assigned to this target agent."},
-                status=404,
-            )
-        if deployment.status not in {
-            ClusterDeployment.Status.CONTROL_PLANE_READY,
-            ClusterDeployment.Status.TARGET_AGENT_PENDING,
-            ClusterDeployment.Status.PROVISIONING,
-            ClusterDeployment.Status.WAITING_APPROVAL,
-            ClusterDeployment.Status.POSTFLIGHT,
-        }:
-            return Response({"detail": "Deployment is not in an agent handoff state."}, status=409)
-        checkpoint = ClusterDeploymentCheckpoint.objects.filter(
-            deployment=deployment,
-            agent_node=node,
-        ).first()
-        if checkpoint is None:
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().filter(
+                pk=deployment_id,
+                tenant=node.tenant,
+                project=node.project,
+                target_node=node,
+            ).first()
+            if deployment is None:
+                return Response(
+                    {"detail": "Deployment is not assigned to this target agent."},
+                    status=404,
+                )
+            if deployment.status not in {
+                ClusterDeployment.Status.CONTROL_PLANE_READY,
+                ClusterDeployment.Status.TARGET_AGENT_PENDING,
+                ClusterDeployment.Status.PROVISIONING,
+                ClusterDeployment.Status.WAITING_APPROVAL,
+                ClusterDeployment.Status.POSTFLIGHT,
+            }:
+                return Response(
+                    {"detail": "Deployment is not in an agent handoff state."},
+                    status=409,
+                )
+            checkpoint = ClusterDeploymentCheckpoint.objects.select_for_update().filter(
+                deployment=deployment,
+            ).first()
+            if checkpoint is not None and checkpoint.agent_node_id != node.id:
+                return Response(
+                    {
+                        "detail": (
+                            "A checkpoint belongs to a previous target agent. "
+                            "Automatic checkpoint transfer is disabled; manual recovery "
+                            "and explicit checkpoint adoption are required."
+                        ),
+                        "code": "CHECKPOINT_AGENT_MISMATCH_MANUAL_RECOVERY_REQUIRED",
+                    },
+                    status=409,
+                )
+            if checkpoint is None:
+                return Response(
+                    {
+                        "deployment_id": str(deployment.id),
+                        "generation": 1,
+                        "sequence": 0,
+                        "phase": "target_agent_bootstrap",
+                        "data": {},
+                        "resume_available": False,
+                    }
+                )
             return Response(
                 {
                     "deployment_id": str(deployment.id),
-                    "generation": 1,
-                    "sequence": 0,
-                    "phase": "target_agent_bootstrap",
-                    "data": {},
-                    "resume_available": False,
+                    "generation": checkpoint.generation,
+                    "sequence": checkpoint.sequence,
+                    "phase": checkpoint.phase,
+                    "data": checkpoint.data,
+                    "resume_available": True,
+                    "updated_at": checkpoint.updated_at,
                 }
             )
-        return Response(
-            {
-                "deployment_id": str(deployment.id),
-                "generation": checkpoint.generation,
-                "sequence": checkpoint.sequence,
-                "phase": checkpoint.phase,
-                "data": checkpoint.data,
-                "resume_available": True,
-                "updated_at": checkpoint.updated_at,
-            }
-        )
 
     def post(self, request, deployment_id):
         if not isinstance(request.data, dict):
@@ -2530,6 +2901,348 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
             status=201,
         )
 
+
+
+class AgentRuntimeDeploymentReconciliationReportView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    ALLOWED_RESOURCE_KINDS = {
+        "Cluster",
+        "KubeadmControlPlane",
+        "MachineDeployment",
+        "MachineSet",
+        "Machine",
+        "Metal3Cluster",
+        "Metal3Machine",
+        "BareMetalHost",
+    }
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "Request body must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        node_id = request.data.get("node_id")
+        node = _authenticate_node(request, node_id)
+        if (
+            node is None
+            or node.node_type != AgentNode.NodeType.TARGET_CLUSTER
+            or node.status != AgentNode.Status.ONLINE
+            or node.last_seen_at is None
+            or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response(
+                {"detail": "Invalid or stale target agent credential."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        cluster_name = request.data.get("cluster_name")
+        observed_cluster_uid = request.data.get("cluster_uid")
+        resources = request.data.get("resources")
+        if cluster_name != node.cluster_name or not isinstance(observed_cluster_uid, str):
+            return Response(
+                {"detail": "Cluster identity does not match the enrolled target agent."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if not observed_cluster_uid or len(observed_cluster_uid) > 128:
+            return Response(
+                {"detail": "cluster_uid must be a non-empty UID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(resources, list) or not 1 <= len(resources) <= 500:
+            return Response(
+                {"detail": "resources must contain between 1 and 500 objects."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        encoded = json.dumps(request.data, separators=(",", ":"), ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 65536:
+            return Response(
+                {"detail": "Reconciliation report must not exceed 64 KiB."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        inventory_completeness = request.data.get("inventory_completeness")
+        expected_resource_types = {
+            ("cluster.x-k8s.io", "machines", "Machine"),
+            ("cluster.x-k8s.io", "machinesets", "MachineSet"),
+            ("cluster.x-k8s.io", "machinedeployments", "MachineDeployment"),
+            (
+                "controlplane.cluster.x-k8s.io",
+                "kubeadmcontrolplanes",
+                "KubeadmControlPlane",
+            ),
+            ("infrastructure.cluster.x-k8s.io", "metal3clusters", "Metal3Cluster"),
+            ("infrastructure.cluster.x-k8s.io", "metal3machines", "Metal3Machine"),
+            ("metal3.io", "baremetalhosts", "BareMetalHost"),
+        }
+        if not isinstance(inventory_completeness, dict):
+            return Response(
+                {"detail": "A complete CAPI inventory report is required."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        checks = inventory_completeness.get("checks")
+        if not isinstance(checks, list) or len(checks) != len(expected_resource_types):
+            return Response(
+                {"detail": "CAPI inventory checks must cover all seven resource types."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        observed_resource_types = set()
+        successful_checks = 0
+        undiscovered_checks = 0
+        failed_checks = 0
+        for check in checks:
+            if not isinstance(check, dict):
+                return Response(
+                    {"detail": "CAPI inventory check is invalid."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            resource_type = (
+                check.get("group"),
+                check.get("resource"),
+                check.get("kind"),
+            )
+            discovery_status = check.get("discovery_status")
+            list_status = check.get("list_status")
+            item_count = check.get("item_count")
+            if (
+                any(not isinstance(value, str) for value in resource_type)
+                or resource_type not in expected_resource_types
+                or resource_type in observed_resource_types
+                or not isinstance(discovery_status, str)
+                or discovery_status not in {"discovered", "not_discovered"}
+                or not isinstance(list_status, str)
+                or list_status not in {"success", "not_attempted", "not_found", "failed"}
+                or (
+                    item_count is not None
+                    and (
+                        not isinstance(item_count, int)
+                        or isinstance(item_count, bool)
+                        or item_count < 0
+                    )
+                )
+            ):
+                return Response(
+                    {"detail": "CAPI inventory check identity or state is invalid."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            observed_resource_types.add(resource_type)
+            if discovery_status == "discovered" and list_status == "success":
+                if (
+                    not isinstance(check.get("api_version"), str)
+                    or not check["api_version"]
+                    or not isinstance(item_count, int)
+                    or isinstance(item_count, bool)
+                    or item_count < 0
+                ):
+                    return Response(
+                        {
+                            "detail": (
+                                "Successful CAPI inventory checks require API version "
+                                "and item count."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                successful_checks += 1
+            elif discovery_status == "not_discovered" and list_status == "not_attempted":
+                if item_count is not None:
+                    return Response(
+                        {"detail": "Undiscovered CAPI resources cannot have an item count."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                undiscovered_checks += 1
+            elif discovery_status == "discovered" and list_status in {"not_found", "failed"}:
+                if item_count is not None:
+                    return Response(
+                        {"detail": "Failed CAPI resource lists cannot have an item count."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                failed_checks += 1
+            else:
+                return Response(
+                    {"detail": "CAPI inventory discovery and list states are inconsistent."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+        if (
+            observed_resource_types != expected_resource_types
+            or inventory_completeness.get("complete") is not True
+            or inventory_completeness.get("expected_resource_type_count") != 7
+            or inventory_completeness.get("successful_resource_type_count")
+            != successful_checks
+            or inventory_completeness.get("not_discovered_resource_type_count")
+            != undiscovered_checks
+            or inventory_completeness.get("failed_resource_type_count") != failed_checks
+            or successful_checks != 7
+            or undiscovered_checks != 0
+            or failed_checks != 0
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "CAPI reconciliation evidence is incomplete or "
+                        "internally inconsistent."
+                    ),
+                    "code": "CAPI_INVENTORY_INCOMPLETE",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        inventory_completeness = {
+            "complete": True,
+            "expected_resource_type_count": 7,
+            "successful_resource_type_count": successful_checks,
+            "not_discovered_resource_type_count": undiscovered_checks,
+            "failed_resource_type_count": failed_checks,
+            "checks": checks,
+        }
+        normalized = []
+        identities = set()
+        for resource in resources:
+            if not isinstance(resource, dict):
+                return Response(
+                    {"detail": "Every resource entry must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            kind = resource.get("kind")
+            api_version = resource.get("api_version")
+            namespace = resource.get("namespace", "")
+            name = resource.get("name")
+            uid = resource.get("uid")
+            generation = resource.get("generation")
+            resource_version = resource.get("resource_version")
+            spec_replicas = resource.get("spec_replicas")
+            status_replicas = resource.get("status_replicas")
+            ready_replicas = resource.get("ready_replicas")
+            conditions = resource.get("conditions", [])
+            if (
+                kind not in self.ALLOWED_RESOURCE_KINDS
+                or not isinstance(api_version, str)
+                or not api_version
+                or not isinstance(namespace, str)
+                or not isinstance(name, str)
+                or not name
+                or not isinstance(uid, str)
+                or not uid
+                or not isinstance(generation, int)
+                or isinstance(generation, bool)
+                or generation < 1
+                or not isinstance(resource_version, str)
+                or not resource_version
+                or any(
+                    value is not None
+                    and (
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                        or value < 0
+                    )
+                    for value in (spec_replicas, status_replicas, ready_replicas)
+                )
+                or not isinstance(conditions, list)
+                or len(conditions) > 100
+                or any(
+                    not isinstance(condition, dict)
+                    or not isinstance(condition.get("type"), str)
+                    or not isinstance(condition.get("status"), str)
+                    for condition in conditions
+                )
+            ):
+                return Response(
+                    {"detail": "Resource inventory contains an invalid object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            identity = (api_version, kind, namespace, name)
+            if identity in identities:
+                return Response(
+                    {"detail": "Resource inventory contains duplicate objects."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            identities.add(identity)
+            normalized.append(
+                {
+                    "api_version": api_version,
+                    "kind": kind,
+                    "namespace": namespace,
+                    "name": name,
+                    "uid": uid,
+                    "generation": generation,
+                    "resource_version": resource_version,
+                    "spec_replicas": spec_replicas,
+                    "status_replicas": status_replicas,
+                    "ready_replicas": ready_replicas,
+                    "conditions": conditions,
+                }
+            )
+        cluster_objects = [
+            item for item in normalized
+            if item["kind"] == "Cluster" and item["name"] == cluster_name
+        ]
+        if len(cluster_objects) != 1 or cluster_objects[0]["uid"] != observed_cluster_uid:
+            return Response(
+                {"detail": "Observed Cluster UID does not match the report identity."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().filter(
+                pk=deployment_id,
+                tenant=node.tenant,
+                project=node.project,
+                target_node=node,
+            ).first()
+            if deployment is None:
+                return Response(
+                    {"detail": "Deployment is not assigned to this target agent."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if deployment.status != ClusterDeployment.Status.RECONCILIATION_REQUIRED:
+                return Response(
+                    {"detail": "Deployment does not require reconciliation."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            plan = deployment.plan_result or {}
+            dual_agent = plan.get("dual_agent", {})
+            expected_cluster_uid = dual_agent.get("target_agent_cluster_uid")
+            if expected_cluster_uid and expected_cluster_uid != observed_cluster_uid:
+                return Response(
+                    {"detail": "Observed Cluster UID differs from the deployment identity."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            previous = plan.get("worker_provisioning_reconciliation", {})
+            report = {
+                "state": "evidence_recorded_not_authorized",
+                "reported_by_agent_node_id": str(node.id),
+                "cluster_name": cluster_name,
+                "cluster_uid": observed_cluster_uid,
+                "resources": normalized,
+                "resource_count": len(normalized),
+                "inventory_completeness": inventory_completeness,
+                "retry_allowed": False,
+                "eph_reclaim_allowed": False,
+                "received_at": timezone.now().isoformat(),
+            }
+            deployment.plan_result = {
+                **plan,
+                "worker_provisioning_reconciliation": {
+                    **previous,
+                    "state": "evidence_recorded_not_authorized",
+                    "report": report,
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **dual_agent,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(update_fields=["plan_result", "updated_at"])
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "reconciliation_state": "evidence_recorded_not_authorized",
+                "resource_count": len(normalized),
+                "retry_allowed": False,
+                "eph_reclaim_allowed": False,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 class AgentProjectCommandListView(APIView):
     permission_classes = [IsAuthenticated]

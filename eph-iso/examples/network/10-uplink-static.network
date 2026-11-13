@@ -1,0 +1,8 @@
+[Match]
+Name=enp5s0
+Type=ether
+
+[Network]
+Address=192.0.2.20/24
+Gateway=192.0.2.1
+DNS=192.0.2.53

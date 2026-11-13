@@ -1,0 +1,12 @@
+[Unit]
+Description=RAM-backed containerd state
+Before=containerd.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/containerd
+Type=tmpfs
+Options=mode=0750,size=25%,nosuid,nodev
+
+[Install]
+WantedBy=multi-user.target
