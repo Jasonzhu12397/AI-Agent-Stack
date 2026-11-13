@@ -545,6 +545,9 @@ def _verify_source_metal3_handoff(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_IDENTITY_INVALID")
         if machine_namespace != namespace:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_NAMESPACE_MISMATCH")
+        api_version = machine.get("apiVersion")
+        if not isinstance(api_version, str) or not api_version:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_API_VERSION_INVALID")
         if not isinstance(host_name, str) or not host_name:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_M3M_BMH_REFERENCE_INVALID")
         if host_name in host_names:
@@ -556,7 +559,7 @@ def _verify_source_metal3_handoff(
             "name": name,
             "uid": uid,
             "namespace": machine_namespace,
-            "api_version": machine.get("apiVersion"),
+            "api_version": api_version,
             "baremetal_host": host_name,
         }
 
@@ -586,8 +589,26 @@ def _verify_source_metal3_handoff(
         if not isinstance(metadata, dict):
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_INVALID")
         host_name = metadata.get("name")
+        labels = metadata.get("labels", {})
+        spec = host.get("spec")
         if not isinstance(host_name, str) or not host_name:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
+        if not isinstance(labels, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_LABELS_INVALID")
+        if not isinstance(spec, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_SPEC_INVALID")
+        if (
+            labels.get("cluster.x-k8s.io/cluster-name") == cluster_name
+            and host_name not in host_names
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_ORPHANED_FROM_M3M:" + host_name)
+        consumer = spec.get("consumerRef")
+        if isinstance(consumer, dict) and consumer.get("kind") == "Metal3Machine":
+            consumer_name = consumer.get("name")
+            consumer_namespace = consumer.get("namespace", namespace)
+            machine = selected_machines.get((consumer_namespace, consumer_name))
+            if machine is not None and machine["baremetal_host"] != host_name:
+                raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_CONSUMER_REF_MISMATCH:" + host_name)
         if host_name in hosts_by_name:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID")
         hosts_by_name[host_name] = host
