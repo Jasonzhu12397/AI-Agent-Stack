@@ -2874,6 +2874,214 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
         )
 
 
+
+class AgentRuntimeDeploymentReconciliationReportView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    ALLOWED_RESOURCE_KINDS = {
+        "Cluster",
+        "KubeadmControlPlane",
+        "MachineDeployment",
+        "MachineSet",
+        "Machine",
+        "Metal3Cluster",
+        "Metal3Machine",
+        "BareMetalHost",
+    }
+
+    def post(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "Request body must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        node_id = request.data.get("node_id")
+        node = _authenticate_node(request, node_id)
+        if (
+            node is None
+            or node.node_type != AgentNode.NodeType.TARGET_CLUSTER
+            or node.status != AgentNode.Status.ONLINE
+            or node.last_seen_at is None
+            or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
+        ):
+            return Response(
+                {"detail": "Invalid or stale target agent credential."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        cluster_name = request.data.get("cluster_name")
+        observed_cluster_uid = request.data.get("cluster_uid")
+        resources = request.data.get("resources")
+        if cluster_name != node.cluster_name or not isinstance(observed_cluster_uid, str):
+            return Response(
+                {"detail": "Cluster identity does not match the enrolled target agent."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if not observed_cluster_uid or len(observed_cluster_uid) > 128:
+            return Response(
+                {"detail": "cluster_uid must be a non-empty UID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(resources, list) or not 1 <= len(resources) <= 500:
+            return Response(
+                {"detail": "resources must contain between 1 and 500 objects."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        encoded = json.dumps(request.data, separators=(",", ":"), ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 65536:
+            return Response(
+                {"detail": "Reconciliation report must not exceed 64 KiB."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        normalized = []
+        identities = set()
+        for resource in resources:
+            if not isinstance(resource, dict):
+                return Response(
+                    {"detail": "Every resource entry must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            kind = resource.get("kind")
+            api_version = resource.get("api_version")
+            namespace = resource.get("namespace", "")
+            name = resource.get("name")
+            uid = resource.get("uid")
+            generation = resource.get("generation")
+            resource_version = resource.get("resource_version")
+            spec_replicas = resource.get("spec_replicas")
+            status_replicas = resource.get("status_replicas")
+            ready_replicas = resource.get("ready_replicas")
+            conditions = resource.get("conditions", [])
+            if (
+                kind not in self.ALLOWED_RESOURCE_KINDS
+                or not isinstance(api_version, str)
+                or not api_version
+                or not isinstance(namespace, str)
+                or not isinstance(name, str)
+                or not name
+                or not isinstance(uid, str)
+                or not uid
+                or not isinstance(generation, int)
+                or isinstance(generation, bool)
+                or generation < 1
+                or not isinstance(resource_version, str)
+                or not resource_version
+                or any(
+                    value is not None
+                    and (
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                        or value < 0
+                    )
+                    for value in (spec_replicas, status_replicas, ready_replicas)
+                )
+                or not isinstance(conditions, list)
+                or len(conditions) > 100
+                or any(
+                    not isinstance(condition, dict)
+                    or not isinstance(condition.get("type"), str)
+                    or not isinstance(condition.get("status"), str)
+                    for condition in conditions
+                )
+            ):
+                return Response(
+                    {"detail": "Resource inventory contains an invalid object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            identity = (api_version, kind, namespace, name)
+            if identity in identities:
+                return Response(
+                    {"detail": "Resource inventory contains duplicate objects."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            identities.add(identity)
+            normalized.append(
+                {
+                    "api_version": api_version,
+                    "kind": kind,
+                    "namespace": namespace,
+                    "name": name,
+                    "uid": uid,
+                    "generation": generation,
+                    "resource_version": resource_version,
+                    "spec_replicas": spec_replicas,
+                    "status_replicas": status_replicas,
+                    "ready_replicas": ready_replicas,
+                    "conditions": conditions,
+                }
+            )
+        cluster_objects = [
+            item for item in normalized
+            if item["kind"] == "Cluster" and item["name"] == cluster_name
+        ]
+        if len(cluster_objects) != 1 or cluster_objects[0]["uid"] != observed_cluster_uid:
+            return Response(
+                {"detail": "Observed Cluster UID does not match the report identity."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().filter(
+                pk=deployment_id,
+                tenant=node.tenant,
+                project=node.project,
+                target_node=node,
+            ).first()
+            if deployment is None:
+                return Response(
+                    {"detail": "Deployment is not assigned to this target agent."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if deployment.status != ClusterDeployment.Status.RECONCILIATION_REQUIRED:
+                return Response(
+                    {"detail": "Deployment does not require reconciliation."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            plan = deployment.plan_result or {}
+            dual_agent = plan.get("dual_agent", {})
+            expected_cluster_uid = dual_agent.get("target_agent_cluster_uid")
+            if expected_cluster_uid and expected_cluster_uid != observed_cluster_uid:
+                return Response(
+                    {"detail": "Observed Cluster UID differs from the deployment identity."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            previous = plan.get("worker_provisioning_reconciliation", {})
+            report = {
+                "state": "evidence_recorded_not_authorized",
+                "reported_by_agent_node_id": str(node.id),
+                "cluster_name": cluster_name,
+                "cluster_uid": observed_cluster_uid,
+                "resources": normalized,
+                "resource_count": len(normalized),
+                "retry_allowed": False,
+                "eph_reclaim_allowed": False,
+                "received_at": timezone.now().isoformat(),
+            }
+            deployment.plan_result = {
+                **plan,
+                "worker_provisioning_reconciliation": {
+                    **previous,
+                    "state": "evidence_recorded_not_authorized",
+                    "report": report,
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **dual_agent,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(update_fields=["plan_result", "updated_at"])
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "reconciliation_state": "evidence_recorded_not_authorized",
+                "resource_count": len(normalized),
+                "retry_allowed": False,
+                "eph_reclaim_allowed": False,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
 class AgentProjectCommandListView(APIView):
     permission_classes = [IsAuthenticated]
 
