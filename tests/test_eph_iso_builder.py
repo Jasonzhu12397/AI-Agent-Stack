@@ -52,7 +52,8 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "CALICO_IPV4POOL" not in initializer
     assert "POD_CIDR" in initializer
     assert "--pod-network-cidr" in initializer
-    assert 'config_path = "/etc/containerd/certs.d"' in initializer
+    assert "CONTAINERD_NOT_ACTIVE" in initializer
+    assert "systemctl restart containerd" not in initializer
     assert "daemonset/calico-node" in initializer
     assert "deployment/calico-kube-controllers" in initializer
     assert "kubectl wait --for=condition=Ready nodes --all" in initializer
@@ -62,6 +63,7 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert 'rm -f /etc/kubernetes/admin.conf' in initializer
     assert 'kubectl --request-timeout=5s get --raw=/readyz' in initializer
     assert "containerd.service" in service
+    assert "systemctl restart containerd" not in initializer
     assert "cloud-config.service" in service
     assert "StartLimitIntervalSec=30min" in service
     assert "StartLimitBurst=5" in service
@@ -117,6 +119,7 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     kubelet_mount = (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
 
     assert "Requires=var-lib-containerd.mount" in containerd
+    assert "eph-containerd-config.sh" in containerd
     assert (
         "Requires=containerd.service var-lib-containerd.mount "
         "var-lib-kubelet.mount var-lib-etcd.mount"
