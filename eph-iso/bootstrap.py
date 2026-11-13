@@ -217,7 +217,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             body = response.read(262145)
     except urllib.error.HTTPError as error:
         raise BootstrapError(
-            "CLIENT_CERTIFICATE_EXCHANGE_HTTP_STATUS_{}".format(error.code)
+            f"CLIENT_CERTIFICATE_EXCHANGE_HTTP_STATUS_{error.code}"
         ) from None
     except (urllib.error.URLError, TimeoutError, ssl.SSLError) as error:
         reason = getattr(error, "reason", None)
