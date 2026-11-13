@@ -1,3 +1,4 @@
+import base64
 import hmac
 import json
 import os
@@ -72,6 +73,24 @@ def validate_config(config):
     return config
 
 
+def _is_pem_certificate_bundle(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    pattern = re.compile(
+        r"-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+/=\\s]+?)\\s*-----END CERTIFICATE-----"
+    )
+    matches = list(pattern.finditer(value))
+    if not matches:
+        return False
+    remainder = pattern.sub("", value)
+    if remainder.strip():
+        return False
+    try:
+        return all(base64.b64decode(match.group(1), validate=True) for match in matches)
+    except (ValueError, base64.binascii.Error):
+        return False
+
+
 def _validate_certificate_exchange_response(result, node_id):
     if not isinstance(result, dict):
         raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_INVALID")
@@ -82,8 +101,8 @@ def _validate_certificate_exchange_response(result, node_id):
     if (
         not isinstance(agent_token, str)
         or not TOKEN_PATTERN.fullmatch(agent_token)
-        or not isinstance(certificate, str)
-        or not isinstance(ca_chain, str)
+        or not _is_pem_certificate_bundle(certificate)
+        or not _is_pem_certificate_bundle(ca_chain)
         or not isinstance(fingerprint, str)
         or not FINGERPRINT_PATTERN.fullmatch(fingerprint)
         or result.get("node_id") != node_id
