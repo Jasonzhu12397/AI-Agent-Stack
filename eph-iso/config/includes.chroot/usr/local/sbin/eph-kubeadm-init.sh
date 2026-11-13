@@ -60,7 +60,15 @@ for attempt in $(seq 1 60); do
     sleep 5
 done
 
-kubectl apply -f "$CALICO_MANIFEST"
+CALICO_DEFAULT_POD_CIDR="192.168.0.0/16"
+grep -Fq "$CALICO_DEFAULT_POD_CIDR" "$CALICO_MANIFEST" ||
+    fail "CALICO_DEFAULT_POD_CIDR_NOT_FOUND"
+CALICO_RUNTIME_MANIFEST="$(mktemp /run/eph-calico.XXXXXX.yaml)"
+trap 'rm -f "$CALICO_RUNTIME_MANIFEST"' EXIT
+sed "s|$CALICO_DEFAULT_POD_CIDR|$POD_CIDR|g" "$CALICO_MANIFEST" > "$CALICO_RUNTIME_MANIFEST"
+grep -Fq "$POD_CIDR" "$CALICO_RUNTIME_MANIFEST" ||
+    fail "CALICO_POD_CIDR_CONFIGURATION_FAILED"
+kubectl apply -f "$CALICO_RUNTIME_MANIFEST"
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
 kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
