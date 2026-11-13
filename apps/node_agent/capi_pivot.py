@@ -1017,7 +1017,12 @@ def run_capi_pivot_postflight(
     machine_infrastructure = {}
     infrastructure_api_versions = {}
     for machine_name in machine_by_name:
-        infrastructure_ref = machine_by_name[machine_name].get("spec", {}).get("infrastructureRef")
+        machine_spec = machine_by_name[machine_name].get("spec")
+        if not isinstance(machine_spec, dict):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_MACHINE_SPEC_INVALID:" + machine_name
+            )
+        infrastructure_ref = machine_spec.get("infrastructureRef")
         if (
             not isinstance(infrastructure_ref, dict)
             or infrastructure_ref.get("kind") != "Metal3Machine"
@@ -1099,14 +1104,27 @@ def run_capi_pivot_postflight(
             )
         host_meta = host.get("metadata", {})
         host_annotations = host_meta.get("annotations", {}) if isinstance(host_meta, dict) else {}
+        if not isinstance(host_annotations, dict):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_ANNOTATIONS_INVALID:" + host_name
+            )
         if "baremetalhost.metal3.io/status" in host_annotations:
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_RECONSTRUCTION_PENDING:" + host_name
             )
-        status = host.get("status", {})
-        provisioning = status.get("provisioning", {}) if isinstance(status, dict) else {}
+        host_spec = host.get("spec")
+        status = host.get("status")
+        if not isinstance(host_spec, dict):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_SPEC_INVALID:" + host_name
+            )
+        if not isinstance(status, dict):
+            raise CapiPivotError(
+                "CAPI_PIVOT_POSTFLIGHT_BMH_STATUS_INVALID:" + host_name
+            )
+        provisioning = status.get("provisioning", {})
         state = provisioning.get("state") if isinstance(provisioning, dict) else None
-        operational = status.get("operationalStatus") if isinstance(status, dict) else None
+        operational = status.get("operationalStatus")
         if state not in {"available", "ready", "provisioned", "externally provisioned"}:
             raise CapiPivotError(
                 "CAPI_PIVOT_POSTFLIGHT_BMH_NOT_STABLE:" + host_name
