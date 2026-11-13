@@ -639,6 +639,65 @@ def test_pivot_execution_requires_metal3_bmh_handoff_metadata(
     )
 
 
+@pytest.mark.parametrize(
+    ("mutation", "error_code"),
+    [
+        ("malformed_spec", "CAPI_PIVOT_SOURCE_BMH_SPEC_INVALID"),
+        ("malformed_labels", "CAPI_PIVOT_SOURCE_BMH_LABELS_INVALID"),
+        ("missing_uid", "CAPI_PIVOT_SOURCE_BMH_IDENTITY_INVALID"),
+        ("wrong_namespace", "CAPI_PIVOT_SOURCE_BMH_NAMESPACE_MISMATCH"),
+    ],
+)
+def test_pivot_execution_rejects_malformed_source_bmh_inventory(
+    tmp_path, mutation, error_code
+):
+    status = {
+        "operationalStatus": "OK",
+        "provisioning": {"state": "provisioned"},
+    }
+    bmh = {
+        "metadata": {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "uid": "bmh-uid-01",
+            "annotations": {
+                "baremetalhost.metal3.io/paused": "metal3.io/capm3",
+                "baremetalhost.metal3.io/status": json.dumps(status),
+            },
+            "labels": {"clusterctl.cluster.x-k8s.io/move": ""},
+        },
+        "spec": {
+            "consumerRef": {
+                "kind": "Metal3Machine",
+                "name": "worker-01",
+            },
+        },
+        "status": status,
+    }
+    if mutation == "malformed_spec":
+        bmh["spec"] = []
+    elif mutation == "malformed_labels":
+        bmh["metadata"]["labels"] = []
+    elif mutation == "missing_uid":
+        bmh["metadata"].pop("uid")
+    elif mutation == "wrong_namespace":
+        bmh["metadata"]["namespace"] = "other"
+    calls, runner = _pivot_runner_for(bmh_items=[bmh])
+
+    with pytest.raises(CapiPivotError, match=error_code):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
 def test_pivot_execution_accepts_fully_prepared_metal3_bmh(tmp_path):
     status = {
         "operationalStatus": "OK",
