@@ -215,8 +215,16 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
     try:
         with opener.open(request, timeout=20) as response:
             body = response.read(262145)
-    except (urllib.error.URLError, TimeoutError, ssl.SSLError):
-        raise BootstrapError("CLIENT_CERTIFICATE_EXCHANGE_FAILED") from None
+    except urllib.error.HTTPError as error:
+        raise BootstrapError(
+            "CLIENT_CERTIFICATE_EXCHANGE_HTTP_STATUS_{}".format(error.code)
+        ) from None
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError) as error:
+        reason = getattr(error, "reason", None)
+        reason_name = type(reason).__name__ if reason is not None else type(error).__name__
+        raise BootstrapError(
+            "CLIENT_CERTIFICATE_EXCHANGE_TRANSPORT_FAILED:" + reason_name
+        ) from None
     if len(body) > 262144:
         raise BootstrapError("CLIENT_CERTIFICATE_RESPONSE_TOO_LARGE")
     try:
@@ -234,6 +242,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
     chain_path = secret_dir / "tls-chain.crt"
     leaf_path.write_text(certificate, encoding="ascii")
     chain_path.write_text(ca_chain, encoding="ascii")
+    validation_stage = "chain"
     try:
         _run([
             "openssl",
@@ -249,6 +258,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             str(chain_path),
             str(leaf_path),
         ])
+        validation_stage = "subject"
         subject = _run_output([
             "openssl",
             "x509",
@@ -261,6 +271,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
         ]).strip()
         if not hmac.compare_digest(subject, "subject=CN=" + common_name):
             raise BootstrapError("CLIENT_CERTIFICATE_IDENTITY_INVALID")
+        validation_stage = "fingerprint"
         actual_fingerprint = _run_output([
             "openssl",
             "x509",
@@ -270,6 +281,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             "-fingerprint",
             "-sha256",
         ]).strip().split("=", 1)[-1].replace(":", "").lower()
+        validation_stage = "certificate-public-key"
         certificate_public_key = _run_output([
             "openssl",
             "x509",
@@ -278,6 +290,7 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             "-pubkey",
             "-noout",
         ]).strip()
+        validation_stage = "private-public-key"
         private_public_key = _run_output([
             "openssl",
             "pkey",
@@ -285,8 +298,13 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             str(key_path),
             "-pubout",
         ]).strip()
-    except subprocess.CalledProcessError:
-        raise BootstrapError("CLIENT_CERTIFICATE_VALIDATION_FAILED") from None
+    except subprocess.CalledProcessError as error:
+        raise BootstrapError(
+            "CLIENT_CERTIFICATE_VALIDATION_FAILED:"
+            + validation_stage
+            + ":"
+            + str(error.returncode)
+        ) from None
     if (
         not hmac.compare_digest(actual_fingerprint, fingerprint)
         or not hmac.compare_digest(certificate_public_key, private_public_key)
