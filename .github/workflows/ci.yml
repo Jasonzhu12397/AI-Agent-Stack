@@ -1,9 +1,5 @@
 name: CI
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
 on:
   push:
     branches: [main, "feature/**"]
@@ -12,6 +8,9 @@ on:
 
 jobs:
   python:
+    concurrency:
+      group: ${{ github.workflow }}-python-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -57,6 +56,9 @@ jobs:
         run: pytest
 
   web:
+    concurrency:
+      group: ${{ github.workflow }}-web-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -76,6 +78,9 @@ jobs:
         run: npm run build
 
   eph-iso:
+    concurrency:
+      group: ${{ github.workflow }}-eph-iso-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -576,6 +581,9 @@ jobs:
           retention-days: 7
 
   compose:
+    concurrency:
+      group: ${{ github.workflow }}-compose-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
