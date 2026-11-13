@@ -54,11 +54,14 @@ def validate_config(config):
         or (parsed_port is not None and not 1 <= parsed_port <= 65535)
     ):
         raise BootstrapError("CONTROL_URL_INVALID")
+    node_id = config["node_id"]
+    if not isinstance(node_id, str):
+        raise BootstrapError("NODE_ID_INVALID") from None
     try:
-        normalized_node_id = str(uuid.UUID(config["node_id"]))
+        normalized_node_id = str(uuid.UUID(node_id))
     except (ValueError, TypeError, AttributeError):
         raise BootstrapError("NODE_ID_INVALID") from None
-    if normalized_node_id != config["node_id"].lower():
+    if normalized_node_id != node_id.lower():
         raise BootstrapError("NODE_ID_INVALID")
     token = config["enrollment_token"]
     if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
