@@ -41,7 +41,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Validate deployment script syntax
-        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh && bash -n deploy/cloud-control-plane/deploy.sh && bash -n eph-iso/build.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-bootstrap-mount.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-kubeadm-init.sh
+        run: bash -n deploy/agents/deploy.sh && bash -n deploy/agents/build-node-agent.sh && bash -n deploy/cloud-control-plane/deploy.sh && bash -n eph-iso/build.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-bootstrap-mount.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-kubeadm-init.sh && bash -n eph-iso/config/includes.chroot/usr/local/sbin/eph-containerd-config.sh
       - name: Show lint auto-fix suggestions
         run: ruff check --fix --diff eph-iso/bootstrap.py eph-iso/network-config.py tests/test_eph_iso_builder.py tests/test_eph_iso_network.py || true
       - name: Lint
