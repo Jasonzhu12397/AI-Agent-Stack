@@ -549,7 +549,7 @@ def _verify_source_metal3_handoff(
         if (
             not isinstance(api_version, str)
             or not re.fullmatch(
-                r"infrastructure\\.cluster\\.x-k8s\\.io/v[0-9]+(?:alpha|beta)?[0-9]*",
+                r"infrastructure\.cluster\.x-k8s\.io/v[0-9]+(?:alpha|beta)?[0-9]*",
                 api_version,
             )
             or machine.get("kind") != "Metal3Machine"
