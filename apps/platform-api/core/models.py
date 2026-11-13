@@ -598,6 +598,7 @@ class ClusterDeployment(models.Model):
         WORKERS_READY = "workers_ready", "Workers ready"
         TARGET_AGENT_PENDING = "target_agent_pending", "Target agent pending"
         POSTFLIGHT = "postflight", "Postflight"
+        RECONCILIATION_REQUIRED = "reconciliation_required", "Reconciliation required"
         SUCCEEDED = "succeeded", "Succeeded"
         FAILED = "failed", "Failed"
         CANCELLED = "cancelled", "Cancelled"
