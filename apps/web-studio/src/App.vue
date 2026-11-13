@@ -31,7 +31,7 @@ const navItems: { id: ActiveView; label: string }[] = [
 const workspaceSection = computed<
   "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs"
 >(() => {
-  if (activeView.value === "dashboard" || activeView.value === "infrastructure") {
+  if (activeView.value === "dashboard" || activeView.value === "infrastructure" || activeView.value === "agent-nodes") {
     return "overview";
   }
   return activeView.value;
