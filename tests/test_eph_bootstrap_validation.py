@@ -66,10 +66,11 @@ def test_validate_config_rejects_missing_required_fields(valid_config):
 
 def test_certificate_exchange_response_requires_consumed_token_and_matching_identity():
     node_id = str(uuid.uuid4())
+    pem = "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"
     response = {
         "agent_token": "B" * 48,
-        "client_certificate": "-----BEGIN CERTIFICATE-----\\nleaf\\n",
-        "ca_chain": "-----BEGIN CERTIFICATE-----\\nca\\n",
+        "client_certificate": pem,
+        "ca_chain": pem,
         "fingerprint_sha256": "c" * 64,
         "node_id": node_id,
         "token_consumed": True,
