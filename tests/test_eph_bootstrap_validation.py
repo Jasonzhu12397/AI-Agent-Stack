@@ -93,7 +93,9 @@ def test_certificate_exchange_response_requires_consumed_token_and_matching_iden
         ("fingerprint_sha256", "invalid"),
         ("agent_token", "short"),
         ("client_certificate", ""),
+        ("client_certificate", "leaf-certificate"),
         ("ca_chain", ""),
+        ("ca_chain", "issuer-certificate"),
     ],
 )
 def test_certificate_exchange_response_rejects_invalid_fields(field, value):
