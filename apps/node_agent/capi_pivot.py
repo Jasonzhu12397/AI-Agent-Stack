@@ -312,10 +312,15 @@ def _verify_target_management_plane(
         process_env,
         "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED",
     )
+    api_groups = discovery.get("groups")
+    if not isinstance(api_groups, list) or any(
+        not isinstance(item, dict) for item in api_groups
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED")
     groups = {
         item.get("name"): item
-        for item in discovery.get("groups", [])
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
+        for item in api_groups
+        if isinstance(item.get("name"), str)
     }
     required_resources = {
         "cluster.x-k8s.io": {
@@ -333,12 +338,11 @@ def _verify_target_management_plane(
     versions = {}
     for group_name, expected in required_resources.items():
         group = groups.get(group_name)
-        version = (
-            group.get("preferredVersion", {}).get("version")
-            if isinstance(group, dict)
-            else None
-        )
-        if not isinstance(version, str) or not version:
+        preferred = group.get("preferredVersion") if isinstance(group, dict) else None
+        version = preferred.get("version") if isinstance(preferred, dict) else None
+        if not isinstance(version, str) or not re.fullmatch(
+            r"v[0-9]+(?:alpha|beta)[0-9]+|v[0-9]+", version
+        ):
             raise CapiPivotError("CAPI_PIVOT_TARGET_APIS_NOT_READY")
         version_data = _kubectl_json(
             runner,
@@ -348,10 +352,15 @@ def _verify_target_management_plane(
             process_env,
             "CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED",
         )
+        api_resources = version_data.get("resources")
+        if not isinstance(api_resources, list) or any(
+            not isinstance(item, dict) for item in api_resources
+        ):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_API_DISCOVERY_FAILED")
         available = {
             item.get("name")
-            for item in version_data.get("resources", [])
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            for item in api_resources
+            if isinstance(item.get("name"), str)
         }
         if not expected.issubset(available):
             raise CapiPivotError("CAPI_PIVOT_TARGET_APIS_NOT_READY")
@@ -380,10 +389,18 @@ def _verify_target_management_plane(
             process_env,
             "CAPI_PIVOT_TARGET_CONTROLLERS_NOT_READY",
         )
-        desired = deployment.get("spec", {}).get("replicas", 1)
-        available = deployment.get("status", {}).get("availableReplicas", 0)
-        observed = deployment.get("status", {}).get("observedGeneration", 0)
-        generation = deployment.get("metadata", {}).get("generation", 1)
+        deployment_spec = deployment.get("spec")
+        deployment_status = deployment.get("status")
+        deployment_metadata = deployment.get("metadata")
+        if not all(
+            isinstance(value, dict)
+            for value in (deployment_spec, deployment_status, deployment_metadata)
+        ):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_CONTROLLERS_NOT_READY")
+        desired = deployment_spec.get("replicas", 1)
+        available = deployment_status.get("availableReplicas", 0)
+        observed = deployment_status.get("observedGeneration", 0)
+        generation = deployment_metadata.get("generation", 1)
         if (
             not isinstance(desired, int)
             or isinstance(desired, bool)
@@ -413,11 +430,14 @@ def _verify_target_management_plane(
         "CAPI_PIVOT_TARGET_CLUSTER_CHECK_FAILED",
     )
     items = cluster_list.get("items")
-    if not isinstance(items, list):
+    if not isinstance(items, list) or any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("metadata"), dict)
+        for item in items
+    ):
         raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_CHECK_FAILED")
     if any(
-        isinstance(item, dict)
-        and item.get("metadata", {}).get("name") == cluster_name
+        item["metadata"].get("name") == cluster_name
         for item in items
     ):
         raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_NAME_CONFLICT")
