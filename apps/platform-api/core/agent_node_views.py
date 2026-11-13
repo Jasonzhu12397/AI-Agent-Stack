@@ -2193,6 +2193,14 @@ class AgentRuntimeHeartbeatView(APIView):
                     "checkpoint_endpoint": (
                         f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
                     ),
+                    "reconciliation_report_endpoint": (
+                        f"/api/v1/agent-runtime/deployments/{deployment.id}/reconciliation-report/"
+                    ),
+                    "capi_namespace": (
+                        deployment.spec.get("capi_namespace", "default")
+                        if isinstance(deployment.spec, dict)
+                        else "default"
+                    ),
                 }
                 for deployment in ClusterDeployment.objects.filter(
                     target_node=node,
@@ -2202,6 +2210,7 @@ class AgentRuntimeHeartbeatView(APIView):
                         ClusterDeployment.Status.PROVISIONING,
                         ClusterDeployment.Status.WAITING_APPROVAL,
                         ClusterDeployment.Status.POSTFLIGHT,
+                        ClusterDeployment.Status.RECONCILIATION_REQUIRED,
                     ],
                 ).order_by("created_at")
             ]
