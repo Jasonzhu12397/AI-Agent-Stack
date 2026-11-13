@@ -66,7 +66,8 @@ def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
         ROOT / "eph-iso/config/includes.chroot/etc/systemd/system/eph-bootstrap.service"
     ).read_text(encoding="utf-8")
     assert "Requires=eph-kubeadm-init.service" in service
-    assert "After=cloud-init.target network-online.target eph-kubeadm-init.service" in service
+    assert "After=cloud-config.service network-online.target eph-kubeadm-init.service" in service
+    assert "cloud-init status --wait" in service
     assert 'MEDIA_ROOT = pathlib.Path("/etc/ai-agent-studio/eph-bootstrap")' in (
         ROOT / "eph-iso/bootstrap.py"
     ).read_text(encoding="utf-8")
@@ -180,8 +181,8 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "containernetworking-plugins" in package_list
     assert "NoCloud" in datasource
     assert "CIDATA" in datasource
-    assert "cloud-init.target" in service
-    assert "After=cloud-init.target" in service
+    assert "cloud-init.target" not in service
+    assert "After=cloud-config.service" in service
     assert "cloud-init status --wait" in service
     assert "Restart=on-failure" in service
     assert "RestartSec=30s" in service
@@ -718,13 +719,14 @@ def test_eph_network_config_runs_before_systemd_networkd():
     drop_in = (
         root / "systemd-networkd.service.d/eph.conf"
     ).read_text(encoding="utf-8")
-    assert "Wants=mnt-eph\\x2dbootstrap.mount" in service
-    assert "After=mnt-eph\\x2dbootstrap.mount" in service
+    assert "DefaultDependencies=no" in service
+    assert "After=local-fs.target" in service
+    assert "ExecStartPre=/usr/local/sbin/eph-bootstrap-mount.sh" in service
     assert "Before=systemd-networkd.service" in service
     assert "Requires=eph-network-config.service" in drop_in
     assert "After=eph-network-config.service" in drop_in
     mount = (root / "mnt-eph\\x2dbootstrap.mount").read_text(encoding="utf-8")
-    assert "x-systemd.device-timeout=10s" in mount
+    assert "EPH_BOOTSTRAP_MEDIA_NOT_PRESENT" in mount_script
 
 
 
