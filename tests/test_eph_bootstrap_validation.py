@@ -34,6 +34,7 @@ def test_validate_config_accepts_digest_pinned_agent_image(valid_config):
         ("control_url", "https://control.example.test/api", "CONTROL_URL_INVALID"),
         ("control_url", "https://control.example.test?token=x", "CONTROL_URL_INVALID"),
         ("node_id", "not-a-uuid", "NODE_ID_INVALID"),
+        ("node_id", 12345, "NODE_ID_INVALID"),
         ("enrollment_token", "short", "ENROLLMENT_TOKEN_INVALID"),
         (
             "agent_image",
