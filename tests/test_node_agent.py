@@ -2353,6 +2353,70 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
     assert result["side_effects"] is False
 
 
+@pytest.mark.parametrize(
+    ("field_path", "value", "error_code"),
+    [
+        (("spec",), [], "INVALID_TARGET_MACHINE_OBJECT"),
+        (("metadata",), [], "INVALID_TARGET_MACHINE_OBJECT"),
+        (("status",), [], "INVALID_TARGET_MACHINE_STATUS"),
+        (("status", "conditions"), {}, "INVALID_TARGET_MACHINE_CONDITIONS"),
+    ],
+)
+def test_target_agent_rejects_malformed_machine_inventory(
+    monkeypatch, field_path, value, error_code
+):
+    machine = {
+        "metadata": {"name": "edge-lab-control-plane-0"},
+        "spec": {"clusterName": "edge-lab"},
+        "status": {
+            "conditions": [{"type": "Ready", "status": "True"}]
+        },
+    }
+    target = machine
+    for key in field_path[:-1]:
+        target = target[key]
+    target[field_path[-1]] = value
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": "cluster.x-k8s.io",
+                    "preferredVersion": {"version": "v1beta1"},
+                }
+            ]
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
+            "metadata": {"uid": "source-uid"}
+        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
+            "items": [machine]
+        },
+    }
+
+    def api_get(path):
+        if path.startswith("/apis/apps/v1/"):
+            return {
+                "metadata": {"generation": 1},
+                "spec": {"replicas": 1},
+                "status": {"availableReplicas": 1, "observedGeneration": 1},
+            }
+        return responses[path]
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", api_get)
+    with pytest.raises(agent.NodeAgentError, match=error_code):
+        agent.execute_command(
+            {
+                "command_type": "cluster.capi.pivot.target.verify",
+                "payload": {
+                    "cluster_name": "edge-lab",
+                    "namespace": "metal3",
+                    "expected_cluster_uid": "source-uid",
+                },
+            },
+            "target_cluster",
+        )
+
+
 def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch):
     responses = {
         "/apis": {
