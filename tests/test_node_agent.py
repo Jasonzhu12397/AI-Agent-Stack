@@ -1652,6 +1652,64 @@ def test_collect_capi_reconciliation_inventory_records_cluster_and_observed_mach
     assert report["resources"][0]["conditions"] == [
         {"type": "ControlPlaneReady", "status": "True"}
     ]
+    assert report["inventory_completeness"]["complete"] is True
+    assert report["inventory_completeness"]["expected_resource_type_count"] == 7
+    assert report["inventory_completeness"]["successful_resource_type_count"] == 7
+
+
+def test_collect_capi_reconciliation_inventory_marks_missing_and_unavailable_apis(
+    monkeypatch,
+):
+    versions = {
+        "cluster.x-k8s.io": "v1beta1",
+        "controlplane.cluster.x-k8s.io": "v1beta1",
+        "infrastructure.cluster.x-k8s.io": "v1alpha1",
+    }
+    cluster = {
+        "metadata": {
+            "name": "edge-lab",
+            "namespace": "capi-system",
+            "uid": "cluster-uid",
+            "generation": 1,
+            "resourceVersion": "17",
+        },
+        "spec": {},
+        "status": {},
+    }
+
+    def fake_get(path):
+        if path == "/apis":
+            return {
+                "groups": [
+                    {"name": name, "preferredVersion": {"version": version}}
+                    for name, version in versions.items()
+                ]
+            }
+        return cluster
+
+    def fake_list(path, max_items=100000):
+        if path.endswith("/machines"):
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
+        return []
+
+    monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
+    monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
+
+    report = agent.collect_capi_reconciliation_inventory("edge-lab", "capi-system")
+
+    completeness = report["inventory_completeness"]
+    assert completeness["complete"] is False
+    assert completeness["not_discovered_resource_type_count"] == 1
+    assert completeness["failed_resource_type_count"] == 1
+    machines = next(check for check in completeness["checks"] if check["resource"] == "machines")
+    assert machines["discovery_status"] == "discovered"
+    assert machines["list_status"] == "not_found"
+    baremetalhosts = next(
+        check for check in completeness["checks"]
+        if check["resource"] == "baremetalhosts"
+    )
+    assert baremetalhosts["discovery_status"] == "not_discovered"
+    assert baremetalhosts["list_status"] == "not_attempted"
 
 
 def test_target_agent_submits_reconciliation_evidence_without_authorizing_recovery(
