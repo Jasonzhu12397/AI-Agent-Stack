@@ -15,6 +15,6 @@ done
 if [ -z "$device" ]; then
     printf '%s\n' "EPH_BOOTSTRAP_MEDIA_NOT_PRESENT; continuing without optional media"
     exit 0
-}
+fi
 install -d -m 0700 /mnt/eph-bootstrap
 mount -o ro,nosuid,nodev,noexec "$device" /mnt/eph-bootstrap
