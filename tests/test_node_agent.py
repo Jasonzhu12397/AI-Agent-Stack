@@ -2586,7 +2586,11 @@ def test_target_agent_rejects_malformed_capi_api_responses(
             "status": {"availableReplicas": 1, "observedGeneration": 1},
         },
     }
-    responses[malformed_path] = []
+    responses[malformed_path] = (
+        {"metadata": []}
+        if "/clusters/edge-lab" in malformed_path
+        else []
+    )
 
     monkeypatch.setattr(agent, "kubernetes_api_get", lambda path: responses[path])
     with pytest.raises(agent.NodeAgentError, match=error_code):
