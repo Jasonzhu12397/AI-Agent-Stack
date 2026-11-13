@@ -2735,33 +2735,43 @@ def execute_command(
         machine_items = machines.get("items", [])
         if not isinstance(machine_items, list):
             raise NodeAgentError("INVALID_TARGET_MACHINE_INVENTORY")
-        cluster_machines = [
-            item
-            for item in machine_items
-            if isinstance(item, dict)
-            and item.get("spec", {}).get("clusterName") == cluster_name
-        ]
-        machine_names = [
-            item.get("metadata", {}).get("name")
-            for item in cluster_machines
-            if isinstance(item.get("metadata", {}).get("name"), str)
-            and item.get("metadata", {}).get("name")
-        ]
-        if (
-            len(machine_names) != len(cluster_machines)
-            or len(set(machine_names)) != len(machine_names)
-        ):
-            raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
-        ready_machines = [
-            item.get("metadata", {}).get("name")
-            for item in cluster_machines
+        if any(not isinstance(item, dict) for item in machine_items):
+            raise NodeAgentError("INVALID_TARGET_MACHINE_INVENTORY")
+        cluster_machines = []
+        for item in machine_items:
+            spec = item.get("spec")
+            metadata = item.get("metadata")
+            if not isinstance(spec, dict) or not isinstance(metadata, dict):
+                raise NodeAgentError("INVALID_TARGET_MACHINE_OBJECT")
+            if spec.get("clusterName") == cluster_name:
+                cluster_machines.append(item)
+        machine_names = []
+        ready_machines = []
+        for item in cluster_machines:
+            metadata = item.get("metadata")
+            name = metadata.get("name")
+            if not isinstance(name, str) or not name:
+                raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
+            machine_names.append(name)
+            status = item.get("status")
+            if not isinstance(status, dict):
+                raise NodeAgentError("INVALID_TARGET_MACHINE_STATUS")
+            conditions = status.get("conditions", [])
+            if not isinstance(conditions, list):
+                raise NodeAgentError("INVALID_TARGET_MACHINE_CONDITIONS")
             if any(
-                isinstance(condition, dict)
-                and condition.get("type") == "Ready"
+                not isinstance(condition, dict)
+                for condition in conditions
+            ):
+                raise NodeAgentError("INVALID_TARGET_MACHINE_CONDITIONS")
+            if any(
+                condition.get("type") == "Ready"
                 and condition.get("status") == "True"
-                for condition in item.get("status", {}).get("conditions", [])
-            )
-        ]
+                for condition in conditions
+            ):
+                ready_machines.append(name)
+        if len(set(machine_names)) != len(machine_names):
+            raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
         not_ready_machines = sorted(set(machine_names) - set(ready_machines))
         expected_controllers = {
             "capi-system": "capi-controller-manager",
