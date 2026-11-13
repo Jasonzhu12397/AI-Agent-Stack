@@ -35,7 +35,11 @@ def test_validate_config_accepts_digest_pinned_agent_image(valid_config):
         ("control_url", "https://control.example.test?token=x", "CONTROL_URL_INVALID"),
         ("node_id", "not-a-uuid", "NODE_ID_INVALID"),
         ("enrollment_token", "short", "ENROLLMENT_TOKEN_INVALID"),
-        ("agent_image", "registry.example.test/node-agent:latest", "AGENT_IMAGE_NOT_PINNED_BY_DIGEST"),
+        (
+            "agent_image",
+            "registry.example.test/node-agent:latest",
+            "AGENT_IMAGE_NOT_PINNED_BY_DIGEST",
+        ),
     ],
 )
 def test_validate_config_rejects_unsafe_values(valid_config, field, value, error):
