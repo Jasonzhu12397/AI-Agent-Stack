@@ -25,13 +25,19 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             raise ValueError("REQUEST_BODY_INVALID")
         return json.loads(self.rfile.read(length))
 
-    def _authorized(self):
+    def _authorized(self, enrollment_csr=None):
         is_enrollment = self.path.endswith("/certificate/")
         if is_enrollment:
-            return (
-                not self.server.enrollment_consumed
-                and self.headers.get("Authorization")
-                == "Bearer " + self.server.enrollment_token
+            token_valid = self.headers.get("Authorization") == (
+                "Bearer " + self.server.enrollment_token
+            )
+            same_request = (
+                self.server.enrollment_consumed
+                and isinstance(enrollment_csr, str)
+                and enrollment_csr == self.server.enrollment_csr
+            )
+            return token_valid and (
+                not self.server.enrollment_consumed or same_request
             )
         return self.headers.get("Authorization") == "Bearer " + self.server.agent_token
 
@@ -82,29 +88,32 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         return certificate, chain, fingerprint
 
     def do_POST(self):
-        if not self._authorized():
-            self._send(401, {"detail": "unauthorized"})
-            return
         try:
             payload = self._payload()
             certificate_path = r"/api/v1/agent-runtime/nodes/[0-9a-f-]{36}/certificate/"
-            if re.fullmatch(certificate_path, self.path):
-                certificate, chain, fingerprint = self._issue_certificate(
-                    payload.get("csr_pem")
-                )
-                self.server.enrollment_consumed = True
-                print("EPH_CI_AGENT_CERTIFICATE_ISSUED", flush=True)
-                self._send(
-                    200,
-                    {
+            is_enrollment = bool(re.fullmatch(certificate_path, self.path))
+            csr_pem = payload.get("csr_pem") if is_enrollment else None
+            if not self._authorized(csr_pem):
+                self._send(401, {"detail": "unauthorized"})
+                return
+            if is_enrollment:
+                if self.server.enrollment_consumed:
+                    response = self.server.enrollment_response
+                else:
+                    certificate, chain, fingerprint = self._issue_certificate(csr_pem)
+                    self.server.enrollment_csr = csr_pem
+                    self.server.enrollment_response = {
                         "node_id": self.path.split("/")[-3],
                         "client_certificate": certificate,
                         "ca_chain": chain,
                         "fingerprint_sha256": fingerprint,
                         "agent_token": self.server.agent_token,
                         "token_consumed": True,
-                    },
-                )
+                    }
+                    self.server.enrollment_consumed = True
+                    response = self.server.enrollment_response
+                    print("EPH_CI_AGENT_CERTIFICATE_ISSUED", flush=True)
+                self._send(200, response)
                 return
             if not self.connection.getpeercert():
                 self._send(401, {"detail": "client_certificate_required"})
@@ -147,6 +156,8 @@ def main():
     server = ThreadingHTTPServer((args.host, args.port), ControlPlaneHandler)
     server.enrollment_token = args.enrollment_token
     server.enrollment_consumed = False
+    server.enrollment_csr = None
+    server.enrollment_response = None
     server.agent_token = args.agent_token
     server.agent_ca = args.agent_ca
     server.agent_ca_key = args.agent_ca_key

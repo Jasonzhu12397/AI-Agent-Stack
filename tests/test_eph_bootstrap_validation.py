@@ -2,6 +2,7 @@
 import base64
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import uuid
@@ -338,3 +339,53 @@ def test_bootstrap_failure_message_reports_os_error_class_and_errno():
 def test_bootstrap_failure_message_preserves_safe_bootstrap_error_code():
     error = BOOTSTRAP.BootstrapError("KUBERNETES_API_NOT_READY")
     assert BOOTSTRAP._bootstrap_failure_message(error) == "KUBERNETES_API_NOT_READY"
+
+
+def test_load_or_create_enrollment_csr_reuses_key_and_request(tmp_path):
+    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    key_path, csr_path, csr_pem = BOOTSTRAP._load_or_create_enrollment_csr(
+        common_name, tmp_path
+    )
+    first_key = key_path.read_bytes()
+    second_key, second_csr, second_pem = BOOTSTRAP._load_or_create_enrollment_csr(
+        common_name, tmp_path
+    )
+
+    assert second_key == key_path
+    assert second_csr == csr_path
+    assert second_pem == csr_pem
+    assert key_path.read_bytes() == first_key
+    assert key_path.stat().st_mode & 0o777 == 0o600
+    assert csr_path.stat().st_mode & 0o777 == 0o600
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+
+
+def test_load_or_create_enrollment_csr_fails_closed_on_partial_state(tmp_path):
+    (tmp_path / "tls.key").write_text("private", encoding="ascii")
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError, match="LOCAL_ENROLLMENT_STATE_INCOMPLETE"
+    ):
+        BOOTSTRAP._load_or_create_enrollment_csr(
+            "agent-node-{}.agents.internal".format(uuid.uuid4()), tmp_path
+        )
+
+
+def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
+    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    key_path, csr_path, _ = BOOTSTRAP._load_or_create_enrollment_csr(
+        common_name, tmp_path
+    )
+    other_key = tmp_path / "other.key"
+    subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+         "ec_paramgen_curve:P-256", "-out", str(other_key)],
+        check=True, capture_output=True, text=True,
+    )
+    os.chmod(str(other_key), 0o600)
+    other_key.replace(key_path)
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError, match="LOCAL_ENROLLMENT_KEY_MISMATCH"
+    ):
+        BOOTSTRAP._load_or_create_enrollment_csr(common_name, tmp_path)

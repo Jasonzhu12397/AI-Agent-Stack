@@ -19,6 +19,7 @@ MANIFEST_ROOT = pathlib.Path("/usr/share/ai-agent-studio/eph-manifests")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 TOKEN_PATTERN = re.compile(r"^[!-~]{32,512}$")
 FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+ENROLLMENT_STATE_ROOT = pathlib.Path("/var/lib/eph-agent/enrollment")
 
 
 class BootstrapError(Exception):
@@ -155,40 +156,68 @@ def _copy_secret_file(source, destination):
     os.chmod(str(destination), 0o600)
 
 
+def _load_or_create_enrollment_csr(common_name, state_root=None):
+    state_root = pathlib.Path(state_root or ENROLLMENT_STATE_ROOT)
+    state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(str(state_root), 0o700)
+    key_path = state_root / "tls.key"
+    csr_path = state_root / "tls.csr"
+    if key_path.exists() != csr_path.exists():
+        raise BootstrapError("LOCAL_ENROLLMENT_STATE_INCOMPLETE")
+    if key_path.exists():
+        if (
+            key_path.is_symlink()
+            or csr_path.is_symlink()
+            or not key_path.is_file()
+            or not csr_path.is_file()
+            or key_path.stat().st_size > 65536
+            or csr_path.stat().st_size > 65536
+            or key_path.stat().st_mode & 0o077
+            or csr_path.stat().st_mode & 0o077
+        ):
+            raise BootstrapError("LOCAL_ENROLLMENT_STATE_INVALID")
+        try:
+            _run(["openssl", "req", "-in", str(csr_path), "-verify", "-noout"])
+            csr_public_key = _run_output([
+                "openssl", "req", "-in", str(csr_path), "-pubkey", "-noout"
+            ]).strip()
+            private_public_key = _run_output([
+                "openssl", "pkey", "-in", str(key_path), "-pubout"
+            ]).strip()
+        except subprocess.CalledProcessError:
+            raise BootstrapError("LOCAL_ENROLLMENT_STATE_INVALID") from None
+        if not hmac.compare_digest(csr_public_key, private_public_key):
+            raise BootstrapError("LOCAL_ENROLLMENT_KEY_MISMATCH")
+    else:
+        with tempfile.TemporaryDirectory(prefix=".enrollment-", dir=str(state_root)) as temporary:
+            temporary_root = pathlib.Path(temporary)
+            temporary_key = temporary_root / "tls.key"
+            temporary_csr = temporary_root / "tls.csr"
+            try:
+                _run([
+                    "openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+                    "ec_paramgen_curve:P-256", "-out", str(temporary_key),
+                ])
+                os.chmod(str(temporary_key), 0o600)
+                _run([
+                    "openssl", "req", "-new", "-key", str(temporary_key),
+                    "-subj", "/CN=" + common_name, "-out", str(temporary_csr),
+                ])
+                os.chmod(str(temporary_csr), 0o600)
+                _run([
+                    "openssl", "req", "-in", str(temporary_csr), "-verify", "-noout"
+                ])
+                os.replace(str(temporary_key), str(key_path))
+                os.replace(str(temporary_csr), str(csr_path))
+            except subprocess.CalledProcessError:
+                raise BootstrapError("LOCAL_CLIENT_KEY_GENERATION_FAILED") from None
+    return key_path, csr_path, csr_path.read_text(encoding="ascii")
+
+
 def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_path):
-    key_path = secret_dir / "tls.key"
-    csr_path = secret_dir / "tls.csr"
     certificate_path = secret_dir / "tls.crt"
     common_name = "agent-node-{}.agents.internal".format(config["node_id"])
-
-    try:
-        _run([
-            "openssl",
-            "genpkey",
-            "-algorithm",
-            "EC",
-            "-pkeyopt",
-            "ec_paramgen_curve:P-256",
-            "-out",
-            str(key_path),
-        ])
-        os.chmod(str(key_path), 0o600)
-        _run([
-            "openssl",
-            "req",
-            "-new",
-            "-key",
-            str(key_path),
-            "-subj",
-            "/CN=" + common_name,
-            "-out",
-            str(csr_path),
-        ])
-        os.chmod(str(csr_path), 0o600)
-    except subprocess.CalledProcessError:
-        raise BootstrapError("LOCAL_CLIENT_KEY_GENERATION_FAILED") from None
-
-    csr_pem = csr_path.read_text(encoding="ascii")
+    key_path, csr_path, csr_pem = _load_or_create_enrollment_csr(common_name)
     request_body = json.dumps({"csr_pem": csr_pem}).encode("utf-8")
     endpoint = (
         config["control_url"].rstrip("/")
@@ -311,10 +340,6 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
     ):
         raise BootstrapError("CLIENT_CERTIFICATE_KEY_MISMATCH")
 
-    try:
-        csr_path.unlink()
-    except FileNotFoundError:
-        pass
     return {
         "agent_token": agent_token,
         "ca.crt": control_ca_path,
