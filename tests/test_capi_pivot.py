@@ -153,3 +153,97 @@ def test_pivot_rejects_same_kubeconfig_and_duplicate_inventory():
             "metal3-system",
             [INVENTORY[0], INVENTORY[0]],
         )
+
+
+class MemoryPivotJournal:
+    def __init__(self):
+        self.records = {}
+
+    def load_state(self, operation_id):
+        return self.records.get(operation_id)
+
+    def save_state(self, operation_id, record):
+        self.records[operation_id] = dict(record)
+
+
+def test_real_pivot_requires_acknowledgement_and_durable_journal():
+    with pytest.raises(PivotError, match="durable journal"):
+        pivot_cluster_api(
+            "source.kubeconfig",
+            "target.kubeconfig",
+            "metal3-system",
+            INVENTORY,
+            execute=True,
+        )
+
+
+def test_real_pivot_executes_once_and_verifies_source_and_target_ownership():
+    runner = SuccessfulPivotRunner()
+    journal = MemoryPivotJournal()
+    result = pivot_cluster_api(
+        "source.kubeconfig",
+        "target.kubeconfig",
+        "metal3-system",
+        INVENTORY,
+        runner=runner,
+        execute=True,
+        operation_id="pivot-operation-001",
+        target_agent_ack=lambda payload: payload["operation_id"] == "pivot-operation-001",
+        journal=journal,
+        monotonic=lambda: 0.0,
+    )
+
+    moves = [
+        command for command in runner.commands
+        if command[0] == "clusterctl" and "--dry-run" not in command
+    ]
+    assert len(moves) == 1
+    assert result["pivot_executed"] is True
+    assert result["ownership_transferred"] is True
+    assert journal.records["pivot-operation-001"]["state"] == "completed"
+
+
+def test_ambiguous_pivot_journal_blocks_second_mutating_attempt():
+    runner = SuccessfulPivotRunner()
+    journal = MemoryPivotJournal()
+    journal.save_state(
+        "pivot-operation-ambiguous",
+        {
+            "state": "uncertain",
+            "inventory_sha256": __import__(
+                "worker_app.capi_pivot", fromlist=["_inventory_digest"]
+            )._inventory_digest(tuple(INVENTORY)),
+        },
+    )
+
+    with pytest.raises(PivotVerificationError, match="ambiguous prior execution"):
+        pivot_cluster_api(
+            "source.kubeconfig",
+            "target.kubeconfig",
+            "metal3-system",
+            INVENTORY,
+            runner=runner,
+            execute=True,
+            operation_id="pivot-operation-ambiguous",
+            target_agent_ack=lambda payload: True,
+            journal=journal,
+        )
+
+    assert not any(
+        command[0] == "clusterctl" and "--dry-run" not in command
+        for command in runner.commands
+    )
+
+
+def test_real_pivot_refuses_inventory_from_another_namespace():
+    with pytest.raises(ValueError, match="outside the requested namespace"):
+        pivot_cluster_api(
+            "source.kubeconfig",
+            "target.kubeconfig",
+            "metal3-system",
+            [CapiObjectRef("Cluster", "foreign", "uid", "other-namespace")],
+            execute=True,
+            operation_id="pivot-operation-foreign",
+            target_agent_ack=lambda payload: True,
+            journal=MemoryPivotJournal(),
+        )

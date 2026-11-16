@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import time
@@ -162,6 +163,33 @@ def verify_pivot_inventory(
     return True
 
 
+def _inventory_digest(objects: tuple[CapiObjectRef, ...]) -> str:
+    payload = [
+        {
+            "kind": item.kind,
+            "name": item.name,
+            "namespace": item.namespace,
+            "uid": item.uid,
+        }
+        for item in sorted(
+            objects,
+            key=lambda value: (value.namespace or "", value.kind, value.name),
+        )
+    ]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _save_journal(journal, operation_id: str, record: dict) -> None:
+    try:
+        journal.save_state(operation_id, record)
+    except Exception as exc:
+        raise PivotError(
+            "Unable to persist CAPI pivot journal; inspect both clusters",
+            retry_safe=False,
+        ) from exc
+
+
 def pivot_cluster_api(
     source_kubeconfig: str,
     target_kubeconfig: str,
@@ -174,6 +202,10 @@ def pivot_cluster_api(
     poll_interval: float = 5.0,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    execute: bool = False,
+    operation_id: str | None = None,
+    target_agent_ack: Callable[[dict], bool] | None = None,
+    journal=None,
 ) -> dict:
     if not source_kubeconfig or not target_kubeconfig or not namespace:
         raise ValueError("Source kubeconfig, target kubeconfig and namespace are required")
@@ -190,6 +222,8 @@ def pivot_cluster_api(
         raise ValueError("CAPI pivot inventory contains duplicate object identities")
     if any(not item.uid for item in objects):
         raise ValueError("Every CAPI inventory entry must include its original UID")
+    if any(item.namespace not in (None, namespace) for item in objects):
+        raise ValueError("CAPI pivot inventory contains objects outside the requested namespace")
 
     base_command = [
         "clusterctl",
@@ -208,16 +242,199 @@ def pivot_cluster_api(
         "clusterctl move dry-run",
     )
 
-    return {
+    result = {
         "state": "simulation_ready",
         "pivot_executed": False,
         "pivot_simulated": True,
         "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
         "dry_run_passed": True,
         "inventory_objects": len(objects),
+        "inventory_sha256": _inventory_digest(objects),
         "ownership_transferred": False,
         "side_effects": False,
         "target_agent_acknowledgement_required": True,
         "postflight_required": True,
     }
+    if not execute:
+        return result
+
+    if (
+        not isinstance(operation_id, str)
+        or not operation_id
+        or len(operation_id) > 128
+        or target_agent_ack is None
+        or journal is None
+        or not callable(getattr(journal, "load_state", None))
+        or not callable(getattr(journal, "save_state", None))
+    ):
+        raise PivotError(
+            "Real CAPI pivot requires operation_id, target Agent acknowledgement "
+            "and a durable journal",
+            retry_safe=True,
+        )
+
+    digest = result["inventory_sha256"]
+    try:
+        previous = journal.load_state(operation_id)
+    except Exception as exc:
+        raise PivotError(
+            "Unable to read CAPI pivot journal; refusing mutation",
+            retry_safe=True,
+        ) from exc
+    if previous is not None:
+        if not isinstance(previous, dict) or previous.get("inventory_sha256") != digest:
+            raise PivotVerificationError(
+                "Pivot operation ID is already bound to a different inventory",
+                retry_safe=False,
+            )
+        state = previous.get("state")
+        if state == "completed":
+            if verify_pivot_inventory(
+                runner,
+                source_kubeconfig,
+                target_kubeconfig,
+                objects,
+                timeout=command_timeout,
+            ):
+                return {
+                    **result,
+                    "state": "completed",
+                    "pivot_executed": True,
+                    "pivot_simulated": False,
+                    "execution_mode": "clusterctl_move_verified",
+                    "ownership_transferred": True,
+                    "side_effects": True,
+                    "target_agent_acknowledged": True,
+                }
+            raise PivotVerificationError(
+                "Journal says completed but ownership verification no longer matches",
+                retry_safe=False,
+            )
+        if state in {"executing", "verifying", "uncertain"}:
+            raise PivotVerificationError(
+                "Pivot operation has an ambiguous prior execution; inspect both clusters "
+                "and reconcile before retry",
+                retry_safe=False,
+            )
+        if state != "preflight_complete":
+            raise PivotVerificationError(
+                "Pivot journal contains an unsupported state",
+                retry_safe=False,
+            )
+    else:
+        _save_journal(
+            journal,
+            operation_id,
+            {
+                "state": "preflight_complete",
+                "inventory_sha256": digest,
+                "namespace": namespace,
+                "inventory_objects": len(objects),
+            },
+        )
+
+    acknowledgement = {
+        "operation_id": operation_id,
+        "namespace": namespace,
+        "inventory_sha256": digest,
+        "inventory_objects": len(objects),
+    }
+    try:
+        acknowledged = target_agent_ack(acknowledgement)
+    except Exception as exc:
+        raise PivotError(
+            "Target Agent acknowledgement could not be confirmed; refusing mutation",
+            retry_safe=True,
+        ) from exc
+    if acknowledged is not True:
+        raise PivotError(
+            "Target Agent did not acknowledge CAPI pivot ownership",
+            retry_safe=True,
+        )
+    _save_journal(
+        journal,
+        operation_id,
+        {
+            **acknowledgement,
+            "state": "executing",
+            "target_agent_acknowledged": True,
+        },
+    )
+
+    try:
+        _run(
+            runner,
+            base_command,
+            command_timeout,
+            "clusterctl move",
+        )
+    except PivotError:
+        try:
+            journal.save_state(
+                operation_id,
+                {
+                    **acknowledgement,
+                    "state": "uncertain",
+                    "target_agent_acknowledged": True,
+                },
+            )
+        except Exception:
+            pass
+        raise
+
+    _save_journal(
+        journal,
+        operation_id,
+        {
+            **acknowledgement,
+            "state": "verifying",
+            "target_agent_acknowledged": True,
+        },
+    )
+    deadline = monotonic() + verification_timeout
+    while True:
+        if verify_pivot_inventory(
+            runner,
+            source_kubeconfig,
+            target_kubeconfig,
+            objects,
+            timeout=command_timeout,
+        ):
+            _save_journal(
+                journal,
+                operation_id,
+                {
+                    **acknowledgement,
+                    "state": "completed",
+                    "target_agent_acknowledged": True,
+                    "ownership_transferred": True,
+                },
+            )
+            return {
+                **result,
+                "state": "completed",
+                "pivot_executed": True,
+                "pivot_simulated": False,
+                "execution_mode": "clusterctl_move_verified",
+                "ownership_transferred": True,
+                "side_effects": True,
+                "target_agent_acknowledged": True,
+            }
+        if monotonic() >= deadline:
+            try:
+                journal.save_state(
+                    operation_id,
+                    {
+                        **acknowledgement,
+                        "state": "uncertain",
+                        "target_agent_acknowledged": True,
+                    },
+                )
+            except Exception:
+                pass
+            raise PivotVerificationError(
+                "CAPI pivot command completed but ownership transfer was not verified; "
+                "reconcile both clusters before retry",
+                retry_safe=False,
+            )
+        sleep(min(poll_interval, max(0.0, deadline - monotonic())))

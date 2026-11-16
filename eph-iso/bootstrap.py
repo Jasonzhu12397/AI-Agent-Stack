@@ -328,11 +328,16 @@ def _request_client_certificate(config, secret_dir, control_ca_path, issuer_ca_p
             "-pubout",
         ]).strip()
     except subprocess.CalledProcessError as error:
+        diagnostic = error.stderr or error.stdout or ""
+        diagnostic = re.sub(r"\\s+", " ", str(diagnostic)).strip()
+        diagnostic = re.sub(r"[^A-Za-z0-9_.:= -]", "?", diagnostic)[:240]
+        suffix = ":detail=" + diagnostic if diagnostic else ""
         raise BootstrapError(
             "CLIENT_CERTIFICATE_VALIDATION_FAILED:"
             + validation_stage
             + ":"
             + str(error.returncode)
+            + suffix
         ) from None
     if (
         not hmac.compare_digest(actual_fingerprint, fingerprint)
