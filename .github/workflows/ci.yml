@@ -10,7 +10,7 @@ jobs:
   python:
     concurrency:
       group: ${{ github.workflow }}-python-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -498,7 +498,7 @@ jobs:
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:16443-:6443 \
             -device virtio-net-pci,netdev=net0 \
             -display none -qmp "unix:$RUNNER_TEMP/qemu-qmp.sock,server=on,wait=off" -serial "file:$RUNNER_TEMP/eph-qemu.log" \
-            -d int,guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
+            -d guest_errors,cpu_reset -D "$RUNNER_TEMP/qemu-debug.log" \
             -no-reboot > "$RUNNER_TEMP/qemu.stdout" 2>&1 &
           QEMU_PID=$!
           trap 'kill "$QEMU_PID" "$HTTP_PID" "$MOCK_CONTROL_PID" >/dev/null 2>&1 || true' EXIT
@@ -639,6 +639,7 @@ jobs:
             ${{ runner.temp }}/eph-mock-control-plane.log
             ${{ runner.temp }}/isolinux.cfg
           if-no-files-found: ignore
+          compression-level: 1
           retention-days: 7
 
   compose:
