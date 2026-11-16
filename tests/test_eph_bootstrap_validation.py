@@ -278,13 +278,13 @@ def test_validate_persisted_client_credentials_accepts_newline_separated_chain(
 ):
     node_id = str(uuid.uuid4())
     certificate = (
-        "-----BEGIN CERTIFICATE-----\\n"
-        "MAA=\\n"
-        "-----END CERTIFICATE-----\\n"
+        "-----BEGIN CERTIFICATE-----\n"
+        "MAA=\n"
+        "-----END CERTIFICATE-----\n"
     )
     certificate_path = tmp_path / "tls.crt"
     key_path = tmp_path / "tls.key"
-    certificate_path.write_text(certificate + "\\n" + certificate, encoding="ascii")
+    certificate_path.write_text(certificate + "\n" + certificate, encoding="ascii")
     key_path.write_text("private-key", encoding="ascii")
     outputs = iter(
         [
