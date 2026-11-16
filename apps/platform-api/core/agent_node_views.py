@@ -2924,15 +2924,22 @@ class AgentRuntimeDeploymentCheckpointView(APIView):
                         status=409,
                     )
             if phase == "capi_pivot_verified":
-                dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
-                source = (deployment.plan_result or {}).get(
-                    "capi_pivot_source_preflight",
+                plan_result = deployment.plan_result or {}
+                dual_agent = plan_result.get("dual_agent", {})
+                source = plan_result.get("capi_pivot_source_preflight", {})
+                source_identity = source.get("source_cluster_identity", {})
+                target_verification = plan_result.get(
+                    "capi_pivot_target_verification",
                     {},
                 )
-                source_identity = source.get("source_cluster_identity", {})
                 if (
                     dual_agent.get("target_agent_owns_cluster") is not True
-                    or dual_agent.get("target_agent_cluster_uid") != source_identity.get("uid")
+                    or dual_agent.get("target_agent_cluster_uid")
+                    != target_verification.get("cluster_uid")
+                    or target_verification.get("source_cluster_uid")
+                    != source_identity.get("uid")
+                    or target_verification.get("cluster_spec_sha256")
+                    != source_identity.get("spec_sha256")
                 ):
                     return Response(
                         {
