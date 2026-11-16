@@ -102,7 +102,6 @@ def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
     assert "mnt-eph" not in service
 
 
-
 def test_eph_time_sync_gate_is_installed_and_fail_closed():
     root = ROOT / "eph-iso/config/includes.chroot"
     script = (root / "usr/local/sbin/eph-wait-time-sync.sh").read_text(encoding="utf-8")
