@@ -548,6 +548,7 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
     ]) in events
     assert ("secret", "agent-control-plane-mtls", "ai-agent-system", [
         "ca.crt",
+        "client-ca.crt",
         "tls.crt",
         "tls.key",
     ]) in events
