@@ -2696,7 +2696,26 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
     )
-    assert replay.status_code == 401
+    assert replay.status_code == 200
+    assert replay.data == response.data
+
+    different_csr = runtime.post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\\nOTHER\\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
+    )
+    assert different_csr.status_code == 401
+
+    node.pending_enrollment_expires_at = timezone.now() - datetime.timedelta(seconds=1)
+    node.save(update_fields=["pending_enrollment_expires_at"])
+    expired_replay = runtime.post(
+        f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\\nMAA=\\n-----END CERTIFICATE REQUEST-----"},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
+    )
+    assert expired_replay.status_code == 401
 
 
 @pytest.mark.django_db

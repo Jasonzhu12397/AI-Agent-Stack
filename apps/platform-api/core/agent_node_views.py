@@ -17,6 +17,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.module_loading import import_string
 import httpx
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -41,6 +44,35 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+
+
+def _eph_enrollment_response_cipher():
+    secret = settings.SECRET_KEY
+    if not isinstance(secret, str) or len(secret) < 32:
+        raise RuntimeError("Django SECRET_KEY is not suitable for EPH response encryption.")
+    key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"ai-agent-stack-eph-enrollment-response-v1",
+        info=b"eph-certificate-exchange",
+    ).derive(secret.encode("utf-8"))
+    return Fernet(__import__("base64").urlsafe_b64encode(key))
+
+
+def _encrypt_eph_enrollment_response(payload):
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _eph_enrollment_response_cipher().encrypt(encoded).decode("ascii")
+
+
+def _decrypt_eph_enrollment_response(value):
+    try:
+        decoded = _eph_enrollment_response_cipher().decrypt(value.encode("ascii"))
+        payload = json.loads(decoded)
+    except (InvalidToken, TypeError, ValueError, UnicodeDecodeError):
+        raise ValueError("EPH enrollment recovery payload is invalid.") from None
+    if not isinstance(payload, dict):
+        raise ValueError("EPH enrollment recovery payload is invalid.")
+    return payload
 
 
 EPH_COMMANDS = {
@@ -1842,6 +1874,8 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
         except (TypeError, ValueError, AttributeError):
             return Response({"detail": "Invalid EPH node identity."}, status=400)
 
+        supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        csr_digest = hashlib.sha256(csr_pem.encode("utf-8")).hexdigest()
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().filter(pk=parsed_node_id).first()
             if (
@@ -1851,7 +1885,29 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 or node.revoked_at is not None
             ):
                 return Response({"detail": "Invalid or revoked EPH node identity."}, status=401)
-            supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+            if (
+                node.pending_enrollment_token_hash
+                and hmac.compare_digest(supplied_hash, node.pending_enrollment_token_hash)
+            ):
+                if (
+                    node.pending_enrollment_expires_at is None
+                    or timezone.now() >= node.pending_enrollment_expires_at
+                    or not hmac.compare_digest(csr_digest, node.pending_enrollment_csr_sha256)
+                    or not node.pending_enrollment_response_encrypted
+                ):
+                    return Response({"detail": "Invalid or expired enrollment recovery request."}, status=401)
+                try:
+                    replay_payload = _decrypt_eph_enrollment_response(
+                        node.pending_enrollment_response_encrypted
+                    )
+                except ValueError:
+                    return Response({"detail": "Enrollment recovery is unavailable."}, status=401)
+                response = Response(replay_payload, status=200)
+                response["Cache-Control"] = "no-store, max-age=0"
+                response["Pragma"] = "no-cache"
+                return response
+
             if not hmac.compare_digest(supplied_hash, node.credential_hash):
                 return Response({"detail": "Invalid or revoked node credential."}, status=401)
             if node.client_certificate_fingerprint and node.client_certificate_revoked_at is None:
@@ -1883,15 +1939,35 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 )
 
             agent_token = secrets.token_urlsafe(48)
-            node.credential_hash = hashlib.sha256(
-                agent_token.encode("utf-8")
-            ).hexdigest()
+            response_payload = {
+                "node_id": str(node.id),
+                "client_certificate": issued["client_certificate"],
+                "ca_chain": issued["ca_chain"],
+                "fingerprint_sha256": issued["fingerprint_sha256"],
+                "token_consumed": True,
+                "agent_token": agent_token,
+                "private_key_returned": False,
+            }
+            try:
+                encrypted_response = _encrypt_eph_enrollment_response(response_payload)
+            except (TypeError, ValueError, RuntimeError):
+                return Response({"detail": "Enrollment recovery could not be secured."}, status=503)
+
+            node.credential_hash = hashlib.sha256(agent_token.encode("utf-8")).hexdigest()
+            node.pending_enrollment_token_hash = supplied_hash
+            node.pending_enrollment_csr_sha256 = csr_digest
+            node.pending_enrollment_response_encrypted = encrypted_response
+            node.pending_enrollment_expires_at = timezone.now() + datetime.timedelta(minutes=10)
             node.client_certificate_fingerprint = issued["fingerprint_sha256"]
             node.client_certificate_bound_at = timezone.now()
             node.client_certificate_revoked_at = None
             node.save(
                 update_fields=[
                     "credential_hash",
+                    "pending_enrollment_token_hash",
+                    "pending_enrollment_csr_sha256",
+                    "pending_enrollment_response_encrypted",
+                    "pending_enrollment_expires_at",
                     "client_certificate_fingerprint",
                     "client_certificate_bound_at",
                     "client_certificate_revoked_at",
@@ -1912,18 +1988,7 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                 },
             )
 
-        response = Response(
-            {
-                "node_id": str(node.id),
-                "client_certificate": issued["client_certificate"],
-                "ca_chain": issued["ca_chain"],
-                "fingerprint_sha256": issued["fingerprint_sha256"],
-                "token_consumed": True,
-                "agent_token": agent_token,
-                "private_key_returned": False,
-            },
-            status=200,
-        )
+        response = Response(response_payload, status=200)
         response["Cache-Control"] = "no-store, max-age=0"
         response["Pragma"] = "no-cache"
         return response
