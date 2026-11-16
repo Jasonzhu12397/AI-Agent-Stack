@@ -2522,6 +2522,19 @@ def execute_command(
                     labels = metadata.get("labels", {})
                     if not isinstance(owner_references, list) or not isinstance(labels, dict):
                         raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
+                    spec_sha256 = None
+                    if resource_key == "cluster.x-k8s.io/clusters":
+                        cluster_spec = item.get("spec")
+                        if not isinstance(cluster_spec, dict):
+                            raise NodeAgentError("CAPI_SOURCE_CLUSTER_SPEC_INVALID")
+                        spec_sha256 = hashlib.sha256(
+                            json.dumps(
+                                cluster_spec,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            ).encode("utf-8")
+                        ).hexdigest()
                     full_inventory.append(
                         {
                             "api_version": item.get("apiVersion"),
@@ -2530,6 +2543,7 @@ def execute_command(
                             "name": metadata.get("name"),
                             "namespace": metadata.get("namespace"),
                             "uid": metadata.get("uid"),
+                            "spec_sha256": spec_sha256,
                             "owner_references": [
                                 {
                                     "api_version": owner.get("apiVersion"),
@@ -2615,12 +2629,15 @@ def execute_command(
                 and source_cluster["namespace"]
                 and isinstance(source_cluster.get("api_version"), str)
                 and source_cluster["api_version"]
+                and isinstance(source_cluster.get("spec_sha256"), str)
+                and re.fullmatch(r"[a-f0-9]{64}", source_cluster["spec_sha256"])
             ):
                 source_cluster_identity = {
                     "name": cluster_name,
                     "namespace": source_cluster["namespace"],
                     "uid": source_cluster["uid"],
                     "api_version": source_cluster.get("api_version"),
+                    "spec_sha256": source_cluster["spec_sha256"],
                 }
         owner_graph = build_capi_owner_graph(
             full_inventory,
@@ -2698,6 +2715,8 @@ def execute_command(
         cluster_name = payload.get("cluster_name")
         namespace = payload.get("namespace", "default")
         expected_uid = payload.get("expected_cluster_uid")
+        expected_api_version = payload.get("expected_cluster_api_version")
+        expected_spec_sha256 = payload.get("expected_cluster_spec_sha256")
         if (
             not isinstance(cluster_name, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
@@ -2712,6 +2731,13 @@ def execute_command(
             raise NodeAgentError("INVALID_NAMESPACE")
         if not isinstance(expected_uid, str) or not expected_uid:
             raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
+        if (
+            not isinstance(expected_api_version, str)
+            or not expected_api_version
+            or not isinstance(expected_spec_sha256, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", expected_spec_sha256)
+        ):
+            raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_SPEC_IDENTITY_REQUIRED")
         discovery = kubernetes_api_get("/apis")
         if not isinstance(discovery, dict):
             raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
@@ -2751,8 +2777,27 @@ def execute_command(
         if not isinstance(metadata, dict):
             raise NodeAgentError("INVALID_TARGET_CLUSTER_METADATA")
         actual_uid = metadata.get("uid")
-        if actual_uid != expected_uid:
-            raise NodeAgentError("TARGET_CLUSTER_UID_MISMATCH")
+        actual_api_version = cluster.get("apiVersion")
+        actual_spec = cluster.get("spec")
+        if (
+            not isinstance(actual_uid, str)
+            or not actual_uid
+            or metadata.get("name") != cluster_name
+            or metadata.get("namespace") != namespace
+            or actual_api_version != expected_api_version
+            or not isinstance(actual_spec, dict)
+        ):
+            raise NodeAgentError("TARGET_CLUSTER_IDENTITY_INVALID")
+        actual_spec_sha256 = hashlib.sha256(
+            json.dumps(
+                actual_spec,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if actual_spec_sha256 != expected_spec_sha256:
+            raise NodeAgentError("TARGET_CLUSTER_SPEC_MISMATCH")
         machines = kubernetes_api_get(
             f"/apis/cluster.x-k8s.io/{version}"
             f"/namespaces/{namespace}/machines"
@@ -2856,6 +2901,8 @@ def execute_command(
             "namespace": namespace,
             "cluster_uid": actual_uid,
             "source_cluster_uid": expected_uid,
+            "cluster_api_version": actual_api_version,
+            "cluster_spec_sha256": actual_spec_sha256,
             "cluster_identity_preserved": True,
             "machine_count": len(machine_names),
             "machine_names": machine_names[:200],
