@@ -2689,6 +2689,11 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
     assert node.client_certificate_fingerprint == fingerprint
     assert node.client_certificate_bound_at is not None
     assert node.client_certificate_revoked_at is None
+    assert node.pending_enrollment_token_hash == hashlib.sha256(
+        enrollment_token.encode("utf-8")
+    ).hexdigest()
+    assert node.pending_enrollment_response_encrypted
+    assert response.data["agent_token"] not in node.pending_enrollment_response_encrypted
 
     replay = runtime.post(
         f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
@@ -2701,7 +2706,7 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
 
     different_csr = runtime.post(
         f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
-        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\\nOTHER\\n-----END CERTIFICATE REQUEST-----"},
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nOTHER\n-----END CERTIFICATE REQUEST-----"},
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
     )
@@ -2711,7 +2716,7 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
     node.save(update_fields=["pending_enrollment_expires_at"])
     expired_replay = runtime.post(
         f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
-        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\\nMAA=\\n-----END CERTIFICATE REQUEST-----"},
+        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----"},
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
     )
