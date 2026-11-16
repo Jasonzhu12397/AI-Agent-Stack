@@ -283,20 +283,24 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     response_data = json.loads(response_body)
     response_data["node_id"] = config["node_id"]
     response_body = json.dumps(response_data).encode("utf-8")
-    key_path = tmp_path / "tls.key"
-    csr_path = tmp_path / "tls.csr"
+    state_root = tmp_path / "enrollment-state"
+    key_path = state_root / "tls.key"
+    csr_path = state_root / "tls.csr"
 
     captured_commands = []
 
     def fake_run(arguments, input_text=None):
         captured_commands.append(list(arguments))
-        if arguments[1] == "genpkey":
-            key_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
-        elif arguments[1] == "req":
-            csr_path.write_text(
-                "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----\n",
-                encoding="ascii",
-            )
+        if arguments[1] in {"genpkey", "req"} and "-out" in arguments:
+            output_path = pathlib.Path(arguments[arguments.index("-out") + 1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if arguments[1] == "genpkey":
+                output_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
+            else:
+                output_path.write_text(
+                    "-----BEGIN CERTIFICATE REQUEST-----\\nMAA=\\n-----END CERTIFICATE REQUEST-----\\n",
+                    encoding="ascii",
+                )
 
     output_values = iter(
         [
@@ -310,6 +314,7 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
         ]
     )
     bootstrap_globals = BOOTSTRAP["_request_client_certificate"].__globals__
+    monkeypatch.setitem(bootstrap_globals, "ENROLLMENT_STATE_ROOT", state_root)
     monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
     monkeypatch.setitem(
         bootstrap_globals,
@@ -542,7 +547,6 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
     ]) in events
     assert ("secret", "agent-control-plane-mtls", "ai-agent-system", [
         "ca.crt",
-        "client-ca.crt",
         "tls.crt",
         "tls.key",
     ]) in events
