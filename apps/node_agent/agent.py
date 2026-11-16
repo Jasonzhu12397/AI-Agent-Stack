@@ -5073,6 +5073,7 @@ def main() -> None:
     liveness_thread.start()
     try:
         for _iteration in count():
+            touch_health_files(readiness=True)
             try:
                 processed = runtime.run_once()
                 if args.once:
@@ -5080,7 +5081,7 @@ def main() -> None:
                 if not processed:
                     time.sleep(args.poll_seconds)
             except NodeAgentError as exc:
-                touch_health_files()
+                touch_health_files(readiness=True)
                 print(json.dumps({"event": "control_plane_error", "code": str(exc)}), flush=True)
                 if args.once:
                     raise SystemExit(1) from exc
