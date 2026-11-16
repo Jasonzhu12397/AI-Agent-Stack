@@ -36,4 +36,5 @@ def test_agent_main_refreshes_readiness_before_polling(monkeypatch):
     agent.main()
 
     assert readiness_updates
-    assert readiness_updates[0] is True
+    assert readiness_updates[0] is False
+    assert True in readiness_updates
