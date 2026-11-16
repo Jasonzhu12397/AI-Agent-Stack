@@ -2706,7 +2706,12 @@ def test_eph_certificate_exchange_consumes_enrollment_token_and_binds_fingerprin
 
     different_csr = runtime.post(
         f"/api/v1/agent-runtime/nodes/{node_id}/certificate/",
-        {"csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nOTHER\n-----END CERTIFICATE REQUEST-----"},
+        {
+            "csr_pem": (
+                "-----BEGIN CERTIFICATE REQUEST-----\\nOTHER\\n"
+                "-----END CERTIFICATE REQUEST-----"
+            )
+        },
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {enrollment_token}",
     )

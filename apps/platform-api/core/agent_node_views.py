@@ -49,7 +49,7 @@ from core.models import (
 
 def _eph_enrollment_response_cipher():
     secret = settings.SECRET_KEY
-    if not isinstance(secret, str) or len(secret) < 32:
+    if not isinstance(secret, str) or len(secret) < 16:
         raise RuntimeError("Django SECRET_KEY is not suitable for EPH response encryption.")
     key = HKDF(
         algorithm=hashes.SHA256(),
@@ -1917,7 +1917,10 @@ class AgentRuntimeEPHCertificateExchangeView(APIView):
                     or not hmac.compare_digest(csr_digest, node.pending_enrollment_csr_sha256)
                     or not node.pending_enrollment_response_encrypted
                 ):
-                    return Response({"detail": "Invalid or expired enrollment recovery request."}, status=401)
+                    return Response(
+                        {"detail": "Invalid or expired enrollment recovery request."},
+                        status=401,
+                    )
                 try:
                     replay_payload = _decrypt_eph_enrollment_response(
                         node.pending_enrollment_response_encrypted
