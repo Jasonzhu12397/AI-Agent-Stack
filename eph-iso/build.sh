@@ -57,6 +57,23 @@ done
 install -d "$BUILD_DIR/config/includes.chroot/etc/default"
 install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio"
 wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml"
+python3 - "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" <<'PY'
+import pathlib
+import sys
+
+manifest = pathlib.Path(sys.argv[1])
+content = manifest.read_text(encoding="utf-8")
+needle = "                - --type=readiness\n            periodSeconds: 10\n          securityContext:"
+replacement = (
+    "                - --type=readiness\n"
+    "            periodSeconds: 10\n"
+    "            timeoutSeconds: 10\n"
+    "          securityContext:"
+)
+if content.count(needle) != 1:
+    raise SystemExit("CALICO_CONTROLLER_READINESS_PROBE_PATCH_TARGET_INVALID")
+manifest.write_text(content.replace(needle, replacement, 1), encoding="utf-8")
+PY
 printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
