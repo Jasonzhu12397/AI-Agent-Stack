@@ -4,7 +4,7 @@ set -euo pipefail
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-}"
 POD_CIDR="${EPH_POD_CIDR:-10.244.0.0/16}"
 CRI_SOCKET="unix:///run/containerd/containerd.sock"
-CALICO_MANIFEST="/usr/share/ai-agent-studio/calico.yaml"
+CALICO_MANIFEST="/usr/share/ai-agent-studio/calico-vxlan.yaml"
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -68,6 +68,6 @@ done
 
 kubectl apply -f "$CALICO_MANIFEST"
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
-kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
-kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
+kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=900s
+kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=900s
+kubectl wait --for=condition=Ready nodes --all --timeout=900s
