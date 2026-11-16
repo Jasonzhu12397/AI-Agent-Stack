@@ -2,14 +2,15 @@
 Description=Initialize the temporary EPH Kubernetes cluster with kubeadm
 StartLimitIntervalSec=30min
 StartLimitBurst=5
-Wants=network-online.target containerd.service
-After=network-online.target containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
+Wants=network-online.target containerd.service systemd-timesyncd.service
+After=network-online.target systemd-timesyncd.service containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 After=cloud-config.service
 Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/default/eph-node
+ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-wait-time-sync.sh
 ExecStart=/usr/bin/bash /usr/local/sbin/eph-kubeadm-init.sh
 RemainAfterExit=yes
 Restart=on-failure
