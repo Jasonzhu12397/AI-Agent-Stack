@@ -119,12 +119,14 @@ spec:
               command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 10
             failureThreshold: 3
           livenessProbe:
             exec:
               command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
             initialDelaySeconds: 15
             periodSeconds: 15
+            timeoutSeconds: 10
             failureThreshold: 3
       volumes:
         - name: host-sysfs
