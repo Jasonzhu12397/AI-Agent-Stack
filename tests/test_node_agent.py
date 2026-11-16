@@ -12,6 +12,27 @@ import pytest
 from node_agent import agent, capabilities, capi_pivot
 
 TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
+TARGET_CAPI_CLUSTER_SPEC = {
+    "clusterNetwork": {"pods": {"cidrBlocks": ["10.244.0.0/16"]}},
+}
+TARGET_CAPI_CLUSTER_SPEC_SHA256 = hashlib.sha256(
+    json.dumps(
+        TARGET_CAPI_CLUSTER_SPEC,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+).hexdigest()
+TARGET_CAPI_CLUSTER_OBJECT = {
+    "apiVersion": "cluster.x-k8s.io/v1beta1",
+    "kind": "Cluster",
+    "metadata": {
+        "name": "edge-lab",
+        "namespace": "metal3",
+        "uid": "target-uid",
+    },
+    "spec": TARGET_CAPI_CLUSTER_SPEC,
+}
 
 
 def test_node_health_is_available_for_both_agent_roles():
@@ -2373,9 +2394,9 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
                 }
             ]
         },
-        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
-        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
+            TARGET_CAPI_CLUSTER_OBJECT
+        ),
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2434,6 +2455,8 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
                 "cluster_name": "edge-lab",
                 "namespace": "metal3",
                 "expected_cluster_uid": "source-uid",
+                "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
             },
         },
         "target_cluster",
@@ -2441,7 +2464,10 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
 
     assert result["pivot_adoption_verified"] is True
     assert result["cluster_identity_preserved"] is True
-    assert result["cluster_uid"] == "source-uid"
+    assert result["cluster_uid"] == "target-uid"
+    assert result["source_cluster_uid"] == "source-uid"
+    assert result["cluster_api_version"] == "cluster.x-k8s.io/v1beta1"
+    assert result["cluster_spec_sha256"] == TARGET_CAPI_CLUSTER_SPEC_SHA256
     assert result["machine_count"] == 1
     assert result["ready_machine_count"] == 1
     assert result["not_ready_machine_names"] == []
@@ -2483,9 +2509,9 @@ def test_target_agent_rejects_malformed_machine_inventory(
                 }
             ]
         },
-        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"uid": "source-uid"}
-        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
+            TARGET_CAPI_CLUSTER_OBJECT
+        ),
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [machine]
         },
@@ -2509,6 +2535,8 @@ def test_target_agent_rejects_malformed_machine_inventory(
                     "cluster_name": "edge-lab",
                     "namespace": "metal3",
                     "expected_cluster_uid": "source-uid",
+                    "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                    "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 },
             },
             "target_cluster",
@@ -2545,9 +2573,9 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                 }
             ]
         },
-        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"uid": "source-uid"}
-        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
+            TARGET_CAPI_CLUSTER_OBJECT
+        ),
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2601,6 +2629,8 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                     "cluster_name": "edge-lab",
                     "namespace": "metal3",
                     "expected_cluster_uid": "source-uid",
+                    "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                    "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 },
             },
             "target_cluster",
@@ -2696,6 +2726,8 @@ def test_eph_agent_cannot_run_target_adoption_verification():
                     "cluster_name": "edge-lab",
                     "namespace": "metal3",
                     "expected_cluster_uid": "source-uid",
+                    "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                    "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 },
             },
             "eph_node",
