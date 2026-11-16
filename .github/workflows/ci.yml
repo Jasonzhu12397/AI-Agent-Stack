@@ -255,6 +255,12 @@ jobs:
                   kubectl get nodes -o wide >&2 || true
                   kubectl get pods --all-namespaces -o wide >&2 || true
                   kubectl get events --all-namespaces --sort-by=.lastTimestamp >&2 || true
+                  for pod in $(kubectl --namespace kube-system get pods -l k8s-app=calico-node -o name 2>/dev/null); do
+                    kubectl --namespace kube-system describe "$pod" >&2 || true
+                    kubectl --namespace kube-system logs "$pod" -c calico-node --tail=300 >&2 || true
+                    kubectl --namespace kube-system logs "$pod" -c install-cni --tail=200 >&2 || true
+                  done
+                  kubectl --namespace kube-system logs deployment/calico-kube-controllers --all-containers=true --tail=300 >&2 || true
                   kubectl --namespace ai-agent-system logs deployment/eph-node-agent --all-containers=true --tail=200 >&2 || true
                   findmnt >&2 || true
                   df -hT / /var/lib/containerd /var/lib/kubelet /var/lib/etcd >&2 || true
@@ -277,8 +283,10 @@ jobs:
                 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
                 test -n "$NODE_NAME"
                 kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=180s
-                kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
-                kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
+                CALICO_BACKEND="$(kubectl --namespace kube-system get configmap calico-config -o jsonpath='{.data.calico_backend}')"
+                test "$CALICO_BACKEND" = "vxlan"
+                kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=900s
+                kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=900s
                 kubectl create namespace eph-ci-smoke --dry-run=client -o yaml | kubectl apply -f -
                 kubectl --namespace eph-ci-smoke apply -f - <<'MANIFEST'
                 apiVersion: apps/v1
