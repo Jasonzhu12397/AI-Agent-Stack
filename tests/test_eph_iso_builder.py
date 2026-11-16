@@ -285,7 +285,6 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     response_body = json.dumps(response_data).encode("utf-8")
     state_root = tmp_path / "enrollment-state"
     key_path = state_root / "tls.key"
-    csr_path = state_root / "tls.csr"
 
     captured_commands = []
 
@@ -298,7 +297,9 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
                 output_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
             else:
                 output_path.write_text(
-                    "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----\n",
+                    "-----BEGIN CERTIFICATE REQUEST-----\n"
+                    "MAA=\n"
+                    "-----END CERTIFICATE REQUEST-----\n",
                     encoding="ascii",
                 )
 
