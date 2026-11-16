@@ -116,17 +116,37 @@ spec:
               readOnly: true
           readinessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  file=/tmp/agent-readiness
+                  test -f "$file"
+                  now="$(date +%s)"
+                  modified="$(stat -c %Y "$file")"
+                  age=$((now - modified))
+                  test "$age" -ge -5
+                  test "$age" -le 45
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  file=/tmp/agent-liveness
+                  test -f "$file"
+                  now="$(date +%s)"
+                  modified="$(stat -c %Y "$file")"
+                  age=$((now - modified))
+                  test "$age" -ge -5
+                  test "$age" -le 45
             initialDelaySeconds: 15
             periodSeconds: 15
-            timeoutSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
       volumes:
         - name: host-sysfs
