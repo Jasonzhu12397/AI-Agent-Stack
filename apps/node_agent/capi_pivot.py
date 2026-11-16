@@ -994,7 +994,12 @@ def run_capi_pivot_postflight(
     process_runner=None,
 ) -> dict[str, Any]:
     env = dict(os.environ if environ is None else environ)
-    if set(payload) - {"cluster_name", "namespace", "baremetal_host_namespace"}:
+    if set(payload) - {
+        "cluster_name",
+        "namespace",
+        "baremetal_host_namespace",
+        "expected_cluster_uid",
+    }:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_PAYLOAD_FIELD_NOT_ALLOWED")
     cluster_name = _validate_identifier(
         payload.get("cluster_name"), "INVALID_CLUSTER_NAME"
@@ -1035,6 +1040,13 @@ def run_capi_pivot_postflight(
     cluster_uid = cluster_list.get("metadata", {}).get("uid")
     if not isinstance(cluster_uid, str) or not cluster_uid:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_CLUSTER_IDENTITY_INVALID")
+    expected_cluster_uid = payload.get("expected_cluster_uid")
+    if expected_cluster_uid is not None and (
+        not isinstance(expected_cluster_uid, str)
+        or not expected_cluster_uid
+        or cluster_uid != expected_cluster_uid
+    ):
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_CLUSTER_UID_CHANGED")
 
     required_controllers = {
         "capi-system": "capi-controller-manager",
