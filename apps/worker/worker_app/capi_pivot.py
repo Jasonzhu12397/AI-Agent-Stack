@@ -214,6 +214,21 @@ def pivot_cluster_api(
     if command_timeout <= 0 or verification_timeout <= 0 or poll_interval <= 0:
         raise ValueError("Timeouts and poll_interval must be greater than zero")
 
+    if execute and (
+        not isinstance(operation_id, str)
+        or not operation_id
+        or len(operation_id) > 128
+        or target_agent_ack is None
+        or journal is None
+        or not callable(getattr(journal, "load_state", None))
+        or not callable(getattr(journal, "save_state", None))
+    ):
+        raise PivotError(
+            "Real CAPI pivot requires operation_id, target Agent acknowledgement "
+            "and a durable journal",
+            retry_safe=True,
+        )
+
     objects = tuple(inventory)
     if not objects:
         raise ValueError("CAPI pivot inventory must not be empty")
@@ -257,21 +272,6 @@ def pivot_cluster_api(
     }
     if not execute:
         return result
-
-    if (
-        not isinstance(operation_id, str)
-        or not operation_id
-        or len(operation_id) > 128
-        or target_agent_ack is None
-        or journal is None
-        or not callable(getattr(journal, "load_state", None))
-        or not callable(getattr(journal, "save_state", None))
-    ):
-        raise PivotError(
-            "Real CAPI pivot requires operation_id, target Agent acknowledgement "
-            "and a durable journal",
-            retry_safe=True,
-        )
 
     digest = result["inventory_sha256"]
     try:
