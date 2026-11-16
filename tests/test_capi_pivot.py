@@ -22,6 +22,9 @@ OBJECT = {
         "namespace": "metal3-system",
         "uid": "original-cluster-uid",
     },
+    "spec": {
+        "clusterNetwork": {"pods": {"cidrBlocks": ["10.244.0.0/16"]}},
+    },
 }
 INVENTORY = [CapiObjectRef.from_dict(OBJECT)]
 
@@ -83,10 +86,36 @@ def test_dry_run_failure_never_executes_real_pivot():
         )
 
 
-def test_target_uid_mismatch_is_a_hard_verification_failure():
+def test_target_uid_is_new_but_stable_object_identity_is_verified():
     replacement = {
         **OBJECT,
-        "metadata": {**OBJECT["metadata"], "uid": "replacement-uid"},
+        "metadata": {**OBJECT["metadata"], "uid": "target-generated-uid"},
+    }
+
+    def runner(command, timeout):
+        if command[0] == "kubectl":
+            kubeconfig = command[command.index("--kubeconfig") + 1]
+            if kubeconfig == "target.kubeconfig":
+                return CommandResult(0, stdout=json.dumps(replacement))
+            return CommandResult(
+                1,
+                stderr="Error from server (NotFound): clusters not found",
+            )
+        return CommandResult(0)
+
+    assert verify_pivot_inventory(
+        runner,
+        "source.kubeconfig",
+        "target.kubeconfig",
+        INVENTORY,
+    ) is True
+
+
+def test_target_spec_mismatch_is_a_hard_verification_failure():
+    replacement = {
+        **OBJECT,
+        "metadata": {**OBJECT["metadata"], "uid": "target-generated-uid"},
+        "spec": {"clusterNetwork": {"pods": {"cidrBlocks": ["10.0.0.0/16"]}}},
     }
 
     def runner(command, timeout):
@@ -94,7 +123,7 @@ def test_target_uid_mismatch_is_a_hard_verification_failure():
             return CommandResult(0, stdout=json.dumps(replacement))
         return CommandResult(0)
 
-    with pytest.raises(PivotVerificationError, match="different UID"):
+    with pytest.raises(PivotVerificationError, match="different spec"):
         verify_pivot_inventory(
             runner,
             "source.kubeconfig",
