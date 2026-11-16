@@ -240,9 +240,16 @@ def queue_deployment_command(
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_cluster_uid"] = identity.get("uid")
+        payload["expected_cluster_api_version"] = identity.get("api_version")
+        payload["expected_cluster_spec_sha256"] = identity.get("spec_sha256")
     elif command_type == "cluster.capi.pivot.postflight":
+        target_verification = (deployment.plan_result or {}).get(
+            "capi_pivot_target_verification",
+            {},
+        )
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
+        payload["expected_cluster_uid"] = target_verification.get("cluster_uid")
         worker_config = deployment.spec.get("worker_provisioning")
         host_namespace = (
             worker_config.get("baremetal_host_namespace")
@@ -548,6 +555,11 @@ def handle_deployment_command_result(
             and isinstance(source_cluster_identity.get("uid"), str)
             and bool(source_cluster_identity.get("uid"))
             and isinstance(source_cluster_identity.get("api_version"), str)
+            and isinstance(source_cluster_identity.get("spec_sha256"), str)
+            and bool(re.fullmatch(
+                r"[a-f0-9]{64}",
+                source_cluster_identity.get("spec_sha256", ""),
+            ))
             and isinstance(inventory, list)
             and any(
                 isinstance(item, dict)
@@ -556,6 +568,7 @@ def handle_deployment_command_result(
                 and item.get("namespace") == source_cluster_identity.get("namespace")
                 and item.get("uid") == source_cluster_identity.get("uid")
                 and item.get("api_version") == source_cluster_identity.get("api_version")
+                and item.get("spec_sha256") == source_cluster_identity.get("spec_sha256")
                 for item in inventory
             )
         )
@@ -823,16 +836,24 @@ def handle_deployment_command_result(
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         source_identity = source.get("source_cluster_identity", {})
         expected_uid = source_identity.get("uid")
+        expected_spec_sha256 = source_identity.get("spec_sha256")
+        target_cluster_uid = result.get("cluster_uid")
         valid_verification = (
             isinstance(expected_uid, str)
             and bool(expected_uid)
+            and isinstance(expected_spec_sha256, str)
+            and bool(re.fullmatch(r"[a-f0-9]{64}", expected_spec_sha256))
+            and isinstance(target_cluster_uid, str)
+            and bool(target_cluster_uid)
             and command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("cluster_identity_preserved") is True
-            and result.get("cluster_uid") == expected_uid
+            and result.get("cluster_uid") != expected_uid
             and result.get("source_cluster_uid") == expected_uid
+            and result.get("cluster_api_version") == source_identity.get("api_version")
+            and result.get("cluster_spec_sha256") == expected_spec_sha256
             and result.get("pivot_adoption_verified") is True
             and result.get("machine_inventory_ready") is True
             and result.get("controllers_ready") is True
@@ -862,7 +883,8 @@ def handle_deployment_command_result(
                 "phase": "target_agent_adopted",
                 "pivot_completed": True,
                 "target_agent_owns_cluster": True,
-                "target_agent_cluster_uid": expected_uid,
+                "target_agent_cluster_uid": target_cluster_uid,
+                "source_cluster_uid": expected_uid,
                 "eph_reclaim_allowed": False,
             },
         }
@@ -884,8 +906,10 @@ def handle_deployment_command_result(
             node=deployment.target_node,
         )
     elif command.command_type == "cluster.capi.pivot.postflight":
-        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
-        source_identity = source.get("source_cluster_identity", {})
+        target_verification = (deployment.plan_result or {}).get(
+            "capi_pivot_target_verification",
+            {},
+        )
         observation = result.get("metal3_observation")
         ironic = observation.get("ironic") if isinstance(observation, dict) else None
         machine_count = observation.get("machine_count") if isinstance(observation, dict) else None
@@ -906,7 +930,9 @@ def handle_deployment_command_result(
             and result.get("postflight_passed") is True
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
-            and result.get("cluster_uid") == source_identity.get("uid")
+            and isinstance(target_verification.get("cluster_uid"), str)
+            and bool(target_verification.get("cluster_uid"))
+            and result.get("cluster_uid") == target_verification.get("cluster_uid")
             and result.get("side_effects") is False
             and result.get("complete_hardware_verification") is True
             and result.get("verification_scope") == "capi_metal3_ironic"
