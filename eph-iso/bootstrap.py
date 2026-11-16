@@ -727,6 +727,7 @@ def bootstrap():
                 key: local_state[key]
                 for key in ("ca.crt", "tls.crt", "tls.key")
             }
+        tls_files["client-ca.crt"] = client_ca_path
         credential_files["token"] = token_path
 
         capi_files = {}
