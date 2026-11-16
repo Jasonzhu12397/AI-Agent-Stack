@@ -121,7 +121,7 @@ jobs:
             -e OUTPUT_DIR=/output \
             debian:bookworm bash -ec '
               apt-get update
-              apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates debian-archive-keyring
+              apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates debian-archive-keyring python3
               bash eph-iso/build.sh
             '
           ISO_FILE="$(find "$RUNNER_TEMP/eph-iso-out" -maxdepth 1 -type f -name '*.iso' -print -quit)"
