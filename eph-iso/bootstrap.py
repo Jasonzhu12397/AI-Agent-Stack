@@ -372,6 +372,125 @@ def _wait_for_kubernetes_api():
     raise BootstrapError("KUBERNETES_API_NOT_READY")
 
 
+def _write_enrollment_state_file(state_root, name, content):
+    path = state_root / name
+    temporary = state_root / ("." + name + "." + uuid.uuid4().hex + ".tmp")
+    descriptor = os.open(
+        str(temporary),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(str(temporary), str(path))
+        os.chmod(str(path), 0o600)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return path
+
+
+def _persist_local_enrollment_state(agent_token, tls_files, state_root=None):
+    state_root = pathlib.Path(state_root or ENROLLMENT_STATE_ROOT)
+    state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(str(state_root), 0o700)
+    key_path = state_root / "tls.key"
+    source_key = pathlib.Path(tls_files["tls.key"])
+    if source_key.resolve() != key_path.resolve():
+        _write_enrollment_state_file(
+            state_root,
+            "tls.key",
+            source_key.read_bytes(),
+        )
+    _write_enrollment_state_file(
+        state_root,
+        "agent-token",
+        agent_token.encode("ascii"),
+    )
+    for name in ("ca.crt", "tls.crt"):
+        _write_enrollment_state_file(
+            state_root,
+            name,
+            pathlib.Path(tls_files[name]).read_bytes(),
+        )
+    directory_fd = os.open(str(state_root), os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return {
+        "token": state_root / "agent-token",
+        "ca.crt": state_root / "ca.crt",
+        "tls.crt": state_root / "tls.crt",
+        "tls.key": key_path,
+    }
+
+
+def _load_local_enrollment_state(node_id, issuer_ca_path, state_root=None):
+    state_root = pathlib.Path(state_root or ENROLLMENT_STATE_ROOT)
+    response_names = ("agent-token", "ca.crt", "tls.crt")
+    present = [(state_root / name).exists() for name in response_names]
+    if not any(present):
+        return None
+    if not all(present):
+        raise BootstrapError("LOCAL_ENROLLMENT_CREDENTIAL_STATE_INCOMPLETE")
+    key_path = state_root / "tls.key"
+    files = {
+        "token": state_root / "agent-token",
+        "ca.crt": state_root / "ca.crt",
+        "tls.crt": state_root / "tls.crt",
+        "tls.key": key_path,
+    }
+    for path in files.values():
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size == 0
+            or path.stat().st_size > 1048576
+            or path.stat().st_mode & 0o077
+        ):
+            raise BootstrapError("LOCAL_ENROLLMENT_CREDENTIAL_STATE_INVALID")
+    token = files["token"].read_text(encoding="ascii")
+    if not TOKEN_PATTERN.fullmatch(token):
+        raise BootstrapError("LOCAL_ENROLLMENT_CREDENTIAL_STATE_INVALID")
+    if not _is_pem_certificate_bundle(
+        files["tls.crt"].read_text(encoding="ascii")
+    ):
+        raise BootstrapError("LOCAL_ENROLLMENT_CREDENTIAL_STATE_INVALID")
+    _validate_persisted_client_credentials(
+        {"tls.crt": files["tls.crt"], "tls.key": files["tls.key"]},
+        issuer_ca_path,
+        state_root,
+        node_id,
+    )
+    return files
+
+
+def _assert_existing_secrets_match_local_state(
+    existing_credentials,
+    existing_tls,
+    local_state,
+):
+    expected = {
+        "token": local_state["token"],
+        "ca.crt": local_state["ca.crt"],
+        "tls.crt": local_state["tls.crt"],
+        "tls.key": local_state["tls.key"],
+    }
+    for secret in (existing_credentials, existing_tls):
+        if secret is None:
+            continue
+        for key, path in secret.items():
+            if key not in expected or not hmac.compare_digest(
+                pathlib.Path(path).read_bytes(),
+                pathlib.Path(expected[key]).read_bytes(),
+            ):
+                raise BootstrapError("EPH_AGENT_CREDENTIAL_SECRET_STATE_MISMATCH")
+
+
 def _create_secret(name, namespace, files):
     command = [
         "kubectl", "--kubeconfig", "/etc/kubernetes/admin.conf",
@@ -558,9 +677,10 @@ def bootstrap():
             ("ca.crt", "tls.crt", "tls.key"),
             secret_dir,
         )
-        if (existing_credentials is None) != (existing_tls is None):
-            raise BootstrapError("EPH_AGENT_CREDENTIAL_SECRET_SET_INCOMPLETE")
-        if existing_credentials is not None:
+        local_state = _load_local_enrollment_state(
+            config["node_id"], client_ca_path
+        )
+        if existing_credentials is not None and existing_tls is not None:
             tls_files = existing_tls
             token_path = existing_credentials["token"]
             if not TOKEN_PATTERN.fullmatch(token_path.read_text(encoding="ascii")):
@@ -568,13 +688,45 @@ def bootstrap():
             _validate_persisted_client_credentials(
                 tls_files, client_ca_path, secret_dir, config["node_id"]
             )
+            if local_state is None:
+                local_state = _persist_local_enrollment_state(
+                    token_path.read_text(encoding="ascii"),
+                    tls_files,
+                )
         else:
-            tls_files = _request_client_certificate(
-                config, secret_dir, control_ca_path, client_ca_path
+            if local_state is None:
+                if existing_credentials is not None or existing_tls is not None:
+                    raise BootstrapError("EPH_AGENT_CREDENTIAL_SECRET_SET_INCOMPLETE")
+                issued_files = _request_client_certificate(
+                    config, secret_dir, control_ca_path, client_ca_path
+                )
+                agent_token = issued_files.pop("agent_token")
+                local_state = _persist_local_enrollment_state(
+                    agent_token,
+                    issued_files,
+                )
+            else:
+                _assert_existing_secrets_match_local_state(
+                    existing_credentials,
+                    existing_tls,
+                    local_state,
+                )
+            token_path = local_state["token"]
+            tls_files = {
+                key: local_state[key]
+                for key in ("ca.crt", "tls.crt", "tls.key")
+            }
+        if local_state is not None:
+            _assert_existing_secrets_match_local_state(
+                existing_credentials,
+                existing_tls,
+                local_state,
             )
-            token_path = secret_dir / "token"
-            token_path.write_text(tls_files.pop("agent_token"), encoding="utf-8")
-            os.chmod(str(token_path), 0o600)
+            token_path = local_state["token"]
+            tls_files = {
+                key: local_state[key]
+                for key in ("ca.crt", "tls.crt", "tls.key")
+            }
         credential_files["token"] = token_path
 
         capi_files = {}

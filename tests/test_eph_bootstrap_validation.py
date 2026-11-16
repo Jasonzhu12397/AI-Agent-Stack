@@ -403,3 +403,62 @@ def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
         BOOTSTRAP.BootstrapError, match="LOCAL_ENROLLMENT_KEY_MISMATCH"
     ):
         BOOTSTRAP._load_or_create_enrollment_csr(common_name, tmp_path),
+
+
+def test_local_enrollment_state_round_trip_and_secure_permissions(tmp_path):
+    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    key_path, csr_path, _ = BOOTSTRAP._load_or_create_enrollment_csr(
+        common_name,
+        tmp_path,
+    )
+    ca_path = tmp_path / "ca.crt"
+    cert_path = tmp_path / "tls.crt"
+    ca_path.write_text(
+        "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n",
+        encoding="ascii",
+    )
+    cert_path.write_text(
+        "-----BEGIN CERTIFICATE-----\\nMAA=\\n-----END CERTIFICATE-----\\n",
+        encoding="ascii",
+    )
+    token = "B" * 48
+    state = BOOTSTRAP._persist_local_enrollment_state(
+        token,
+        {"ca.crt": ca_path, "tls.crt": cert_path, "tls.key": key_path},
+        tmp_path,
+    )
+
+    assert state["token"].read_text(encoding="ascii") == token
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in state.values())
+
+
+def test_local_enrollment_state_rejects_partial_response_files(tmp_path):
+    (tmp_path / "agent-token").write_text("B" * 48, encoding="ascii")
+    os.chmod(str(tmp_path / "agent-token"), 0o600)
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="LOCAL_ENROLLMENT_CREDENTIAL_STATE_INCOMPLETE",
+    ):
+        BOOTSTRAP._load_local_enrollment_state(
+            str(uuid.uuid4()),
+            tmp_path / "issuer-ca.crt",
+            tmp_path,
+        )
+
+
+def test_existing_partial_secret_must_match_local_enrollment_state(tmp_path):
+    expected = tmp_path / "expected-token"
+    actual = tmp_path / "actual-token"
+    expected.write_text("B" * 48, encoding="ascii")
+    actual.write_text("C" * 48, encoding="ascii")
+
+    with pytest.raises(
+        BOOTSTRAP.BootstrapError,
+        match="EPH_AGENT_CREDENTIAL_SECRET_STATE_MISMATCH",
+    ):
+        BOOTSTRAP._assert_existing_secrets_match_local_state(
+            {"token": actual},
+            None,
+            {"token": expected},
+        )
