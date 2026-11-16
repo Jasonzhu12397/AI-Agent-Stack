@@ -457,6 +457,11 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
         events.append(("manifest", pathlib.Path(path).name, image))
 
     bootstrap_globals = BOOTSTRAP["bootstrap"].__globals__
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "ENROLLMENT_STATE_ROOT",
+        tmp_path / "enrollment-state",
+    )
     monkeypatch.setitem(bootstrap_globals, "MEDIA_ROOT", media_root)
     monkeypatch.setitem(bootstrap_globals, "MANIFEST_ROOT", manifest_root)
     monkeypatch.setitem(bootstrap_globals, "_run", fake_run)
