@@ -21,6 +21,8 @@ class CapiObjectRef:
     name: str
     uid: str
     namespace: str | None = None
+    api_version: str | None = None
+    spec_sha256: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict) -> CapiObjectRef:
@@ -28,9 +30,28 @@ class CapiObjectRef:
         kind = value.get("kind")
         name = metadata.get("name")
         uid = metadata.get("uid")
+        api_version = value.get("apiVersion")
+        spec = value.get("spec")
         if not all(isinstance(item, str) and item for item in (kind, name, uid)):
             raise ValueError("CAPI inventory entries require kind, metadata.name and metadata.uid")
-        return cls(kind=kind, name=name, uid=uid, namespace=metadata.get("namespace"))
+        if not isinstance(api_version, str) or not api_version:
+            raise ValueError("CAPI inventory entries require apiVersion")
+        if not isinstance(spec, dict):
+            raise ValueError("CAPI inventory entries require an object spec")
+        encoded_spec = json.dumps(
+            spec,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return cls(
+            kind=kind,
+            name=name,
+            uid=uid,
+            namespace=metadata.get("namespace"),
+            api_version=api_version,
+            spec_sha256=hashlib.sha256(encoded_spec).hexdigest(),
+        )
 
 
 class PivotError(RuntimeError):
@@ -144,22 +165,48 @@ def verify_pivot_inventory(
         target = _get_object(runner, target_kubeconfig, item, timeout)
         if target is None:
             return False
-        target_uid = (target.get("metadata") or {}).get("uid")
-        if target_uid != item.uid:
+        target_metadata = target.get("metadata")
+        if not isinstance(target_metadata, dict):
             raise PivotVerificationError(
-                f"Target object {item.kind}/{item.name} has a different UID; "
-                "refusing to report a successful pivot",
+                f"Target object {item.kind}/{item.name} has invalid metadata",
                 retry_safe=False,
             )
+        if (
+            target.get("kind") != item.kind
+            or target_metadata.get("name") != item.name
+            or target_metadata.get("namespace") != item.namespace
+            or (
+                item.api_version is not None
+                and target.get("apiVersion") != item.api_version
+            )
+        ):
+            raise PivotVerificationError(
+                f"Target object {item.kind}/{item.name} has a different stable identity",
+                retry_safe=False,
+            )
+        if item.spec_sha256 is not None:
+            target_spec = target.get("spec")
+            if not isinstance(target_spec, dict):
+                raise PivotVerificationError(
+                    f"Target object {item.kind}/{item.name} has invalid spec",
+                    retry_safe=False,
+                )
+            target_spec_sha256 = hashlib.sha256(
+                json.dumps(
+                    target_spec,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if target_spec_sha256 != item.spec_sha256:
+                raise PivotVerificationError(
+                    f"Target object {item.kind}/{item.name} has a different spec",
+                    retry_safe=False,
+                )
         source = _get_object(runner, source_kubeconfig, item, timeout)
         if source is not None:
-            source_uid = (source.get("metadata") or {}).get("uid")
-            if source_uid == item.uid:
-                return False
-            raise PivotVerificationError(
-                f"Source object {item.kind}/{item.name} was replaced with a different UID",
-                retry_safe=False,
-            )
+            return False
     return True
 
 
