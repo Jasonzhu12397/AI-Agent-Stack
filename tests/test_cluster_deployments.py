@@ -1883,6 +1883,98 @@ def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
 
 
 @pytest.mark.django_db
+def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="target-cluster-new-uid",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-new-uid-agent",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"target-new-uid-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {
+                "uid": "source-cluster-uid",
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "spec_sha256": "d" * 64,
+            }
+        },
+        "dual_agent": {
+            "phase": "target_agent_verification_pending",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"target-new-uid:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "target-generated-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_api_version": "cluster.x-k8s.io/v1beta1",
+            "cluster_spec_sha256": "d" * 64,
+            "cluster_identity_preserved": True,
+            "pivot_adoption_verified": True,
+            "machine_inventory_ready": True,
+            "controllers_ready": True,
+            "machine_count": 3,
+            "ready_machine_count": 3,
+            "not_ready_machine_names": [],
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.error is None
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
+    assert deployment.plan_result["dual_agent"]["target_agent_cluster_uid"] == (
+        "target-generated-uid"
+    )
+    assert deployment.plan_result["dual_agent"]["source_cluster_uid"] == (
+        "source-cluster-uid"
+    )
+    postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.postflight",
+    )
+    assert postflight.node_id == target_node.id
+    assert postflight.payload["expected_cluster_uid"] == "target-generated-uid"
+
+
+@pytest.mark.django_db
 def test_control_plane_rejects_partial_target_machine_readiness_claim(
     cluster_delivery_workspace,
 ):
