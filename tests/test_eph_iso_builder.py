@@ -124,8 +124,8 @@ def test_eph_iso_build_container_installs_python_for_manifest_patch():
 
 def test_eph_iso_qemu_job_is_not_cancelled_by_new_runs():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    start = workflow.index("  eph-iso:\\n")
-    end = workflow.index("\\n  compose:", start)
+    start = workflow.index("  eph-iso:\n")
+    end = workflow.index("\n  compose:", start)
     eph_job = workflow[start:end]
     assert "cancel-in-progress: false" in eph_job
 
