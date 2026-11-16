@@ -398,7 +398,7 @@ def _validate_persisted_client_credentials(files, issuer_ca_path, directory, nod
         certificate_data,
         re.DOTALL,
     )
-    if len(blocks) < 1 or "".join(blocks).strip() != certificate_data.strip():
+    if len(blocks) < 1 or not _is_pem_certificate_bundle(certificate_data):
         raise BootstrapError("PERSISTED_CLIENT_CERTIFICATE_INVALID")
     leaf_path = directory / "persisted-client-leaf.crt"
     chain_path = directory / "persisted-client-chain.crt"
