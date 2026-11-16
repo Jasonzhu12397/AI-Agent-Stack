@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import base64
 import datetime
 import ipaddress
 import hashlib
@@ -56,7 +57,7 @@ def _eph_enrollment_response_cipher():
         salt=b"ai-agent-stack-eph-enrollment-response-v1",
         info=b"eph-certificate-exchange",
     ).derive(secret.encode("utf-8"))
-    return Fernet(__import__("base64").urlsafe_b64encode(key))
+    return Fernet(base64.urlsafe_b64encode(key))
 
 
 def _encrypt_eph_enrollment_response(payload):
@@ -1402,7 +1403,19 @@ class AgentNodeRevokeView(APIView):
                 return Response({"detail": "Agent node has been revoked."}, status=409)
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
-            node.save(update_fields=["status", "revoked_at", "updated_at"])
+            node.pending_enrollment_token_hash = ""
+            node.pending_enrollment_csr_sha256 = ""
+            node.pending_enrollment_response_encrypted = ""
+            node.pending_enrollment_expires_at = None
+            node.save(update_fields=[
+                "status",
+                "revoked_at",
+                "pending_enrollment_token_hash",
+                "pending_enrollment_csr_sha256",
+                "pending_enrollment_response_encrypted",
+                "pending_enrollment_expires_at",
+                "updated_at",
+            ])
             EPHSeedArtifact.objects.filter(
                 agent_node=node,
                 downloaded_at__isnull=True,
@@ -1475,6 +1488,10 @@ class AgentNodeCredentialRotateView(APIView):
 
             raw_token = secrets.token_urlsafe(36)
             node.credential_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            node.pending_enrollment_token_hash = ""
+            node.pending_enrollment_csr_sha256 = ""
+            node.pending_enrollment_response_encrypted = ""
+            node.pending_enrollment_expires_at = None
             node.status = AgentNode.Status.OFFLINE
             node.last_seen_at = None
             node.last_seen_ip = None
@@ -1486,6 +1503,10 @@ class AgentNodeCredentialRotateView(APIView):
             node.save(
                 update_fields=[
                     "credential_hash",
+                    "pending_enrollment_token_hash",
+                    "pending_enrollment_csr_sha256",
+                    "pending_enrollment_response_encrypted",
+                    "pending_enrollment_expires_at",
                     "status",
                     "last_seen_at",
                     "last_seen_ip",
@@ -2237,17 +2258,38 @@ class AgentRuntimeHeartbeatView(APIView):
             node.status = AgentNode.Status.ONLINE
             node.last_seen_at = timezone.now()
             node.last_seen_ip = request.META.get("REMOTE_ADDR")
-            node.save(
-                update_fields=[
-                    "agent_version",
-                    "capabilities",
-                    "cluster_name",
-                    "status",
-                    "last_seen_at",
-                    "last_seen_ip",
-                    "updated_at",
-                ]
-            )
+            update_fields = [
+                "agent_version",
+                "capabilities",
+                "cluster_name",
+                "status",
+                "last_seen_at",
+                "last_seen_ip",
+                "updated_at",
+            ]
+            verified_fingerprint = request.headers.get(
+                "X-Verified-Client-Cert-SHA256", ""
+            ).strip().lower()
+            if (
+                verified_fingerprint
+                and node.client_certificate_fingerprint
+                and hmac.compare_digest(
+                    verified_fingerprint,
+                    node.client_certificate_fingerprint,
+                )
+                and node.pending_enrollment_response_encrypted
+            ):
+                node.pending_enrollment_token_hash = ""
+                node.pending_enrollment_csr_sha256 = ""
+                node.pending_enrollment_response_encrypted = ""
+                node.pending_enrollment_expires_at = None
+                update_fields.extend([
+                    "pending_enrollment_token_hash",
+                    "pending_enrollment_csr_sha256",
+                    "pending_enrollment_response_encrypted",
+                    "pending_enrollment_expires_at",
+                ])
+            node.save(update_fields=update_fields)
         active_deployments = []
         if node.node_type == AgentNode.NodeType.TARGET_CLUSTER:
             active_deployments = [
