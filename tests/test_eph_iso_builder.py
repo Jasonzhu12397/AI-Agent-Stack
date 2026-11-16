@@ -107,7 +107,8 @@ def test_eph_time_sync_gate_is_installed_and_fail_closed():
     script = (root / "usr/local/sbin/eph-wait-time-sync.sh").read_text(encoding="utf-8")
     service = (root / "etc/systemd/system/eph-kubeadm-init.service").read_text(encoding="utf-8")
     assert "systemctl enable --now systemd-timesyncd.service" in script
-    assert "NTPSynchronized" in script
+    assert "/run/systemd/timesync/synchronized" in script
+    assert "timedatectl" not in script
     assert "EPH_SYSTEM_CLOCK_SYNCHRONIZATION_TIMEOUT" in script
     assert "ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-wait-time-sync.sh" in service
     assert "After=network-online.target systemd-timesyncd.service" in service
@@ -893,7 +894,7 @@ def test_eph_qemu_job_uses_isolated_replaceable_concurrency_group():
     assert not any(line == "concurrency:" for line in lines[:lines.index("jobs:")])
     eph_job = lines[lines.index("  eph-iso:"):]
     eph_job_text = "\n".join(eph_job[:eph_job.index("  compose:")])
-    assert "cancel-in-progress: true" in eph_job_text
+    assert "cancel-in-progress: false" in eph_job_text
     assert "timeout-minutes: 90" in eph_job_text
     assert "eph-iso-" in eph_job_text
     assert "Boot ISO and verify single-node Kubernetes API" in eph_job_text
