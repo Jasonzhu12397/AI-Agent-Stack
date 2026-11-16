@@ -48,6 +48,8 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "v1.35|v1.36) CALICO_VERSION=v3.33.0" in script
     assert "$CALICO_VERSION/manifests/calico.yaml" in script
     assert '"calico_version": "%s"' in script
+    assert "CALICO_CONTROLLER_READINESS_PROBE_PATCH_TARGET_INVALID" in script
+    assert "timeoutSeconds: 10" in script
 
 
 def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
@@ -75,6 +77,8 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     assert "containerd.service" in service
     assert "systemctl restart containerd" not in initializer
     assert "cloud-config.service" in service
+    assert "systemd-timesyncd.service" in service
+    assert "eph-wait-time-sync.sh" in service
     assert "StartLimitIntervalSec=30min" in service
     assert "StartLimitBurst=5" in service
     assert "Restart=on-failure" in service
@@ -96,6 +100,26 @@ def test_eph_bootstrap_reads_cloud_init_seed_and_waits_for_cluster():
         ROOT / "eph-iso/bootstrap.py"
     ).read_text(encoding="utf-8")
     assert "mnt-eph" not in service
+
+
+
+def test_eph_time_sync_gate_is_installed_and_fail_closed():
+    root = ROOT / "eph-iso/config/includes.chroot"
+    script = (root / "usr/local/sbin/eph-wait-time-sync.sh").read_text(encoding="utf-8")
+    service = (root / "etc/systemd/system/eph-kubeadm-init.service").read_text(encoding="utf-8")
+    assert "systemctl enable --now systemd-timesyncd.service" in script
+    assert "NTPSynchronized" in script
+    assert "EPH_SYSTEM_CLOCK_SYNCHRONIZATION_TIMEOUT" in script
+    assert "ExecStartPre=/usr/bin/bash /usr/local/sbin/eph-wait-time-sync.sh" in service
+    assert "After=network-online.target systemd-timesyncd.service" in service
+
+
+def test_eph_iso_qemu_job_is_not_cancelled_by_new_runs():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    start = workflow.index("  eph-iso:\\n")
+    end = workflow.index("\\n  compose:", start)
+    eph_job = workflow[start:end]
+    assert "cancel-in-progress: false" in eph_job
 
 
 def test_eph_iso_uses_kubernetes_pod_for_agent_not_compose():
@@ -208,6 +232,7 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
         / "eph-iso/config/includes.chroot/etc/systemd/system/multi-user.target.d/eph.conf"
     ).read_text(encoding="utf-8")
     assert "cloud-init" in package_list
+    assert "systemd-timesyncd" in package_list
     assert "containerd" in package_list
     assert "containernetworking-plugins" in package_list
     assert "NoCloud" in datasource
