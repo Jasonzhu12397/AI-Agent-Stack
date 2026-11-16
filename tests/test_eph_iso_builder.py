@@ -46,7 +46,12 @@ def test_eph_iso_builder_pins_kubernetes_binaries_and_verifies_checksums():
     assert "v1.33) CALICO_VERSION=v3.31.6" in script
     assert "v1.34) CALICO_VERSION=v3.32.1" in script
     assert "v1.35|v1.36) CALICO_VERSION=v3.33.0" in script
-    assert "$CALICO_VERSION/manifests/calico.yaml" in script
+    assert "$CALICO_VERSION/manifests/calico-vxlan.yaml" in script
+    assert "CALICO_VXLAN_MANIFEST_INVALID" in script
+    assert "CALICO_VXLAN_MANIFEST_REQUIRES_BIRD" in script
+    assert "initialDelaySeconds: 60" in script
+    assert "timeoutSeconds: 30" in script
+    assert "failureThreshold: 12" in script
     assert '"calico_version": "%s"' in script
 
 
@@ -283,17 +288,19 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     response_data = json.loads(response_body)
     response_data["node_id"] = config["node_id"]
     response_body = json.dumps(response_data).encode("utf-8")
-    key_path = tmp_path / "tls.key"
-    csr_path = tmp_path / "tls.csr"
+    key_path = BOOTSTRAP["ENROLLMENT_STATE_ROOT"] / "tls.key"
+    csr_path = BOOTSTRAP["ENROLLMENT_STATE_ROOT"] / "tls.csr"
 
     captured_commands = []
 
     def fake_run(arguments, input_text=None):
         captured_commands.append(list(arguments))
         if arguments[1] == "genpkey":
-            key_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
-        elif arguments[1] == "req":
-            csr_path.write_text(
+            output_path = pathlib.Path(arguments[arguments.index("-out") + 1])
+            output_path.write_text("LOCAL PRIVATE KEY", encoding="ascii")
+        elif arguments[1] == "req" and "-out" in arguments:
+            output_path = pathlib.Path(arguments[arguments.index("-out") + 1])
+            output_path.write_text(
                 "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----\n",
                 encoding="ascii",
             )
@@ -367,6 +374,8 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
         for command in captured_commands
     )
     assert result["tls.key"] == key_path
+    assert csr_path.is_file()
+    assert csr_path.stat().st_mode & 0o777 == 0o600
     assert result["tls.crt"].read_text(encoding="ascii") == certificate + certificate
     assert key_path.stat().st_mode & 0o777 == 0o600
 
@@ -444,7 +453,6 @@ def _prepare_bootstrap_runtime(monkeypatch, tmp_path, fail_rollout=False):
     secret_files = {}
     for name, content in (
         ("ca.crt", "CONTROL CA"),
-        ("client-ca.crt", "INDEPENDENT AGENT CA"),
         ("tls.crt", "CLIENT CERTIFICATE"),
         ("tls.key", "LOCAL PRIVATE KEY"),
     ):
@@ -542,7 +550,6 @@ def test_bootstrap_applies_agent_resources_and_waits_for_deployment_rollout(
     ]) in events
     assert ("secret", "agent-control-plane-mtls", "ai-agent-system", [
         "ca.crt",
-        "client-ca.crt",
         "tls.crt",
         "tls.key",
     ]) in events
