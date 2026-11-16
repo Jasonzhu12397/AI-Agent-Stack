@@ -349,7 +349,8 @@ def test_load_or_create_enrollment_csr_reuses_key_and_request(tmp_path):
     )
     first_key = key_path.read_bytes()
     second_key, second_csr, second_pem = BOOTSTRAP._load_or_create_enrollment_csr(
-        common_name, tmp_path
+        common_name,
+        tmp_path,
     )
 
     assert second_key == key_path
@@ -391,7 +392,9 @@ def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
             "-out",
             str(other_key),
         ],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     os.chmod(str(other_key), 0o600)
     other_key.replace(key_path)
@@ -399,4 +402,4 @@ def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
     with pytest.raises(
         BOOTSTRAP.BootstrapError, match="LOCAL_ENROLLMENT_KEY_MISMATCH"
     ):
-        BOOTSTRAP._load_or_create_enrollment_csr(common_name, tmp_path)
+        BOOTSTRAP._load_or_create_enrollment_csr(common_name, tmp_path),
