@@ -2384,7 +2384,7 @@ def test_command_lease_is_required_before_execution():
 
 
 
-def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypatch):
+def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(monkeypatch):
     responses = {
         "/apis": {
             "groups": [
@@ -2647,9 +2647,9 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 }
             ]
         },
-        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
-        },
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
+            TARGET_CAPI_CLUSTER_OBJECT
+        ),
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2705,6 +2705,8 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 "cluster_name": "edge-lab",
                 "namespace": "metal3",
                 "expected_cluster_uid": "source-uid",
+                "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+                "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
             },
         },
         "target_cluster",
