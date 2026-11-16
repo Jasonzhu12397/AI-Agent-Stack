@@ -11,12 +11,11 @@ BOOTSTRAP = runpy.run_path(str(BOOTSTRAP_PATH))
 
 @pytest.fixture(autouse=True)
 def isolate_eph_enrollment_state(monkeypatch, tmp_path):
+    state_root = tmp_path / "enrollment-state"
     bootstrap_globals = BOOTSTRAP["bootstrap"].__globals__
-    monkeypatch.setitem(
-        bootstrap_globals,
-        "ENROLLMENT_STATE_ROOT",
-        tmp_path / "enrollment-state",
-    )
+    enrollment_globals = BOOTSTRAP["_load_or_create_enrollment_csr"].__globals__
+    monkeypatch.setitem(bootstrap_globals, "ENROLLMENT_STATE_ROOT", state_root)
+    monkeypatch.setitem(enrollment_globals, "ENROLLMENT_STATE_ROOT", state_root)
 
 
 def valid_config():
