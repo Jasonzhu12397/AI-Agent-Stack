@@ -9,6 +9,16 @@ BOOTSTRAP_PATH = ROOT / "eph-iso/bootstrap.py"
 BOOTSTRAP = runpy.run_path(str(BOOTSTRAP_PATH))
 
 
+@pytest.fixture(autouse=True)
+def isolate_eph_enrollment_state(monkeypatch, tmp_path):
+    bootstrap_globals = BOOTSTRAP["bootstrap"].__globals__
+    monkeypatch.setitem(
+        bootstrap_globals,
+        "ENROLLMENT_STATE_ROOT",
+        tmp_path / "enrollment-state",
+    )
+
+
 def valid_config():
     return {
         "control_url": "https://agent-control.example.com",
