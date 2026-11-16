@@ -271,3 +271,36 @@ def test_persisted_client_certificate_accepts_pem_chain_whitespace():
 )
 def test_persisted_client_certificate_rejects_invalid_pem_bundle(certificate):
     assert not BOOTSTRAP._is_pem_certificate_bundle(certificate)
+
+
+def test_validate_persisted_client_credentials_accepts_newline_separated_chain(
+    tmp_path, monkeypatch
+):
+    node_id = str(uuid.uuid4())
+    certificate = (
+        "-----BEGIN CERTIFICATE-----\\n"
+        "MAA=\\n"
+        "-----END CERTIFICATE-----\\n"
+    )
+    certificate_path = tmp_path / "tls.crt"
+    key_path = tmp_path / "tls.key"
+    certificate_path.write_text(certificate + "\\n" + certificate, encoding="ascii")
+    key_path.write_text("private-key", encoding="ascii")
+    outputs = iter(
+        [
+            "subject=CN=agent-node-" + node_id + ".agents.internal",
+            "PUBLIC KEY",
+            "PUBLIC KEY",
+        ]
+    )
+    monkeypatch.setattr(BOOTSTRAP, "_run", lambda arguments, input_text=None: None)
+    monkeypatch.setattr(
+        BOOTSTRAP, "_run_output", lambda arguments, timeout=None: next(outputs)
+    )
+
+    BOOTSTRAP._validate_persisted_client_credentials(
+        {"tls.crt": certificate_path, "tls.key": key_path},
+        tmp_path / "issuer-ca.crt",
+        tmp_path,
+        node_id,
+    )
