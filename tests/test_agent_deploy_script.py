@@ -82,7 +82,7 @@ def test_node_agents_are_kubernetes_workloads_and_not_compose_services():
     assert "docker compose" not in root_readme[agent_docs_start:agent_docs_end]
 
 
-def test_eph_agent_health_probes_allow_slow_emulated_guest_execution():
+def test_eph_agent_health_probes_are_lightweight_and_check_fresh_heartbeat_files():
     manifest = (ROOT / "deploy/agents/eph-node-agent.yaml").read_text(
         encoding="utf-8"
     )
@@ -93,5 +93,11 @@ def test_eph_agent_health_probes_allow_slow_emulated_guest_execution():
         "      volumes:", 1
     )[0]
 
-    assert "timeoutSeconds: 10" in readiness
-    assert "timeoutSeconds: 10" in liveness
+    for probe in (readiness, liveness):
+        assert "python -m apps.node_agent.agent" not in probe
+        assert "/bin/sh" in probe
+        assert "date +%s" in probe
+        assert "stat -c %Y" in probe
+        assert 'test "$age" -ge -5' in probe
+        assert 'test "$age" -le 45' in probe
+        assert "timeoutSeconds: 5" in probe
