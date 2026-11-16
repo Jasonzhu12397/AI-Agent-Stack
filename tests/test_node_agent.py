@@ -720,17 +720,6 @@ def test_capi_observation_uses_discovered_group_version(monkeypatch):
 
 def test_provider_discovery_reports_live_api_versions_and_missing_resources(monkeypatch):
     calls = []
-    source_cluster_spec = {
-        "clusterNetwork": {"pods": {"cidrBlocks": ["10.244.0.0/16"]}},
-    }
-    source_cluster_spec_sha256 = hashlib.sha256(
-        json.dumps(
-            source_cluster_spec,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
 
     def fake_get(path):
         calls.append(path)
@@ -2174,6 +2163,17 @@ def test_eph_capi_pivot_source_preflight_inventories_all_namespaces_read_only(
         "capm3-system": "capm3-controller-manager",
     }
     calls = []
+    source_cluster_spec = {
+        "clusterNetwork": {"pods": {"cidrBlocks": ["10.244.0.0/16"]}},
+    }
+    source_cluster_spec_sha256 = hashlib.sha256(
+        json.dumps(
+            source_cluster_spec,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
     def fake_get(path):
         calls.append(path)
