@@ -342,7 +342,7 @@ def test_bootstrap_failure_message_preserves_safe_bootstrap_error_code():
 
 
 def test_load_or_create_enrollment_csr_reuses_key_and_request(tmp_path):
-    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    common_name = f"agent-node-{uuid.uuid4()}.agents.internal"
     key_path, csr_path, csr_pem = BOOTSTRAP._load_or_create_enrollment_csr(
         common_name,
         tmp_path,
@@ -369,13 +369,13 @@ def test_load_or_create_enrollment_csr_fails_closed_on_partial_state(tmp_path):
         BOOTSTRAP.BootstrapError, match="LOCAL_ENROLLMENT_STATE_INCOMPLETE"
     ):
         BOOTSTRAP._load_or_create_enrollment_csr(
-            "agent-node-{}.agents.internal".format(uuid.uuid4()),
+            f"agent-node-{uuid.uuid4()}.agents.internal",
             tmp_path,
         )
 
 
 def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
-    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    common_name = f"agent-node-{uuid.uuid4()}.agents.internal"
     key_path, csr_path, _ = BOOTSTRAP._load_or_create_enrollment_csr(
         common_name,
         tmp_path,
@@ -406,7 +406,7 @@ def test_load_or_create_enrollment_csr_fails_closed_on_key_mismatch(tmp_path):
 
 
 def test_local_enrollment_state_round_trip_and_secure_permissions(tmp_path):
-    common_name = "agent-node-{}.agents.internal".format(uuid.uuid4())
+    common_name = f"agent-node-{uuid.uuid4()}.agents.internal"
     key_path, csr_path, _ = BOOTSTRAP._load_or_create_enrollment_csr(
         common_name,
         tmp_path,
