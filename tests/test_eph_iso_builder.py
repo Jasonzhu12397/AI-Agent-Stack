@@ -62,7 +62,7 @@ def test_eph_iso_initializes_kubernetes_with_kubeadm_and_calico():
     kubelet = (root / "etc/systemd/system/kubelet.service").read_text(encoding="utf-8")
     assert "kubeadm init" in initializer
     assert "--cri-socket" in initializer
-    assert "calico.yaml" in initializer
+    assert "calico-vxlan.yaml" in initializer
     assert "CALICO_MANIFEST_MISSING" in initializer
     assert "CALICO_IPV4POOL" not in initializer
     assert "POD_CIDR" in initializer
