@@ -241,3 +241,33 @@ def test_read_secret_files_rejects_invalid_secret_data(tmp_path, monkeypatch):
             ("token",),
             tmp_path,
         )
+
+
+def test_persisted_client_certificate_accepts_pem_chain_whitespace():
+    certificate = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "MAA=\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    bundle = certificate + "\n" + certificate
+
+    assert BOOTSTRAP._is_pem_certificate_bundle(bundle)
+    assert len(
+        BOOTSTRAP.re.findall(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            bundle,
+            BOOTSTRAP.re.DOTALL,
+        )
+    ) == 2
+
+
+@pytest.mark.parametrize(
+    "certificate",
+    [
+        "",
+        "not-a-certificate",
+        "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\ntrailing-data",
+    ],
+)
+def test_persisted_client_certificate_rejects_invalid_pem_bundle(certificate):
+    assert not BOOTSTRAP._is_pem_certificate_bundle(certificate)
