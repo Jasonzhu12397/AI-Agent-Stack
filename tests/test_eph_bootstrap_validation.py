@@ -3,6 +3,7 @@ import base64
 import importlib.util
 import json
 import pathlib
+import subprocess
 import uuid
 
 import pytest
@@ -304,3 +305,36 @@ def test_validate_persisted_client_credentials_accepts_newline_separated_chain(
         tmp_path,
         node_id,
     )
+
+
+
+def test_bootstrap_failure_message_reports_failed_command_without_file_values():
+    error = subprocess.CalledProcessError(
+        1,
+        [
+            "kubectl",
+            "--kubeconfig",
+            "/etc/kubernetes/admin.conf",
+            "create",
+            "secret",
+            "--from-file=token=/tmp/private-token",
+        ],
+    )
+    message = BOOTSTRAP._bootstrap_failure_message(error)
+    assert message == (
+        "EPH_BOOTSTRAP_COMMAND_FAILED:kubectl:--kubeconfig:"
+        "/etc/kubernetes/admin.conf:create:secret:exit=1"
+    )
+    assert "private-token" not in message
+
+
+def test_bootstrap_failure_message_reports_os_error_class_and_errno():
+    error = OSError(13, "permission denied")
+    assert BOOTSTRAP._bootstrap_failure_message(error) == (
+        "EPH_BOOTSTRAP_OS_ERROR:PermissionError:errno=13"
+    )
+
+
+def test_bootstrap_failure_message_preserves_safe_bootstrap_error_code():
+    error = BOOTSTRAP.BootstrapError("KUBERNETES_API_NOT_READY")
+    assert BOOTSTRAP._bootstrap_failure_message(error) == "KUBERNETES_API_NOT_READY"

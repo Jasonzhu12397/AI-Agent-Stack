@@ -574,10 +574,37 @@ def bootstrap():
         _wait_for_agent_pod()
 
 
+def _bootstrap_failure_message(error):
+    if isinstance(error, BootstrapError):
+        return str(error)
+    if isinstance(error, subprocess.CalledProcessError):
+        command = error.cmd
+        if isinstance(command, (list, tuple)) and command:
+            executable = pathlib.Path(str(command[0])).name
+            arguments = [str(value) for value in command[1:5]]
+        else:
+            executable = "unknown"
+            arguments = []
+        safe_arguments = [
+            value[:120]
+            for value in arguments
+            if not value.startswith("--from-file=")
+        ]
+        detail = ":".join([executable] + safe_arguments)
+        return "EPH_BOOTSTRAP_COMMAND_FAILED:" + detail + ":exit=" + str(error.returncode)
+    if isinstance(error, OSError):
+        return (
+            "EPH_BOOTSTRAP_OS_ERROR:"
+            + type(error).__name__
+            + ":errno="
+            + str(error.errno or 0)
+        )
+    return "EPH_BOOTSTRAP_FAILED:" + type(error).__name__
+
+
 if __name__ == "__main__":
     try:
         bootstrap()
     except (BootstrapError, OSError, ValueError, subprocess.CalledProcessError) as error:
-        message = str(error) if isinstance(error, BootstrapError) else "EPH_BOOTSTRAP_FAILED"
-        print(message, file=__import__("sys").stderr)
+        print(_bootstrap_failure_message(error), file=__import__("sys").stderr)
         raise SystemExit(1) from None
