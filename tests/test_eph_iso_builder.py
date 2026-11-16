@@ -114,6 +114,11 @@ def test_eph_time_sync_gate_is_installed_and_fail_closed():
     assert "After=network-online.target systemd-timesyncd.service" in service
 
 
+def test_eph_iso_build_container_installs_python_for_manifest_patch():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "apt-get install -y live-build xorriso squashfs-tools debootstrap wget ca-certificates debian-archive-keyring python3" in workflow
+
+
 def test_eph_iso_qemu_job_is_not_cancelled_by_new_runs():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     start = workflow.index("  eph-iso:\\n")
