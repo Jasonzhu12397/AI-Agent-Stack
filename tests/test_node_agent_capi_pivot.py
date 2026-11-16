@@ -1040,6 +1040,7 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
             "cluster_name": "target-cluster",
             "namespace": "metal3",
             "baremetal_host_namespace": "metal3-hosts",
+            "expected_cluster_uid": "cluster-uid",
         },
         environ=_environment(tmp_path),
         executable_lookup=lambda name: f"/usr/bin/{name}",
@@ -1056,6 +1057,25 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
         command for command in calls if "baremetalhosts.metal3.io" in command
     )
     assert bmh_command[bmh_command.index("--namespace") + 1] == "metal3-hosts"
+
+
+def test_pivot_postflight_rejects_target_cluster_uid_change(tmp_path):
+    _, runner = _postflight_runner()
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_CLUSTER_UID_CHANGED",
+    ):
+        run_capi_pivot_postflight(
+            {
+                "cluster_name": "target-cluster",
+                "namespace": "metal3",
+                "baremetal_host_namespace": "metal3-hosts",
+                "expected_cluster_uid": "different-target-uid",
+            },
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
 
 
 @pytest.mark.parametrize(
