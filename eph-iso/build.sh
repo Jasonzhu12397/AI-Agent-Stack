@@ -56,7 +56,18 @@ for binary_name in kubeadm kubelet kubectl; do
 done
 install -d "$BUILD_DIR/config/includes.chroot/etc/default"
 install -d "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio"
-wget -q -O "$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico.yaml" "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico.yaml"
+CALICO_MANIFEST="$BUILD_DIR/config/includes.chroot/usr/share/ai-agent-studio/calico-vxlan.yaml"
+wget -q -O "$CALICO_MANIFEST" "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/calico-vxlan.yaml"
+grep -Eq 'calico_backend:[[:space:]]*"vxlan"' "$CALICO_MANIFEST" ||
+    fail "CALICO_VXLAN_MANIFEST_INVALID"
+if grep -Eq 'bird-(live|ready)' "$CALICO_MANIFEST"; then
+    fail "CALICO_VXLAN_MANIFEST_REQUIRES_BIRD"
+fi
+sed -i -E \
+    -e 's/^([[:space:]]*)initialDelaySeconds: 10$/\1initialDelaySeconds: 60/' \
+    -e 's/^([[:space:]]*)timeoutSeconds: 10$/\1timeoutSeconds: 30/' \
+    -e 's/^([[:space:]]*)failureThreshold: 6$/\1failureThreshold: 12/' \
+    "$CALICO_MANIFEST"
 printf 'KUBERNETES_VERSION=%s\n' "$KUBERNETES_VERSION" > "$BUILD_DIR/config/includes.chroot/etc/default/eph-node"
 
 cd "$BUILD_DIR"
