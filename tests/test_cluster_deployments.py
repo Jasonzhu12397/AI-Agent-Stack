@@ -616,11 +616,19 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
 
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
-            "source_cluster_identity": {"uid": "checkpoint-source-cluster-uid"}
+            "source_cluster_identity": {
+                "uid": "checkpoint-source-cluster-uid",
+                "spec_sha256": "b" * 64,
+            }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "checkpoint-target-cluster-uid",
+            "source_cluster_uid": "checkpoint-source-cluster-uid",
+            "cluster_spec_sha256": "b" * 64,
         },
         "dual_agent": {
             "target_agent_owns_cluster": True,
-            "target_agent_cluster_uid": "checkpoint-source-cluster-uid",
+            "target_agent_cluster_uid": "checkpoint-target-cluster-uid",
         },
     }
     deployment.save(update_fields=["plan_result"])
@@ -1123,6 +1131,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
             "namespace": "capi-system",
             "uid": "cluster-uid",
             "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "a" * 64,
         },
         "cluster_name": "edge-lab",
         "provider_versions": {
@@ -1141,6 +1150,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
                 "name": "edge-lab",
                 "namespace": "capi-system",
                 "uid": "cluster-uid",
+                "spec_sha256": "a" * 64,
                 "owner_references": [],
                 "owner_references_truncated": False,
                 "cluster_name": "edge-lab",
@@ -1900,7 +1910,16 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
     deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
-            "source_cluster_identity": {"uid": "source-cluster-uid"}
+            "source_cluster_identity": {
+                "uid": "source-cluster-uid",
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "spec_sha256": "c" * 64,
+            }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_spec_sha256": "c" * 64,
         },
         "dual_agent": {
             "phase": "target_agent_verification_pending",
@@ -1927,8 +1946,10 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         {
             "cluster_name": "edge-lab",
             "namespace": "metal3",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
+            "cluster_api_version": "cluster.x-k8s.io/v1beta1",
+            "cluster_spec_sha256": "c" * 64,
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
             "machine_inventory_ready": True,
@@ -2081,7 +2102,11 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+        },
     }
     deployment.status = ClusterDeployment.Status.PROVISIONING
     deployment.save(update_fields=["target_node", "spec", "plan_result", "status"])
@@ -2624,7 +2649,7 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
             "postflight_passed": True,
             "cluster_name": "edge-lab",
             "namespace": "default",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
             "side_effects": False,
             "complete_hardware_verification": False,
             "verification_scope": "capi_metal3_without_direct_ironic_api",
