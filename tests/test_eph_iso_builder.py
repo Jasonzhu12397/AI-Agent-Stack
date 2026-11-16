@@ -287,8 +287,9 @@ def test_bootstrap_generates_local_key_and_exchanges_csr_for_node_identity(
     response_data = json.loads(response_body)
     response_data["node_id"] = config["node_id"]
     response_body = json.dumps(response_data).encode("utf-8")
-    key_path = BOOTSTRAP["ENROLLMENT_STATE_ROOT"] / "tls.key"
-    csr_path = BOOTSTRAP["ENROLLMENT_STATE_ROOT"] / "tls.csr"
+    state_root = tmp_path / "enrollment-state"
+    key_path = state_root / "tls.key"
+    csr_path = state_root / "tls.csr"
 
     captured_commands = []
 
