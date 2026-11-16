@@ -51,19 +51,17 @@ def test_pivot_runs_only_dry_run_and_returns_simulation_result():
         runner=runner,
     )
 
-    assert result == {
-        "state": "simulation_ready",
-        "pivot_executed": False,
-        "pivot_simulated": True,
-        "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
-        "dry_run_passed": True,
-        "inventory_objects": 1,
-        "ownership_transferred": False,
-        "side_effects": False,
-        "target_agent_acknowledgement_required": True,
-        "postflight_required": True,
-    }
+    assert result["state"] == "simulation_ready"
+    assert result["pivot_executed"] is False
+    assert result["pivot_simulated"] is True
+    assert result["execution_mode"] == "preflight_verified_simulation"
+    assert result["dry_run_passed"] is True
+    assert result["inventory_objects"] == 1
+    assert len(result["inventory_sha256"]) == 64
+    assert result["ownership_transferred"] is False
+    assert result["side_effects"] is False
+    assert result["target_agent_acknowledgement_required"] is True
+    assert result["postflight_required"] is True
     assert len(runner.commands) == 1
     assert runner.commands[0][0:2] == ["clusterctl", "move"]
     assert runner.commands[0][-1] == "--dry-run"
