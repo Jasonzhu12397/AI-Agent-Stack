@@ -448,9 +448,17 @@ def test_local_enrollment_state_rejects_partial_response_files(tmp_path):
 
 
 def test_existing_partial_secret_must_match_local_enrollment_state(tmp_path):
-    expected = tmp_path / "expected-token"
+    local_state = {}
+    for key, content in (
+        ("token", "B" * 48),
+        ("ca.crt", "CA CERTIFICATE"),
+        ("tls.crt", "CLIENT CERTIFICATE"),
+        ("tls.key", "PRIVATE KEY"),
+    ):
+        path = tmp_path / ("expected-" + key)
+        path.write_text(content, encoding="ascii")
+        local_state[key] = path
     actual = tmp_path / "actual-token"
-    expected.write_text("B" * 48, encoding="ascii")
     actual.write_text("C" * 48, encoding="ascii")
 
     with pytest.raises(
@@ -460,5 +468,5 @@ def test_existing_partial_secret_must_match_local_enrollment_state(tmp_path):
         BOOTSTRAP._assert_existing_secrets_match_local_state(
             {"token": actual},
             None,
-            {"token": expected},
+            local_state,
         )
