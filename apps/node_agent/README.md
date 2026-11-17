@@ -22,8 +22,9 @@ Runs as a Pod in the temporary EPH Single-Node Kubernetes cluster on the tempora
 - Report host health and validate the temporary management environment.
 - Inspect source Kubernetes, Cluster API, Metal3 and Ironic inventory.
 - Produce a validated deployment plan and source-side Pivot preflight.
-- Execute an explicitly approved `cluster.capi.pivot.execute` simulation after read-only source/target preflight.
-- Never transfer ownership from the EPH Agent; a successful simulation is not a real Pivot.
+- Execute the explicitly approved `cluster.capi.pivot.execute` operation: run server-side `clusterctl move --dry-run`, verify source/target CAPI and Metal3 preconditions, execute the real `clusterctl move`, then verify target object identity and source absence.
+- Persist the source Cluster UID as an annotation before move; the Target API assigns a new UID, so Target Agent verifies source identity annotation and records the new Target UID rather than requiring equal Kubernetes UIDs.
+- EPH does not authorize its own cleanup. Target Agent independently verifies adoption, BMH ownership and controller readiness before it may clean up EPH.
 
 ### Target Agent (AGENT_NODE_TYPE=target_cluster)
 
@@ -43,7 +44,7 @@ Build the Node Agent image using `deploy/agents/build-node-agent.sh` with explic
 
 ## Safety
 
-The current `cluster.capi.pivot.execute` command is simulation-only. It never invokes mutating `clusterctl move`, never writes Kubernetes resources, and never changes Agent ownership. EPH reclaim remains fail-closed. The node image includes kubectl and clusterctl only for the bounded, typed operations implemented by this runtime; arbitrary shell, arbitrary manifest apply and arbitrary command payloads are not supported.
+The `cluster.capi.pivot.execute` command performs a real, approval-gated `clusterctl move` after server-side dry-run and source/target preflight. It has external side effects and is not safe for blind automatic retry after an ambiguous timeout. Target Agent postflight must independently verify the moved Cluster identity, source absence, CAPI/Metal3 controller readiness and BMH ownership before worker provisioning or EPH cleanup. EPH cleanup remains fail-closed until its Target Agent executor is implemented and verified. The node image includes kubectl and clusterctl only for bounded typed operations; arbitrary shell, arbitrary manifest apply and arbitrary command payloads are not supported.
 
 ## Dual-network inspection
 
