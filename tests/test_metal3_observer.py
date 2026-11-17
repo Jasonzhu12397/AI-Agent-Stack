@@ -332,3 +332,32 @@ def test_target_agent_rejects_ironic_node_in_maintenance(monkeypatch):
             },
             deployment_context=trusted_deployment_context(source),
         )
+
+
+def test_target_agent_rejects_malformed_target_cluster_annotations(monkeypatch):
+    cluster, machines, metal3machines, bmhs, source = ownership_documents()
+    cluster["metadata"]["annotations"] = None
+    documents = {
+        "cluster.cluster.x-k8s.io": cluster,
+        "machines.cluster.x-k8s.io": machines,
+        "metal3machines.infrastructure.cluster.x-k8s.io": metal3machines,
+        "baremetalhosts.metal3.io": bmhs,
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(documents[arguments[1]]),
+            "stderr": "",
+        },
+    )
+    with pytest.raises(Metal3OwnershipError, match="TARGET_CLUSTER_ANNOTATIONS_INVALID"):
+        target_main._observe_target_metal3_ownership(
+            {
+                "namespace": "metal3-system",
+                "cluster_name": "target-cluster",
+            },
+            deployment_context=trusted_deployment_context(source),
+        )
