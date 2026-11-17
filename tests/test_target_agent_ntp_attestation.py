@@ -11,6 +11,7 @@ def _machine_and_config(index, approved_source, worker_network):
     machine_uid = f"machine-uid-{index}"
     config_name = f"control-plane-{index}-bootstrap"
     script = "\n".join((
+        "apt-get install -y chrony iproute2",
         "server " + approved_source + " iburst",
         "allow " + worker_network,
         "chronyc -n sources",
