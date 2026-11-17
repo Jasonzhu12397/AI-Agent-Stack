@@ -2,9 +2,9 @@ import pytest
 
 from apps.target_agent.ntp_policy import (
     NtpPolicyError,
-    render_worker_chrony_config,
     render_control_plane_chrony_config,
     render_control_plane_chrony_pre_kubeadm_command,
+    render_worker_chrony_config,
     render_worker_chrony_pre_kubeadm_command,
     validate_control_plane_ntp_profile,
     validate_worker_ntp_sources,
