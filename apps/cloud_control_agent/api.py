@@ -200,18 +200,40 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("DEPLOYMENT_NOT_FOUND")
                 if role == "target" and agent["cluster_id"] != deployment["cluster_id"]:
                     raise ControlApiError("TARGET_AGENT_CLUSTER_MISMATCH")
-                connection.execute(
+                inserted = connection.execute(
                     """
                     INSERT INTO agent_control_commands (
                         command_id, deployment_id, target_agent_id, required_role,
                         action, idempotency_key, payload, status, approval_digest
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    RETURNING command_id
                     """,
                     (
                         command_id, deployment_id, target_agent_id, role, action,
                         idempotency_key, Jsonb(payload), approval_digest,
                     ),
-                )
+                ).fetchone()
+                if inserted is None:
+                    existing = connection.execute(
+                        """
+                        SELECT command_id, deployment_id, target_agent_id, required_role,
+                               action, payload, approval_digest
+                        FROM agent_control_commands WHERE idempotency_key = %s
+                        """,
+                        (idempotency_key,),
+                    ).fetchone()
+                    if (
+                        not existing
+                        or existing["deployment_id"] != deployment_id
+                        or existing["target_agent_id"] != target_agent_id
+                        or existing["required_role"] != role
+                        or existing["action"] != action
+                        or existing["payload"] != payload
+                        or existing["approval_digest"] != approval_digest
+                    ):
+                        raise ControlApiError("IDEMPOTENCY_KEY_CONFLICT")
+                    command_id = existing["command_id"]
             self._send(201, {"command_id": str(command_id), "status": "queued"})
 
         def _heartbeat(self, document: dict[str, Any]) -> None:
@@ -256,6 +278,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                action, idempotency_key, payload, created_at
                         FROM agent_control_commands
                         WHERE target_agent_id = %s AND required_role = %s
+                          AND (deadline IS NULL OR deadline > NOW())
                           AND (
                               status = 'queued'
                               OR (status = 'leased' AND lease_expires_at <= NOW())
@@ -269,7 +292,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     if row is None:
                         self._send(200, {"command": None})
                         return
-                    deadline = now + timedelta(minutes=15)
+                    deadline = row["deadline"] or now + timedelta(minutes=15)
                     expires = min(deadline, now + timedelta(seconds=LEASE_SECONDS))
                     connection.execute(
                         """
