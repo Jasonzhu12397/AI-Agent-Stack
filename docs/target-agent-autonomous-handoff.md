@@ -48,3 +48,18 @@ Only Target Agent provisions Target Workers. Each worker's host preparation incl
 ## Implementation boundary
 
 The new `apps/target_agent/handoff.py` module enforces topology, phase ordering, stable BMH hardware-identity equality and Target ownership evidence. The new `apps/target_agent/ntp_policy.py` module enforces Worker chronyd source scope. These checks are policy and validation primitives; they do not claim to perform a live clusterctl move, delete EPH Pods, mutate BMH objects or install chronyd. Those external side effects remain behind versioned Kubernetes/CAPI/Metal3/host adapters and must be tested against the selected provider versions before production enablement.
+
+
+## Trusted NTP policy configuration
+
+The Target Agent does not accept its approved external NTP sources or Worker network CIDRs
+from a Cloud Control command payload. These values are deployment policy and must be supplied
+through the `target-agent-credentials` Secret:
+
+- `approved-external-ntp-sources`: comma-separated approved upstream NTP IPs or DNS names.
+- `worker-network-cidrs`: comma-separated CIDRs permitted to query the Control Plane NTP service.
+
+The Target Agent validates every Control Plane bootstrap configuration against these trusted
+values. A command payload cannot approve its own NTP source or broaden the served Worker networks.
+Missing policy keys block NTP attestation and rendering; they must not be replaced with public
+fallback pools or caller-provided values.
