@@ -35,7 +35,7 @@ def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
     microversion = environ.get("IRONIC_API_MICROVERSION", "1.82").strip()
     if not endpoint or not token:
         raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
-    if any(character in token for character in ("\r", "\n")):
+    if any(character in token for character in ("\r", "\n", "\\r", "\\n")):
         raise IronicObservationError("IRONIC_API_TOKEN_INVALID")
     parsed = urlsplit(endpoint)
     if (
@@ -116,7 +116,10 @@ def get_ironic_node(
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_JSON") from exc
     if not isinstance(document, dict):
         raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_OBJECT")
-    if document.get("uuid") != normalized_uuid:
+    returned_uuid = document.get("uuid")
+    if not isinstance(returned_uuid, str) or not returned_uuid:
+        raise IronicObservationError("IRONIC_NODE_IDENTITY_INVALID")
+    if returned_uuid != normalized_uuid:
         raise IronicObservationError("IRONIC_NODE_IDENTITY_MISMATCH")
     provision_state = document.get("provision_state")
     maintenance = document.get("maintenance")
