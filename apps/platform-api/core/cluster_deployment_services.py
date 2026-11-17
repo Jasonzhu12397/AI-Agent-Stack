@@ -82,7 +82,13 @@ def _record_capi_pivot_event(
         return None
     allowed = {
         ClusterDeploymentPivotOperation.State.PREPARED: {
+            ClusterDeploymentPivotOperation.State.WAITING_APPROVAL,
             ClusterDeploymentPivotOperation.State.WAITING_TARGET_ACK,
+            ClusterDeploymentPivotOperation.State.READY,
+            ClusterDeploymentPivotOperation.State.FAILED,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.WAITING_APPROVAL: {
             ClusterDeploymentPivotOperation.State.READY,
             ClusterDeploymentPivotOperation.State.FAILED,
             ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
@@ -557,8 +563,8 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     if operation_created:
         _record_capi_pivot_event(
             deployment,
-            ClusterDeploymentPivotOperation.State.READY,
-            "target_agent_acknowledged",
+            ClusterDeploymentPivotOperation.State.WAITING_APPROVAL,
+            "target_agent_acknowledged_approval_required",
             {
                 "source_inventory_sha256": persisted_payload["source_inventory_sha256"],
                 "target_ack": persisted_ack,
