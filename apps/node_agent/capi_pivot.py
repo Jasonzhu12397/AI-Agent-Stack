@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -907,8 +908,57 @@ def run_capi_pivot(
         )
         return completed
 
+    allowed_fields = {
+        "deployment_id",
+        "cluster_name",
+        "namespace",
+        "operation_id",
+        "source_cluster_uid",
+        "source_cluster_api_version",
+        "source_cluster_spec_sha256",
+        "source_inventory_sha256",
+        "target_agent_ack",
+    }
+    if set(payload) != allowed_fields:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_AUTHORIZATION_INVALID")
+    operation_id = payload.get("operation_id")
+    if not isinstance(operation_id, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        operation_id,
+    ):
+        raise CapiPivotError("CAPI_PIVOT_OPERATION_ID_INVALID")
+    for key in ("source_cluster_uid",):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_IDENTITY_INVALID")
+    for key in ("source_cluster_spec_sha256", "source_inventory_sha256"):
+        if not isinstance(payload.get(key), str) or not re.fullmatch(
+            r"[a-f0-9]{64}", payload[key]
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_DIGEST_INVALID")
+    if not isinstance(payload.get("source_cluster_api_version"), str):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_API_VERSION_INVALID")
+    acknowledgement = payload.get("target_agent_ack")
+    if (
+        not isinstance(acknowledgement, dict)
+        or set(acknowledgement) != {
+            "node_id", "command_id", "result_sha256", "acknowledged_at"
+        }
+        or not all(
+            isinstance(acknowledgement.get(key), str) and acknowledgement[key]
+            for key in ("node_id", "command_id", "acknowledged_at")
+        )
+        or not isinstance(acknowledgement.get("result_sha256"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", acknowledgement["result_sha256"])
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_REQUIRED")
+
+    dry_run_payload = {
+        key: payload[key]
+        for key in ("deployment_id", "cluster_name", "namespace")
+        if key in payload
+    }
     dry_run = run_capi_pivot_dry_run(
-        payload,
+        dry_run_payload,
         environ=env,
         executable_lookup=lookup,
         process_runner=preflight_runner,
@@ -921,16 +971,20 @@ def run_capi_pivot(
         "CAPI_PIVOT_TARGET_KUBECONFIG",
         secret_root,
     )
+    source_kubeconfig = _resolve_kubeconfig(
+        env,
+        "CAPI_PIVOT_SOURCE_KUBECONFIG",
+        secret_root,
+    )
     clusterctl = lookup("clusterctl")
     kubectl = lookup("kubectl")
     if not clusterctl:
         raise CapiPivotError("CLUSTERCTL_NOT_INSTALLED")
     if not kubectl:
         raise CapiPivotError("KUBECTL_NOT_INSTALLED")
-
     cluster_name = dry_run["cluster_name"]
     namespace = dry_run["namespace"]
-    target_process_env = {
+    process_env = {
         "PATH": env.get("PATH", ""),
         "HOME": env.get("HOME", "/tmp"),
     }
@@ -940,12 +994,7 @@ def run_capi_pivot(
         target_kubeconfig,
         namespace,
         cluster_name,
-        target_process_env,
-    )
-    source_kubeconfig = _resolve_kubeconfig(
-        env,
-        "CAPI_PIVOT_SOURCE_KUBECONFIG",
-        secret_root,
+        process_env,
     )
     metal3_handoff = _verify_source_metal3_handoff(
         preflight_runner,
@@ -957,33 +1006,159 @@ def run_capi_pivot(
         env,
         env,
     )
-    _raise_if_cancelled(
-        cancellation_event,
-        "CAPI_PIVOT_CANCELLED_BEFORE_SIMULATION",
+    source_cluster = _kubectl_json(
+        preflight_runner,
+        kubectl,
+        source_kubeconfig,
+        [
+            "--namespace", namespace, "get", "clusters.cluster.x-k8s.io",
+            cluster_name, "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_UNAVAILABLE",
     )
+    source_metadata = source_cluster.get("metadata", {})
+    source_spec = source_cluster.get("spec")
+    if (
+        source_metadata.get("uid") != payload["source_cluster_uid"]
+        or source_cluster.get("apiVersion") != payload["source_cluster_api_version"]
+        or not isinstance(source_spec, dict)
+        or hashlib.sha256(
+            json.dumps(
+                source_spec,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest() != payload["source_cluster_spec_sha256"]
+    ):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_CHANGED_AFTER_APPROVAL")
+
+    _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_BEFORE_MOVE")
+    move_command = [
+        clusterctl,
+        "move",
+        "--kubeconfig",
+        str(source_kubeconfig),
+        "--to-kubeconfig",
+        str(target_kubeconfig),
+        "--namespace",
+        namespace,
+        "-v",
+        "5",
+    ]
+    timeout = int(env.get("CAPI_PIVOT_EXECUTION_TIMEOUT_SECONDS", "1800"))
+    if timeout < 60 or timeout > 7200:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_TIMEOUT_INVALID")
+    try:
+        moved = runner(
+            move_command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CapiPivotError(
+            "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+        ) from exc
+    except OSError as exc:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
+    if moved.returncode != 0:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED:" + _safe_output(
+            (moved.stderr or moved.stdout or "")[-1000:]
+        ))
+
+    _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_AFTER_MOVE")
+    target_cluster = _kubectl_json(
+        preflight_runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace", namespace, "get", "clusters.cluster.x-k8s.io",
+            cluster_name, "-o", "json",
+        ],
+        process_env,
+        "CAPI_PIVOT_TARGET_CLUSTER_NOT_VISIBLE_AFTER_MOVE",
+    )
+    target_metadata = target_cluster.get("metadata", {})
+    target_spec = target_cluster.get("spec")
+    target_uid = target_metadata.get("uid")
+    if (
+        target_metadata.get("name") != cluster_name
+        or target_metadata.get("namespace") != namespace
+        or not isinstance(target_uid, str)
+        or not target_uid
+        or target_uid == payload["source_cluster_uid"]
+        or target_cluster.get("apiVersion") != payload["source_cluster_api_version"]
+        or not isinstance(target_spec, dict)
+        or hashlib.sha256(
+            json.dumps(
+                target_spec,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest() != payload["source_cluster_spec_sha256"]
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_IDENTITY_MISMATCH")
+
+    source_check = preflight_runner(
+        [
+            kubectl,
+            "--kubeconfig",
+            str(source_kubeconfig),
+            "--namespace",
+            namespace,
+            "get",
+            "clusters.cluster.x-k8s.io",
+            cluster_name,
+            "-o",
+            "json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+        env=process_env,
+    )
+    source_error = (source_check.stderr or "").lower()
+    if source_check.returncode == 0 or (
+        "notfound" not in source_error and "not found" not in source_error
+    ):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_OWNERSHIP_NOT_RELEASED")
 
     return {
+        "deployment_id": payload["deployment_id"],
+        "operation_id": operation_id,
         "cluster_name": cluster_name,
         "namespace": namespace,
-        "pivot_executed": False,
-        "pivot_simulated": True,
-        "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "pivot_executed": True,
+        "pivot_simulated": False,
+        "execution_mode": "clusterctl_move",
         "dry_run_passed": dry_run["dry_run_passed"],
-        "source_namespace_scope_verified": True,
+        "source_cluster_uid": payload["source_cluster_uid"],
+        "target_cluster_uid": target_uid,
+        "source_cluster_spec_sha256": payload["source_cluster_spec_sha256"],
+        "source_inventory_sha256": payload["source_inventory_sha256"],
+        "source_cluster_absent": True,
+        "target_cluster_present": True,
+        "target_agent_acknowledged": True,
+        "target_agent_ack": acknowledgement,
         "target_management_plane_verified": True,
         "target_provider_versions": target_preflight["provider_versions"],
         "target_controllers_ready": target_preflight["controllers_ready"],
-        "target_cluster_name_available": target_preflight["target_cluster_name_available"],
         "metal3_handoff": metal3_handoff,
         "ownership_transferred": False,
-        "target_agent_acknowledgement_required": True,
-        "postflight_required": True,
-        "side_effects": False,
-        "automatic_retry_allowed": True,
-        "exit_code": dry_run["exit_code"],
-        "stdout_summary": dry_run["stdout_summary"],
-        "stderr_summary": dry_run["stderr_summary"],
+        "target_agent_postflight_required": True,
+        "side_effects": True,
+        "automatic_retry_allowed": False,
+        "exit_code": moved.returncode,
+        "stdout_summary": _safe_output(moved.stdout or ""),
+        "stderr_summary": _safe_output(moved.stderr or ""),
     }
 
 
