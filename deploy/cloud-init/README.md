@@ -42,7 +42,7 @@ DNS IP addresses, the DNS probe hostname and search domains, and writes cloud-in
 - configures NTP servers with `iburst`, `makestep` and `rtcsync`;
 - enables the distro's `chrony.service` or `chronyd.service`;
 - configures systemd-resolved DNS and search domains;
-- makes the systemd-resolved stub resolver the host resolver;
+- points the host resolver at systemd-resolved's upstream resolver file (not the 127.0.0.53 stub), so kubelet and CoreDNS can use the configured upstream DNS servers without a forwarding loop;
 - waits for chrony synchronization and resolves the configured DNS probe name;
 - fails cloud-init if chrony or systemd-resolved cannot be enabled or the probe fails.
 
