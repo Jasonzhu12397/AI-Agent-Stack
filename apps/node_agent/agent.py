@@ -5487,7 +5487,12 @@ def run_once(
                         ),
                         flush=True,
                     )
+    if authority_event is not None and not authority_event.is_set():
+        touch_health_files(readiness=True)
+        return False
     envelope = client.poll()
+    if authority_event is not None and not authority_event.is_set():
+        return False
     command = envelope.get("command")
     if not command:
         touch_health_files(readiness=True)
