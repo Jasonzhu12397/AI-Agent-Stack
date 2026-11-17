@@ -371,6 +371,26 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         deployment.save(update_fields=["plan_result", "updated_at"])
         return
 
+    if (
+        target_command.node_id != deployment.target_node_id
+        or target_command.result.get("target_management_plane_ready") is not True
+        or target_command.result.get("pivot_execution_allowed") is not True
+        or target_command.result.get("missing_resources") != []
+        or target_command.result.get("cluster_name_conflicts") != []
+        or target_command.result.get("side_effects") is not False
+    ):
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **plan_result.get("dual_agent", {}),
+                "phase": "target_agent_preflight_not_ready",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["plan_result", "updated_at"])
+        return
+
     source_identity = source.get("source_cluster_identity")
     source_inventory = source.get("inventory")
     if (
@@ -449,6 +469,58 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         },
     )
     persisted_payload = command.payload if isinstance(command.payload, dict) else {}
+    operation_id = persisted_payload.get("operation_id")
+    inventory_digest = persisted_payload.get("source_inventory_sha256")
+    if isinstance(operation_id, str) and isinstance(inventory_digest, str):
+        operation_uuid = uuid.UUID(operation_id)
+        operation, created = ClusterDeploymentPivotOperation.objects.get_or_create(
+            deployment=deployment,
+            defaults={
+                "operation_id": operation_uuid,
+                "source_node": deployment.eph_node,
+                "target_node": deployment.target_node,
+                "source_identity": source_identity,
+                "inventory": source_inventory,
+                "inventory_sha256": inventory_digest,
+                "state": ClusterDeploymentPivotOperation.State.READY,
+                "target_ack": {
+                    "node_id": str(deployment.target_node_id),
+                    "command_id": str(target_command.id),
+                    "result_sha256": hashlib.sha256(
+                        json.dumps(
+                            target_command.result,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "target_management_plane_ready": True,
+                    "acknowledged_at": target_command.finished_at.isoformat(),
+                },
+            },
+        )
+        if created:
+            ClusterDeploymentPivotEvent.objects.create(
+                operation=operation,
+                sequence=1,
+                actor_node=deployment.target_node,
+                event_type="target_management_plane_acknowledged",
+                from_state="",
+                to_state=ClusterDeploymentPivotOperation.State.READY,
+                evidence={
+                    "command_id": str(target_command.id),
+                    "inventory_sha256": inventory_digest,
+                },
+            )
+            operation.version = 1
+            operation.save(update_fields=["version", "updated_at"])
+        elif (
+            operation.operation_id != operation_uuid
+            or operation.inventory_sha256 != inventory_digest
+            or operation.source_node_id != deployment.eph_node_id
+            or operation.target_node_id != deployment.target_node_id
+        ):
+            raise ValueError("CAPI_PIVOT_OPERATION_IDENTITY_CONFLICT")
     persisted_ack = persisted_payload.get("target_agent_ack")
     operation, operation_created = ClusterDeploymentPivotOperation.objects.get_or_create(
         deployment=deployment,
