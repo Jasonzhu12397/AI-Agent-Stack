@@ -929,7 +929,30 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             )
                             else None
                         )
-                        if attestation is not None:
+                        if attestation is None:
+                            invalid_result = {
+                                key: value
+                                for key, value in document.items()
+                                if key != "lease_token"
+                            }
+                            invalid_result["status"] = "blocked"
+                            invalid_result["error"] = "EPH_PIVOT_ATTESTATION_INVALID"
+                            connection.execute(
+                                """
+                                UPDATE agent_control_commands
+                                SET status = 'blocked', result = %s, updated_at = NOW()
+                                WHERE command_id = %s AND target_agent_id = %s
+                                  AND lease_id = %s AND lease_token_hash = %s
+                                """,
+                                (
+                                    Jsonb(invalid_result),
+                                    command_id,
+                                    identity["agent_id"],
+                                    lease_id,
+                                    token_hash,
+                                ),
+                            )
+                        else:
                             deployment = connection.execute(
                                 """
                                 SELECT trusted_context
