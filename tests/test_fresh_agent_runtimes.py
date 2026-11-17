@@ -92,7 +92,7 @@ def test_target_agent_blocks_handoff_phase_skips():
 
 
 
-def test_target_agent_handoff_uses_cloud_checkpoint_not_payload_phase():
+def test_target_agent_cannot_claim_eph_owned_bootstrap_checkpoint():
     result = execute_target({
         "action": "target.handoff.evaluate",
         "deployment_checkpoint": {
@@ -110,9 +110,9 @@ def test_target_agent_handoff_uses_cloud_checkpoint_not_payload_phase():
             },
         },
     })
-    assert result["status"] == "succeeded"
-    assert result["output"]["from_phase"] is None
-    assert result["output"]["to_phase"] == "eph_single_node_ready"
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "HANDOFF_EPH_CHECKPOINT_REQUIRED"
+    assert result["side_effects"] is False
 
 
 def test_target_agent_handoff_recognizes_already_persisted_checkpoint():
@@ -271,3 +271,37 @@ def test_target_agent_reads_worker_inventory_from_target_kubernetes_api(monkeypa
     assert json.loads(result["output"]["stdout"]) == observed
     assert calls == [["get", "nodes", "-o", "json"]]
     assert result["side_effects"] is False
+
+
+
+def test_eph_preflight_emits_checkpoint_ready_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
+    (tmp_path / "source.kubeconfig").write_text("test", encoding="utf-8")
+    node_list = {
+        "items": [{
+            "metadata": {"name": "eph-single-node"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+
+    def fake_read_only(command, timeout=20):
+        if command[:3] == ["kubectl", "get", "nodes"]:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(node_list),
+                "stderr": "",
+            }
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "{}",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(eph_main, "_run_read_only", fake_read_only)
+    result = execute_eph({"action": "eph.preflight"})
+    assert result["status"] == "succeeded"
+    assert result["output"]["eph_ready"] is True
+    assert result["output"]["eph_node_count"] == 1
+    assert result["output"]["eph_source_preflight_passed"] is True
