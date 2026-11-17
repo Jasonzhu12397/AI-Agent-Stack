@@ -46,10 +46,10 @@ def test_handoff_rejects_bmh_identity_set_mismatch():
             "bmh_registry_migrated",
             {
                 "source_bmh_identities": [
-                    {"namespace": "metal3", "name": "host-1", "system_uuid": "abc"}
+                    {"namespace": "metal3", "name": "host-1", "hardware_identity": "abc"}
                 ],
                 "target_bmh_identities": [
-                    {"namespace": "metal3", "name": "host-2", "system_uuid": "abc"}
+                    {"namespace": "metal3", "name": "host-2", "hardware_identity": "abc"}
                 ],
                 "target_metal3_ownership_verified": True,
                 "target_metal3_reconciliation_healthy": True,
@@ -87,3 +87,43 @@ def test_handoff_accepts_complete_ordered_worker_evidence():
     )
     assert result["accepted"] is True
     assert result["side_effects"] is False
+
+
+
+def test_capi_pivot_accepts_new_target_uid_with_preserved_source_identity_annotation():
+    result = evaluate_transition(
+        "target_agent_ready",
+        "capi_pivot_verified",
+        {
+            "capi_pivot_succeeded": True,
+            "target_controllers_ready": True,
+            "source_cluster_uid": "source-api-uid",
+            "target_cluster_uid": "target-api-uid",
+            "target_source_cluster_uid_annotation": "source-api-uid",
+            "source_stable_cluster_identity": "cluster-logical-id-123",
+            "target_stable_cluster_identity": "cluster-logical-id-123",
+            "source_cluster_absent": True,
+            "target_cluster_ownership_verified": True,
+        },
+    )
+    assert result["accepted"] is True
+    assert result["evidence"]["source_cluster_uid"] != result["evidence"]["target_cluster_uid"]
+
+
+def test_capi_pivot_rejects_source_uid_annotation_mismatch():
+    with pytest.raises(HandoffError, match="SOURCE_UID_ANNOTATION_MISMATCH"):
+        evaluate_transition(
+            "target_agent_ready",
+            "capi_pivot_verified",
+            {
+                "capi_pivot_succeeded": True,
+                "target_controllers_ready": True,
+                "source_cluster_uid": "source-api-uid",
+                "target_cluster_uid": "target-api-uid",
+                "target_source_cluster_uid_annotation": "wrong-source-uid",
+                "source_stable_cluster_identity": "cluster-logical-id-123",
+                "target_stable_cluster_identity": "cluster-logical-id-123",
+                "source_cluster_absent": True,
+                "target_cluster_ownership_verified": True,
+            },
+        )
