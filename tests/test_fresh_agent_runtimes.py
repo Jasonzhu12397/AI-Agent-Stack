@@ -540,6 +540,7 @@ def _stub_target_metal3_ownership(monkeypatch):
             "target_bmh_identities": [],
             "target_metal3_ownership_verified": True,
             "target_metal3_reconciliation_healthy": True,
+            "target_cluster_uid": "cluster-uid",
             "side_effects": False,
         },
     )
@@ -584,6 +585,32 @@ def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatc
     assert evidence["target_ironic_inventory_verified"] is True
     assert evidence["ironic_node_count"] == 2
     assert evidence["side_effects"] is False
+
+
+def test_target_metal3_ownership_rejects_payload_only_source_identity(monkeypatch):
+    documents = _target_metal3_observation_documents()
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        _fake_target_metal3_kubectl(documents),
+    )
+    result = execute_target({
+        "action": "target.metal3.verify_ownership",
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "source_bmh_identities": [
+                {
+                    "namespace": "metal3",
+                    "name": "host-1",
+                    "hardware_identity": "forged-payload-identity",
+                },
+            ],
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "SOURCE_BMH_PIVOT_ATTESTATION_REQUIRED"
+    assert result["side_effects"] is False
 
 
 def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeypatch):
