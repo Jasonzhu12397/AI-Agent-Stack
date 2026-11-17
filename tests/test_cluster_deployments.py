@@ -2551,6 +2551,54 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
     ).exists()
 
 
+
+@pytest.mark.django_db
+def test_agent_poll_skips_exhausted_command_and_dispatches_next_eligible_command(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="agent-poll-skips-exhausted-command",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    exhausted = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="host.preflight",
+    )
+    exhausted.attempts = exhausted.max_attempts
+    exhausted.save(update_fields=["attempts"])
+    next_command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="node.health",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="agent-poll-next-eligible-command",
+    )
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    assert response.status_code == 200
+    assert response.data["command"]["id"] == str(next_command.id)
+    exhausted.refresh_from_db()
+    next_command.refresh_from_db()
+    assert exhausted.status == AgentCommand.Status.FAILED
+    assert exhausted.error["code"] == "LEASE_EXPIRED"
+    assert next_command.status == AgentCommand.Status.RUNNING
+    assert next_command.attempts == 1
+
 @pytest.mark.django_db
 def test_eph_agent_cannot_poll_deployment_commands_after_target_ownership(
     cluster_delivery_workspace,
