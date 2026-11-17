@@ -1124,6 +1124,7 @@ def handle_deployment_command_result(
         )
         created = result.get("created")
         reconciled = result.get("idempotent_reconciliation")
+        bootstrap_created = result.get("chrony_bootstrap_template_created")
         machine_uid = result.get("machine_deployment_uid")
         manifest_hash = result.get("machine_deployment_manifest_hash")
         valid_result = (
@@ -1164,12 +1165,13 @@ def handle_deployment_command_result(
             )
             and isinstance(result.get("chrony_bootstrap_template_uid"), str)
             and bool(result.get("chrony_bootstrap_template_uid"))
+            and isinstance(bootstrap_created, bool)
             and isinstance(created, bool)
             and isinstance(reconciled, bool)
             and created != reconciled
             and result.get("dry_run_passed") is (created is True)
             and result.get("execution_allowed") is True
-            and result.get("side_effects") is created
+            and result.get("side_effects") is (created or bootstrap_created)
             and result.get("worker_creation_performed") is True
             and result.get("network_profile_hash")
             == _spec_hash(
