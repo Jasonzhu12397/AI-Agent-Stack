@@ -306,3 +306,104 @@ def test_eph_preflight_emits_checkpoint_ready_evidence(monkeypatch, tmp_path):
     assert result["output"]["eph_ready"] is True
     assert result["output"]["eph_node_count"] == 1
     assert result["output"]["eph_source_preflight_passed"] is True
+
+
+
+def test_target_agent_verifies_live_capi_pivot_annotations_and_cluster_readiness(monkeypatch):
+    cluster = {
+        "metadata": {
+            "uid": "target-cluster-object-uid",
+            "generation": 3,
+            "annotations": {
+                "ai-agent-stack.io/source-cluster-uid": "source-cluster-object-uid",
+                "ai-agent-stack.io/stable-cluster-identity": "logical-cluster-001",
+            },
+        },
+        "status": {
+            "observedGeneration": 3,
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda _arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(cluster),
+            "stderr": "",
+        },
+    )
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "target_agent_ready",
+            "sequence": 2,
+            "state": {},
+        },
+        "payload": {
+            "next_phase": "capi_pivot_verified",
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "stable_cluster_identity": "logical-cluster-001",
+            "evidence": {
+                "source_cluster_uid": "source-cluster-object-uid",
+                "source_cluster_absent": True,
+                "target_controllers_ready": True,
+            },
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["evidence"]["target_cluster_uid"] == "target-cluster-object-uid"
+    assert result["output"]["evidence"]["target_cluster_ownership_verified"] is True
+
+
+def test_target_agent_rejects_capi_pivot_when_live_target_source_uid_annotation_differs(
+    monkeypatch,
+):
+    cluster = {
+        "metadata": {
+            "uid": "target-cluster-object-uid",
+            "generation": 1,
+            "annotations": {
+                "ai-agent-stack.io/source-cluster-uid": "wrong-source-uid",
+                "ai-agent-stack.io/stable-cluster-identity": "logical-cluster-001",
+            },
+        },
+        "status": {
+            "observedGeneration": 1,
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda _arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(cluster),
+            "stderr": "",
+        },
+    )
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "target_agent_ready",
+            "sequence": 2,
+            "state": {},
+        },
+        "payload": {
+            "next_phase": "capi_pivot_verified",
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "stable_cluster_identity": "logical-cluster-001",
+            "evidence": {
+                "source_cluster_uid": "source-cluster-object-uid",
+                "source_cluster_absent": True,
+                "target_controllers_ready": True,
+            },
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "TARGET_CAPI_PIVOT_SOURCE_UID_ANNOTATION_MISMATCH"
+    assert result["side_effects"] is False
