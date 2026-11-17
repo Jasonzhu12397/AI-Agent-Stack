@@ -28,4 +28,4 @@ COPY apps/node_agent ./apps/node_agent
 COPY --from=clusterctl /usr/local/bin/clusterctl /usr/local/bin/clusterctl
 COPY --from=clusterctl /usr/local/bin/kubectl /usr/local/bin/kubectl
 USER 10001:10001
-CMD ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+CMD ["python", "-m", "apps.target_agent.main", "--poll-seconds", "5"]
