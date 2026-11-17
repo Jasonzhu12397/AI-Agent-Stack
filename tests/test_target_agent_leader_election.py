@@ -33,24 +33,22 @@ def _lease(holder, renew_time, resource_version="7", transitions=1):
     }
 
 
-def test_target_agent_leader_election_creates_missing_lease(monkeypatch):
-    calls = []
-
+def test_target_agent_fails_closed_when_precreated_lease_is_missing(monkeypatch):
     def get_lease(path):
         raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
 
-    def write_lease(method, path, payload):
-        calls.append((method, path, payload))
-        return {}
-
     monkeypatch.setattr(agent, "kubernetes_api_get", get_lease)
-    monkeypatch.setattr(agent, "kubernetes_api_lease_request", write_lease)
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_lease_request",
+        lambda *args: pytest.fail("Target Agent must not create a Lease"),
+    )
 
-    assert _elector().acquire_or_renew() is True
-    assert len(calls) == 1
-    assert calls[0][0] == "POST"
-    assert calls[0][1].endswith("/namespaces/ai-agent-system/leases")
-    assert calls[0][2]["spec"]["holderIdentity"] == "target-cluster-agent-0"
+    with pytest.raises(
+        agent.NodeAgentError,
+        match="TARGET_AGENT_LEADER_LEASE_MISSING",
+    ):
+        _elector().acquire_or_renew()
 
 
 def test_target_agent_standby_does_not_steal_active_lease(monkeypatch):
