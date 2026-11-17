@@ -1056,6 +1056,7 @@ from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402
 class ClusterDeploymentPivotOperation(models.Model):
     class State(models.TextChoices):
         PREPARED = "prepared", "Prepared"
+        WAITING_APPROVAL = "waiting_approval", "Waiting for approval"
         WAITING_TARGET_ACK = "waiting_target_ack", "Waiting for target acknowledgement"
         READY = "ready", "Ready"
         EXECUTING = "executing", "Executing"
