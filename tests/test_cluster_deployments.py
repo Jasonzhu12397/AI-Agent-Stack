@@ -2415,6 +2415,7 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
                 "spec_sha256": "d" * 64,
             }
         },
+        "time_dns_profile": {"profile_hash": "a" * 64},
         "dual_agent": {
             "phase": "target_agent_verification_pending",
             "target_agent_owns_cluster": False,
@@ -2496,6 +2497,10 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
             "pivot_adoption_verified": True,
             "machine_inventory_ready": True,
             "controllers_ready": True,
+            "time_dns_verified": True,
+            "time_dns_profile_hash": "a" * 64,
+            "time_dns_node_count": 3,
+            "time_dns_unverified_machine_names": [],
             "machine_count": 3,
             "ready_machine_count": 3,
             "not_ready_machine_names": [],
