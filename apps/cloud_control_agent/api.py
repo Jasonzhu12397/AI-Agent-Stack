@@ -20,6 +20,31 @@ LEASE_SECONDS = 90
 class ControlApiError(ValueError):
     pass
 
+EPH_ACTIONS = frozenset({
+    "eph.preflight",
+    "eph.source.observe",
+    "eph.capi.pivot.dry_run",
+    "eph.capi.pivot",
+})
+TARGET_ACTIONS = frozenset({
+    "target.cluster.observe",
+    "target.capi.observe",
+    "target.metal3.observe",
+    "target.metal3.verify_ownership",
+    "target.worker.ntp.validate",
+    "target.ntp.control_plane.render",
+    "target.ntp.control_plane.verify_bootstrap",
+    "target.ntp.internal.probe",
+    "target.handoff.evaluate",
+})
+
+
+def _validate_action_role(role: str, action: str) -> None:
+    allowed = EPH_ACTIONS if role == "eph" else TARGET_ACTIONS if role == "target" else frozenset()
+    if action not in allowed:
+        raise ControlApiError("COMMAND_ACTION_NOT_ALLOWED_FOR_AGENT_ROLE")
+
+
 CHECKPOINT_PHASES = (
     "eph_single_node_ready",
     "target_control_plane_ready",
@@ -381,6 +406,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 raise ControlApiError("COMMAND_ROLE_INVALID")
             if not isinstance(action, str) or not action or len(action) > 128:
                 raise ControlApiError("COMMAND_ACTION_INVALID")
+            _validate_action_role(role, action)
             if (
                 not isinstance(idempotency_key, str)
                 or len(idempotency_key) < 16
