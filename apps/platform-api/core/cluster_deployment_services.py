@@ -1018,6 +1018,10 @@ def handle_deployment_command_result(
             and result.get("template_host_selector_verified") is True
             and result.get("template_host_selector") == config.get("host_selector")
             and result.get("blockers") == []
+            and result.get("ntp_server_ready") is True
+            and result.get("ntp_server_ip") == config.get("ironic_internal_ip")
+            and isinstance(result.get("ntp_server_stratum"), int)
+            and 1 <= result.get("ntp_server_stratum") <= 15
             and isinstance(result.get("available_baremetal_host_count"), int)
             and not isinstance(result.get("available_baremetal_host_count"), bool)
             and result.get("available_baremetal_host_count") >= expected_workers
@@ -1148,6 +1152,18 @@ def handle_deployment_command_result(
             and isinstance(manifest_hash, str)
             and bool(re.fullmatch(r"[0-9a-f]{64}", manifest_hash))
             and result.get("execution_mode") == "real_create_or_idempotent_reconcile"
+            and result.get("chrony_ntp_server_ip")
+            == expected.get("worker_provisioning", {}).get("ironic_internal_ip")
+            and result.get("chrony_bootstrap_template_name")
+            == (
+                expected.get("worker_provisioning", {}).get(
+                    "bootstrap_template_name", ""
+                )[: 63 - len("-ntp-" + str(deployment.id).replace("-", "")[:8])]
+                + "-ntp-"
+                + str(deployment.id).replace("-", "")[:8]
+            )
+            and isinstance(result.get("chrony_bootstrap_template_uid"), str)
+            and bool(result.get("chrony_bootstrap_template_uid"))
             and isinstance(created, bool)
             and isinstance(reconciled, bool)
             and created != reconciled
