@@ -1299,20 +1299,22 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_command_data["id"] == str(pivot_command.id)
     assert pivot_command_data["command_type"] == "cluster.capi.pivot.execute"
 
+    source_uid = deployment.plan_result["capi_pivot_source_preflight"]["source_cluster_identity"]["uid"]
     pivot_result = {
-        "pivot_executed": False,
-        "pivot_simulated": True,
-        "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "pivot_executed": True,
+        "pivot_simulated": False,
+        "execution_mode": "clusterctl_move",
         "dry_run_passed": True,
         "source_namespace_scope_verified": True,
         "target_management_plane_verified": True,
         "cluster_name": "edge-lab",
         "namespace": "capi-system",
-        "ownership_transferred": False,
-        "target_agent_acknowledgement_required": True,
+        "target_cluster_uid": source_uid,
+        "source_cluster_absent": True,
+        "ownership_transferred": True,
+        "automatic_retry_allowed": False,
         "postflight_required": True,
-        "side_effects": False,
+        "side_effects": True,
     }
     pivot_submitted = eph_agent_client.post(
         f"/api/v1/agent-runtime/commands/{pivot_command_data['id']}/result/",
@@ -1331,15 +1333,17 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_submitted.status_code == 200
     assert pivot_command.status == AgentCommand.Status.SUCCEEDED
     assert deployment.error is None
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
-    assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_executed_waiting_target_verification"
+    assert deployment.plan_result["dual_agent"]["pivot_executed"] is True
     assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    assert not AgentCommand.objects.filter(
+    target_verify = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.pivot.target.verify",
-    ).exists()
+    )
+    assert target_verify.status == AgentCommand.Status.QUEUED
+    assert target_verify.node_id == target_node.id
     assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.capi.worker.preflight",
@@ -1530,19 +1534,14 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval(
+def test_dual_agent_pivot_rejects_simulated_success_result(
     cluster_delivery_workspace,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
-        client,
-        tenant,
-        project,
-        eph_node,
-        key="dual-agent-pivot-simulation",
+        client, tenant, project, eph_node, key="dual-agent-pivot-simulation"
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
-    target_token = "dual-agent-target-token"
     target_node = AgentNode.objects.create(
         tenant=tenant,
         project=project,
@@ -1550,7 +1549,7 @@ def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval(
         name="dual-agent-target",
         node_type=AgentNode.NodeType.TARGET_CLUSTER,
         cluster_name="edge-lab",
-        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        credential_hash=hashlib.sha256(b"dual-agent-target-token").hexdigest(),
         status=AgentNode.Status.ONLINE,
         last_seen_at=timezone.now(),
     )
@@ -1567,25 +1566,19 @@ def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval(
         },
         "capi_pivot_preflight": {"preflight_validated": True},
         "capi_pivot_provider_compatibility": {
-            "checked": True,
-            "compatible": True,
-            "execution_allowed": False,
+            "checked": True, "compatible": True, "execution_allowed": False,
         },
     }
     deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
     deployment.save(update_fields=["target_node", "spec", "plan_result", "status", "updated_at"])
-
     _maybe_queue_capi_pivot(deployment)
     pivot_command = AgentCommand.objects.get(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.execute",
+        deployment=deployment, command_type="cluster.capi.pivot.execute"
     )
     assert pivot_command.node_id == eph_node.id
     assert pivot_command.status == AgentCommand.Status.QUEUED
-
     pivot_command.status = AgentCommand.Status.SUCCEEDED
     pivot_command.save(update_fields=["status"])
-
     handle_deployment_command_result(
         pivot_command,
         "succeeded",
@@ -1606,26 +1599,14 @@ def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval(
         },
         None,
     )
-
     deployment.refresh_from_db()
-    dual_agent = deployment.plan_result["dual_agent"]
-    assert dual_agent["phase"] == "pivot_simulation_ready"
-    assert dual_agent["pivot_simulated"] is True
-    assert dual_agent["pivot_completed"] is False
-    assert dual_agent["target_agent_owns_cluster"] is False
-    assert dual_agent["eph_reclaim_allowed"] is False
-    assert deployment.error is None
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_EXECUTION_RESULT"
     assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.target.verify",
-    ).exists()
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.capi.worker.preflight",
+        deployment=deployment, command_type="cluster.capi.pivot.target.verify"
     ).exists()
 
 
-@pytest.mark.django_db
 def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
     cluster_delivery_workspace,
 ):
@@ -1677,7 +1658,7 @@ def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
+    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_EXECUTION_RESULT"
     assert deployment.plan_result.get("dual_agent", {}).get("target_agent_owns_cluster") is not True
 
 @pytest.mark.django_db
