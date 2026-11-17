@@ -3,7 +3,7 @@ import urllib.error
 import urllib.request
 
 import pytest
-from node_agent.ironic_client import (
+from apps.target_agent.ironic_client import (
     IronicObservationError,
     _NoRedirectHandler,
     get_ironic_node,
