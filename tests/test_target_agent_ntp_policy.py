@@ -1,5 +1,7 @@
 import pytest
 
+from apps.target_agent import ntp_policy
+
 from apps.target_agent.ntp_policy import (
     NtpPolicyError,
     render_control_plane_chrony_config,
@@ -100,3 +102,62 @@ def test_control_plane_chrony_bootstrap_installs_and_verifies_udp_123():
     assert "ss -lun" in command
     assert "allow 10.130.60.80/28" in command
     assert "pool " not in command
+
+
+
+def test_internal_ntp_probe_requires_synchronized_server_response(monkeypatch):
+    class FakeSocket:
+        def __init__(self, *_args):
+            self.timeout = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, value):
+            self.timeout = value
+
+        def sendto(self, _packet, _destination):
+            return None
+
+        def recvfrom(self, _size):
+            response = bytearray(48)
+            response[0] = (4 << 3) | 4
+            response[1] = 2
+            return bytes(response), ("10.130.60.84", 123)
+
+    monkeypatch.setattr(ntp_policy.socket, "socket", FakeSocket)
+    result = ntp_policy.probe_ironic_internal_ntp_endpoint("10.130.60.84")
+    assert result["reachable"] is True
+    assert result["stratum"] == 2
+    assert result["port"] == 123
+
+
+def test_internal_ntp_probe_rejects_unsynchronized_server(monkeypatch):
+    class FakeSocket:
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, _value):
+            return None
+
+        def sendto(self, _packet, _destination):
+            return None
+
+        def recvfrom(self, _size):
+            response = bytearray(48)
+            response[0] = (3 << 6) | (4 << 3) | 4
+            response[1] = 16
+            return bytes(response), ("10.130.60.84", 123)
+
+    monkeypatch.setattr(ntp_policy.socket, "socket", FakeSocket)
+    with pytest.raises(NtpPolicyError, match="UNSYNCHRONIZED"):
+        ntp_policy.probe_ironic_internal_ntp_endpoint("10.130.60.84")
