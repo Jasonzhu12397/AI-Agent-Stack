@@ -45,7 +45,7 @@ def test_renderer_includes_chrony_and_systemd_resolved_configuration(tmp_path):
     assert "DNS=1.1.1.1 8.8.8.8" in content
     assert "Domains=lab.example" in content
     assert "chronyd.service" in content
-    assert "systemd-resolved.service" in content
+    assert "systemd-resolved.service" in content\n    assert "chronyc waitsync 10 0.1" in content\n    assert "resolvectl query time.cloudflare.com" in content
 
 
 def test_renderer_rejects_shell_injection_in_ntp_server(tmp_path):
