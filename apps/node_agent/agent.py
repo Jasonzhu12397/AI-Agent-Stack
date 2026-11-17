@@ -4374,9 +4374,9 @@ EOF
 systemctl enable "$CHRONY_SERVICE"
 systemctl restart "$CHRONY_SERVICE"
 for attempt in $(seq 1 60); do
-  if chronyc -n sources | awk -v server=\"$NTP_SERVER\" \\
-    '$1 == \"^*\" && $2 == server { found=1 } END { exit !found }' \\
-    && chronyc tracking | grep -Eiq \\
+  if chronyc -n sources | awk -v server="$NTP_SERVER" \
+    '$1 == "^*" && $2 == server { found=1 } END { exit !found }' \
+    && chronyc tracking | grep -Eiq \
     '^Leap status[[:space:]]*:[[:space:]]*Normal'; then
     exit 0
   fi
