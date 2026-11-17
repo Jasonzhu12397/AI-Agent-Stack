@@ -168,7 +168,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 raise ControlApiError("COMMAND_ROLE_INVALID")
             if not isinstance(action, str) or not action or len(action) > 128:
                 raise ControlApiError("COMMAND_ACTION_INVALID")
-            if not isinstance(idempotency_key, str) or len(idempotency_key) < 16 or len(idempotency_key) > 200:
+            if (
+                not isinstance(idempotency_key, str)
+                or len(idempotency_key) < 16
+                or len(idempotency_key) > 200
+            ): 
                 raise ControlApiError("IDEMPOTENCY_KEY_INVALID")
             if not isinstance(payload, dict) or len(_json_bytes(payload)) > MAX_BODY_BYTES:
                 raise ControlApiError("COMMAND_PAYLOAD_INVALID")
@@ -181,11 +185,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             command_id = uuid4()
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 agent = connection.execute(
-                    "SELECT role, enabled, cluster_id FROM agent_control_agents WHERE agent_id = %s",
+                    "SELECT role, enabled, cluster_id "
+                    "FROM agent_control_agents WHERE agent_id = %s",
                     (target_agent_id,),
                 ).fetchone()
                 deployment = connection.execute(
-                    "SELECT deployment_id, cluster_id FROM agent_control_deployments WHERE deployment_id = %s",
+                    "SELECT deployment_id, cluster_id "
+                    "FROM agent_control_deployments WHERE deployment_id = %s",
                     (deployment_id,),
                 ).fetchone()
                 if not agent or not agent["enabled"] or agent["role"] != role:
@@ -250,7 +256,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                action, idempotency_key, payload, created_at
                         FROM agent_control_commands
                         WHERE target_agent_id = %s AND required_role = %s
-                          AND (status = 'queued' OR (status = 'leased' AND lease_expires_at <= NOW()))
+                          AND (
+                              status = 'queued'
+                              OR (status = 'leased' AND lease_expires_at <= NOW())
+                          )
                         ORDER BY created_at
                         LIMIT 1
                         FOR UPDATE SKIP LOCKED
@@ -322,7 +331,14 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                       AND status = 'leased' AND lease_expires_at > NOW()
                     """,
                     (
-                        status, Jsonb({key: value for key, value in document.items() if key != "lease_token"}), command_id, identity["agent_id"],
+                        status,
+                        Jsonb({
+                            key: value
+                            for key, value in document.items()
+                            if key != "lease_token"
+                        }),
+                        command_id,
+                        identity["agent_id"],
                         lease_id, token_hash,
                     ),
                 ).rowcount
@@ -333,7 +349,14 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(database_url: str, host: str, port: int, cert_file: str, key_file: str, client_ca_file: str) -> None:
+def serve(
+    database_url: str,
+    host: str,
+    port: int,
+    cert_file: str,
+    key_file: str,
+    client_ca_file: str,
+) -> None:
     server = ThreadingHTTPServer((host, port), create_handler(database_url))
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
