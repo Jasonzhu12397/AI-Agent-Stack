@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HOME=/tmp
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HOME=/tmp PYTHONPATH=/workspace/apps/platform-api:/workspace/apps/worker:/workspace
 WORKDIR /workspace
 COPY pyproject.toml README.md ./
 COPY apps/platform-api ./apps/platform-api
