@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
+import json
+
 import httpx
 
 from .config import AgentSettings
@@ -95,6 +98,42 @@ class AgentControlClient:
         })
         if response.get("renewed") is not True:
             raise AgentTransportError("Command lease renewal was not confirmed")
+        return response
+
+    def persist_checkpoint(
+        self,
+        command: dict[str, Any],
+        phase: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        checkpoint = command.get("deployment_checkpoint")
+        if not isinstance(checkpoint, dict):
+            raise AgentTransportError("Deployment checkpoint is missing from command")
+        encoded = json.dumps(
+            evidence,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        response = self._post("/api/v1/agent-control/deployments/checkpoints", {
+            "schema_version": "v1",
+            "agent_id": str(self.settings.agent_id),
+            "role": self.settings.role,
+            "installation_id": str(self.settings.installation_id),
+            "cluster_id": str(self.settings.cluster_id) if self.settings.cluster_id else None,
+            "instance_id": self.settings.instance_id,
+            "deployment_id": command["deployment_id"],
+            "command_id": command["command_id"],
+            "lease_id": command["lease"]["lease_id"],
+            "lease_token": command["lease"]["token"],
+            "expected_phase": checkpoint["phase"],
+            "expected_sequence": checkpoint["sequence"],
+            "phase": phase,
+            "state_digest": hashlib.sha256(encoded).hexdigest(),
+            "evidence": evidence,
+        })
+        if response.get("persisted") is not True:
+            raise AgentTransportError("Deployment checkpoint persistence was not confirmed")
         return response
 
     def report_result(self, result: dict[str, Any]) -> None:
