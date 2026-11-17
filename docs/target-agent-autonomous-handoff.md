@@ -21,7 +21,7 @@ Each transition requires positive evidence from the preceding operation. Missing
 
 ## BMH migration invariant
 
-The source and target inventories must be complete and have exactly equal sets of (name, UID). The target Metal3/CAPM3 controller must be healthy and demonstrably own/reconcile the migrated inventory. A matching count alone is insufficient. Do not delete source BMH objects until target ownership and reconciliation are verified.
+The source and target inventories must be complete and have exactly equal sets of (namespace, name and stable hardware identity). The target Metal3/CAPM3 controller must be healthy and demonstrably own/reconcile the migrated inventory. A matching count alone is insufficient. Do not delete source BMH objects until target ownership and reconciliation are verified.
 
 ## EPH cleanup invariant
 
