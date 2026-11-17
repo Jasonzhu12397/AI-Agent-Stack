@@ -77,8 +77,8 @@ if ! systemctl cat systemd-resolved.service >/dev/null 2>&1; then
   exit 1
 fi
 systemctl enable --now systemd-resolved.service
-if [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
-  echo "systemd-resolved stub resolv.conf is missing" >&2
+if [ ! -e /run/systemd/resolve/resolv.conf ]; then
+  echo "systemd-resolved upstream resolv.conf is missing" >&2
   exit 1
 fi
 ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
