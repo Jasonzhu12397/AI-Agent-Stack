@@ -70,7 +70,9 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             action TEXT NOT NULL,
             idempotency_key TEXT NOT NULL UNIQUE,
             payload JSONB NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'succeeded', 'failed', 'blocked', 'cancelled')),
+            status TEXT NOT NULL CHECK (
+                status IN ('queued', 'leased', 'succeeded', 'failed', 'blocked', 'cancelled')
+            ),
             lease_id UUID,
             lease_token_hash TEXT,
             lease_expires_at TIMESTAMPTZ,
@@ -82,11 +84,21 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
-    connection.execute("ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS lease_token_hash TEXT")
-    connection.execute("ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ")
-    connection.execute("ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS issued_at TIMESTAMPTZ")
-    connection.execute("ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ")
-    connection.execute("ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS approval_digest TEXT")
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS lease_token_hash TEXT"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS issued_at TIMESTAMPTZ"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS approval_digest TEXT"
+    )
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_commands_claim_idx
         ON agent_control_commands (required_role, target_agent_id, status, created_at)
