@@ -30,6 +30,7 @@ python3 deploy/cloud-init/render_site_cloud_init.py \
   --ntp-server time.google.com \
   --dns-server 1.1.1.1 \
   --dns-server 8.8.8.8 \
+  --dns-test-name time.cloudflare.com \
   --search-domain lab.example \
   --output build/cloud-init/target-os.user-data
 ```
