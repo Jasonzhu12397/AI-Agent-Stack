@@ -1,7 +1,11 @@
 # ADR 0004: Separate Cloud and Kubernetes Agent Runtime Artifacts
 
-- Status: Accepted
+- Status: Superseded by [ADR 0005](0005-three-agent-fresh-runtime.md)
 - Date: 2026-11-09
+
+## Historical decision (no longer authoritative)
+
+This ADR records the prior Cloud + Node Agent packaging decision. Its shared Node Agent runtime, image and adapter reuse are retired. ADR 0005 is the sole authoritative runtime architecture.
 
 ## Context
 
