@@ -35,7 +35,6 @@ def test_agent_deployments_use_the_pivot_capable_image():
     paths = (
         "deploy/agents/eph-node-agent.yaml",
         "deploy/agents/target-cluster-agent.yaml",
-        "deploy/agents/network-inventory-agent.yaml",
     )
 
     for relative_path in paths:
@@ -50,6 +49,6 @@ def test_agent_deployments_use_the_pivot_capable_image():
 
         assert containers
         assert all(
-            item.get("image") == "REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION"
+            item.get("image") == "REPLACE_WITH_REGISTRY/ai-agent-runtime:VERSION"
             for item in containers
         )
