@@ -1308,6 +1308,7 @@ def run_capi_pivot_postflight(
     return {
         "cluster_name": cluster_name,
         "cluster_uid": cluster_uid,
+        "target_cluster_uid": cluster_uid,
         "source_cluster_uid": source_cluster_uid,
         "cluster_identity_preserved": True,
         "namespace": namespace,
