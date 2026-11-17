@@ -1,53 +1,15 @@
-# Dual Node Agent Runtime
+# Deprecated: legacy Node Agent package
 
-The system has three separately enrolled Agent roles: Cloud Control Agent, EPH Agent and Target Agent. EPH and Target use shared cluster-side adapters but separate executable entrypoints (`apps.eph_agent.main` and `apps.target_agent.main`), role-bound command allowlists, credentials, heartbeats, leases and audit history. Target Agent is pinned to a Target Control Plane master. This runtime is not the Cloud Control Agent.
+<badge>DEPRECATED — DO NOT USE FOR NEW DEVELOPMENT</badge>
 
-## Runtime boundary
+The old Node Agent runtime and its shared EPH/Target implementation are superseded by the clean three-Agent architecture in [ADR 0005](../../docs/adr/0005-three-agent-fresh-runtime.md).
 
-- Cloud Control Agent: runs in the cloud deployment from `Dockerfile.cloud-agent`, starts `worker_app.main`, and owns model execution, tool routing, RAG, workflow orchestration, approvals and durable task state.
-- EPH Agent: runs from `Dockerfile.node-agent` with `apps.eph_agent.main`; it is only the temporary EPH Single-Node role.
-- Target Agent: runs from `Dockerfile.node-agent` with `apps.target_agent.main`; it is installed on a Target Control Plane master after the target API and etcd are healthy.
-- Shared node-side adapters live under `apps/node_agent/runtime.py` and supporting modules. The EPH and Target entrypoints reject the wrong `AGENT_NODE_TYPE` at startup.
-- Studio API: runs from `Dockerfile`, exposes user-facing APIs and the versioned Agent command/heartbeat API. It is a separate process and image from both Agent runtimes.
+The only supported Agent roles are:
 
-The Node Agent image does not contain Django, the cloud worker package, the Studio API package, model-provider SDKs, PostgreSQL/Redis/Qdrant clients or cloud LLM credentials. It has no general-purpose shell command endpoint. The cloud Agent does not mount kubeconfigs, host sysfs, BMC credentials or Kubernetes ServiceAccount tokens.
+1. Cloud Control Agent — `apps/cloud_control_agent`, deployed in the cloud management environment.
+2. EPH Agent — `apps/eph_agent`, deployed in the temporary EPH Single-Node Kubernetes environment.
+3. Target Agent — `apps/target_agent`, deployed as three replicas across Target Control Plane masters with Kubernetes Lease leader election.
 
-Kubernetes API requests from the Node Agent validate the in-cluster service endpoint, port and ServiceAccount token before use. Both read-only requests and server-side dry-run MachineDeployment validation reject HTTP redirects so the ServiceAccount bearer token is never forwarded to another origin. Configure the in-cluster API endpoint directly; redirects are treated as an error.
+The new images and active deployment scripts do not copy, import, or execute this package. Do not add new imports, tests, features, adapters, manifests, or image build steps against `apps/node_agent`.
 
-## Agent roles
-
-### EPH Agent (AGENT_NODE_TYPE=eph_node)
-
-Runs as a Pod in the temporary EPH Single-Node Kubernetes cluster on the temporary bootstrap host. EPH is not a Target Worker and is never counted as a Target worker replica. Its responsibilities are:
-- Report host health and validate the temporary management environment.
-- Inspect source Kubernetes, Cluster API, Metal3 and Ironic inventory.
-- Produce a validated deployment plan and source-side Pivot preflight.
-- Execute the explicitly approved `cluster.capi.pivot.execute` operation: run server-side `clusterctl move --dry-run`, verify source/target CAPI and Metal3 preconditions, execute the real `clusterctl move`, then verify target object identity and source absence.
-- Persist the source Cluster UID as an annotation before move; the Target API assigns a new UID, so Target Agent verifies source identity annotation and records the new Target UID rather than requiring equal Kubernetes UIDs.
-- EPH does not authorize its own cleanup. Target Agent independently verifies adoption, BMH ownership and controller readiness before it may clean up EPH.
-
-### Target Agent (AGENT_NODE_TYPE=target_cluster)
-
-Runs as a Pod pinned to a Target Kubernetes Control Plane master after its API, etcd and core networking are healthy. It remains available before any Target Worker exists. Its responsibilities are:
-- Report target cluster health and Kubernetes identity.
-- Validate target CAPI/Metal3 APIs and controller readiness before handoff.
-- Verify expected Cluster identity and UID against an independently executed test fixture or controlled integration cluster.
-- Report Machine inventory and Ready counts to the control plane.
-- When a MachineDeployment name is supplied to `cluster.postflight`, verify its UID, generation convergence, desired/updated/ready/available replica counts and unavailable replicas before reporting worker inventory complete.
-- Persist and restore deployment checkpoints across agent restarts.
-
-The Target Agent cannot run source-side Pivot commands. The EPH Agent cannot run target adoption verification commands.
-
-## Build and deploy
-
-Build the Node Agent image using `deploy/agents/build-node-agent.sh` with explicit version and checksum inputs. Deploy EPH and Target Pods with `deploy/agents/deploy.sh`; provide separate EPH and target Kubernetes contexts, per-agent credentials and an immutable image digest. The deployment script performs server-side dry-run validation before applying either workload.
-
-## Safety
-
-The `cluster.capi.pivot.execute` command performs a real, approval-gated `clusterctl move` after server-side dry-run and source/target preflight. It has external side effects and is not safe for blind automatic retry after an ambiguous timeout. Target Agent postflight must independently verify the moved Cluster identity, source absence, CAPI/Metal3 controller readiness and BMH ownership before worker provisioning or EPH cleanup. EPH cleanup remains fail-closed until its Target Agent executor is implemented and verified. The node image includes kubectl and clusterctl only for bounded typed operations; arbitrary shell, arbitrary manifest apply and arbitrary command payloads are not supported.
-
-## Dual-network inspection
-
-The `cluster.network.inspect` command reads Kubernetes node allocatable extended resources, Multus NetworkAttachmentDefinitions and selected CNI component Pods. If the Deployment mounts host `/sys` read-only at `/host/sys`, it also reports physical NIC/PCI/VF/NUMA/hugepage inventory. The mount is read-only; the Agent remains non-root, non-privileged and without host networking or host PID access.
-
-Network interface names, VLANs, CIDRs, gateways, MTUs, SR-IOV resource names and DPDK settings are deployment inputs. The Agent validates declared profiles but does not invent values, install CNI components, change routes or bind devices. A NetworkAttachmentDefinition is configuration evidence, not proof of dataplane connectivity.
+This directory remains temporarily while the platform API registry, command lifecycle, deployment checkpoint and legacy test migrations are completed. It is scheduled for deletion as part of the legacy API/model removal; its presence is not an approved runtime or compatibility contract.
