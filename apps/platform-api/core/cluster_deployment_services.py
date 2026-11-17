@@ -293,11 +293,65 @@ def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> 
         return
     source = plan_result.get("capi_pivot_source_preflight", {})
     target = plan_result.get("capi_pivot_preflight", {})
+    if not isinstance(source, dict) or not isinstance(target, dict):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_PREFLIGHT_STATE_INVALID"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **(
+                    plan_result.get("dual_agent", {})
+                    if isinstance(plan_result.get("dual_agent"), dict)
+                    else {}
+                ),
+                "phase": "pivot_preflight_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
     source_versions = source.get("provider_versions")
     target_versions = target.get("provider_versions")
-    if not source.get("preflight_validated") or not target.get("preflight_validated"):
+    if (
+        source.get("preflight_validated") is not True
+        or target.get("preflight_validated") is not True
+    ):
         return
-    if not isinstance(source_versions, dict) or not isinstance(target_versions, dict):
+    if (
+        not isinstance(source_versions, dict)
+        or not isinstance(target_versions, dict)
+        or any(
+            not isinstance(group, str)
+            or not group
+            or not isinstance(version, str)
+            or not version
+            for versions in (source_versions, target_versions)
+            for group, version in versions.items()
+        )
+    ):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_PROVIDER_VERSION_STATE_INVALID"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **(
+                    plan_result.get("dual_agent", {})
+                    if isinstance(plan_result.get("dual_agent"), dict)
+                    else {}
+                ),
+                "phase": "pivot_provider_version_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
         return
     groups = sorted(set(source_versions) | set(target_versions))
     mismatches = [
@@ -327,12 +381,16 @@ def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> 
 
 
 def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
-    source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
+    plan_result = deployment.plan_result
+    if not isinstance(plan_result, dict):
+        plan_result = {}
+    source = plan_result.get("capi_pivot_source_preflight", {})
     identity = source.get("source_cluster_identity", {}) if isinstance(source, dict) else {}
     namespace = identity.get("namespace") if isinstance(identity, dict) else None
     if isinstance(namespace, str) and namespace:
         return namespace
-    configured = deployment.spec.get("capi_namespace", "default")
+    spec = deployment.spec if isinstance(deployment.spec, dict) else {}
+    configured = spec.get("capi_namespace", "default")
     return configured if isinstance(configured, str) and configured else "default"
 
 @transaction.atomic
