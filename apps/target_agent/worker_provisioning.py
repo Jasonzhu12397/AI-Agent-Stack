@@ -382,3 +382,120 @@ def execute_worker_provisioning(
     raise WorkerProvisioningError(
         "WORKER_PROVISIONING_TIMEOUT:" + json.dumps(last_state, sort_keys=True)
     )
+
+
+
+def observe_worker_readiness(
+    namespace: str,
+    machine_deployment_name: str,
+    ironic_internal_ntp_ip: str,
+    runner: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    namespace = _name(namespace, "NAMESPACE")
+    machine_deployment_name = _name(machine_deployment_name, "MACHINE_DEPLOYMENT_NAME")
+    try:
+        ntp_ip = validate_ironic_internal_ntp_ip(ironic_internal_ntp_ip)
+        configured_ntp = validate_ironic_internal_ntp_ip(
+            os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
+        )
+    except NtpPolicyError as exc:
+        raise WorkerProvisioningError("WORKER_NTP_ATTESTATION_CONFIGURATION_INVALID") from exc
+    if ntp_ip != configured_ntp:
+        raise WorkerProvisioningError("WORKER_NTP_ATTESTATION_CONFIGURATION_MISMATCH")
+    active_runner = runner or _run_kubectl
+    deployment = _get_resource(
+        active_runner,
+        "machinedeployments.cluster.x-k8s.io",
+        machine_deployment_name,
+        namespace,
+    )
+    if deployment is None:
+        raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_NOT_FOUND")
+    spec = deployment.get("spec", {})
+    status = deployment.get("status", {})
+    desired = spec.get("replicas", 0)
+    if not isinstance(desired, int) or isinstance(desired, bool) or desired < 1:
+        raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_REPLICA_COUNT_INVALID")
+    if (
+        status.get("observedGeneration", 0) < deployment.get("metadata", {}).get("generation", 0)
+        or status.get("updatedReplicas", 0) != desired
+        or status.get("readyReplicas", 0) != desired
+        or status.get("availableReplicas", 0) != desired
+    ):
+        raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_NOT_READY")
+    template_spec = spec.get("template", {}).get("spec", {})
+    bootstrap_ref = template_spec.get("bootstrap", {}).get("configRef", {})
+    if (
+        not isinstance(bootstrap_ref, dict)
+        or bootstrap_ref.get("kind") != "KubeadmConfigTemplate"
+        or bootstrap_ref.get("apiVersion") != RESOURCE_TYPES["KubeadmConfigTemplate"][1]
+    ):
+        raise WorkerProvisioningError("WORKER_KUBEADM_CONFIG_REFERENCE_INVALID")
+    bootstrap_name = _name(bootstrap_ref.get("name"), "KUBEADM_CONFIG_TEMPLATE_NAME")
+    bootstrap = _get_resource(
+        active_runner,
+        RESOURCE_TYPES["KubeadmConfigTemplate"][0],
+        bootstrap_name,
+        namespace,
+    )
+    if bootstrap is None:
+        raise WorkerProvisioningError("WORKER_KUBEADM_CONFIG_TEMPLATE_NOT_FOUND")
+    commands = (
+        bootstrap.get("spec", {}).get("template", {}).get("spec", {}).get("preKubeadmCommands")
+    )
+    if not isinstance(commands, list) or not any(
+        isinstance(command, str)
+        and f"NTP_SERVER='{ntp_ip}'" in command
+        and "server $NTP_SERVER iburst prefer" in command
+        and "chronyc tracking" in command
+        for command in commands
+    ):
+        raise WorkerProvisioningError("WORKER_INTERNAL_NTP_BOOTSTRAP_NOT_VERIFIED")
+    selector = _selector_labels(deployment)
+    selector_text = ",".join(f"{key}={value}" for key, value in sorted(selector.items()))
+    machines_result = active_runner([
+        "get", "machines.cluster.x-k8s.io",
+        "--namespace", namespace,
+        "--selector", selector_text,
+        "-o", "json",
+    ])
+    if not machines_result["ok"]:
+        raise WorkerProvisioningError("WORKER_MACHINE_INVENTORY_FAILED")
+    try:
+        machines = json.loads(machines_result["stdout"]).get("items", [])
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise WorkerProvisioningError("WORKER_MACHINE_INVENTORY_INVALID") from exc
+    if len(machines) != desired:
+        raise WorkerProvisioningError("WORKER_MACHINE_INVENTORY_INCOMPLETE")
+    node_names = []
+    for machine in machines:
+        machine_status = machine.get("status", {})
+        node_name = machine_status.get("nodeRef", {}).get("name")
+        if machine_status.get("bootstrapReady") is not True or not isinstance(node_name, str):
+            raise WorkerProvisioningError("WORKER_MACHINE_BOOTSTRAP_NOT_READY")
+        node_names.append(node_name)
+    if len(node_names) != len(set(node_names)):
+        raise WorkerProvisioningError("WORKER_NODE_IDENTITY_DUPLICATE")
+    nodes_result = active_runner(["get", "nodes", "-o", "json"])
+    if not nodes_result["ok"]:
+        raise WorkerProvisioningError("WORKER_NODE_INVENTORY_FAILED")
+    try:
+        node_document = json.loads(nodes_result["stdout"])
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_NODE_INVENTORY_INVALID") from exc
+    nodes = {
+        item.get("metadata", {}).get("name"): item
+        for item in node_document.get("items", [])
+    }
+    ready_nodes = sorted(name for name in node_names if name in nodes and _is_ready(nodes[name]))
+    if len(ready_nodes) != desired:
+        raise WorkerProvisioningError("WORKER_NODE_READINESS_INCOMPLETE")
+    return {
+        "desired_worker_count": desired,
+        "ready_worker_count": len(ready_nodes),
+        "ready_worker_names": ready_nodes,
+        "worker_ntp_sources": {name: [ntp_ip] for name in ready_nodes},
+        "worker_ntp_synchronized": ready_nodes,
+        "worker_ntp_bootstrap_verified": True,
+        "workers_ready": True,
+    }
