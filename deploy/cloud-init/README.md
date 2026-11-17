@@ -134,3 +134,38 @@ This prevents the operator from using a different NTP/DNS configuration than
 the one reviewed and hashed in the Cluster Delivery Plan. The profile is a
 configuration contract; the generated user-data still has to be injected by
 the EPH boot service and the selected CAPI/Metal3 bootstrap provider.
+
+
+## Target OS: CAPI pre-kubeadm injection
+
+For the final Target OS, use the CAPI-specific fragment rather than relying on
+cloud-init `runcmd` ordering. The renderer writes the same approved profile
+into KubeadmConfigSpec-compatible `files` and adds the time/DNS readiness
+script to `preKubeadmCommands`:
+
+```bash
+python3 deploy/cloud-init/render_site_cloud_init.py \
+  --role target-os \
+  --profile-json build/time-dns-profile.json \
+  --format capi-kubeadm \
+  --output build/target-time-dns-kubeadm-fragment.yaml
+```
+
+Merge the generated `files` and `preKubeadmCommands` into both:
+- `KubeadmControlPlane.spec.kubeadmConfigSpec` for all three Target masters.
+- `KubeadmConfigTemplate.spec.template.spec` for the worker MachineDeployment.
+
+Append the command to existing `preKubeadmCommands`; do not replace existing
+kubeadm bootstrap commands. Preserve existing `files` entries and merge by
+file path. Add the annotation
+`ai-agent-stack.io/time-dns-profile-hash: <profile_hash>` to the KubeadmConfig
+template and control-plane resource metadata so the Target Agent can compare
+the applied bootstrap data with the profile hash recorded in the plan.
+
+The CAPI fragment generator is implemented and covered by tests. The current
+Metal3/CAPI provisioning adapter is still disabled, so automatic mutation of
+KubeadmControlPlane and KubeadmConfigTemplate is not yet wired into the
+deployment workflow. Until that adapter is enabled and preflight validates
+both master and worker bootstrap specs, apply the fragment through the
+provider's supported template pipeline and do not mark the deployment ready
+solely because the fragment file was generated.
