@@ -191,10 +191,8 @@ def _snapshot_source_inventory(
             if not isinstance(labels, dict) or not isinstance(owner_references, list):
                 raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
             spec_sha256 = None
-            if resource_key == "cluster.x-k8s.io/clusters":
-                spec = item.get("spec")
-                if not isinstance(spec, dict):
-                    raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_SPEC_INVALID")
+            spec = item.get("spec")
+            if isinstance(spec, dict):
                 spec_sha256 = hashlib.sha256(
                     json.dumps(
                         spec,
@@ -203,6 +201,8 @@ def _snapshot_source_inventory(
                         ensure_ascii=False,
                     ).encode("utf-8")
                 ).hexdigest()
+            elif resource_key == "cluster.x-k8s.io/clusters":
+                raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_SPEC_INVALID")
             consumer_ref = None
             if resource_key == "metal3.io/baremetalhosts":
                 host_spec = item.get("spec")
