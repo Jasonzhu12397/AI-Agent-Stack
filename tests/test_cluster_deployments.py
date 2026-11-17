@@ -613,6 +613,11 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "checkpoint-source-cluster-uid"}
         },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "checkpoint-target-cluster-uid",
+            "source_cluster_uid": "checkpoint-source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
         "dual_agent": {
             "target_agent_owns_cluster": True,
             "target_agent_cluster_uid": "checkpoint-target-cluster-uid",
