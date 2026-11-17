@@ -280,7 +280,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     row = connection.execute(
                         """
                         SELECT command_id, deployment_id, target_agent_id, required_role,
-                               action, idempotency_key, payload, created_at
+                               action, idempotency_key, payload, approval_digest, created_at
                         FROM agent_control_commands
                         WHERE target_agent_id = %s AND required_role = %s
                           AND (deadline IS NULL OR deadline > NOW())
@@ -319,6 +319,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "required_role": row["required_role"],
                     "action": row["action"],
                     "payload": row["payload"],
+                    "approval_digest": row["approval_digest"],
                     "issued_at": now.isoformat(),
                     "deadline": deadline.isoformat(),
                     "lease": {
