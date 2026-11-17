@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -1587,3 +1588,94 @@ def test_real_pivot_rejects_malformed_target_agent_ack_before_mutation(tmp_path)
         item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
         for item in calls
     )
+
+
+def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp_path):
+    source_spec = {"clusterNetwork": {"pods": {"cidrBlocks": ["10.244.0.0/16"]}}}
+    source_cluster = {
+        "apiVersion": "cluster.x-k8s.io/v1beta1",
+        "kind": "Cluster",
+        "metadata": {
+            "name": "target-cluster",
+            "namespace": "metal3",
+            "uid": "source-cluster-uid",
+        },
+        "spec": source_spec,
+    }
+    target_cluster = {
+        **source_cluster,
+        "metadata": {
+            **source_cluster["metadata"],
+            "uid": "target-cluster-uid",
+        },
+    }
+    spec_digest = hashlib.sha256(
+        json.dumps(
+            source_spec,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    calls, base_runner = _pivot_runner_for()
+    moved = {"value": False}
+
+    def runner(command, **kwargs):
+        if command[0].endswith("clusterctl") and "--dry-run" not in command:
+            result = base_runner(command, **kwargs)
+            moved["value"] = result.returncode == 0
+            return result
+        if command[0].endswith("kubectl") and "clusters.cluster.x-k8s.io" in command:
+            kubeconfig = command[command.index("--kubeconfig") + 1]
+            named_get = "target-cluster" in command
+            if named_get and kubeconfig.endswith("source.kubeconfig"):
+                if moved["value"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        1,
+                        "",
+                        'Error from server (NotFound): clusters.cluster.x-k8s.io "target-cluster" not found',
+                    )
+                return subprocess.CompletedProcess(command, 0, json.dumps(source_cluster), "")
+            if named_get and kubeconfig.endswith("target.kubeconfig"):
+                return subprocess.CompletedProcess(command, 0, json.dumps(target_cluster), "")
+        return base_runner(command, **kwargs)
+
+    payload = {
+        "deployment_id": "deployment-123",
+        "cluster_name": "target-cluster",
+        "namespace": "metal3",
+        "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+        "source_cluster_uid": "source-cluster-uid",
+        "source_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+        "source_cluster_spec_sha256": spec_digest,
+        "source_inventory_sha256": "b" * 64,
+        "target_agent_ack": {
+            "node_id": "target-node",
+            "command_id": "target-command",
+            "result_sha256": "c" * 64,
+            "acknowledged_at": "2026-11-17T00:00:00+00:00",
+        },
+    }
+
+    result = run_capi_pivot(
+        payload,
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    move_calls = [
+        item[0]
+        for item in calls
+        if item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+    ]
+    assert len(move_calls) == 1
+    assert result["pivot_executed"] is True
+    assert result["pivot_simulated"] is False
+    assert result["execution_mode"] == "clusterctl_move"
+    assert result["source_cluster_absent"] is True
+    assert result["target_cluster_present"] is True
+    assert result["target_cluster_uid"] == "target-cluster-uid"
+    assert result["ownership_transferred"] is False
+    assert result["target_agent_postflight_required"] is True
