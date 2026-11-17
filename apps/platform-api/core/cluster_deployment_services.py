@@ -842,7 +842,7 @@ def handle_deployment_command_result(
                 "phase": "target_agent_adopted",
                 "pivot_completed": True,
                 "target_agent_owns_cluster": True,
-                "target_agent_cluster_uid": expected_uid,
+                "target_agent_cluster_uid": expected_target_uid,
                 "eph_reclaim_allowed": False,
             },
         }
