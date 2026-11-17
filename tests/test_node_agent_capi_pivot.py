@@ -1634,7 +1634,10 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
                         command,
                         1,
                         "",
-                        'Error from server (NotFound): clusters.cluster.x-k8s.io "target-cluster" not found',
+                        (
+                            'Error from server (NotFound): clusters.cluster.x-k8s.io '
+                            '"target-cluster" not found'
+                        ),
                     )
                 return subprocess.CompletedProcess(command, 0, json.dumps(source_cluster), "")
             if named_get and kubeconfig.endswith("target.kubeconfig"):
