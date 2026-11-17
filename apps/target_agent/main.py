@@ -710,6 +710,9 @@ def execute(
                     **_observe_target_agent_readiness(),
                 }
             if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
+                _require_configured_ironic_internal_ntp_ip(
+                    evidence.get("ironic_internal_ntp_ip")
+                )
                 raise HandoffError("WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED")
             if next_phase == HandoffPhase.WORKERS_READY.value:
                 configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
