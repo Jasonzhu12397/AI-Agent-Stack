@@ -9,6 +9,7 @@ from apps.cloud_control_agent.api import (
     _parse_uuid,
     _validate_action_role,
     _validate_checkpoint_actor_transition,
+    _validate_reported_capabilities,
 )
 
 
@@ -125,3 +126,33 @@ def test_cloud_control_rejects_cross_role_or_unregistered_agent_capabilities(
 ):
     with pytest.raises(ControlApiError, match="ACTION_NOT_ALLOWED"):
         _validate_action_role(role, action)
+
+
+
+def test_cloud_control_accepts_only_capabilities_owned_by_agent_role():
+    assert _validate_reported_capabilities(
+        "eph",
+        ["eph.preflight", "eph.capi.pivot"],
+    ) == ["eph.preflight", "eph.capi.pivot"]
+    assert _validate_reported_capabilities(
+        "target",
+        ["target.cluster.observe", "target.handoff.evaluate"],
+    ) == ["target.cluster.observe", "target.handoff.evaluate"]
+
+
+@pytest.mark.parametrize(
+    ("role", "capabilities"),
+    [
+        ("eph", ["target.handoff.evaluate"]),
+        ("target", ["eph.capi.pivot"]),
+        ("target", ["run.shell"]),
+        ("target", ["target.cluster.observe", "target.cluster.observe"]),
+        ("target", ["target.cluster.observe", None]),
+    ],
+)
+def test_cloud_control_rejects_invalid_or_cross_role_heartbeat_capabilities(
+    role,
+    capabilities,
+):
+    with pytest.raises(ControlApiError):
+        _validate_reported_capabilities(role, capabilities)
