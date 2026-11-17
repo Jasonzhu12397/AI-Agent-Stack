@@ -111,8 +111,8 @@ def verify_worker_readiness(
         ):
             raise WorkerAttestationError("WORKER_ATTESTATION_NTP_BOOTSTRAP_COMMAND_MISSING")
         script = "\n".join(commands)
-        sources = re.findall(r"(?m)^\\s*server\\s+(\\S+)", script)
-        if sources != [ntp_ip] or re.search(r"(?m)^\\s*pool\\s+", script):
+        sources = re.findall(r"(?m)^\s*server\s+(\S+)", script)
+        if sources != [ntp_ip] or re.search(r"(?m)^\s*pool\s+", script):
             raise WorkerAttestationError("WORKER_ATTESTATION_NTP_SOURCE_MISMATCH")
         required_markers = (
             "chronyc -n sources",
