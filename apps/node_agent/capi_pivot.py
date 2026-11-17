@@ -1221,6 +1221,36 @@ def run_capi_pivot(
     ):
         raise CapiPivotError("CAPI_PIVOT_SOURCE_OWNERSHIP_NOT_RELEASED")
 
+    source_resources = (
+        "clusters.cluster.x-k8s.io",
+        "machines.cluster.x-k8s.io",
+        "machinesets.cluster.x-k8s.io",
+        "machinedeployments.cluster.x-k8s.io",
+        "kubeadmconfigs.bootstrap.cluster.x-k8s.io",
+        "kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io",
+        "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io",
+        "metal3clusters.infrastructure.cluster.x-k8s.io",
+        "metal3machines.infrastructure.cluster.x-k8s.io",
+        "metal3machinetemplates.infrastructure.cluster.x-k8s.io",
+        "baremetalhosts.metal3.io",
+    )
+    for resource in source_resources:
+        remaining = _kubectl_json(
+            preflight_runner,
+            kubectl,
+            source_kubeconfig,
+            ["--namespace", namespace, "get", resource, "-o", "json"],
+            process_env,
+            "CAPI_PIVOT_SOURCE_INVENTORY_RECONCILIATION_REQUIRED",
+        )
+        remaining_items = remaining.get("items")
+        if not isinstance(remaining_items, list):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        if remaining_items:
+            raise CapiPivotError(
+                "CAPI_PIVOT_SOURCE_INVENTORY_NOT_EMPTY:" + resource
+            )
+
     return {
         "deployment_id": payload["deployment_id"],
         "operation_id": operation_id,
@@ -1235,6 +1265,7 @@ def run_capi_pivot(
         "source_cluster_spec_sha256": payload["source_cluster_spec_sha256"],
         "source_inventory_sha256": payload["source_inventory_sha256"],
         "source_cluster_absent": True,
+        "source_inventory_empty": True,
         "target_cluster_present": True,
         "target_agent_acknowledged": True,
         "target_agent_ack": acknowledgement,
