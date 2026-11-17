@@ -113,6 +113,123 @@ def _safe_output(value: str, limit: int = 12000) -> str:
     return value[-limit:]
 
 
+def _canonical_source_inventory(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        owner_references = item.get("owner_references")
+        if not isinstance(owner_references, list):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        normalized_item = dict(item)
+        normalized_item["owner_references"] = sorted(
+            owner_references,
+            key=lambda owner: (
+                str(owner.get("api_version", "")),
+                str(owner.get("kind", "")),
+                str(owner.get("name", "")),
+                str(owner.get("uid", "")),
+                bool(owner.get("controller", False)),
+            )
+            if isinstance(owner, dict)
+            else ("", "", "", "", False),
+        )
+        normalized.append(normalized_item)
+    return sorted(
+        normalized,
+        key=lambda item: (
+            str(item.get("resource", "")),
+            str(item.get("namespace") or ""),
+            str(item.get("name", "")),
+            str(item.get("uid", "")),
+        ),
+    )
+
+
+def _snapshot_source_inventory(
+    runner,
+    kubectl: str,
+    kubeconfig: Path,
+    namespace: str,
+    process_env: dict[str, str],
+) -> list[dict[str, Any]]:
+    resources = (
+        ("cluster.x-k8s.io", "clusters"),
+        ("cluster.x-k8s.io", "machines"),
+        ("cluster.x-k8s.io", "machinesets"),
+        ("cluster.x-k8s.io", "machinedeployments"),
+        ("bootstrap.cluster.x-k8s.io", "kubeadmconfigs"),
+        ("bootstrap.cluster.x-k8s.io", "kubeadmconfigtemplates"),
+        ("controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes"),
+        ("infrastructure.cluster.x-k8s.io", "metal3clusters"),
+        ("infrastructure.cluster.x-k8s.io", "metal3machines"),
+        ("infrastructure.cluster.x-k8s.io", "metal3machinetemplates"),
+        ("metal3.io", "baremetalhosts"),
+    )
+    inventory = []
+    for group, resource_name in resources:
+        resource_key = group + "/" + resource_name
+        document = _kubectl_json(
+            runner,
+            kubectl,
+            kubeconfig,
+            ["--namespace", namespace, "get", resource_name + "." + group, "-o", "json"],
+            process_env,
+            "CAPI_PIVOT_SOURCE_INVENTORY_RECHECK_FAILED",
+        )
+        items = document.get("items")
+        if not isinstance(items, list):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        for item in items:
+            if not isinstance(item, dict):
+                raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+            labels = metadata.get("labels", {})
+            owner_references = metadata.get("ownerReferences", [])
+            if not isinstance(labels, dict) or not isinstance(owner_references, list):
+                raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+            spec_sha256 = None
+            if resource_key == "cluster.x-k8s.io/clusters":
+                spec = item.get("spec")
+                if not isinstance(spec, dict):
+                    raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_SPEC_INVALID")
+                spec_sha256 = hashlib.sha256(
+                    json.dumps(
+                        spec,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+            inventory.append(
+                {
+                    "api_version": item.get("apiVersion"),
+                    "kind": item.get("kind"),
+                    "resource": resource_key,
+                    "name": metadata.get("name"),
+                    "namespace": metadata.get("namespace"),
+                    "uid": metadata.get("uid"),
+                    "spec_sha256": spec_sha256,
+                    "owner_references": [
+                        {
+                            "api_version": owner.get("apiVersion"),
+                            "kind": owner.get("kind"),
+                            "name": owner.get("name"),
+                            "uid": owner.get("uid"),
+                            "controller": owner.get("controller", False),
+                        }
+                        for owner in owner_references[:10]
+                        if isinstance(owner, dict)
+                    ],
+                    "owner_references_truncated": len(owner_references) > 10,
+                    "cluster_name": labels.get("cluster.x-k8s.io/cluster-name"),
+                }
+            )
+    return _canonical_source_inventory(inventory)
+
+
 def _verify_source_namespace_scope(
     runner,
     kubectl: str,
@@ -1107,6 +1224,23 @@ def run_capi_pivot(
         process_env,
         "CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_UNAVAILABLE",
     )
+    live_inventory = _snapshot_source_inventory(
+        preflight_runner,
+        kubectl,
+        source_kubeconfig,
+        namespace,
+        process_env,
+    )
+    live_inventory_digest = hashlib.sha256(
+        json.dumps(
+            live_inventory,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    if live_inventory_digest != payload["source_inventory_sha256"]:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_INVENTORY_CHANGED_AFTER_APPROVAL")
     source_metadata = source_cluster.get("metadata", {})
     source_spec = source_cluster.get("spec")
     if (
