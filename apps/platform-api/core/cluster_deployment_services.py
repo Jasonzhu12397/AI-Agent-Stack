@@ -339,6 +339,23 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             update_fields=["status", "error", "plan_result", "updated_at"]
         )
         return
+    dual_agent_state = plan_result.get("dual_agent", {})
+    if not isinstance(dual_agent_state, dict):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_DUAL_AGENT_STATE_INVALID"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                "phase": "pivot_dual_agent_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
     source = plan_result.get("capi_pivot_source_preflight", {})
     target = plan_result.get("capi_pivot_preflight", {})
     compatibility = plan_result.get("capi_pivot_provider_compatibility", {})
@@ -399,24 +416,6 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         or now - target_command.finished_at > datetime.timedelta(minutes=5)
         or not isinstance(target_command.result, dict)
     ):
-        dual_agent_state = plan_result.get("dual_agent", {})
-        if not isinstance(dual_agent_state, dict):
-            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
-            deployment.error = {"code": "CAPI_PIVOT_DUAL_AGENT_STATE_INVALID"}
-            deployment.plan_result = {
-                **plan_result,
-                "dual_agent": {
-                    "phase": "target_preflight_state_invalid",
-                    "target_agent_owns_cluster": False,
-                    "eph_reclaim_allowed": False,
-                    "manual_reconciliation_required": True,
-                },
-            }
-            deployment.save(
-                update_fields=["status", "error", "plan_result", "updated_at"]
-            )
-            return
-
         raw_refresh_count = dual_agent_state.get("target_preflight_refresh_count", 0)
         if (
             not isinstance(raw_refresh_count, int)
