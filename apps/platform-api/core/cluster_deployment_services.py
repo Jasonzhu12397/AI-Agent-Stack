@@ -1495,6 +1495,7 @@ def handle_deployment_command_result(
             and isinstance(expected_target_uid, str)
             and bool(expected_target_uid)
             and target_cluster_uid == expected_target_uid
+            and target_cluster_uid != expected_uid
             and isinstance(operation_id, str)
             and result.get("operation_id") == operation_id
             and result.get("cluster_identity_preserved") is True
