@@ -146,7 +146,7 @@ def test_target_agent_command_is_cancelled_after_leadership_loss(monkeypatch):
 
     monkeypatch.setattr(agent, "execute_command", execute)
 
-    with pytest.raises(agent.NodeAgentError, match="AGENT_LEADERSHIP_LOST"):
+    with pytest.raises(agent.NodeAgentError, match="COMMAND_LEASE_LOST") as exc_info:
         agent.execute_command_with_lease(
             Client(),
             {"id": "command-1", "lease_token": "lease-token"},
@@ -154,3 +154,4 @@ def test_target_agent_command_is_cancelled_after_leadership_loss(monkeypatch):
             renew_interval=30,
             authority_event=authority,
         )
+    assert str(exc_info.value.__cause__) == "AGENT_LEADERSHIP_LOST"
