@@ -667,6 +667,18 @@ def handle_deployment_command_result(
             "cluster.capi.pivot.postflight",
         }:
             postflight = command.command_type == "cluster.capi.pivot.postflight"
+            _record_capi_pivot_event(
+                deployment,
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                "target_agent_verification_failed",
+                {
+                    "command_id": str(command.id),
+                    "command_type": command.command_type,
+                    "error": error or {"code": "AGENT_COMMAND_FAILED"},
+                },
+                actor_node=command.node,
+                last_error=error or {"code": "AGENT_COMMAND_FAILED"},
+            )
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.plan_result = {
                 **(deployment.plan_result or {}),
@@ -706,6 +718,22 @@ def handle_deployment_command_result(
             )
             return
         if command.command_type == "cluster.capi.pivot.execute":
+            _record_capi_pivot_event(
+                deployment,
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                "eph_agent_execution_failed",
+                {
+                    "command_id": str(command.id),
+                    "operation_id": (
+                        command.payload.get("operation_id")
+                        if isinstance(command.payload, dict)
+                        else None
+                    ),
+                    "error": error or {"code": "AGENT_COMMAND_FAILED"},
+                },
+                actor_node=command.node,
+                last_error=error or {"code": "AGENT_COMMAND_FAILED"},
+            )
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.plan_result = {
                 **(deployment.plan_result or {}),
@@ -1216,6 +1244,14 @@ def handle_deployment_command_result(
             and result.get("automatic_retry_allowed") is False
         )
         if not valid_execution:
+            _record_capi_pivot_event(
+                deployment,
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                "pivot_execution_result_rejected",
+                {"command_id": str(command.id), "result": result},
+                actor_node=command.node,
+                last_error={"code": "CAPI_PIVOT_EXECUTION_RESULT_REJECTED"},
+            )
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "CAPI_PIVOT_EXECUTION_RESULT_REJECTED"}
             deployment.finished_at = timezone.now()
@@ -1234,6 +1270,24 @@ def handle_deployment_command_result(
                 ],
             )
             return
+        _record_capi_pivot_event(
+            deployment,
+            ClusterDeploymentPivotOperation.State.VERIFYING,
+            "clusterctl_move_completed",
+            {
+                "command_id": str(command.id),
+                "operation_id": result.get("operation_id"),
+                "source_cluster_uid": result.get("source_cluster_uid"),
+                "target_cluster_uid": result.get("target_cluster_uid"),
+                "source_inventory_sha256": result.get("source_inventory_sha256"),
+            },
+            actor_node=command.node,
+            target_identity={
+                "uid": result.get("target_cluster_uid"),
+                "api_version": expected_payload.get("source_cluster_api_version"),
+                "spec_sha256": expected_payload.get("source_cluster_spec_sha256"),
+            },
+        )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "capi_pivot_execution": result,
@@ -1302,6 +1356,14 @@ def handle_deployment_command_result(
             and result.get("side_effects") is False
         )
         if not valid_verification:
+            _record_capi_pivot_event(
+                deployment,
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                "target_agent_adoption_verification_failed",
+                {"command_id": str(command.id), "result": result},
+                actor_node=command.node,
+                last_error={"code": "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"},
+            )
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"}
             deployment.finished_at = timezone.now()
@@ -1321,6 +1383,24 @@ def handle_deployment_command_result(
                 ],
             )
             return
+        _record_capi_pivot_event(
+            deployment,
+            ClusterDeploymentPivotOperation.State.VERIFYING,
+            "target_agent_adopted_cluster",
+            {
+                "command_id": str(command.id),
+                "operation_id": operation_id,
+                "target_cluster_uid": target_cluster_uid,
+                "machine_count": result.get("machine_count"),
+                "ready_machine_count": result.get("ready_machine_count"),
+            },
+            actor_node=command.node,
+            target_identity={
+                "uid": target_cluster_uid,
+                "api_version": result.get("cluster_api_version"),
+                "spec_sha256": result.get("cluster_spec_sha256"),
+            },
+        )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "capi_pivot_target_verification": result,
@@ -1401,6 +1481,14 @@ def handle_deployment_command_result(
             and ironic_verified == ironic_applicable
         )
         if not valid_postflight:
+            _record_capi_pivot_event(
+                deployment,
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                "metal3_ironic_postflight_failed",
+                {"command_id": str(command.id), "result": result},
+                actor_node=command.node,
+                last_error={"code": "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"},
+            )
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"}
             deployment.finished_at = timezone.now()
@@ -1425,6 +1513,27 @@ def handle_deployment_command_result(
                 ],
             )
             return
+        _record_capi_pivot_event(
+            deployment,
+            ClusterDeploymentPivotOperation.State.COMPLETED,
+            "metal3_ironic_postflight_verified",
+            {
+                "command_id": str(command.id),
+                "cluster_uid": result.get("cluster_uid"),
+                "ironic_verification": result.get("ironic_verification"),
+                "complete_hardware_verification": result.get("complete_hardware_verification"),
+            },
+            actor_node=command.node,
+            target_identity={
+                "uid": result.get("cluster_uid"),
+                "api_version": (
+                    deployment.plan_result or {}
+                ).get("capi_pivot_target_verification", {}).get("cluster_api_version"),
+                "spec_sha256": (
+                    deployment.plan_result or {}
+                ).get("capi_pivot_target_verification", {}).get("cluster_spec_sha256"),
+            },
+        )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
             "capi_pivot_postflight": result,
