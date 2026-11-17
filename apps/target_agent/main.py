@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -28,6 +29,7 @@ from .handoff import (
     validate_phase_evidence,
 )
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
+from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_policy import (
     NtpPolicyError,
     render_worker_chrony_config,
@@ -40,6 +42,7 @@ CAPABILITIES = [
     "target.cluster.observe",
     "target.capi.observe",
     "target.metal3.observe",
+    "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
     "target.handoff.evaluate",
 ]
@@ -124,6 +127,52 @@ def _kubectl(
     }
 
 
+def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
+    namespace = payload.get("namespace")
+    cluster_name = payload.get("cluster_name")
+    if (
+        not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace)
+        or not isinstance(cluster_name, str)
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", cluster_name)
+    ):
+        raise Metal3OwnershipError("TARGET_METAL3_NAMESPACE_OR_CLUSTER_INVALID")
+    resources = (
+        (
+            "cluster",
+            ["get", "cluster.cluster.x-k8s.io", cluster_name, "--namespace", namespace, "-o", "json"],
+        ),
+        (
+            "machines",
+            ["get", "machines.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+        ),
+        (
+            "metal3machines",
+            ["get", "metal3machines.infrastructure.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+        ),
+        (
+            "bmhs",
+            ["get", "baremetalhosts.metal3.io", "--namespace", namespace, "-o", "json"],
+        ),
+    )
+    documents = {}
+    for name, arguments in resources:
+        result = _kubectl(arguments, timeout=60, max_output_bytes=8 * 1024 * 1024)
+        if not result["available"]:
+            raise Metal3OwnershipError(f"TARGET_METAL3_OBSERVATION_FAILED:{name}")
+        try:
+            documents[name] = json.loads(result["stdout"])
+        except ValueError as exc:
+            raise Metal3OwnershipError(f"TARGET_METAL3_JSON_INVALID:{name}") from exc
+    return verify_metal3_ownership(
+        documents["cluster"],
+        documents["machines"],
+        documents["metal3machines"],
+        documents["bmhs"],
+        payload.get("source_bmh_identities"),
+    )
+
+
 def execute(
     command: dict[str, Any],
     lease_lost_event: Any = None,
@@ -151,6 +200,22 @@ def execute(
             "output": result,
             "side_effects": False,
         }
+    if action == "target.metal3.verify_ownership":
+        try:
+            evidence = _observe_target_metal3_ownership(command.get("payload", {}))
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": evidence,
+                "side_effects": False,
+            }
+        except (Metal3OwnershipError, TypeError, AttributeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "TARGET_METAL3_OWNERSHIP_NOT_VERIFIED",
+                "output": {},
+                "side_effects": False,
+            }
     if action == "target.metal3.observe":
         result = _kubectl([
             "get",
@@ -173,6 +238,9 @@ def execute(
                 raise HandoffError("HANDOFF_CHECKPOINT_MISSING")
             next_phase = str(payload.get("next_phase", ""))
             evidence = payload.get("evidence", {})
+            if next_phase == HandoffPhase.BMH_REGISTRY_MIGRATED.value:
+                observed_ownership = _observe_target_metal3_ownership(payload)
+                evidence = {**evidence, **observed_ownership}
             current_phase = checkpoint.get("phase")
             if current_phase == next_phase:
                 validated = validate_phase_evidence(HandoffPhase(next_phase), evidence)
