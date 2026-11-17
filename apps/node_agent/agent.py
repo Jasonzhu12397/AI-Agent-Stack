@@ -974,6 +974,12 @@ def build_capi_owner_graph(
         if item.get("uid") not in reachable
     ]
     root_namespace = root.get("namespace") if root_valid else None
+    root_metal3_machine_names = {
+        item.get("name")
+        for item in inventory
+        if item.get("resource") == "infrastructure.cluster.x-k8s.io/metal3machines"
+        and item.get("namespace") == root_namespace
+    }
     cross_namespace_reachable = [
         {
             "kind": item.get("kind"),
@@ -988,7 +994,13 @@ def build_capi_owner_graph(
             or (
                 item.get("resource") == "metal3.io/baremetalhosts"
                 and isinstance(item.get("consumer_ref"), dict)
-                and item["consumer_ref"].get("namespace") == root_namespace
+                and (
+                    item["consumer_ref"].get("namespace") == root_namespace
+                    or (
+                        item["consumer_ref"].get("kind") == "Metal3Machine"
+                        and item["consumer_ref"].get("name") in root_metal3_machine_names
+                    )
+                )
             )
         )
         and item.get("namespace") != root_namespace
