@@ -3924,7 +3924,11 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         if path.endswith("/kubeadmconfigtemplates/worker-bootstrap"):
             return {
                 "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
-                "metadata": {"uid": "bootstrap-template-uid"},
+                "metadata": {
+                    "name": "worker-bootstrap",
+                    "namespace": "default",
+                    "uid": "bootstrap-template-uid",
+                },
             }
         if path.endswith("/machinedeployments/edge-workers"):
             raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
@@ -4775,7 +4779,8 @@ def test_worker_chrony_pre_kubeadm_command_is_valid_shell():
     _, stderr = checked.communicate(command.encode("utf-8"))
 
     assert checked.returncode == 0, stderr.decode("utf-8", errors="replace")
-    assert "server 10.130.60.84 iburst" in command
+    assert "NTP_SERVER='10.130.60.84'" in command
+    assert 'server "$NTP_SERVER" iburst' in command
     assert "pool " not in command
     assert "pool.ntp.org" not in command
     assert "'^Leap status[[:space:]]*:[[:space:]]*Normal'; then" in command
