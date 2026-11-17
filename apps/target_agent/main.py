@@ -277,6 +277,7 @@ def _observe_target_capi_pivot(payload: dict[str, Any]) -> dict[str, Any]:
         ],
         "target_cluster_ownership_verified": True,
         "target_capi_cluster_ready": True,
+        "capi_pivot_succeeded": True,
     }
 
 
@@ -422,8 +423,6 @@ def execute(
             current_phase = checkpoint.get("phase")
             if current_phase == "not_started":
                 raise HandoffError("HANDOFF_EPH_CHECKPOINT_REQUIRED")
-            if next_phase == "eph_single_node_ready":
-                raise HandoffError("HANDOFF_EPH_PHASE_OWNED_BY_EPH_AGENT")
             if current_phase == next_phase:
                 validated = validate_phase_evidence(HandoffPhase(next_phase), evidence)
                 state_digest = hashlib.sha256(
@@ -451,6 +450,8 @@ def execute(
                     },
                     "side_effects": False,
                 }
+            if next_phase == "eph_single_node_ready":
+                raise HandoffError("HANDOFF_EPH_PHASE_OWNED_BY_EPH_AGENT")
             transition = evaluate_transition(
                 None if current_phase == "not_started" else current_phase,
                 next_phase,
