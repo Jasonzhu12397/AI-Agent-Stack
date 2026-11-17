@@ -32,6 +32,7 @@ def _run(
     kubeconfig: str,
     timeout_seconds: int = 30,
     lease_lost_event: Event | None = None,
+    max_output_bytes: int = 8 * 1024 * 1024,
 ) -> dict[str, Any]:
     if not Path(kubeconfig).is_file():
         raise CapiPivotError("CAPI_PIVOT_KUBECONFIG_MISSING")
@@ -87,20 +88,34 @@ def _run(
         return {
             "ok": False,
             "returncode": process.returncode,
-            "stdout": stdout[-8000:],
+            "stdout": "",
             "stderr": stderr[-4000:],
             "error": termination_reason,
+        }
+    output_size = len(stdout.encode("utf-8"))
+    if output_size > max_output_bytes:
+        return {
+            "ok": False,
+            "returncode": process.returncode,
+            "stdout": "",
+            "stderr": stderr[-4000:],
+            "error": "COMMAND_OUTPUT_LIMIT_EXCEEDED",
+            "output_bytes": output_size,
         }
     return {
         "ok": process.returncode == 0,
         "returncode": process.returncode,
-        "stdout": stdout[-8000:],
+        "stdout": stdout,
         "stderr": stderr[-4000:],
     }
 
 
 def _kubectl(kubeconfig: str, arguments: list[str]) -> dict[str, Any]:
-    result = _run(["kubectl", "--kubeconfig", kubeconfig, *arguments], kubeconfig)
+    result = _run(
+        ["kubectl", "--kubeconfig", kubeconfig, *arguments],
+        kubeconfig,
+        max_output_bytes=32 * 1024 * 1024,
+    )
     if not result["ok"]:
         raise CapiPivotError("CAPI_PIVOT_KUBECTL_READ_FAILED")
     try:
@@ -119,6 +134,7 @@ def _cluster(kubeconfig: str, namespace: str, name: str) -> dict[str, Any] | Non
             "cluster.cluster.x-k8s.io", name, "--namespace", namespace, "-o", "json",
         ],
         kubeconfig,
+        max_output_bytes=2 * 1024 * 1024,
     )
     if result["ok"]:
         try:
