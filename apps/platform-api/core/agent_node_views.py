@@ -1910,9 +1910,49 @@ class AgentRuntimePollView(APIView):
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
                 return Response({"detail": "Invalid or revoked node credential."}, status=401)
-            command = (
+            allowed_commands = (
+                EPH_COMMANDS
+                if node.node_type == AgentNode.NodeType.EPH_NODE
+                else TARGET_COMMANDS
+            )
+            pending_commands = (
                 AgentCommand.objects.select_for_update(skip_locked=True)
                 .filter(node=node)
+                .filter(
+                    Q(status=AgentCommand.Status.QUEUED)
+                    | Q(
+                        status=AgentCommand.Status.RUNNING,
+                        lease_expires_at__lt=now,
+                    )
+                )
+                .exclude(command_type__in=allowed_commands)
+                .order_by("created_at")
+            )
+            for pending_command in pending_commands:
+                if _command_is_fenced_by_cluster_ownership(pending_command, node):
+                    _fail_fenced_command(pending_command, now)
+                    continue
+                pending_command.status = AgentCommand.Status.FAILED
+                pending_command.error = {
+                    "code": "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE",
+                    "retryable": False,
+                }
+                pending_command.finished_at = now
+                pending_command.lease_token = None
+                pending_command.lease_expires_at = None
+                pending_command.save(
+                    update_fields=[
+                        "status",
+                        "error",
+                        "finished_at",
+                        "lease_token",
+                        "lease_expires_at",
+                        "updated_at",
+                    ],
+                )
+            command = (
+                AgentCommand.objects.select_for_update(skip_locked=True)
+                .filter(node=node, command_type__in=allowed_commands)
                 .filter(
                     Q(status=AgentCommand.Status.QUEUED)
                     | Q(
@@ -1927,31 +1967,6 @@ class AgentRuntimePollView(APIView):
                 return Response({"command": None})
             if _command_is_fenced_by_cluster_ownership(command, node):
                 _fail_fenced_command(command, now)
-                return Response({"command": None})
-            allowed_commands = (
-                EPH_COMMANDS
-                if node.node_type == AgentNode.NodeType.EPH_NODE
-                else TARGET_COMMANDS
-            )
-            if command.command_type not in allowed_commands:
-                command.status = AgentCommand.Status.FAILED
-                command.error = {
-                    "code": "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE",
-                    "retryable": False,
-                }
-                command.finished_at = now
-                command.lease_token = None
-                command.lease_expires_at = None
-                command.save(
-                    update_fields=[
-                        "status",
-                        "error",
-                        "finished_at",
-                        "lease_token",
-                        "lease_expires_at",
-                        "updated_at",
-                    ],
-                )
                 return Response({"command": None})
             lease_expired_while_running = (
                 command.status == AgentCommand.Status.RUNNING
