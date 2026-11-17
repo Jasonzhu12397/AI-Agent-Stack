@@ -197,3 +197,39 @@ def test_target_agent_renders_control_plane_chronyd_profile_without_claiming_hos
     assert "allow 10.130.60.80/28" in result["output"]["chrony_config"]
     assert result["output"]["host_configuration_applied"] is False
     assert result["side_effects"] is False
+
+
+
+def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_observe_control_plane_ntp_bootstrap",
+        lambda _payload: {
+            "target_control_plane_ntp_profile_verified": True,
+            "target_control_plane_ntp_external_sync_verified": True,
+        },
+    )
+    monkeypatch.setattr(target_main, "_observe_ready_master_count", lambda: 3)
+    monkeypatch.setattr(
+        target_main,
+        "probe_ironic_internal_ntp_endpoint",
+        lambda _ip: {"reachable": True, "stratum": 2, "port": 123},
+    )
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "eph_single_node_ready",
+            "sequence": 1,
+            "state": {},
+        },
+        "payload": {
+            "next_phase": "target_control_plane_ready",
+            "evidence": {
+                "ironic_internal_ntp_ip": "10.130.60.84",
+            },
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["evidence"]["ready_master_count"] == 3
+    assert result["output"]["evidence"]["ironic_internal_ntp_service_reachable"] is True
+    assert result["output"]["evidence"]["target_control_plane_ntp_external_sync_verified"] is True
