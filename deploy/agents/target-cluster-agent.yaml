@@ -1,3 +1,12 @@
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: target-cluster-agent-leader
+  namespace: ai-agent-system
+spec:
+  leaseDurationSeconds: 30
+  leaseTransitions: 0
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
