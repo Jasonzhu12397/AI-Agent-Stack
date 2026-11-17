@@ -14,7 +14,7 @@ if ! timeout --foreground 360s systemctl start systemd-time-wait-sync.service; t
     exit 1
 fi
 
-if [ ! -s /run/systemd/timesync/synchronized ]; then
+if [ ! -e /run/systemd/timesync/synchronized ]; then
     journalctl -b -u systemd-timesyncd.service -u systemd-time-wait-sync.service --no-pager -n 100 >&2 || true
     printf '%s\n' "EPH_SYSTEM_CLOCK_SYNCHRONIZATION_MARKER_MISSING" >&2
     exit 1
