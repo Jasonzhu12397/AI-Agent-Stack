@@ -68,4 +68,11 @@ class AgentControlClient:
         return command
 
     def report_result(self, result: dict[str, Any]) -> None:
-        self._post("/api/v1/agent-control/commands/results", result)
+        payload = {
+            **result,
+            "role": self.settings.role,
+            "installation_id": str(self.settings.installation_id),
+            "cluster_id": str(self.settings.cluster_id) if self.settings.cluster_id else None,
+            "instance_id": self.settings.instance_id,
+        }
+        self._post("/api/v1/agent-control/commands/results", payload)
