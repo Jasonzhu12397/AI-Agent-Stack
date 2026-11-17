@@ -1108,6 +1108,10 @@ def handle_deployment_command_result(
         approved_provisioning_hash = approved_payload.pop(
             "provisioning_plan_hash", None
         )
+        created = result.get("created")
+        reconciled = result.get("idempotent_reconciliation")
+        machine_uid = result.get("machine_deployment_uid")
+        manifest_hash = result.get("machine_deployment_manifest_hash")
         valid_result = (
             isinstance(expected, dict)
             and isinstance(source_identity, dict)
@@ -1129,17 +1133,18 @@ def handle_deployment_command_result(
             and result.get("cluster_uid") == expected.get("expected_cluster_uid")
             and result.get("provisioning_plan_hash")
             == expected.get("provisioning_plan_hash")
-            and result.get("machine_deployment_uid") is None
-            and isinstance(result.get("machine_deployment_manifest_hash"), str)
-            and len(result.get("machine_deployment_manifest_hash")) == 64
-            and result.get("execution_mode") == "server_side_dry_run_simulation"
-            and result.get("simulation_status") == "ready_for_manual_execution"
-            and result.get("dry_run_passed") is True
-            and result.get("execution_allowed") is False
-            and result.get("side_effects") is False
-            and result.get("created") is False
-            and result.get("worker_creation_performed") is False
-            and result.get("idempotent_reconciliation") is False
+            and isinstance(machine_uid, str)
+            and bool(machine_uid)
+            and isinstance(manifest_hash, str)
+            and bool(re.fullmatch(r"[0-9a-f]{64}", manifest_hash))
+            and result.get("execution_mode") == "real_create_or_idempotent_reconcile"
+            and isinstance(created, bool)
+            and isinstance(reconciled, bool)
+            and created != reconciled
+            and result.get("dry_run_passed") is (created is True)
+            and result.get("execution_allowed") is True
+            and result.get("side_effects") is created
+            and result.get("worker_creation_performed") is True
             and result.get("network_profile_hash")
             == _spec_hash(
                 deployment.spec.get("worker_provisioning", {}).get(
@@ -1154,7 +1159,7 @@ def handle_deployment_command_result(
         )
         if not valid_result:
             deployment.status = ClusterDeployment.Status.FAILED
-            deployment.error = {"code": "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"}
+            deployment.error = {"code": "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"}
             deployment.finished_at = timezone.now()
             deployment.save(
                 update_fields=["status", "error", "finished_at", "updated_at"]
@@ -1162,17 +1167,30 @@ def handle_deployment_command_result(
             return
         deployment.plan_result = {
             **(deployment.plan_result or {}),
-            "worker_provisioning_simulation": result,
+            "worker_provisioning": result,
             "dual_agent": {
                 **((deployment.plan_result or {}).get("dual_agent", {})),
-                "phase": "worker_provisioning_simulated_manual_execution_required",
+                "phase": "worker_provisioning_waiting_for_readiness",
+                "worker_provisioning_created": created,
+                "worker_provisioning_reconciled": reconciled,
                 "worker_provisioning_completed": False,
-                "worker_provisioning_simulated": True,
                 "eph_reclaim_allowed": False,
             },
         }
-        deployment.status = ClusterDeployment.Status.PLAN_READY
+        deployment.status = ClusterDeployment.Status.PROVISIONING
         deployment.error = None
+        postflight_command = queue_deployment_command(
+            deployment,
+            "cluster.postflight",
+            node=deployment.target_node,
+        )
+        deployment.plan_result = {
+            **(deployment.plan_result or {}),
+            "dual_agent": {
+                **((deployment.plan_result or {}).get("dual_agent", {})),
+                "worker_postflight_command_id": str(postflight_command.id),
+            },
+        }
         deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.postflight":
         deployment.plan_result = {
