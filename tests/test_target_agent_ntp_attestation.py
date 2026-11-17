@@ -95,3 +95,25 @@ def test_control_plane_ntp_attestation_rejects_external_fallback_pool():
             ["192.0.2.10"],
             ["10.130.60.80/28"],
         )
+
+
+
+def test_control_plane_ntp_attestation_rejects_unapproved_configured_source():
+    machines = []
+    configs = []
+    for index in range(1, 4):
+        machine, config = _machine_and_config(
+            index,
+            "pool.ntp.org",
+            "10.130.60.80/28",
+        )
+        machines.append(machine)
+        configs.append(config)
+    with pytest.raises(NtpAttestationError, match="NOT_APPROVED"):
+        verify_control_plane_ntp_bootstrap(
+            {"items": machines},
+            {"items": configs},
+            ["pool.ntp.org"],
+            ["192.0.2.10"],
+            ["10.130.60.80/28"],
+        )
