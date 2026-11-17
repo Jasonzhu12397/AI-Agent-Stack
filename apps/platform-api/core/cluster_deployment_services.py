@@ -287,6 +287,8 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             "plan_hash": _payload_hash("cluster.capi.pivot.execute", payload),
         },
     )
+    persisted_payload = command.payload if isinstance(command.payload, dict) else {}
+    persisted_ack = persisted_payload.get("target_agent_ack")
     deployment.plan_result = {
         **plan_result,
         "dual_agent": {
@@ -295,8 +297,8 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             "source_agent_id": str(deployment.eph_node_id),
             "target_agent_id": str(deployment.target_node_id),
             "pivot_command_id": str(command.id),
-            "pivot_operation_id": payload["operation_id"],
-            "target_agent_ack": target_ack,
+            "pivot_operation_id": persisted_payload.get("operation_id"),
+            "target_agent_ack": persisted_ack,
             "approval_required": True,
             "target_agent_owns_cluster": False,
             "eph_reclaim_allowed": False,
