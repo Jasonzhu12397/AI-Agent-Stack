@@ -9,7 +9,6 @@ import signal
 import subprocess
 import time
 from datetime import datetime, timezone
-from itertools import count
 from typing import Any
 from uuid import UUID
 
@@ -62,6 +61,7 @@ def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) ->
         "command_id": command["command_id"],
         "agent_id": str(identity),
         "lease_id": command["lease"]["lease_id"],
+        "lease_token": command["lease"]["token"],
         "status": outcome["status"],
         "started_at": now.isoformat(),
         "completed_at": now.isoformat(),
@@ -108,12 +108,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     try:
-        for sequence in count(1):
+        for _ in iter(int, 1):
             if stopped:
                 break
             try:
                 if elector.try_acquire_or_renew():
-                    client.heartbeat(sequence, "ready", CAPABILITIES)
+                    client.heartbeat(time.time_ns(), "ready", CAPABILITIES)
                     command = client.claim()
                     if command is not None:
                         outcome = execute(command)
