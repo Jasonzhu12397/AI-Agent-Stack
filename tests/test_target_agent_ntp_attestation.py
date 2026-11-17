@@ -119,4 +119,5 @@ def test_control_plane_ntp_attestation_rejects_unapproved_configured_source():
             {"items": configs},
             ["192.0.2.10"],
             ["10.130.60.80/28"],
+            "target-cluster",
         )
