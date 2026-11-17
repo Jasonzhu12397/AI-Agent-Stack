@@ -1,5 +1,7 @@
 # Dual-Agent Infrastructure Control Architecture
 
+> **Architecture correction (authoritative):** EPH is a single-node bootstrap Kubernetes cluster only; it is not a pool of EPH workers and the EPH host is not automatically reclaimed as a Target Worker. Target Control Plane masters are deployed first. Target Agent runs on a Target Control Plane master, restores its checkpoint, verifies CAPI pivot and exact BMH inventory ownership migration, then autonomously cleans up the EPH bootstrap Pods/components and EPH-only credentials. Cloud Control Agent does not approve Target adoption or EPH cleanup. Target Agent then deploys all Target Worker nodes. Chronyd is installed and verified on Target Workers only. Older statements below describing EPH as a future worker, requiring Cloud approval for handoff/worker provisioning, or placing EPH cleanup after worker reclamation are superseded by this correction.
+
 ## Purpose
 
 This document extends the general AI Agent Studio architecture with a remotely managed, two-sided Kubernetes bare-metal delivery model. It does not replace the platform's general Agent, Workflow, Plugin, MCP, Skills or RAG capabilities.
