@@ -751,6 +751,10 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "kubectl.sha256" in workflow
     assert "eph-mock-control-plane.log" in workflow
     assert "EPH_AGENT_MTLS_HEARTBEAT_READY=true" in workflow
+    assert "time-dns-profile.json" in workflow
+    assert "time.cloudflare.com" in workflow
+    assert "render_site_cloud_init.py" in workflow
+    assert "merge-cloud-init-user-data.py" in workflow
     assert "EPH_AGENT_INVENTORY_READY=true" in workflow
     assert "EPH_AGENT_COMMAND_POLL_READY=true" in workflow
     assert "/etc/ai-agent-studio/eph-bootstrap/bootstrap.json" in workflow
