@@ -2950,6 +2950,28 @@ def test_control_plane_accepts_pivot_with_distinct_source_and_target_uids(
             "machine_count": 1,
             "ready_machine_count": 1,
             "not_ready_machine_names": [],
+            "controllers": [
+                {
+                    "namespace": "capi-system",
+                    "deployment": "capi-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capi-kubeadm-bootstrap-system",
+                    "deployment": "capi-kubeadm-bootstrap-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capi-kubeadm-control-plane-system",
+                    "deployment": "capi-kubeadm-control-plane-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capm3-system",
+                    "deployment": "capm3-controller-manager",
+                    "ready": True,
+                },
+            ],
             "side_effects": False,
         },
         None,
