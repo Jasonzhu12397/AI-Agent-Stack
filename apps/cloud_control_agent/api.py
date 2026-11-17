@@ -181,17 +181,19 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             command_id = uuid4()
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 agent = connection.execute(
-                    "SELECT role, enabled FROM agent_control_agents WHERE agent_id = %s",
+                    "SELECT role, enabled, cluster_id FROM agent_control_agents WHERE agent_id = %s",
                     (target_agent_id,),
                 ).fetchone()
                 deployment = connection.execute(
-                    "SELECT deployment_id FROM agent_control_deployments WHERE deployment_id = %s",
+                    "SELECT deployment_id, cluster_id FROM agent_control_deployments WHERE deployment_id = %s",
                     (deployment_id,),
                 ).fetchone()
                 if not agent or not agent["enabled"] or agent["role"] != role:
                     raise ControlApiError("TARGET_AGENT_NOT_ELIGIBLE")
                 if not deployment:
                     raise ControlApiError("DEPLOYMENT_NOT_FOUND")
+                if role == "target" and agent["cluster_id"] != deployment["cluster_id"]:
+                    raise ControlApiError("TARGET_AGENT_CLUSTER_MISMATCH")
                 connection.execute(
                     """
                     INSERT INTO agent_control_commands (
