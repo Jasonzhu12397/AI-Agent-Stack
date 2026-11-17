@@ -1,0 +1,10 @@
+{
+  "version": "v1",
+  "chrony_required": true,
+  "resolver_backend": "systemd-resolved",
+  "apply_to": ["eph_live_os", "target_os"],
+  "ntp_servers": ["time.cloudflare.com", "time.google.com"],
+  "dns_servers": ["1.1.1.1", "8.8.8.8"],
+  "search_domains": ["lab.example"],
+  "dns_probe_name": "time.cloudflare.com"
+}
