@@ -32,8 +32,11 @@ from .leader_election import KubernetesLeaseElector, LeaseElectionError
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_policy import (
     NtpPolicyError,
+    render_control_plane_chrony_config,
+    render_control_plane_chrony_pre_kubeadm_command,
     render_worker_chrony_config,
     render_worker_chrony_pre_kubeadm_command,
+    validate_control_plane_ntp_profile,
     validate_worker_ntp_sources,
 )
 
@@ -44,6 +47,7 @@ CAPABILITIES = [
     "target.metal3.observe",
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
+    "target.ntp.control_plane.render",
     "target.handoff.evaluate",
 ]
 
@@ -301,6 +305,44 @@ def execute(
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
+                "output": {},
+                "side_effects": False,
+            }
+    if action == "target.ntp.control_plane.render":
+        payload = command.get("payload", {})
+        try:
+            configured = payload.get("configured_external_sources", [])
+            approved = payload.get("approved_external_sources", [])
+            worker_networks = payload.get("worker_networks", [])
+            sources, networks = validate_control_plane_ntp_profile(
+                configured,
+                approved,
+                worker_networks,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": {
+                    "profile_rendered": True,
+                    "chrony_config": render_control_plane_chrony_config(
+                        sources,
+                        networks,
+                    ),
+                    "pre_kubeadm_command": render_control_plane_chrony_pre_kubeadm_command(
+                        sources,
+                        networks,
+                    ),
+                    "approved_external_sources": list(sources),
+                    "worker_networks": list(networks),
+                    "worker_external_fallback_allowed": False,
+                    "host_configuration_applied": False,
+                },
+                "side_effects": False,
+            }
+        except NtpPolicyError as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc),
                 "output": {},
                 "side_effects": False,
             }
