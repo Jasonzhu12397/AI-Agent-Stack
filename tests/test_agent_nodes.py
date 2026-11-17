@@ -320,7 +320,7 @@ def test_node_agent_enrollment_is_tenant_admin_only(node_workspace):
 
 @pytest.mark.django_db
 def test_eph_capi_pivot_command_is_queued_without_cloud_approval_and_is_leased(node_workspace):
-    user, tenant, project, client = node_workspace
+    _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
         {"name": "eph-autonomous-pivot", "node_type": "eph_node"},
@@ -429,7 +429,6 @@ def test_expired_mutating_agent_command_fails_closed_without_redelivery(node_wor
 
 
 @pytest.mark.django_db
-
 def test_cloud_api_command_allowlists_match_node_agent_capability_registry():
     from core.agent_node_views import EPH_COMMANDS, TARGET_COMMANDS
 
