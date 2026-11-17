@@ -17,25 +17,11 @@ The long-term infrastructure product scope is documented in [Omni-Inspired Infra
 
 ## Authoritative three-Agent infrastructure architecture
 
-<box border radius="lg" padding={3} gap={3}>
-  <box gap={1}>
-    **1. Cloud Control Agent**
+1. **Cloud Control Agent** — runs in the Alibaba Cloud or Tencent Cloud management environment. Owns durable deployment/command state, approvals, global scheduling, task dispatch, status aggregation and failure coordination.
 
-    Runs in the Alibaba Cloud or Tencent Cloud management environment. Owns durable deployment/command state, approvals, global scheduling, task dispatch, status aggregation and failure coordination.
-  </box>
-  <divider color="subtle"/>
-  <box gap={1}>
-    **2. EPH Agent**
+2. **EPH Agent** — runs as one Pod inside the temporary EPH Live OS / temporary single-node Kubernetes cluster. Owns source-side preflight and the source-side CAPI Pivot operation. EPH has exactly one temporary Kubernetes node and no Worker pool.
 
-    Runs as one Pod inside the temporary EPH Live OS / temporary single-node Kubernetes cluster. Owns source-side preflight and the source-side CAPI Pivot operation. EPH has exactly one temporary Kubernetes node and no Worker pool.
-  </box>
-  <divider color="subtle"/>
-  <box gap={1}>
-    **3. Target Agent**
-
-    Runs in the target Kubernetes cluster on Control Plane Master nodes as three replicas, spread across the masters. Kubernetes Lease leader election ensures only one replica claims and executes commands. Target Agent owns target adoption, CAPI/Metal3/Ironic coordination, BMH migration, EPH handoff/cleanup and Target Worker provisioning.
-  </box>
-</box>
+3. **Target Agent** — runs in the target Kubernetes cluster on Control Plane Master nodes as three replicas, spread across the masters. Kubernetes Lease leader election ensures only one replica claims and executes commands. Target Agent owns target adoption, CAPI/Metal3/Ironic coordination, BMH migration, EPH handoff/cleanup and Target Worker provisioning.
 
 There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker facts are collected through Kubernetes, CAPI, Metal3 and approved infrastructure APIs.
 
