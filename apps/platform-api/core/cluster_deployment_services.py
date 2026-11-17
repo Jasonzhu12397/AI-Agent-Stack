@@ -752,7 +752,10 @@ def handle_deployment_command_result(
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and isinstance(expected_uid, str)
             and bool(expected_uid)
-            and result.get("target_cluster_uid") == expected_uid
+            and result.get("source_cluster_uid") == expected_uid
+            and result.get("cluster_identity_preserved") is True
+            and isinstance(result.get("target_cluster_uid"), str)
+            and bool(result.get("target_cluster_uid"))
             and result.get("source_cluster_absent") is True
             and result.get("ownership_transferred") is True
             and result.get("side_effects") is True
@@ -791,6 +794,12 @@ def handle_deployment_command_result(
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         source_identity = source.get("source_cluster_identity", {})
         expected_uid = source_identity.get("uid")
+        pivot_execution = (deployment.plan_result or {}).get("capi_pivot_execution", {})
+        expected_target_uid = (
+            pivot_execution.get("target_cluster_uid")
+            if isinstance(pivot_execution, dict)
+            else None
+        )
         valid_verification = (
             isinstance(expected_uid, str)
             and bool(expected_uid)
@@ -799,7 +808,9 @@ def handle_deployment_command_result(
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("cluster_identity_preserved") is True
-            and result.get("cluster_uid") == expected_uid
+            and isinstance(expected_target_uid, str)
+            and bool(expected_target_uid)
+            and result.get("cluster_uid") == expected_target_uid
             and result.get("source_cluster_uid") == expected_uid
             and result.get("pivot_adoption_verified") is True
             and result.get("machine_inventory_ready") is True
@@ -854,6 +865,14 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.capi.pivot.postflight":
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         source_identity = source.get("source_cluster_identity", {})
+        target_verification = (
+            (deployment.plan_result or {}).get("capi_pivot_target_verification", {})
+        )
+        expected_target_uid = (
+            target_verification.get("cluster_uid")
+            if isinstance(target_verification, dict)
+            else None
+        )
         observation = result.get("metal3_observation")
         ironic = observation.get("ironic") if isinstance(observation, dict) else None
         machine_count = observation.get("machine_count") if isinstance(observation, dict) else None
@@ -874,7 +893,9 @@ def handle_deployment_command_result(
             and result.get("postflight_passed") is True
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
-            and result.get("cluster_uid") == source_identity.get("uid")
+            and result.get("cluster_uid") == expected_target_uid
+            and result.get("source_cluster_uid") == source_identity.get("uid")
+            and result.get("cluster_identity_preserved") is True
             and result.get("side_effects") is False
             and result.get("complete_hardware_verification") is True
             and result.get("verification_scope") == "capi_metal3_ironic"
