@@ -1154,3 +1154,11 @@ class ClusterDeploymentPivotEvent(models.Model):
             )
         ]
 
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("CAPI pivot events are append-only.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("CAPI pivot events cannot be deleted through the model API.")
