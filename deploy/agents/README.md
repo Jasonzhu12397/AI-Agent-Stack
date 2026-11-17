@@ -2,7 +2,7 @@
 
 These manifests are templates. They intentionally do not grant Kubernetes write permissions.
 
-The EPH Agent runs inside a temporary single-node Kubernetes cluster on a RAM-booted bare-metal host. That host is borrowed from the final target compute pool and must later be rebooted into the target worker OS/image and verified by the Target Agent as a Ready worker. The EPH OS, local etcd, Pod filesystem and local credentials are disposable; persist deployment state centrally. See [the EPH lifecycle specification](../../docs/eph-node-lifecycle.md).
+The EPH Agent runs inside a temporary Single-Node Kubernetes cluster on a RAM-booted bootstrap host. EPH is a temporary management environment, not a Target Worker; it is not counted in Target worker replicas and must never be automatically reclassified as a worker. The Target Agent runs separately on a Target Control Plane master after the Target API, etcd and core networking are healthy. The EPH OS, local etcd, Pod filesystem and EPH-only credentials are disposable; persist deployment state centrally. See [the EPH lifecycle specification](../../docs/eph-node-lifecycle.md).
 
 ## Cloud and physical-site deployment topology
 
