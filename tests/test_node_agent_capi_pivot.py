@@ -1564,7 +1564,27 @@ def test_real_pivot_rejects_malformed_target_agent_ack_before_mutation(tmp_path)
         "source_cluster_uid": "source-cluster-uid",
         "source_cluster_api_version": "cluster.x-k8s.io/v1beta1",
         "source_cluster_spec_sha256": "a" * 64,
-        "source_inventory_sha256": "b" * 64,
+        "source_inventory_sha256": hashlib.sha256(
+            json.dumps(
+                [
+                    {
+                        "api_version": "cluster.x-k8s.io/v1beta1",
+                        "kind": "Cluster",
+                        "resource": "cluster.x-k8s.io/clusters",
+                        "name": "target-cluster",
+                        "namespace": "metal3",
+                        "uid": "source-cluster-uid",
+                        "spec_sha256": spec_digest,
+                        "owner_references": [],
+                        "owner_references_truncated": False,
+                        "cluster_name": "target-cluster",
+                    }
+                ],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest(),
         "target_agent_ack": {
             "node_id": "target-node",
             "command_id": "target-command",
@@ -1599,6 +1619,8 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
             "name": "target-cluster",
             "namespace": "metal3",
             "uid": "source-cluster-uid",
+            "labels": {"cluster.x-k8s.io/cluster-name": "target-cluster"},
+            "ownerReferences": [],
         },
         "spec": source_spec,
     }
@@ -1619,6 +1641,7 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
     ).hexdigest()
     calls, base_runner = _pivot_runner_for()
     moved = {"value": False}
+    source_identity_checked = {"value": False}
 
     def runner(command, **kwargs):
         if command[0].endswith("clusterctl") and "--dry-run" not in command:
@@ -1639,7 +1662,21 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
                             '"target-cluster" not found'
                         ),
                     )
+                source_identity_checked["value"] = True
                 return subprocess.CompletedProcess(command, 0, json.dumps(source_cluster), "")
+            if (
+                source_identity_checked["value"]
+                and not moved["value"]
+                and kubeconfig.endswith("source.kubeconfig")
+                and "get" in command
+            ):
+                if "clusters.cluster.x-k8s.io" in command:
+                    return subprocess.CompletedProcess(
+                        command, 0, json.dumps({"items": [source_cluster]}), ""
+                    )
+                return subprocess.CompletedProcess(
+                    command, 0, json.dumps({"items": []}), ""
+                )
             if named_get and kubeconfig.endswith("target.kubeconfig"):
                 return subprocess.CompletedProcess(command, 0, json.dumps(target_cluster), "")
             if (
