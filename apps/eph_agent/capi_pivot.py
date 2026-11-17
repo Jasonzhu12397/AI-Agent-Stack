@@ -298,6 +298,8 @@ def _provider_versions(
             _valid_name(target_ref.get("namespace"), "TARGET_PROVIDER_NAMESPACE"),
             _valid_name(target_ref.get("name"), "TARGET_PROVIDER_DEPLOYMENT"),
         )
+        if target.get("status", {}).get("readyReplicas", 0) < 1:
+            raise CapiPivotError(f"CAPI_PIVOT_TARGET_PROVIDER_NOT_READY:{provider}")
         source_status = source.get("status", {})
         if source_status.get("readyReplicas", 0) < 1:
             raise CapiPivotError(f"CAPI_PIVOT_SOURCE_PROVIDER_NOT_READY:{provider}")
@@ -459,10 +461,26 @@ def _provider_preflight(
     target: str,
 ) -> dict[str, Any]:
     masters = _ready_masters(target)
+    controller_specs = payload.get("target_controller_deployments")
+    provider_specs = payload.get("provider_deployments")
+    if not isinstance(controller_specs, list) or not isinstance(provider_specs, list):
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_CONTROLLER_MATRIX_INVALID")
+    controller_refs = {
+        (item.get("namespace"), item.get("name"))
+        for item in controller_specs
+        if isinstance(item, dict)
+    }
+    provider_target_refs = {
+        (item.get("target", {}).get("namespace"), item.get("target", {}).get("name"))
+        for item in provider_specs
+        if isinstance(item, dict) and isinstance(item.get("target"), dict)
+    }
+    if not provider_target_refs or not provider_target_refs.issubset(controller_refs):
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_MISSING_MASTER_PLACEMENT_CHECK")
     controllers = _target_controllers_ready(
         target,
         masters,
-        payload.get("target_controller_deployments"),
+        controller_specs,
     )
     versions = _provider_versions(
         source,
