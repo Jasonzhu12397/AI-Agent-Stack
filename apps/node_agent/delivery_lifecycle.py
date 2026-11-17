@@ -37,7 +37,7 @@ def validate_topology(topology: dict[str, Any]) -> dict[str, Any]:
         raise DeliveryLifecycleError("DELIVERY_TOPOLOGY_INVALID")
     eph_nodes = topology.get("eph_kubernetes_node_count")
     eph_mode = topology.get("eph_mode")
-    if eph_mode != "single_node" or eph_nodes != 1:
+    if eph_mode != "single_node" or not isinstance(eph_nodes, int) or isinstance(eph_nodes, bool) or eph_nodes != 1:
         raise DeliveryLifecycleError("EPH_MUST_BE_SINGLE_NODE")
     if topology.get("target_agent_placement") != "target_control_plane":
         raise DeliveryLifecycleError("TARGET_AGENT_MUST_RUN_ON_CONTROL_PLANE")
@@ -66,8 +66,6 @@ def evaluate_transition(
     current_phase: str,
     requested_phase: str,
     evidence: dict[str, Any],
-    *,
-    cloud_approval_present: bool = False,
 ) -> dict[str, Any]:
     if current_phase not in PHASES or requested_phase not in PHASES:
         raise DeliveryLifecycleError("DELIVERY_PHASE_UNKNOWN")
@@ -79,8 +77,6 @@ def evaluate_transition(
     missing = [key for key in REQUIRED_EVIDENCE.get(requested_phase, ()) if evidence.get(key) is not True]
     if missing:
         raise DeliveryLifecycleError("DELIVERY_EVIDENCE_INCOMPLETE:" + ",".join(missing))
-    if cloud_approval_present:
-        raise DeliveryLifecycleError("CLOUD_APPROVAL_MUST_NOT_GATE_TARGET_HANDOFF")
     return {
         "accepted": True,
         "current_phase": current_phase,
@@ -105,6 +101,8 @@ def validate_bmh_migration(
 
     def identities(hosts: list[dict[str, Any]]) -> set[tuple[str, str]]:
         values: set[tuple[str, str]] = set()
+        names: set[str] = set()
+        uids: set[str] = set()
         for host in hosts:
             if not isinstance(host, dict):
                 raise DeliveryLifecycleError("BMH_INVENTORY_INVALID")
@@ -112,9 +110,11 @@ def validate_bmh_migration(
             if not isinstance(name, str) or not name or not isinstance(uid, str) or not uid:
                 raise DeliveryLifecycleError("BMH_IDENTITY_INCOMPLETE")
             identity = (name, uid)
-            if identity in values:
+            if identity in values or name in names or uid in uids:
                 raise DeliveryLifecycleError("BMH_IDENTITY_DUPLICATED")
             values.add(identity)
+            names.add(name)
+            uids.add(uid)
         return values
 
     source = identities(source_hosts)
