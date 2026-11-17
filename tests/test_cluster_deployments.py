@@ -546,9 +546,18 @@ def test_stale_target_preflight_is_refreshed_before_pivot_approval(
     ("dual_agent_state", "expected_error"),
     [
         ([], "CAPI_PIVOT_DUAL_AGENT_STATE_INVALID"),
-        ({"target_preflight_refresh_count": True}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
-        ({"target_preflight_refresh_count": -1}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
-        ({"target_preflight_refresh_count": "3"}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
+        (
+            {"target_preflight_refresh_count": True},
+            "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID",
+        ),
+        (
+            {"target_preflight_refresh_count": -1},
+            "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID",
+        ),
+        (
+            {"target_preflight_refresh_count": "3"},
+            "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID",
+        ),
     ],
 )
 @pytest.mark.django_db
