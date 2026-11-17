@@ -2565,7 +2565,9 @@ class AgentRuntimePollView(APIView):
                             actor_node=node,
                             last_error=command.error,
                         )
-                        plan_result = deployment.plan_result or {}
+                        plan_result = deployment.plan_result
+                        if not isinstance(plan_result, dict):
+                            plan_result = {}
                         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
                         deployment.error = {
                             "code": "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
@@ -2575,7 +2577,11 @@ class AgentRuntimePollView(APIView):
                         deployment.plan_result = {
                             **plan_result,
                             "dual_agent": {
-                                **plan_result.get("dual_agent", {}),
+                                **(
+                                    plan_result.get("dual_agent", {})
+                                    if isinstance(plan_result.get("dual_agent"), dict)
+                                    else {}
+                                ),
                                 "phase": "pivot_outcome_unknown",
                                 "pivot_completed": False,
                                 "target_agent_owns_cluster": False,
@@ -2644,7 +2650,9 @@ class AgentRuntimePollView(APIView):
                             actor_node=node,
                             last_error={"code": error_code},
                         )
-                        plan_result = deployment.plan_result or {}
+                        plan_result = deployment.plan_result
+                        if not isinstance(plan_result, dict):
+                            plan_result = {}
                         deployment.status = ClusterDeployment.Status.FAILED
                         deployment.error = {
                             "code": "CAPI_PIVOT_APPROVAL_INVALID",
@@ -2655,7 +2663,11 @@ class AgentRuntimePollView(APIView):
                         deployment.plan_result = {
                             **plan_result,
                             "dual_agent": {
-                                **plan_result.get("dual_agent", {}),
+                                **(
+                                    plan_result.get("dual_agent", {})
+                                    if isinstance(plan_result.get("dual_agent"), dict)
+                                    else {}
+                                ),
                                 "phase": "pivot_approval_invalid",
                                 "target_agent_owns_cluster": False,
                                 "eph_reclaim_allowed": False,
@@ -2759,7 +2771,9 @@ class AgentRuntimePollView(APIView):
                             actor_node=node,
                             last_error={"code": "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED"},
                         )
-                        plan_result = deployment.plan_result or {}
+                        plan_result = deployment.plan_result
+                        if not isinstance(plan_result, dict):
+                            plan_result = {}
                         deployment.status = ClusterDeployment.Status.FAILED
                         deployment.error = {
                             "code": "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED",
@@ -2769,7 +2783,11 @@ class AgentRuntimePollView(APIView):
                         deployment.plan_result = {
                             **plan_result,
                             "dual_agent": {
-                                **plan_result.get("dual_agent", {}),
+                                **(
+                                    plan_result.get("dual_agent", {})
+                                    if isinstance(plan_result.get("dual_agent"), dict)
+                                    else {}
+                                ),
                                 "phase": "pivot_target_ack_expired",
                                 "target_agent_owns_cluster": False,
                                 "eph_reclaim_allowed": False,
