@@ -365,11 +365,16 @@ def queue_deployment_command(
     elif command_type == "cluster.capi.pivot.target.verify":
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         identity = source.get("source_cluster_identity", {})
+        dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_cluster_uid"] = identity.get("uid")
         payload["expected_cluster_api_version"] = identity.get("api_version")
         payload["expected_cluster_spec_sha256"] = identity.get("spec_sha256")
+        payload["expected_target_cluster_uid"] = dual_agent.get(
+            "target_cluster_uid_after_move"
+        )
+        payload["operation_id"] = dual_agent.get("pivot_operation_id")
     elif command_type == "cluster.capi.pivot.postflight":
         target_verification = (deployment.plan_result or {}).get(
             "capi_pivot_target_verification",
@@ -1037,6 +1042,9 @@ def handle_deployment_command_result(
         source_identity = source.get("source_cluster_identity", {})
         expected_uid = source_identity.get("uid")
         expected_spec_sha256 = source_identity.get("spec_sha256")
+        dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
+        expected_target_uid = dual_agent.get("target_cluster_uid_after_move")
+        operation_id = dual_agent.get("pivot_operation_id")
         target_cluster_uid = result.get("cluster_uid")
         valid_verification = (
             isinstance(expected_uid, str)
@@ -1049,6 +1057,11 @@ def handle_deployment_command_result(
             and command.node_id == deployment.target_node_id
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
+            and isinstance(expected_target_uid, str)
+            and bool(expected_target_uid)
+            and target_cluster_uid == expected_target_uid
+            and isinstance(operation_id, str)
+            and result.get("operation_id") == operation_id
             and result.get("cluster_identity_preserved") is True
             and result.get("cluster_uid") != expected_uid
             and result.get("source_cluster_uid") == expected_uid
