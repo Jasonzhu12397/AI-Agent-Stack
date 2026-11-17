@@ -2,6 +2,9 @@
 set -euo pipefail
 umask 077
 
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$ROOT_DIR/.." && pwd)"
+
 fail() {
     printf '%s\n' "$1" >&2
     exit 1
@@ -29,7 +32,7 @@ import zipfile
 
 archive_path = pathlib.Path(sys.argv[1])
 output_dir = pathlib.Path(sys.argv[2])
-expected = {"user-data", "meta-data", "network-config"}
+expected = {"user-data", "meta-data", "network-config", "time-dns-profile.json"}
 
 try:
     with zipfile.ZipFile(str(archive_path), "r") as archive:
@@ -41,10 +44,8 @@ try:
             mode = entry.external_attr >> 16
             if stat.S_ISLNK(mode) or entry.is_dir() or entry.flag_bits & 1:
                 raise ValueError("SEED_ARCHIVE_ENTRY_INVALID")
-            if entry.file_size > 262144:
+            if entry.file_size > 262144 or entry.compress_size > 262144:
                 raise ValueError("SEED_ARCHIVE_ENTRY_TOO_LARGE")
-            if entry.compress_size > 262144:
-                raise ValueError("SEED_ARCHIVE_COMPRESSED_ENTRY_TOO_LARGE")
             content = archive.read(entry)
             if len(content) != entry.file_size:
                 raise ValueError("SEED_ARCHIVE_ENTRY_SIZE_MISMATCH")
@@ -52,6 +53,21 @@ try:
 except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
     raise SystemExit("SEED_ARCHIVE_INVALID")
 PY
+
+python3 "$REPO_ROOT/deploy/cloud-init/render_site_cloud_init.py" \
+    --role eph-live-os \
+    --profile-json "$temporary_dir/time-dns-profile.json" \
+    --output "$temporary_dir/time-dns-user-data" ||
+    fail "EPH_TIME_DNS_CLOUD_INIT_RENDER_FAILED"
+
+python3 "$ROOT_DIR/merge-cloud-init-user-data.py" \
+    --base "$temporary_dir/user-data" \
+    --additional "$temporary_dir/time-dns-user-data" \
+    --output "$temporary_dir/merged-user-data" ||
+    fail "EPH_CLOUD_INIT_USER_DATA_MERGE_FAILED"
+
+mv "$temporary_dir/merged-user-data" "$temporary_dir/user-data"
+rm -f "$temporary_dir/time-dns-profile.json" "$temporary_dir/time-dns-user-data"
 
 command -v xorriso >/dev/null 2>&1 || fail "SEED_ISO_DEPENDENCY_MISSING:xorriso"
 install -d -m 0700 "$(dirname -- "$output_iso")"
