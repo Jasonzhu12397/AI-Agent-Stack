@@ -82,7 +82,7 @@ def _configure_in_cluster_kubeconfig() -> None:
 def _kubectl(
     arguments: list[str],
     timeout: int = 30,
-    max_output_bytes: int = 8 * 1024 * 1024,
+    max_output_bytes: int = 512 * 1024,
 ) -> dict[str, Any]:
     allowed_environment = (
         "PATH",
@@ -140,7 +140,15 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     resources = (
         (
             "cluster",
-            ["get", "cluster.cluster.x-k8s.io", cluster_name, "--namespace", namespace, "-o", "json"],
+            [
+                "get",
+                "cluster.cluster.x-k8s.io",
+                cluster_name,
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
         ),
         (
             "machines",
@@ -148,7 +156,14 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         (
             "metal3machines",
-            ["get", "metal3machines.infrastructure.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+            [
+                "get",
+                "metal3machines.infrastructure.cluster.x-k8s.io",
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
         ),
         (
             "bmhs",
@@ -157,7 +172,7 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     )
     documents = {}
     for name, arguments in resources:
-        result = _kubectl(arguments, timeout=60, max_output_bytes=8 * 1024 * 1024)
+        result = _kubectl(arguments, timeout=60, max_output_bytes=32 * 1024 * 1024)
         if not result["available"]:
             raise Metal3OwnershipError(f"TARGET_METAL3_OBSERVATION_FAILED:{name}")
         try:
@@ -169,7 +184,8 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
         documents["machines"],
         documents["metal3machines"],
         documents["bmhs"],
-        payload.get("source_bmh_identities"),
+        payload.get("source_bmh_identities")
+        or payload.get("evidence", {}).get("source_bmh_identities"),
     )
 
 
