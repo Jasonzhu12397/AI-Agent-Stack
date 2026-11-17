@@ -53,7 +53,7 @@ All three Target replicas share one logical Agent UUID and installation/cluster 
 
 ## Cloud Control database provisioning
 
-The Cloud Control Agent creates its tables on startup. Before Agents can connect, register their identities in `agent_control_agents` and create a deployment record in `agent_control_deployments`. The Agent UUID, role, installation UUID and (for Target only) cluster UUID must match the mTLS certificate and Agent environment.
+The Cloud Control Agent creates its tables on startup. Before Agents can connect, register their identities in `agent_control_agents` and create a deployment record in `agent_control_deployments` with `phase='not_started'`, `sequence=0` and an empty JSON state. The Agent UUID, role, installation UUID and (for Target only) cluster UUID must match the mTLS certificate and Agent environment. Target Agent checkpoints are persisted through `POST /api/v1/agent-control/deployments/checkpoints`; updates are compare-and-swap protected by the current phase/sequence and the active command lease.
 
 The Cloud Control API accepts:
 - `POST /api/v1/agent-control/heartbeats` from registered EPH/Target Agents.
