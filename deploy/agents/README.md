@@ -58,12 +58,13 @@ The Cloud Control Agent creates its tables on startup. Before Agents can connect
 The Cloud Control API accepts:
 - `POST /api/v1/agent-control/heartbeats` from registered EPH/Target Agents.
 - `POST /api/v1/agent-control/commands/claim` from registered EPH/Target Agents.
+- `POST /api/v1/agent-control/commands/lease/renew` from the current lease holder.
 - `POST /api/v1/agent-control/commands/results` from the current lease holder.
 - `POST /api/v1/control/commands` from a trusted platform API client certificate whose Common Name is `platform-api`.
 
 The platform API command request must include `deployment_id`, `target_agent_id`, `required_role`, `action`, a unique `idempotency_key`, object `payload`, and a 64-character `approval_digest`. The API service certificate is the trust boundary for approval verification; the Cloud Control service records the digest but does not independently authenticate the human approver. Do not expose the platform command endpoint to untrusted clients.
 
-Expired command leases can be reclaimed. The lease token is returned only to the current claimant and is stored as a SHA-256 digest; it is not persisted in the result record.
+Expired command leases can be reclaimed. The lease token is returned only to the current claimant and is stored as a SHA-256 digest; it is not persisted in the result record. The command envelope also carries the approval digest recorded by the trusted platform API. Lease renewal is bounded by the original absolute command deadline.
 
 ## Build
 
