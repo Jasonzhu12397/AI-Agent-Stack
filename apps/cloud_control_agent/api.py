@@ -144,11 +144,69 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/agent-control/commands/results":
                     self._result(document)
                     return
+                if self.path == "/api/v1/control/commands":
+                    self._enqueue(document)
+                    return
                 self._send(404, {"error": "NOT_FOUND"})
             except ControlApiError as exc:
                 self._send(400, {"error": str(exc)})
             except psycopg.Error:
                 self._send(503, {"error": "PERSISTENCE_UNAVAILABLE"})
+
+
+        def _enqueue(self, document: dict[str, Any]) -> None:
+            certificate = self.connection.getpeercert()
+            if _certificate_common_name(certificate) != "platform-api":
+                raise ControlApiError("PLATFORM_API_CERTIFICATE_REQUIRED")
+            deployment_id = _parse_uuid(document.get("deployment_id"), "DEPLOYMENT_ID")
+            target_agent_id = _parse_uuid(document.get("target_agent_id"), "TARGET_AGENT_ID")
+            role = document.get("required_role")
+            action = document.get("action")
+            idempotency_key = document.get("idempotency_key")
+            payload = document.get("payload", {})
+            approval_digest = document.get("approval_digest")
+            if role not in ("eph", "target"):
+                raise ControlApiError("COMMAND_ROLE_INVALID")
+            if not isinstance(action, str) or not action or len(action) > 128:
+                raise ControlApiError("COMMAND_ACTION_INVALID")
+            if not isinstance(idempotency_key, str) or len(idempotency_key) < 16 or len(idempotency_key) > 200:
+                raise ControlApiError("IDEMPOTENCY_KEY_INVALID")
+            if not isinstance(payload, dict) or len(_json_bytes(payload)) > MAX_BODY_BYTES:
+                raise ControlApiError("COMMAND_PAYLOAD_INVALID")
+            if not isinstance(approval_digest, str) or len(approval_digest) != 64:
+                raise ControlApiError("APPROVAL_DIGEST_REQUIRED")
+            try:
+                int(approval_digest, 16)
+            except ValueError as exc:
+                raise ControlApiError("APPROVAL_DIGEST_INVALID") from exc
+            command_id = uuid4()
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                agent = connection.execute(
+                    "SELECT role, enabled FROM agent_control_agents WHERE agent_id = %s",
+                    (target_agent_id,),
+                ).fetchone()
+                deployment = connection.execute(
+                    "SELECT deployment_id FROM agent_control_deployments WHERE deployment_id = %s",
+                    (deployment_id,),
+                ).fetchone()
+                if not agent or not agent["enabled"] or agent["role"] != role:
+                    raise ControlApiError("TARGET_AGENT_NOT_ELIGIBLE")
+                if not deployment:
+                    raise ControlApiError("DEPLOYMENT_NOT_FOUND")
+                connection.execute(
+                    """
+                    INSERT INTO agent_control_commands (
+                        command_id, deployment_id, target_agent_id, required_role,
+                        action, idempotency_key, payload, status, result
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s)
+                    """,
+                    (
+                        command_id, deployment_id, target_agent_id, role, action,
+                        idempotency_key, Jsonb(payload),
+                        Jsonb({"approval_digest": approval_digest}),
+                    ),
+                )
+            self._send(201, {"command_id": str(command_id), "status": "queued"})
 
         def _heartbeat(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
