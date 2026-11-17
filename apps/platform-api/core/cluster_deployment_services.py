@@ -1501,6 +1501,25 @@ def handle_deployment_command_result(
             deployment=deployment
         ).first()
         target_cluster_uid = result.get("cluster_uid")
+        expected_inventory = _canonical_capi_inventory(
+            [
+                item
+                for item in pivot_operation.inventory
+                if isinstance(item, dict)
+                and item.get("namespace") == _deployment_capi_namespace(deployment)
+            ]
+            if pivot_operation is not None
+            and isinstance(pivot_operation.inventory, list)
+            else []
+        )
+        expected_inventory_sha256 = hashlib.sha256(
+            json.dumps(
+                expected_inventory,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
         valid_verification = (
             pivot_operation is not None
             and str(pivot_operation.operation_id) == operation_id
@@ -1528,6 +1547,10 @@ def handle_deployment_command_result(
             and result.get("source_cluster_uid") == expected_uid
             and result.get("cluster_api_version") == source_identity.get("api_version")
             and result.get("cluster_spec_sha256") == expected_spec_sha256
+            and expected_inventory
+            and result.get("inventory_verified") is True
+            and result.get("inventory_sha256") == expected_inventory_sha256
+            and result.get("inventory_object_count") == len(expected_inventory)
             and result.get("pivot_adoption_verified") is True
             and result.get("machine_inventory_ready") is True
             and result.get("controllers_ready") is True
