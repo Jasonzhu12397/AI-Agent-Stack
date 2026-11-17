@@ -973,6 +973,19 @@ def build_capi_owner_graph(
         for item in cluster_labeled_objects
         if item.get("uid") not in reachable
     ]
+    root_namespace = root.get("namespace") if root_valid else None
+    cross_namespace_reachable = [
+        {
+            "kind": item.get("kind"),
+            "resource": item.get("resource"),
+            "namespace": item.get("namespace"),
+            "name": item.get("name"),
+            "uid": item.get("uid"),
+        }
+        for item in inventory
+        if item.get("uid") in reachable
+        and item.get("namespace") != root_namespace
+    ]
     complete = (
         inventory_complete
         and root_valid
@@ -981,14 +994,18 @@ def build_capi_owner_graph(
         and not unresolved_owner_references
         and not truncated_owner_references
         and not orphaned_cluster_objects
+        and not cross_namespace_reachable
     )
     return {
         "complete": complete,
         "root_cluster_uid": cluster_uid if root_valid else None,
+        "root_cluster_namespace": root_namespace,
         "object_count": len(inventory),
         "unique_uid_count": len(uid_map),
         "reachable_object_count": len(reachable),
         "cluster_labeled_object_count": len(cluster_labeled_objects),
+        "cross_namespace_reachable_count": len(cross_namespace_reachable),
+        "cross_namespace_reachable_objects": cross_namespace_reachable[:100],
         "duplicate_uids": duplicate_uids[:100],
         "truncated_owner_references": truncated_owner_references[:100],
         "unresolved_owner_references": unresolved_owner_references[:100],
