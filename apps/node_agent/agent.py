@@ -2875,6 +2875,11 @@ def execute_command(
             )
         ):
             raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
+        ntp_server_ip = config.get("ironic_internal_ip")
+        try:
+            ntp_observation = verify_ntp_server(ntp_server_ip)
+        except ChronyError as exc:
+            raise NodeAgentError("WORKER_IRONIC_INTERNAL_NTP_NOT_READY") from exc
         network_profile = validate_network_profile(config.get("network_profile"))
         if network_profile.get("dpdk_requested") is not True:
             raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
@@ -3207,6 +3212,9 @@ def execute_command(
             "selected_baremetal_hosts": selected_hosts[:100],
             "unavailable_matching_hosts": unavailable_hosts[:100],
             "network_profile": network_profile,
+            "ntp_server_ip": ntp_observation["server_ip"],
+            "ntp_server_ready": ntp_observation["synchronized"],
+            "ntp_server_stratum": ntp_observation["stratum"],
             "network_template_profile_hash": network_template_profile_hash,
             "network_template_profile_verified": network_template_profile_verified,
             "metal3_data_template": data_template_result,
@@ -3286,6 +3294,11 @@ def execute_command(
         bootstrap_template_name = config.get("bootstrap_template_name")
         host_namespace = config.get("baremetal_host_namespace")
         host_selector = config.get("host_selector")
+        ntp_server_ip = config.get("ironic_internal_ip")
+        try:
+            ntp_observation = verify_ntp_server(ntp_server_ip)
+        except ChronyError as exc:
+            raise NodeAgentError("WORKER_IRONIC_INTERNAL_NTP_NOT_READY") from exc
         network_profile = validate_network_profile(config.get("network_profile"))
         if network_profile.get("dpdk_requested") is not True:
             raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
@@ -3543,6 +3556,16 @@ def execute_command(
             "cluster.x-k8s.io/cluster-name": cluster_name,
             "cluster.x-k8s.io/deployment-name": deployment_name,
         }
+        chrony_bootstrap_template_name, chrony_bootstrap_template_uid = (
+            ensure_worker_chrony_bootstrap_template(
+                namespace=namespace,
+                bootstrap_api_version=expected_bootstrap_api_version,
+                base_template=bootstrap_template,
+                deployment_id=deployment_id,
+                plan_hash=plan_hash,
+                ntp_server_ip=ntp_server_ip,
+            )
+        )
         manifest = {
             "apiVersion": "cluster.x-k8s.io/" + md_version,
             "kind": "MachineDeployment",
@@ -3565,7 +3588,7 @@ def execute_command(
                             "configRef": {
                                 "apiVersion": expected_bootstrap_api_version,
                                 "kind": "KubeadmConfigTemplate",
-                                "name": bootstrap_template_name,
+                                "name": chrony_bootstrap_template_name,
                             }
                         },
                         "infrastructureRef": {
@@ -3648,6 +3671,9 @@ def execute_command(
             "cluster_uid": expected_cluster_uid,
             "provisioning_plan_hash": plan_hash,
             "machine_deployment_manifest_hash": manifest_hash,
+            "chrony_bootstrap_template_name": chrony_bootstrap_template_name,
+            "chrony_bootstrap_template_uid": chrony_bootstrap_template_uid,
+            "chrony_ntp_server_ip": ntp_observation["server_ip"],
             "execution_mode": "real_create_or_idempotent_reconcile",
             "created": created,
             "idempotent_reconciliation": idempotent_reconciliation,
