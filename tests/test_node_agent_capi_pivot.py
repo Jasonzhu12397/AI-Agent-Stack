@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 import subprocess
@@ -1569,7 +1570,7 @@ def test_real_pivot_rejects_malformed_target_agent_ack_before_mutation(tmp_path)
             "node_id": "target-node",
             "command_id": "target-command",
             "result_sha256": "not-a-digest",
-            "acknowledged_at": "2026-11-17T00:00:00+00:00",
+            "acknowledged_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         },
     }
 
@@ -1702,7 +1703,7 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
             "node_id": "target-node",
             "command_id": "target-command",
             "result_sha256": "c" * 64,
-            "acknowledged_at": "2026-11-17T00:00:00+00:00",
+            "acknowledged_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         },
     }
 
