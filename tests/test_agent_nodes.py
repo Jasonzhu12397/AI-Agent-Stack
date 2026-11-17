@@ -1,5 +1,4 @@
 # ruff: noqa: I001
-from node_agent.capabilities import ROLE_CAPABILITIES
 from core.agent_node_views import _validate_kubernetes_upgrade_result
 import datetime
 import hashlib
@@ -428,12 +427,13 @@ def test_expired_mutating_agent_command_fails_closed_without_redelivery(node_wor
     assert command.attempts == 1
 
 
-@pytest.mark.django_db
-def test_cloud_api_command_allowlists_match_node_agent_capability_registry():
-    from core.agent_node_views import EPH_COMMANDS, TARGET_COMMANDS
+def test_cloud_control_command_allowlists_match_fresh_agent_runtimes():
+    from apps.cloud_control_agent.api import EPH_ACTIONS, TARGET_ACTIONS
+    from apps.eph_agent.main import CAPABILITIES as EPH_CAPABILITIES
+    from apps.target_agent.main import CAPABILITIES as TARGET_CAPABILITIES
 
-    assert EPH_COMMANDS == ROLE_CAPABILITIES["eph_node"]
-    assert TARGET_COMMANDS == ROLE_CAPABILITIES["target_cluster"]
+    assert EPH_ACTIONS == frozenset(EPH_CAPABILITIES)
+    assert TARGET_ACTIONS == frozenset(TARGET_CAPABILITIES)
 
 
 @pytest.mark.django_db
