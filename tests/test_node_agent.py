@@ -1997,7 +1997,7 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
             ]
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
+            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "target-uid", "annotations": {"ai-agent-stack.io/source-cluster-uid": "source-uid"}}
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
@@ -2064,7 +2064,9 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
 
     assert result["pivot_adoption_verified"] is True
     assert result["cluster_identity_preserved"] is True
-    assert result["cluster_uid"] == "source-uid"
+    assert result["cluster_uid"] == "target-uid"
+    assert result["target_cluster_uid"] == "target-uid"
+    assert result["source_cluster_uid"] == "source-uid"
     assert result["machine_count"] == 1
     assert result["ready_machine_count"] == 1
     assert result["not_ready_machine_names"] == []
@@ -2085,7 +2087,7 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
             ]
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "source-uid"}
+            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "target-uid", "annotations": {"ai-agent-stack.io/source-cluster-uid": "source-uid"}}
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
