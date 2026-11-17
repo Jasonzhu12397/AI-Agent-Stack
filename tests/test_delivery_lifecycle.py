@@ -1,3 +1,5 @@
+import pytest
+
 from node_agent.delivery_lifecycle import (
     DeliveryLifecycleError,
     evaluate_transition,
@@ -6,48 +8,71 @@ from node_agent.delivery_lifecycle import (
     validate_topology,
 )
 
-import pytest
 
-# Keep the project test imports grouped with the test framework.
-#
-    DeliveryLifecycleError,
-    evaluate_transition,
-    validate_bmh_migration,
-    validate_chronyd_scope,
-    validate_topology,
-)
-
-
-def test_eph_is_exactly_one_kubernetes_node():
-    result = validate_topology({
+def topology():
+    return {
         "eph_mode": "single_node",
         "eph_kubernetes_node_count": 1,
         "target_agent_placement": "target_control_plane",
-        "worker_chronyd_scope": "target_workers_only",
-    })
+        "chronyd_scope": "eph_and_target_kubernetes_nodes",
+    }
+
+
+def test_eph_is_exactly_one_kubernetes_node():
+    result = validate_topology(topology())
     assert result["valid"] is True
+    assert result["chronyd_scope"] == "eph_and_target_kubernetes_nodes"
 
 
-@pytest.mark.parametrize("count", [0, 2, 3])
+@pytest.mark.parametrize("count", [0, 2, 3, True])
 def test_rejects_non_single_node_eph(count):
+    config = topology()
+    config["eph_kubernetes_node_count"] = count
     with pytest.raises(DeliveryLifecycleError, match="EPH_MUST_BE_SINGLE_NODE"):
-        validate_topology({
-            "eph_mode": "single_node",
-            "eph_kubernetes_node_count": count,
-            "target_agent_placement": "target_control_plane",
-            "worker_chronyd_scope": "target_workers_only",
-        })
+        validate_topology(config)
 
 
-def test_chronyd_is_rejected_for_eph():
-    with pytest.raises(DeliveryLifecycleError, match="CHRONYD_NOT_APPLICABLE_TO_EPH"):
-        validate_chronyd_scope("eph", "install")
+def test_rejects_chronyd_scope_that_omits_eph():
+    config = topology()
+    config["chronyd_scope"] = "target_workers_only"
+    with pytest.raises(
+        DeliveryLifecycleError,
+        match="CHRONYD_SCOPE_MUST_INCLUDE_EPH_AND_TARGET_NODES",
+    ):
+        validate_topology(config)
 
 
-def test_chronyd_is_only_allowed_for_target_workers():
-    assert validate_chronyd_scope("target_worker", "install")["allowed"] is True
-    with pytest.raises(DeliveryLifecycleError, match="CHRONYD_ONLY_ALLOWED_ON_TARGET_WORKERS"):
-        validate_chronyd_scope("target_control_plane", "install")
+@pytest.mark.parametrize(
+    "role",
+    ["eph", "target_control_plane", "target_worker"],
+)
+@pytest.mark.parametrize("action", ["install", "configure", "enable", "verify"])
+def test_chronyd_is_allowed_for_all_kubernetes_node_roles(role, action):
+    result = validate_chronyd_scope(role, action)
+    assert result["allowed"] is True
+    assert result["node_role"] == role
+
+
+def test_eph_chronyd_must_run_before_kubeadm():
+    result = validate_chronyd_scope("eph", "verify")
+    assert result["required_before_kubeadm"] is True
+
+
+def test_target_control_plane_chronyd_must_run_before_kubeadm():
+    result = validate_chronyd_scope("target_control_plane", "verify")
+    assert result["required_before_kubeadm"] is True
+
+
+def test_worker_chronyd_must_run_before_node_join():
+    result = validate_chronyd_scope("target_worker", "verify")
+    assert result["required_before_node_join"] is True
+
+
+def test_chronyd_rejects_unknown_role_or_action():
+    with pytest.raises(DeliveryLifecycleError, match="CHRONYD_NODE_ROLE_INVALID"):
+        validate_chronyd_scope("cloud_agent", "install")
+    with pytest.raises(DeliveryLifecycleError, match="CHRONYD_ACTION_INVALID"):
+        validate_chronyd_scope("eph", "remove")
 
 
 def test_bmh_migration_requires_exact_identity_set_and_target_ownership():
@@ -67,7 +92,9 @@ def test_bmh_migration_requires_exact_identity_set_and_target_ownership():
             "serial_number": "SN02",
         },
     ]
-    result = validate_bmh_migration(hosts, list(hosts), target_controller_owns_inventory=True)
+    result = validate_bmh_migration(
+        hosts, list(hosts), target_controller_owns_inventory=True
+    )
     assert result["migration_verified"] is True
     assert result["source_mutation_performed"] is False
     assert result["kubernetes_uids_used_as_identity"] is False
@@ -81,8 +108,13 @@ def test_bmh_migration_rejects_missing_target_host():
             "boot_mac": "00:11:22:33:44:55",
         }
     ]
-    with pytest.raises(DeliveryLifecycleError, match="BMH_REGISTRY_HARDWARE_IDENTITY_MISMATCH"):
-        validate_bmh_migration(source, [], target_controller_owns_inventory=True)
+    with pytest.raises(
+        DeliveryLifecycleError,
+        match="BMH_REGISTRY_HARDWARE_IDENTITY_MISMATCH",
+    ):
+        validate_bmh_migration(
+            source, [], target_controller_owns_inventory=True
+        )
 
 
 def test_bmh_migration_requires_target_controller_ownership():
@@ -93,8 +125,13 @@ def test_bmh_migration_requires_target_controller_ownership():
             "boot_mac": "00:11:22:33:44:55",
         }
     ]
-    with pytest.raises(DeliveryLifecycleError, match="TARGET_BMH_CONTROLLER_OWNERSHIP_UNVERIFIED"):
-        validate_bmh_migration(hosts, list(hosts), target_controller_owns_inventory=False)
+    with pytest.raises(
+        DeliveryLifecycleError,
+        match="TARGET_BMH_CONTROLLER_OWNERSHIP_UNVERIFIED",
+    ):
+        validate_bmh_migration(
+            hosts, list(hosts), target_controller_owns_inventory=False
+        )
 
 
 def test_target_agent_can_advance_without_cloud_approval():
@@ -104,37 +141,24 @@ def test_target_agent_can_advance_without_cloud_approval():
         "eph_credentials_revoked": True,
     }
     result = evaluate_transition(
-        "bmh_registry_migrated",
-        "eph_cleanup_verified",
-        evidence,
+        "bmh_registry_migrated", "eph_cleanup_verified", evidence
     )
     assert result["accepted"] is True
     assert result["cloud_approval_required"] is False
     assert result["eph_cleanup_allowed"] is True
 
 
-def test_transition_does_not_require_cloud_approval():
-    evidence = {
-        "eph_agent_stopped": True,
-        "eph_bootstrap_components_removed": True,
-        "eph_credentials_revoked": True,
-    }
-    result = evaluate_transition(
-        "bmh_registry_migrated",
-        "eph_cleanup_verified",
-        evidence,
-    )
-    assert result["accepted"] is True
-    assert result["cloud_approval_required"] is False
-
-
 def test_cleanup_cannot_precede_bmh_migration():
-    with pytest.raises(DeliveryLifecycleError, match="DELIVERY_PHASE_TRANSITION_INVALID"):
+    with pytest.raises(
+        DeliveryLifecycleError, match="DELIVERY_PHASE_TRANSITION_INVALID"
+    ):
         evaluate_transition("capi_pivot_verified", "eph_cleanup_verified", {})
 
 
 def test_worker_provisioning_requires_cleanup_phase():
-    with pytest.raises(DeliveryLifecycleError, match="DELIVERY_PHASE_TRANSITION_INVALID"):
+    with pytest.raises(
+        DeliveryLifecycleError, match="DELIVERY_PHASE_TRANSITION_INVALID"
+    ):
         evaluate_transition("bmh_registry_migrated", "worker_provisioning", {})
 
 
@@ -145,21 +169,15 @@ def test_target_agent_command_exposes_lifecycle_policy():
         {
             "command_type": "cluster.delivery.lifecycle.evaluate",
             "payload": {
-                "action": "transition.evaluate",
-                "current_phase": "bmh_registry_migrated",
-                "requested_phase": "eph_cleanup_verified",
-                "evidence": {
-                    "eph_agent_stopped": True,
-                    "eph_bootstrap_components_removed": True,
-                    "eph_credentials_revoked": True,
-                },
+                "action": "chronyd.validate",
+                "node_role": "eph",
+                "chronyd_action": "install",
             },
         },
         "target_cluster",
     )
-    assert result["accepted"] is True
-    assert result["eph_cleanup_allowed"] is True
-    assert result["cloud_approval_required"] is False
+    assert result["allowed"] is True
+    assert result["required_before_kubeadm"] is True
 
 
 def test_eph_agent_cannot_run_target_lifecycle_handoff_command():
@@ -182,16 +200,6 @@ def test_eph_agent_cannot_run_target_lifecycle_handoff_command():
             },
             "eph_node",
         )
-
-
-def test_rejects_boolean_as_eph_node_count():
-    with pytest.raises(DeliveryLifecycleError, match="EPH_MUST_BE_SINGLE_NODE"):
-        validate_topology({
-            "eph_mode": "single_node",
-            "eph_kubernetes_node_count": True,
-            "target_agent_placement": "target_control_plane",
-            "worker_chronyd_scope": "target_workers_only",
-        })
 
 
 @pytest.mark.parametrize(
@@ -224,5 +232,9 @@ def test_rejects_boolean_as_eph_node_count():
     ],
 )
 def test_bmh_migration_rejects_duplicate_hardware_identity(hosts):
-    with pytest.raises(DeliveryLifecycleError, match="BMH_IDENTITY_DUPLICATED"):
-        validate_bmh_migration(hosts, hosts, target_controller_owns_inventory=True)
+    with pytest.raises(
+        DeliveryLifecycleError, match="BMH_IDENTITY_DUPLICATED"
+    ):
+        validate_bmh_migration(
+            hosts, hosts, target_controller_owns_inventory=True
+        )
