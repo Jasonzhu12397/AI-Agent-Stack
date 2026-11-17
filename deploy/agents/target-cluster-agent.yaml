@@ -38,7 +38,7 @@ spec:
         - name: agent
           image: REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+          command: ["python", "-m", "apps.target_agent.main", "--poll-seconds", "5"]
           env:
             - name: APP_ENV
               value: production
@@ -104,13 +104,13 @@ spec:
               readOnly: true
           readinessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
+              command: ["python", "-m", "apps.target_agent.main", "--readiness-check"]
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+              command: ["python", "-m", "apps.target_agent.main", "--healthcheck"]
             initialDelaySeconds: 15
             periodSeconds: 15
             failureThreshold: 3
