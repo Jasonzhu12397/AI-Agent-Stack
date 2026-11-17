@@ -3,6 +3,7 @@ from django.urls import path
 
 from core.audit_views import AuditEventListView, AuditEventVerifyView
 
+from core.capi_pivot_views import AgentRuntimeCapiPivotOperationView
 from core.agent_node_views import (
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
@@ -290,6 +291,11 @@ urlpatterns = [
         "api/v1/agent-runtime/heartbeat/",
         AgentRuntimeHeartbeatView.as_view(),
         name="agent-runtime-heartbeat",
+    ),
+    path(
+        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/capi-pivot-operation/",
+        AgentRuntimeCapiPivotOperationView.as_view(),
+        name="agent-runtime-capi-pivot-operation",
     ),
     path(
         "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
