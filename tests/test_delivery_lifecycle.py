@@ -1,6 +1,15 @@
+from node_agent.delivery_lifecycle import (
+    DeliveryLifecycleError,
+    evaluate_transition,
+    validate_bmh_migration,
+    validate_chronyd_scope,
+    validate_topology,
+)
+
 import pytest
 
-from node_agent.delivery_lifecycle import (
+# Keep the project test imports grouped with the test framework.
+#
     DeliveryLifecycleError,
     evaluate_transition,
     validate_bmh_migration,
@@ -43,8 +52,20 @@ def test_chronyd_is_only_allowed_for_target_workers():
 
 def test_bmh_migration_requires_exact_identity_set_and_target_ownership():
     hosts = [
-        {"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55", "bmc_address": "redfish://bmc01", "serial_number": "SN01"},
-        {"name": "worker-02", "namespace": "metal3", "boot_mac": "00:11:22:33:44:66", "bmc_address": "redfish://bmc02", "serial_number": "SN02"},
+        {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "boot_mac": "00:11:22:33:44:55",
+            "bmc_address": "redfish://bmc01",
+            "serial_number": "SN01",
+        },
+        {
+            "name": "worker-02",
+            "namespace": "metal3",
+            "boot_mac": "00:11:22:33:44:66",
+            "bmc_address": "redfish://bmc02",
+            "serial_number": "SN02",
+        },
     ]
     result = validate_bmh_migration(hosts, list(hosts), target_controller_owns_inventory=True)
     assert result["migration_verified"] is True
@@ -53,13 +74,25 @@ def test_bmh_migration_requires_exact_identity_set_and_target_ownership():
 
 
 def test_bmh_migration_rejects_missing_target_host():
-    source = [{"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55"}]
+    source = [
+        {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "boot_mac": "00:11:22:33:44:55",
+        }
+    ]
     with pytest.raises(DeliveryLifecycleError, match="BMH_REGISTRY_HARDWARE_IDENTITY_MISMATCH"):
         validate_bmh_migration(source, [], target_controller_owns_inventory=True)
 
 
 def test_bmh_migration_requires_target_controller_ownership():
-    hosts = [{"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55"}]
+    hosts = [
+        {
+            "name": "worker-01",
+            "namespace": "metal3",
+            "boot_mac": "00:11:22:33:44:55",
+        }
+    ]
     with pytest.raises(DeliveryLifecycleError, match="TARGET_BMH_CONTROLLER_OWNERSHIP_UNVERIFIED"):
         validate_bmh_migration(hosts, list(hosts), target_controller_owns_inventory=False)
 
@@ -165,15 +198,31 @@ def test_rejects_boolean_as_eph_node_count():
     "hosts",
     [
         [
-            {"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55"},
-            {"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:66"},
+            {
+                "name": "worker-01",
+                "namespace": "metal3",
+                "boot_mac": "00:11:22:33:44:55",
+            },
+            {
+                "name": "worker-01",
+                "namespace": "metal3",
+                "boot_mac": "00:11:22:33:44:66",
+            },
         ],
         [
-            {"name": "worker-01", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55"},
-            {"name": "worker-02", "namespace": "metal3", "boot_mac": "00:11:22:33:44:55"},
+            {
+                "name": "worker-01",
+                "namespace": "metal3",
+                "boot_mac": "00:11:22:33:44:55",
+            },
+            {
+                "name": "worker-02",
+                "namespace": "metal3",
+                "boot_mac": "00:11:22:33:44:55",
+            },
         ],
     ],
 )
-def test_bmh_migration_rejects_duplicate_name_or_uid(hosts):
+def test_bmh_migration_rejects_duplicate_hardware_identity(hosts):
     with pytest.raises(DeliveryLifecycleError, match="BMH_IDENTITY_DUPLICATED"):
         validate_bmh_migration(hosts, hosts, target_controller_owns_inventory=True)
