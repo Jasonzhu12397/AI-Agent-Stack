@@ -319,8 +319,10 @@ def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
 @transaction.atomic
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-    plan_result = deployment.plan_result or {}
-    if not isinstance(plan_result, dict):
+    raw_plan_result = deployment.plan_result
+    if raw_plan_result is None:
+        plan_result = {}
+    elif not isinstance(raw_plan_result, dict):
         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
         deployment.error = {"code": "CAPI_PIVOT_PLAN_STATE_INVALID"}
         deployment.plan_result = {
