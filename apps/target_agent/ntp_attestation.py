@@ -56,7 +56,7 @@ def verify_control_plane_ntp_bootstrap(
             condition.get("type") == "Ready" and condition.get("status") == "True"
             for condition in machine.get("status", {}).get("conditions", [])
         )
-        if not machine_ready:
+        if not machine_ready or machine.get("status", {}).get("bootstrapReady") is not True:
             raise NtpAttestationError(f"TARGET_NTP_CONTROL_PLANE_MACHINE_NOT_READY:{machine_name}")
         reference = machine.get("spec", {}).get("bootstrap", {}).get("configRef", {})
         if (
@@ -79,6 +79,8 @@ def verify_control_plane_ntp_bootstrap(
         )
         if not owned:
             raise NtpAttestationError(f"TARGET_NTP_KUBEADMCONFIG_OWNER_MISMATCH:{machine_name}")
+        if config.get("status", {}).get("ready") is not True:
+            raise NtpAttestationError(f"TARGET_NTP_KUBEADMCONFIG_NOT_READY:{machine_name}")
         commands = config.get("spec", {}).get("preKubeadmCommands", [])
         if not isinstance(commands, list) or not commands or not all(
             isinstance(command, str) for command in commands
