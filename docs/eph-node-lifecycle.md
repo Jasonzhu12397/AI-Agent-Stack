@@ -7,7 +7,7 @@
 - The Target Agent is deployed as a Pod on a Target Control Plane master. It restores the deployment checkpoint from the durable cloud service and independently owns the handoff.
 - All BMH inventory and CAPI/Metal3 ownership required after bootstrap must be migrated and verified in the Target cluster before the EPH bootstrap environment is removed.
 - The Target Agent provisions all Target Worker nodes after EPH cleanup.
-- Chronyd installation, configuration, enablement and synchronization checks apply to Target Worker hosts only. Never schedule the worker chronyd role against the EPH Single-Node host.
+- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. Install, configure and enable chronyd on EPH and verify synchronization before kubeadm init; perform the same check on Target Control Plane masters before kubeadm init/join; and on every Worker before kubeadm join.
 
 ## Lifecycle
 
@@ -26,6 +26,10 @@ EPH_SINGLE_NODE_READY
 Cloud Control Agent provides global scheduling, durable checkpoint storage, agent registry, command relay, audit and status visibility. It does not approve Target Agent adoption, BMH migration or EPH cleanup. These are autonomous Target Agent workflow transitions gated by machine-verifiable evidence.
 
 ## Mandatory gates
+
+### Chrony and time synchronization
+
+Before any kubeadm init/join operation, install the chrony package, deploy the approved chrony configuration, enable and start the chronyd service, verify the configured time sources are reachable, and require `chronyc tracking` to report synchronized state with acceptable leap status and offset. This gate applies to the EPH Single-Node host, every Target Control Plane master and every Target Worker host. A failed or unsynchronized clock blocks kubeadm; do not silently skip the check.
 
 ### Target Control Plane
 
@@ -61,7 +65,7 @@ After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker pro
 
 ## Current implementation boundary
 
-The new `apps/node_agent/delivery_lifecycle.py` module implements topology validation, Target Worker-only chronyd role validation, exact BMH identity-set comparison, and fail-closed lifecycle transition evidence checks. The `cluster.delivery.lifecycle.evaluate` command exposes those policy checks to Target Agent only.
+The new `apps/node_agent/delivery_lifecycle.py` module implements topology validation, EPH, Target Control Plane and Target Worker chronyd role validation, exact BMH identity-set comparison, and fail-closed lifecycle transition evidence checks. The `cluster.delivery.lifecycle.evaluate` command exposes those policy checks to Target Agent only.
 
 These policy primitives do not themselves execute clusterctl move, transfer Kubernetes objects, delete EPH Pods, revoke credentials, create MachineDeployments, or install chronyd. Those side effects require version-aware CAPI/Metal3/Kubernetes/host adapters and end-to-end integration tests. The implementation must not report a real handoff as complete until those adapters return verified postconditions.
 
