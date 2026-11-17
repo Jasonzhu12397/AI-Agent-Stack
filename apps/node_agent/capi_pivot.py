@@ -826,15 +826,24 @@ def run_capi_pivot(
         env,
         env,
     )
-    _raise_if_cancelled(
-        cancellation_event,
-        "CAPI_PIVOT_CANCELLED_BEFORE_EXECUTION",
-    )
     source_process_env = {
         "PATH": env.get("PATH", ""),
         "HOME": env.get("HOME", "/tmp"),
         "KUBECONFIG": str(source_kubeconfig),
     }
+    source_identity_annotation_written = _ensure_source_cluster_identity_annotation(
+        preflight_runner,
+        kubectl,
+        source_kubeconfig,
+        namespace,
+        cluster_name,
+        dry_run["source_cluster_uid"],
+        source_process_env,
+    )
+    _raise_if_cancelled(
+        cancellation_event,
+        "CAPI_PIVOT_CANCELLED_BEFORE_EXECUTION",
+    )
     command = [
         clusterctl,
         "move",
@@ -892,7 +901,14 @@ def run_capi_pivot(
         target_process_env,
         "CAPI_PIVOT_TARGET_CLUSTER_NOT_FOUND_AFTER_MOVE",
     )
-    target_uid = target_cluster.get("metadata", {}).get("uid")
+    target_metadata = target_cluster.get("metadata", {})
+    target_uid = target_metadata.get("uid")
+    target_annotations = target_metadata.get("annotations", {})
+    source_uid_annotation = (
+        target_annotations.get(CAPI_SOURCE_CLUSTER_UID_ANNOTATION)
+        if isinstance(target_annotations, dict)
+        else None
+    )
     source_clusters = _kubectl_json(
         preflight_runner,
         kubectl,
@@ -910,8 +926,13 @@ def run_capi_pivot(
     ).get("items")
     if not isinstance(target_uid, str) or not target_uid:
         raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_IDENTITY_INVALID")
-    if target_uid != dry_run["source_cluster_uid"]:
-        raise CapiPivotError("CAPI_PIVOT_CLUSTER_UID_NOT_PRESERVED")
+    if source_uid_annotation != dry_run["source_cluster_uid"]:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_NOT_PRESERVED")
+    if (
+        target_metadata.get("name") != cluster_name
+        or target_metadata.get("namespace") != namespace
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_IDENTITY_INVALID")
     if not isinstance(source_clusters, list):
         raise CapiPivotError("CAPI_PIVOT_SOURCE_POST_MOVE_VERIFY_FAILED")
     if any(
@@ -935,6 +956,10 @@ def run_capi_pivot(
         "target_controllers_ready": target_preflight["controllers_ready"],
         "target_cluster_name_available": target_preflight["target_cluster_name_available"],
         "target_cluster_uid": target_uid,
+        "source_cluster_uid": dry_run["source_cluster_uid"],
+        "cluster_identity_preserved": True,
+        "source_cluster_identity_annotation": CAPI_SOURCE_CLUSTER_UID_ANNOTATION,
+        "source_cluster_identity_annotation_written": source_identity_annotation_written,
         "source_cluster_absent": True,
         "metal3_handoff": metal3_handoff,
         "ownership_transferred": True,
