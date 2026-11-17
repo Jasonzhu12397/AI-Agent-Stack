@@ -1,359 +1,182 @@
+import hashlib
+
 import pytest
-from node_agent.metal3_observer import (
-    Metal3ObservationError,
-    observe_cluster_metal3,
+
+from apps.target_agent.metal3_ownership import (
+    Metal3OwnershipError,
+    verify_metal3_ownership,
 )
 
-VERSIONS = {
-    "cluster.x-k8s.io": "v1beta1",
-    "infrastructure.cluster.x-k8s.io": "v1beta1",
-    "metal3.io": "v1alpha1",
-}
 
-
-def documents():
-    machine = {
-        "metadata": {"name": "worker-0", "uid": "machine-uid"},
-        "spec": {
-            "clusterName": "edge-lab",
-            "providerID": "metal3://metal3-system/bmh-0/worker-0",
-            "infrastructureRef": {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                "kind": "Metal3Machine",
-                "name": "worker-0",
-                "namespace": "default",
-            },
-        },
-        "status": {
-            "phase": "Running",
-            "nodeRef": {"name": "node-0", "uid": "node-uid"},
-        },
-    }
-    metal3_machine = {
+def ownership_documents():
+    cluster = {
         "metadata": {
-            "name": "worker-0",
-            "namespace": "default",
-            "uid": "mm-uid",
-            "ownerReferences": [{
-                "apiVersion": "cluster.x-k8s.io/v1beta1",
-                "kind": "Machine",
-                "name": "worker-0",
-                "uid": "machine-uid",
-            }],
-        },
-        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
-        "status": {"ready": True},
-    }
-    host = {
-        "metadata": {
-            "name": "bmh-0",
+            "name": "target-cluster",
             "namespace": "metal3-system",
-            "uid": "bmh-uid",
-        },
-        "spec": {
-            "online": True,
-            "consumerRef": {
-                "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                "kind": "Metal3Machine",
-                "name": "worker-0",
-                "namespace": "default",
-                "uid": "mm-uid",
+            "uid": "target-cluster-uid",
+        }
+    }
+    machines = []
+    metal3machines = []
+    bmhs = []
+    source_identities = []
+    for index in range(3):
+        machine_name = f"control-plane-{index}"
+        machine_uid = f"machine-uid-{index}"
+        metal3machine_uid = f"metal3machine-uid-{index}"
+        host_name = f"bmh-{index}"
+        system_uuid = f"system-uuid-{index}"
+        hardware_identity = (
+            "system-uuid:sha256:"
+            + hashlib.sha256(system_uuid.encode()).hexdigest()
+        )
+        machines.append({
+            "metadata": {
+                "name": machine_name,
+                "uid": machine_uid,
+                "ownerReferences": [{
+                    "kind": "Cluster",
+                    "name": "target-cluster",
+                    "uid": "target-cluster-uid",
+                    "controller": True,
+                }],
             },
-        },
-        "status": {
-            "operationalStatus": "OK",
-            "provisioning": {"state": "provisioned"},
-        },
-    }
-    return machine, metal3_machine, host
-
-
-def run_observer(machine=None, metal3_machine=None, hosts=None, ironic_lookup=None, nodes=None):
-    default_machine, default_mm, default_host = documents()
-    machine = default_machine if machine is None else machine
-    metal3_machine = default_mm if metal3_machine is None else metal3_machine
-    hosts = [default_host] if hosts is None else hosts
-    groups = [
-        {"name": name, "preferredVersion": {"version": version}}
-        for name, version in VERSIONS.items()
-    ]
-    default_node = {
-        "metadata": {"name": "node-0", "uid": "node-uid"},
-        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
-        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-    }
-    node_items = [default_node] if nodes is None else nodes
-    documents_by_path = {
-        "/apis": {"groups": groups},
-        (
-            "/apis/infrastructure.cluster.x-k8s.io/v1beta1/namespaces/"
-            "default/metal3machines/worker-0"
-        ): metal3_machine,
-    }
-
-    def get_item(path):
-        if path not in documents_by_path:
-            raise AssertionError(path)
-        return documents_by_path[path]
-
-    def list_items(path):
-        if path.endswith("/machines"):
-            return machine if isinstance(machine, list) else [machine]
-        if path.endswith("/baremetalhosts"):
-            return hosts
-        if path == "/api/v1/nodes":
-            return node_items
-        raise AssertionError(path)
-
-    payload = {
-        "cluster_name": "edge-lab",
-        "namespace": "default",
-        "baremetal_host_namespace": "metal3-system",
-    }
-    return observe_cluster_metal3(
-        payload,
-        get_item,
-        list_items,
-        ironic_lookup=ironic_lookup,
+            "spec": {
+                "infrastructureRef": {
+                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                    "kind": "Metal3Machine",
+                    "name": machine_name,
+                    "namespace": "metal3-system",
+                },
+            },
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        })
+        metal3machines.append({
+            "metadata": {
+                "name": machine_name,
+                "namespace": "metal3-system",
+                "uid": metal3machine_uid,
+                "ownerReferences": [{
+                    "kind": "Machine",
+                    "name": machine_name,
+                    "uid": machine_uid,
+                    "controller": True,
+                }],
+            },
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        })
+        bmhs.append({
+            "metadata": {
+                "name": host_name,
+                "namespace": "metal3-system",
+                "uid": f"bmh-uid-{index}",
+            },
+            "spec": {
+                "bootMACAddress": f"02:00:00:00:00:{index:02x}",
+                "consumerRef": {
+                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                    "kind": "Metal3Machine",
+                    "name": machine_name,
+                    "namespace": "metal3-system",
+                    "uid": metal3machine_uid,
+                },
+            },
+            "status": {
+                "hardware": {"systemUUID": system_uuid},
+                "operationalStatus": "OK",
+                "provisioning": {"state": "provisioned"},
+            },
+        })
+        source_identities.append({
+            "namespace": "metal3-system",
+            "name": host_name,
+            "hardware_identity": hardware_identity,
+        })
+    return (
+        cluster,
+        {"items": machines},
+        {"items": metal3machines},
+        {"items": bmhs},
+        source_identities,
     )
 
 
-def test_full_machine_metal3machine_bmh_chain_resolves():
-    result = run_observer()
-    assert result["ready"] is True
-    assert result["machines"][0]["baremetal_host"] == "bmh-0"
-    assert result["ironic"]["status"] == "not_configured"
+def observe(cluster=None, machines=None, metal3machines=None, bmhs=None, source=None):
+    values = ownership_documents()
+    return verify_metal3_ownership(
+        values[0] if cluster is None else cluster,
+        values[1] if machines is None else machines,
+        values[2] if metal3machines is None else metal3machines,
+        values[3] if bmhs is None else bmhs,
+        values[4] if source is None else source,
+    )
+
+
+def test_target_metal3_ownership_verifies_cluster_machine_metal3machine_bmh_chain():
+    result = observe()
+    assert result["target_metal3_ownership_verified"] is True
+    assert result["target_metal3_reconciliation_healthy"] is True
+    assert result["machine_count"] == 3
+    assert result["metal3machine_count"] == 3
+    assert result["source_target_bmh_identity_sets_equal"] is True
     assert result["side_effects"] is False
 
 
-def test_missing_infrastructure_reference_fails_closed():
-    machine, _, _ = documents()
-    machine["spec"].pop("infrastructureRef")
-    result = run_observer(machine=machine)
-    assert result["ready"] is False
-    assert "machine_infrastructure_ref_missing" in result["blockers"]
+def test_target_metal3_ownership_rejects_machine_without_cluster_owner():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    machines["items"][0]["metadata"]["ownerReferences"] = []
+    with pytest.raises(Metal3OwnershipError, match="CLUSTER_OWNER_MISMATCH"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_cross_namespace_infrastructure_reference_fails_closed():
-    machine, _, _ = documents()
-    machine["spec"]["infrastructureRef"]["namespace"] = "other"
-    result = run_observer(machine=machine)
-    assert result["ready"] is False
-    assert "machine_infrastructure_ref_invalid_or_cross_namespace" in (
-        result["blockers"]
-    )
+def test_target_metal3_ownership_rejects_machine_without_ready_condition():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    machines["items"][0]["status"]["conditions"][0]["status"] = "False"
+    with pytest.raises(Metal3OwnershipError, match="MACHINE_NOT_READY"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_missing_consumer_reference_fails_closed():
-    _, _, host = documents()
-    host["spec"].pop("consumerRef")
-    result = run_observer(hosts=[host])
-    assert result["ready"] is False
-    assert "baremetal_host_consumer_not_found" in result["blockers"]
+def test_target_metal3_ownership_rejects_metal3machine_owner_uid_mismatch():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    metal3machines["items"][0]["metadata"]["ownerReferences"][0]["uid"] = "stale-uid"
+    with pytest.raises(Metal3OwnershipError, match="MACHINE_UID_MISMATCH"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_ambiguous_consumer_reference_fails_closed():
-    _, _, host = documents()
-    duplicate = dict(host)
-    duplicate["metadata"] = dict(
-        host["metadata"],
-        name="bmh-1",
-        uid="bmh-uid-1",
-    )
-    result = run_observer(hosts=[host, duplicate])
-    assert result["ready"] is False
-    assert "baremetal_host_consumer_ambiguous" in result["blockers"]
+def test_target_metal3_ownership_rejects_unhealthy_bmh():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    bmhs["items"][0]["status"]["operationalStatus"] = "error"
+    with pytest.raises(Metal3OwnershipError, match="NOT_OPERATIONAL"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-@pytest.mark.parametrize(
-    ("state", "online", "operational", "expected"),
-    [
-        ("provisioned", True, "OK", True),
-        ("available", True, "OK", False),
-        ("provisioning", True, "OK", False),
-        ("provisioned", False, "OK", False),
-        ("provisioned", True, "error", False),
-    ],
-)
-def test_bmh_must_be_provisioned_and_healthy(
-    state,
-    online,
-    operational,
-    expected,
-):
-    _, _, host = documents()
-    host["spec"]["online"] = online
-    host["status"]["provisioning"]["state"] = state
-    host["status"]["operationalStatus"] = operational
-    assert run_observer(hosts=[host])["ready"] is expected
+def test_target_metal3_ownership_rejects_bmh_consumer_reference_mismatch():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    bmhs["items"][0]["spec"]["consumerRef"]["uid"] = "stale-uid"
+    with pytest.raises(Metal3OwnershipError, match="CONSUMER_REFERENCE_MISMATCH"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_consumer_reference_without_namespace_defaults_to_metal3machine_namespace():
-    _, _, host = documents()
-    host["spec"]["consumerRef"].pop("namespace")
-    assert run_observer(hosts=[host])["ready"] is True
+def test_target_metal3_ownership_rejects_source_target_hardware_identity_mismatch():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    source[0]["hardware_identity"] = "system-uuid:sha256:wrong"
+    with pytest.raises(Metal3OwnershipError, match="IDENTITY_SET_DIFFERS"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_consumer_reference_with_wrong_namespace_is_rejected():
-    _, _, host = documents()
-    host["spec"]["consumerRef"]["namespace"] = "wrong"
-    result = run_observer(hosts=[host])
-    assert result["ready"] is False
-    assert "baremetal_host_consumer_not_found" in result["blockers"]
+def test_target_metal3_ownership_rejects_duplicate_source_hardware_identity():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    source[1]["hardware_identity"] = source[0]["hardware_identity"]
+    with pytest.raises(Metal3OwnershipError, match="IDENTITY_DUPLICATE"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
 
 
-def test_bmh_missing_uid_fails_closed():
-    _, _, host = documents()
-    host["metadata"].pop("uid")
-    with pytest.raises(
-        Metal3ObservationError,
-        match="BAREMETAL_HOST_IDENTITY_INVALID",
-    ):
-        run_observer(hosts=[host])
-
-
-def test_ironic_active_node_is_verified_when_adapter_is_configured():
-    _, _, host = documents()
-    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
-    node = {
-        "uuid": "12345678-1234-1234-1234-123456789abc",
-        "provision_state": "active",
-        "maintenance": False,
-        "target_provision_state": None,
-        "has_last_error": False,
-    }
-    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
-    assert result["ready"] is True
-    assert result["ironic"]["status"] == "verified"
-    assert result["ironic"]["verified_node_count"] == 1
-
-
-def test_ironic_maintenance_node_fails_closed():
-    _, _, host = documents()
-    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
-    node = {
-        "uuid": "12345678-1234-1234-1234-123456789abc",
-        "provision_state": "active",
-        "maintenance": True,
-        "target_provision_state": None,
-        "has_last_error": False,
-    }
-    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
-    assert result["ready"] is False
-    assert result["ironic"]["status"] == "unhealthy"
-    assert "ironic_node_not_active_or_unhealthy" in result["blockers"]
-
-
-def test_ironic_enabled_requires_bmh_provisioning_uuid():
-    _, _, host = documents()
-    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: {})
-    assert result["ready"] is False
-    assert "ironic_node_uuid_missing_or_invalid" in result["blockers"]
-
-
-def test_ironic_api_errors_fail_closed_without_leaking_details():
-    _, _, host = documents()
-
-    def fail_lookup(node_uuid):
-        raise RuntimeError("sensitive upstream detail")
-
-    host["status"]["provisioning"]["ID"] = "12345678-1234-1234-1234-123456789abc"
-    result = run_observer(hosts=[host], ironic_lookup=fail_lookup)
-    assert result["ready"] is False
-    assert "ironic_api_unavailable_or_node_unreadable" in result["blockers"]
-
-
-def test_missing_ironic_adapter_is_never_reported_as_healthy():
-    result = run_observer()
-    assert result["ironic"]["status"] == "not_configured"
-
-
-def test_malformed_ironic_adapter_identity_fails_closed():
-    _, _, host = documents()
-    host["status"]["provisioning"]["ID"] = (
-        "12345678-1234-1234-1234-123456789abc"
-    )
-    node = {
-        "uuid": None,
-        "provision_state": "active",
-        "maintenance": False,
-        "target_provision_state": None,
-        "has_last_error": False,
-    }
-    result = run_observer(hosts=[host], ironic_lookup=lambda node_uuid: node)
-    assert result["ready"] is False
-    assert result["ironic"]["status"] == "unhealthy"
-    assert "ironic_node_not_active_or_unhealthy" in result["blockers"]
-
-
-def test_machine_metal3machine_and_node_provider_ids_must_match():
-    machine, metal3_machine, _ = documents()
-    machine["spec"]["providerID"] = "metal3://other/worker-0/worker-0"
-    result = run_observer(machine=machine, metal3_machine=metal3_machine)
-    assert result["ready"] is False
-    assert "capi_metal3_provider_id_mismatch" in result["blockers"]
-
-
-def test_workload_node_provider_id_must_match_infrastructure_provider_id():
-    node = {
-        "metadata": {"name": "node-0", "uid": "node-uid"},
-        "spec": {"providerID": "metal3://wrong/bmh-0/worker-0"},
-        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-    }
-    result = run_observer(nodes=[node])
-    assert result["ready"] is False
-    assert "workload_node_provider_id_mismatch" in result["blockers"]
-
-
-def test_metal3_machine_must_be_ready():
-    _, metal3_machine, _ = documents()
-    metal3_machine["status"]["ready"] = False
-    result = run_observer(metal3_machine=metal3_machine)
-    assert result["ready"] is False
-    assert "metal3_machine_not_ready" in result["blockers"]
-
-
-def test_capi_machine_must_be_running_and_reference_ready_node():
-    machine, _, _ = documents()
-    machine["status"]["phase"] = "Provisioning"
-    result = run_observer(machine=machine)
-    assert result["ready"] is False
-    assert "capi_machine_not_running" in result["blockers"]
-
-
-def test_workload_node_must_be_ready():
-    result = run_observer()
-    assert result["machines"][0]["node_ready"] is True
-
-
-def test_missing_workload_node_fails_closed():
-    result = run_observer(nodes=[])
-    assert result["ready"] is False
-    assert "workload_node_reference_not_found" in result["blockers"]
-
-
-def test_workload_node_not_ready_fails_closed():
-    node = {
-        "metadata": {"name": "node-0", "uid": "node-uid"},
-        "spec": {"providerID": "metal3://metal3-system/bmh-0/worker-0"},
-        "status": {"conditions": [{"type": "Ready", "status": "False"}]},
-    }
-    result = run_observer(nodes=[node])
-    assert result["ready"] is False
-    assert "workload_node_not_ready" in result["blockers"]
-
-
-def test_metal3_machine_owner_reference_must_match_capi_machine_uid():
-    _, metal3_machine, _ = documents()
-    metal3_machine["metadata"]["ownerReferences"][0]["uid"] = "stale-machine-uid"
-    result = run_observer(metal3_machine=metal3_machine)
-    assert result["ready"] is False
-    assert "metal3_machine_owner_reference_mismatch" in result["blockers"]
-
-
-def test_capi_machine_node_reference_uid_must_match_live_node():
-    machine, _, _ = documents()
-    machine["status"]["nodeRef"]["uid"] = "stale-node-uid"
-    result = run_observer(machine=machine)
-    assert result["ready"] is False
-    assert "workload_node_uid_mismatch" in result["blockers"]
+def test_target_metal3_ownership_rejects_incomplete_control_plane_inventory():
+    _, machines, metal3machines, bmhs, source = ownership_documents()
+    machines["items"] = machines["items"][:2]
+    with pytest.raises(Metal3OwnershipError, match="MACHINES_INCOMPLETE"):
+        observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
