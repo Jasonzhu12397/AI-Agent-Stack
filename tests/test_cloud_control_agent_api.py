@@ -207,8 +207,10 @@ def test_eph_pivot_attestation_rejects_identity_or_digest_tampering():
         "capi_pivot_succeeded": True,
         "source_cluster_absent": True,
         "target_cluster_ownership_verified": True,
+        "target_controllers_ready": True,
         "source_cluster_uid": "source-cluster-uid",
         "target_cluster_uid": "target-cluster-uid",
+        "target_source_cluster_uid_annotation": "source-cluster-uid",
         "source_bmh_identities": [
             {
                 "namespace": "metal3",
