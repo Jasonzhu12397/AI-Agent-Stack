@@ -3172,6 +3172,15 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
             ], "metadata": {}}
         raise AssertionError(path)
 
+    monkeypatch.setattr(
+        agent,
+        "verify_ntp_server",
+        lambda server_ip: {
+            "server_ip": server_ip,
+            "synchronized": True,
+            "stratum": 2,
+        },
+    )
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     result = agent.execute_command(
         {"command_type": "cluster.capi.worker.preflight", "payload": {
@@ -3277,6 +3286,15 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
             }], "metadata": {}}
         raise AssertionError(path)
 
+    monkeypatch.setattr(
+        agent,
+        "verify_ntp_server",
+        lambda server_ip: {
+            "server_ip": server_ip,
+            "synchronized": True,
+            "stratum": 2,
+        },
+    )
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     result = agent.execute_command(
         {"command_type": "cluster.capi.worker.preflight", "payload": {
@@ -3401,6 +3419,15 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
             ], "metadata": {}}
         raise AssertionError(path)
 
+    monkeypatch.setattr(
+        agent,
+        "verify_ntp_server",
+        lambda server_ip: {
+            "server_ip": server_ip,
+            "synchronized": True,
+            "stratum": 2,
+        },
+    )
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
     result = agent.execute_command(
         {
