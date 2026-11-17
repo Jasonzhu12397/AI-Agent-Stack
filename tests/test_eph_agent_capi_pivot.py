@@ -38,14 +38,20 @@ def test_capi_pivot_blocks_when_approval_digest_does_not_match_plan(monkeypatch,
     target.write_text("target", encoding="utf-8")
     monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
     monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
-    monkeypatch.setattr(capi_pivot, "_kubernetes_cluster_uid", lambda _path: "api-uid")
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubernetes_cluster_uid",
+        lambda path: "source-api" if path == str(source) else "target-api",
+    )
     monkeypatch.setattr(capi_pivot, "_provider_preflight", lambda *_args: {"target_ready_master_names": []})
     monkeypatch.setattr(
         capi_pivot,
         "_cluster",
-        lambda _kubeconfig, _namespace, _name: {
-            "metadata": {"uid": "cluster-uid", "annotations": {}}
-        },
+        lambda kubeconfig, _namespace, _name: (
+            {"metadata": {"uid": "cluster-uid", "annotations": {}}}
+            if kubeconfig == str(source)
+            else None
+        ),
     )
     monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: [
         {"namespace": "metal3", "name": "host-1", "hardware_identity": "system-uuid:abc"}
