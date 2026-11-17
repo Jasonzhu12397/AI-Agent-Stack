@@ -1188,6 +1188,16 @@ def test_complete_cluster_plan_reports_missing_adapter_separately():
             "url": "https://images.example.invalid/worker.qcow2",
             "checksum": "sha256:example",
         },
+        "time_dns_profile": {
+            "version": "v1",
+            "chrony_required": True,
+            "resolver_backend": "systemd-resolved",
+            "apply_to": ["eph_live_os", "target_os"],
+            "ntp_servers": ["time.cloudflare.com"],
+            "dns_servers": ["1.1.1.1"],
+            "search_domains": ["lab.example"],
+            "dns_probe_name": "time.cloudflare.com",
+        },
         "metal3": {"namespace": "metal3-system", "hosts": hosts},
     }
 
