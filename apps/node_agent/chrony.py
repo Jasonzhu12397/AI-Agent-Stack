@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -354,3 +355,60 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def verify_ntp_server(server_ip: str, timeout: float = 3.0) -> dict[str, Any]:
+    try:
+        address = ipaddress.ip_address(server_ip)
+    except (TypeError, ValueError) as exc:
+        raise ChronyError("IRONIC_INTERNAL_NTP_ADDRESS_INVALID") from exc
+    if not address.is_private:
+        raise ChronyError("IRONIC_INTERNAL_NTP_ADDRESS_MUST_BE_PRIVATE")
+    if (
+        not isinstance(timeout, (int, float))
+        or isinstance(timeout, bool)
+        or timeout <= 0
+        or timeout > 15
+    ):
+        raise ChronyError("IRONIC_INTERNAL_NTP_TIMEOUT_INVALID")
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    request = bytearray(48)
+    request[0] = 0x23
+    transmit_token = os.urandom(8)
+    request[40:48] = transmit_token
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as client:
+            client.settimeout(float(timeout))
+            destination = (str(address), 123, 0, 0) if family == socket.AF_INET6 else (str(address), 123)
+            client.sendto(request, destination)
+            response, peer = client.recvfrom(512)
+    except (OSError, TimeoutError) as exc:
+        raise ChronyError("IRONIC_INTERNAL_NTP_UNAVAILABLE") from exc
+    if len(response) < 48:
+        raise ChronyError("IRONIC_INTERNAL_NTP_RESPONSE_TOO_SHORT")
+    mode = response[0] & 0x07
+    version = (response[0] >> 3) & 0x07
+    leap = (response[0] >> 6) & 0x03
+    stratum = response[1]
+    try:
+        peer_address = ipaddress.ip_address(peer[0])
+    except (TypeError, ValueError, IndexError) as exc:
+        raise ChronyError("IRONIC_INTERNAL_NTP_PEER_INVALID") from exc
+    if (
+        peer_address != address
+        or mode != 4
+        or version not in {3, 4}
+        or leap == 3
+        or not 1 <= stratum <= 15
+        or response[24:32] != transmit_token
+        or response[40:48] == bytes(8)
+    ):
+        raise ChronyError("IRONIC_INTERNAL_NTP_RESPONSE_INVALID")
+    return {
+        "server_ip": str(address),
+        "port": 123,
+        "mode": mode,
+        "version": version,
+        "stratum": stratum,
+        "synchronized": True,
+    }
