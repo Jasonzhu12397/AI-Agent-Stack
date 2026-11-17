@@ -65,7 +65,7 @@ After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker pro
 
 ## Current implementation boundary
 
-The new `apps/node_agent/delivery_lifecycle.py` module implements topology validation, EPH, Target Control Plane and Target Worker chronyd role validation, exact BMH identity-set comparison, and fail-closed lifecycle transition evidence checks. The `cluster.delivery.lifecycle.evaluate` command exposes those policy checks to Target Agent only.
+The `apps/node_agent/delivery_lifecycle.py` module implements topology validation, EPH/Target chronyd policy, hierarchical NTP source validation, exact BMH hardware identity-set comparison, and fail-closed lifecycle transition evidence checks. `apps/node_agent/chrony.py` adds a root-only host executor and CLI for chrony installation, managed configuration, service enablement, source selection and synchronization checks on Ubuntu/Debian and SLES/RHEL-family hosts. It binds the Target Control Plane NTP listener to the Ironic internal IP and rejects external/fallback sources on Workers. The host executor must be invoked by the host bootstrap/cloud-init integration; the current non-root Node Agent Pods cannot directly mutate host chronyd.
 
 These policy primitives do not themselves execute clusterctl move, transfer Kubernetes objects, delete EPH Pods, revoke credentials, create MachineDeployments, or install chronyd. Those side effects require version-aware CAPI/Metal3/Kubernetes/host adapters and end-to-end integration tests. The implementation must not report a real handoff as complete until those adapters return verified postconditions.
 
