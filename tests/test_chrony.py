@@ -1,5 +1,3 @@
-import subprocess
-
 import pytest
 
 from node_agent.chrony import (
