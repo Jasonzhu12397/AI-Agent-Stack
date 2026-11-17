@@ -1021,6 +1021,7 @@ def handle_deployment_command_result(
             and result.get("ntp_server_ready") is True
             and result.get("ntp_server_ip") == config.get("ironic_internal_ip")
             and isinstance(result.get("ntp_server_stratum"), int)
+            and not isinstance(result.get("ntp_server_stratum"), bool)
             and 1 <= result.get("ntp_server_stratum") <= 15
             and isinstance(result.get("available_baremetal_host_count"), int)
             and not isinstance(result.get("available_baremetal_host_count"), bool)
