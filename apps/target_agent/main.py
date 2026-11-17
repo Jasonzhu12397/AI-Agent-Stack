@@ -16,6 +16,7 @@ from uuid import UUID
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
+    CommandLeaseGuard,
     AgentTransportError,
     ConfigurationError,
 )
@@ -95,7 +96,10 @@ def _kubectl(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
     }
 
 
-def execute(command: dict[str, Any]) -> dict[str, Any]:
+def execute(
+    command: dict[str, Any],
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
     action = command.get("action")
     if action == "target.cluster.observe":
         result = _kubectl(["get", "nodes", "-o", "json"])
@@ -304,30 +308,43 @@ def main() -> int:
                     command = client.claim()
                     if command is not None:
                         started_at = datetime.now(timezone.utc)
-                        outcome = execute(command)
-                        if (
-                            command.get("action") == "target.handoff.evaluate"
-                            and outcome["status"] == "succeeded"
-                            and not outcome["output"].get("already_applied")
-                        ):
-                            try:
-                                checkpoint_result = client.persist_checkpoint(
-                                    command,
-                                    outcome["output"]["to_phase"],
-                                    outcome["output"]["evidence"],
-                                )
-                                outcome["output"]["checkpoint"] = checkpoint_result
-                                outcome["side_effects"] = True
-                            except AgentTransportError:
+                        guard = CommandLeaseGuard(client, command)
+                        guard.start()
+                        try:
+                            outcome = execute(command, guard.lost)
+                            if guard.lost.is_set():
                                 outcome = {
                                     "status": "failed",
-                                    "error_code": "HANDOFF_CHECKPOINT_PERSIST_FAILED",
-                                    "output": {"phase": outcome["output"]["to_phase"]},
-                                    "side_effects": False,
+                                    "error_code": "COMMAND_LEASE_LOST_DURING_EXECUTION",
+                                    "output": outcome.get("output", {}),
+                                    "side_effects": outcome.get("side_effects", False),
                                 }
-                        client.report_result(
-                            _result(command, settings.agent_id, outcome, started_at)
-                        )
+                            if (
+                                command.get("action") == "target.handoff.evaluate"
+                                and outcome["status"] == "succeeded"
+                                and not outcome["output"].get("already_applied")
+                                and not guard.lost.is_set()
+                            ):
+                            try:
+                                    checkpoint_result = client.persist_checkpoint(
+                                        command,
+                                        outcome["output"]["to_phase"],
+                                        outcome["output"]["evidence"],
+                                    )
+                                    outcome["output"]["checkpoint"] = checkpoint_result
+                                    outcome["side_effects"] = True
+                                except AgentTransportError:
+                                    outcome = {
+                                        "status": "failed",
+                                        "error_code": "HANDOFF_CHECKPOINT_PERSIST_FAILED",
+                                        "output": {"phase": outcome["output"]["to_phase"]},
+                                        "side_effects": False,
+                                    }
+                            client.report_result(
+                                _result(command, settings.agent_id, outcome, started_at)
+                            )
+                        finally:
+                            guard.close()
                 else:
                     LOG.debug("This Target Agent replica is not the elected leader")
             except (
