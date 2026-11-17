@@ -53,7 +53,7 @@ def test_worker_pre_kubeadm_command_installs_chrony_and_verifies_exact_internal_
     assert 'chronyc -n sources' in command
     assert 'chronyc tracking' in command
     assert "pool " not in command
-    assert command.count("server ") == 1
+    assert sum(line.startswith("server ") for line in command.splitlines()) == 1
     assert "did not synchronize with the required Ironic internal NTP endpoint" in command
 
 
