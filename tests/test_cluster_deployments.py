@@ -1081,6 +1081,21 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert source_command.node_id == eph_node.id
     assert handoff.data["source_preflight_command_id"] == str(source_command.id)
 
+    blocked_command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.delivery.lifecycle.evaluate",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="role-ineligible-command-before-source-preflight",
+    )
+    AgentCommand.objects.filter(pk=blocked_command.pk).update(
+        created_at=timezone.now() - datetime.timedelta(minutes=1)
+    )
+
     source_client = APIClient()
     source_poll = source_client.post(
         "/api/v1/agent-runtime/commands/poll/",
@@ -1091,6 +1106,9 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert source_poll.status_code == 200
     source_command_data = source_poll.data["command"]
     assert source_command_data["command_type"] == "cluster.capi.pivot.source.preflight"
+    blocked_command.refresh_from_db()
+    assert blocked_command.status == AgentCommand.Status.FAILED
+    assert blocked_command.error["code"] == "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE"
     source_groups = {
         "cluster.x-k8s.io",
         "bootstrap.cluster.x-k8s.io",
