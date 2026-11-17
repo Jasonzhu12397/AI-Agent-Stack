@@ -103,7 +103,7 @@ Before binding a certificate, calculate the exact fingerprint using the same Age
 
 ```sh
 AGENT_TLS_CERT_FILE=/secure/path/eph-agent-client.crt \
-  python -m apps.node_agent.agent --print-client-cert-fingerprint
+  python -m apps.target_agent.main --print-client-cert-fingerprint
 ```
 
 Run it separately for the Target Agent certificate. Bind each output to its enrolled node through the tenant-admin API:
@@ -143,7 +143,7 @@ The deployment sequence after Pivot is now enforced by the Supervisor:
 2. Target Agent verifies the preserved CAPI Cluster UID, Machines and management controllers.
 3. Target Agent runs `cluster.capi.pivot.postflight` to verify the Metal3Machine/BMH consumer chain, consumed BMO status annotation, stable BMH state and direct Ironic node health.
 4. Only a complete postflight result can queue Worker provisioning preflight.
-5. EPH reclaim remains disabled; it requires a separate lifecycle/reclaim executor and physical Data Plane validation.
+5. EPH cleanup is a Target Agent-owned lifecycle operation, not EPH reclaim or worker reuse. It remains fail-closed until the Target Agent cleanup executor and its physical/network postflight gates are implemented and verified.
 
 ## Deploy both Agent roles to separate clusters
 
