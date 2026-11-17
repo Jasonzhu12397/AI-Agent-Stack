@@ -209,6 +209,8 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     ).read_text(encoding="utf-8")
     assert "cloud-init" in package_list
     assert "containerd" in package_list
+    assert "chrony" in package_list
+    assert "systemd-resolved" in package_list
     assert "containernetworking-plugins" in package_list
     assert "NoCloud" in datasource
     assert "CIDATA" in datasource
@@ -226,7 +228,7 @@ def test_eph_cloud_init_nocloud_seed_configures_node_before_agent_bootstrap():
     assert "TimeoutStartSec=40min" in service
     assert "StartLimitBurst=10" in service
     assert "eph-kubeadm-init.service eph-bootstrap.service" in multi_user
-    for name in ("user-data", "meta-data", "network-config"):
+    for name in ("user-data", "meta-data", "network-config", "time-dns-profile.json"):
         assert (ROOT / "eph-iso/examples/cloud-init" / name).is_file()
     user_data = (ROOT / "eph-iso/examples/cloud-init/user-data").read_text(encoding="utf-8")
     assert "agent-ca.crt" in user_data
@@ -891,3 +893,12 @@ def test_eph_agent_rbac_covers_runtime_and_network_inventory_reads():
     assert "name: eph-node-agent-inventory-readonly" in rbac
     assert "namespace: ai-agent-inventory" in rbac
     assert 'resources: ["configmaps"]' in rbac
+
+
+
+def test_eph_seed_iso_requires_and_merges_the_site_time_dns_profile():
+    script = (ROOT / "eph-iso/create-seed-iso.sh").read_text(encoding="utf-8")
+    assert '"time-dns-profile.json"' in script
+    assert "render_site_cloud_init.py" in script
+    assert "merge-cloud-init-user-data.py" in script
+    assert "--role eph-live-os" in script
