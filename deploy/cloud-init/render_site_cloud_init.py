@@ -83,6 +83,20 @@ if [ ! -e /run/systemd/resolve/resolv.conf ]; then
 fi
 ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved.service
+resolvectl query __DNS_TEST_NAME__
+if ! command -v chronyc >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y chrony
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y chrony
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install chrony
+  else
+    echo "no supported package manager found to install chrony" >&2
+    exit 1
+  fi
+fi
 if systemctl cat chronyd.service >/dev/null 2>&1; then
   chrony_unit=chronyd.service
 elif systemctl cat chrony.service >/dev/null 2>&1; then
@@ -108,7 +122,7 @@ resolvectl status
         ("/usr/local/sbin/ai-agent-site-time-dns-apply", apply_script, "0755"),
         ("/etc/ai-agent/site-network-time-role", args.role + "\n", "0644"),
     ]
-    output = ["#cloud-config", "package_update: true", "packages:", "  - chrony", "write_files:"]
+    output = ["#cloud-config", "write_files:"]
     for path, content, permissions in files:
         output.extend([
             "  - path: " + path,
