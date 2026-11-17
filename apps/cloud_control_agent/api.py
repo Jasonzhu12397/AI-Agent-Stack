@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
 import ssl
@@ -197,13 +196,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     """
                     INSERT INTO agent_control_commands (
                         command_id, deployment_id, target_agent_id, required_role,
-                        action, idempotency_key, payload, status, result
+                        action, idempotency_key, payload, status, approval_digest
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s)
                     """,
                     (
                         command_id, deployment_id, target_agent_id, role, action,
-                        idempotency_key, Jsonb(payload),
-                        Jsonb({"approval_digest": approval_digest}),
+                        idempotency_key, Jsonb(payload), approval_digest,
                     ),
                 )
             self._send(201, {"command_id": str(command_id), "status": "queued"})
