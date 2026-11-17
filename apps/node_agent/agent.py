@@ -3556,8 +3556,11 @@ def execute_command(
             "cluster.x-k8s.io/cluster-name": cluster_name,
             "cluster.x-k8s.io/deployment-name": deployment_name,
         }
-        chrony_bootstrap_template_name, chrony_bootstrap_template_uid = (
-            ensure_worker_chrony_bootstrap_template(
+        (
+            chrony_bootstrap_template_name,
+            chrony_bootstrap_template_uid,
+            chrony_bootstrap_template_created,
+        ) = ensure_worker_chrony_bootstrap_template(
                 namespace=namespace,
                 bootstrap_api_version=expected_bootstrap_api_version,
                 base_template=bootstrap_template,
@@ -3673,12 +3676,13 @@ def execute_command(
             "machine_deployment_manifest_hash": manifest_hash,
             "chrony_bootstrap_template_name": chrony_bootstrap_template_name,
             "chrony_bootstrap_template_uid": chrony_bootstrap_template_uid,
+            "chrony_bootstrap_template_created": chrony_bootstrap_template_created,
             "chrony_ntp_server_ip": ntp_observation["server_ip"],
             "execution_mode": "real_create_or_idempotent_reconcile",
             "created": created,
             "idempotent_reconciliation": idempotent_reconciliation,
             "dry_run_passed": existing is None,
-            "side_effects": created,
+            "side_effects": created or chrony_bootstrap_template_created,
             "worker_creation_performed": created or idempotent_reconciliation,
             "execution_allowed": True,
             "network_profile_hash": network_profile.get("profile_hash"),
@@ -5020,7 +5024,7 @@ def ensure_worker_chrony_bootstrap_template(
             raise
         existing = None
     if existing is not None:
-        return clone_name, validate_clone(existing)
+        return clone_name, validate_clone(existing), False
     dry_run_result = kubernetes_api_create_kubeadm_config_template(
         version, namespace, manifest, dry_run=True
     )
@@ -5039,7 +5043,7 @@ def ensure_worker_chrony_bootstrap_template(
         if str(exc) != "KUBERNETES_API_HTTP_409":
             raise
         created = kubernetes_api_get(clone_path)
-    return clone_name, validate_clone(created)
+    return clone_name, validate_clone(created), True
 
 
 def kubernetes_api_create_machine_deployment(
