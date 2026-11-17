@@ -339,7 +339,7 @@ def execute(
                 },
                 "side_effects": False,
             }
-        except NtpPolicyError as exc:
+        except (NtpPolicyError, TypeError, ValueError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc),
