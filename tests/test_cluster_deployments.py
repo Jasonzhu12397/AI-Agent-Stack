@@ -4138,6 +4138,10 @@ def test_eph_mutating_command_is_fenced_when_deployment_state_is_uncertain(
         key="eph-uncertain-mutation-fence-" + invalid_state,
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    AgentCommand.objects.filter(
+        deployment=deployment,
+        status=AgentCommand.Status.QUEUED,
+    ).update(status=AgentCommand.Status.FAILED)
     command = AgentCommand.objects.create(
         tenant=tenant,
         project=project,
