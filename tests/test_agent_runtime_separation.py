@@ -41,6 +41,8 @@ def test_node_agent_image_contains_only_cluster_runtime_and_minimal_dependency()
     dockerfile = (ROOT / "Dockerfile.node-agent").read_text(encoding="utf-8")
     assert 'RUN pip install --no-cache-dir "PyYAML>=6.0,<7.0"' in dockerfile
     assert "COPY apps/node_agent ./apps/node_agent" in dockerfile
+    assert "COPY apps/eph_agent ./apps/eph_agent" in dockerfile
+    assert "COPY apps/target_agent ./apps/target_agent" in dockerfile
     assert "COPY apps ./apps" not in dockerfile
     assert "COPY pyproject.toml" not in dockerfile
     assert "COPY apps/platform-api" not in dockerfile
