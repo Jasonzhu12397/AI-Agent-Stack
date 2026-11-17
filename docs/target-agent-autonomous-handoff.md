@@ -63,3 +63,22 @@ The Target Agent validates every Control Plane bootstrap configuration against t
 values. A command payload cannot approve its own NTP source or broaden the served Worker networks.
 Missing policy keys block NTP attestation and rendering; they must not be replaced with public
 fallback pools or caller-provided values.
+
+
+## Source-cluster and controller post-pivot proof
+
+Target Agent must receive a temporary, read-only source-cluster observer kubeconfig in the
+`target-agent-source-observer` Secret. It queries the source API directly and accepts source
+absence only when the API returns Kubernetes NotFound for the exact Cluster object. API
+unavailability, authentication failure, timeout, and any other error are not treated as absence.
+
+The `target-agent-credentials` Secret must also contain
+`required-controller-deployments`, a comma-separated allowlist of exact
+`namespace/deployment-name` references for the selected CAPI, bootstrap, control-plane,
+Metal3 and Ironic controllers. Target Agent checks each deployment's observed generation,
+updated replicas and available replicas against its desired replica count before accepting
+the pivot phase. A command payload cannot choose or weaken this controller policy.
+
+The source observer credential is temporary and read-only. It remains available only until
+the Target Agent has independently verified pivot and BMH ownership; the EPH cleanup executor
+must revoke it as part of the credential retirement phase.
