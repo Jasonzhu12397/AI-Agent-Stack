@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 from threading import Event
 
 import pytest
+import yaml
 
 from apps.target_agent.worker_provisioning import (
     WorkerProvisioningError,
@@ -201,3 +203,72 @@ def test_worker_provisioning_rejects_invalid_replica_count(monkeypatch):
     payload["desired_worker_count"] = 0
     with pytest.raises(WorkerProvisioningError, match="DESIRED_COUNT_INVALID"):
         execute_worker_provisioning(payload)
+
+
+
+def test_worker_provisioning_rejects_external_chrony_directives(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
+    payload = _payload()
+    payload["resources"][0]["spec"]["template"]["spec"]["preKubeadmCommands"] = [
+        "cat > /etc/chrony/chrony.conf <<EOF\\npool pool.ntp.org iburst\\nEOF"
+    ]
+    calls = []
+    with pytest.raises(WorkerProvisioningError, match="NTP_DIRECTIVE_REJECTED"):
+        execute_worker_provisioning(payload, runner=lambda *args, **kwargs: calls.append(args))
+    assert calls == []
+
+
+def test_target_agent_dispatches_worker_provisioning(monkeypatch):
+    from apps.target_agent import main as target_main
+
+    monkeypatch.setattr(
+        target_main,
+        "execute_worker_provisioning",
+        lambda payload, lease_lost_event=None: {
+            "status": "succeeded",
+            "error_code": None,
+            "output": {"workers_ready": True, "desired_replicas": payload["desired_worker_count"]},
+            "side_effects": True,
+        },
+    )
+    result = target_main.execute({
+        "action": "target.worker.provision",
+        "payload": {"desired_worker_count": 4},
+    })
+    assert result["status"] == "succeeded"
+    assert result["side_effects"] is True
+    assert result["output"]["desired_replicas"] == 4
+    assert "target.worker.provision" in target_main.CAPABILITIES
+
+
+def test_target_agent_rbac_precreates_lease_and_grants_only_required_worker_writes():
+    root = Path(__file__).resolve().parents[1]
+    manifest = root / "deploy/agents/target-cluster-agent.yaml"
+    documents = list(yaml.safe_load_all(manifest.read_text(encoding="utf-8")))
+    lease = next(item for item in documents if item.get("kind") == "Lease")
+    assert lease["metadata"]["name"] == "target-agent-leader"
+    role = next(
+        item for item in documents
+        if item.get("kind") == "Role"
+        and item["metadata"]["name"] == "target-agent-leader-election"
+    )
+    assert role["rules"][0]["verbs"] == ["get", "update"]
+    cluster_role = next(
+        item for item in documents
+        if item.get("kind") == "ClusterRole"
+        and item["metadata"]["name"] == "target-agent-observer"
+    )
+    permissions = {
+        (rule.get("apiGroups", [""])[0], resource): set(rule["verbs"])
+        for rule in cluster_role["rules"]
+        for resource in rule["resources"]
+    }
+    assert {"get", "list", "watch", "create", "patch"} <= permissions[
+        ("cluster.x-k8s.io", "machinedeployments")
+    ]
+    assert {"get", "create"} <= permissions[
+        ("bootstrap.cluster.x-k8s.io", "kubeadmconfigtemplates")
+    ]
+    assert {"get", "create"} <= permissions[
+        ("infrastructure.cluster.x-k8s.io", "metal3machinetemplates")
+    ]
