@@ -13,8 +13,8 @@ The long-term infrastructure product scope is documented in [Omni-Inspired Infra
 - **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
 - **Execution:** independent Python Worker with PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, bounded retries and cooperative cancellation. Safe demo handlers, single-turn LLM Agent runs and a basic persistent Workflow DAG runner are connected.
 - **Integration Hub:** tenant-scoped versioned connector metadata, tool schemas, admin review, project installation, explicit permission grants and credential-reference records. The Worker supports normalized HTTP/OpenAPI contracts through an HTTPS host allowlist, bounded requests, connection health checks and a pluggable credential resolver; raw OpenAPI import, OAuth refresh, MCP transport and provider-specific connectors remain in progress.
-- **Infrastructure control:** a central remote control plane can enroll an EPH Node Agent and a Target Cluster Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
-- **Node agents:** the Python runner supports EPH preflight, typed Metal3/CAPI cluster-plan validation, dynamic CAPI/Metal3 API discovery and read-only Kubernetes inspection from an in-cluster ServiceAccount. It does not execute arbitrary shell or apply CAPI/Metal3 manifests yet.
+- **Infrastructure control:** a central remote control plane can enroll the EPH Agent and Target Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
+- **Site-side Agents:** the shared EPH/Target runtime supports EPH preflight, typed Metal3/CAPI plan validation, operation-bound CAPI Pivot execution through clusterctl after approval and Target ACK, plus Target-side adoption/postflight verification. It does not expose arbitrary shell execution.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
 - **Deployment:** Docker Compose is limited to the local Cloud Control Plane development stack and the production cloud Control Plane profile. EPH and Target Agents run only as Kubernetes Pods from dedicated Deployments; the EPH Agent runs inside the temporary single-node EPH Kubernetes cluster. The target network-inventory publisher runs as a DaemonSet.
 
@@ -56,7 +56,7 @@ Use that account to sign in to the Vue Studio; tenant membership provisioning is
 The EPH Agent is **always a Kubernetes Pod inside the temporary single-node Kubernetes cluster running on the EPH bare-metal host**. This is the same Kubernetes-native operating model used by Metal3/Ironic controllers: Kubernetes Deployments, ServiceAccounts, RBAC, Secrets, probes, resource limits and Pod lifecycle management. The Target Agent is also deployed as a Pod inside the target Kubernetes cluster. Neither Agent is launched by Docker Compose or as a standalone host process.
 
 1. Sign in to the Studio and create/select a tenant and project. The enrolling user must be a tenant owner or tenant administrator; project-only membership is not sufficient.
-2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Node Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
+2. Open **Infrastructure Agents** and enroll the EPH and Target agents separately. Choose **EPH Agent** (`eph_node`) for the temporary EPH cluster and **Target Cluster Agent** (`target_cluster`) for the target cluster.
 3. The Studio creates the AgentNode UUID and generates the one-time token server-side with Python `secrets.token_urlsafe(36)`. The API returns the token as `enrollment_token` exactly once; the database stores only its SHA-256 hash. Copy each node UUID and token into your secret manager. If a token is lost, use **Rotate credential**; never reuse EPH credentials for Target.
 4. Prepare the Kubernetes Secrets and mTLS certificates as described in [Kubernetes Agent deployment](deploy/agents/README.md). Source/target CAPI kubeconfigs are optional during initial enrollment and are added only when the pivot workflow is ready. Do not place credentials in Compose environment files or Git.
 
@@ -83,12 +83,12 @@ two enrollment responses, not values to invent locally. If a token is lost,
 rotate that node's credential in the Studio and update the corresponding
 secret; never print tokens in logs or commit them to Git.
 
-5. Build and push the digest-pinned Node Agent image, then deploy it into the two independent Kubernetes contexts:
+5. Build and push the digest-pinned shared EPH/Target Agent runtime image, then deploy it into the two independent Kubernetes contexts:
 
 ```bash
 EPH_CONTEXT=<eph-single-node-k8s-context> \
 TARGET_CONTEXT=<target-cluster-k8s-context> \
-AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \
+AGENT_IMAGE=<registry>/ai-agent-runtime@sha256:<64-hex-digest> \
 bash deploy/agents/deploy.sh
 ```
 
