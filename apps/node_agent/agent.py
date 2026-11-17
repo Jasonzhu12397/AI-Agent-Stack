@@ -4923,7 +4923,7 @@ def ensure_worker_chrony_bootstrap_template(
     deployment_id: str,
     plan_hash: str,
     ntp_server_ip: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     try:
         address = ipaddress.ip_address(ntp_server_ip)
     except (TypeError, ValueError) as exc:
