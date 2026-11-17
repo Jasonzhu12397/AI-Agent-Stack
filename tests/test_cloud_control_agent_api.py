@@ -187,8 +187,10 @@ def test_eph_pivot_attestation_requires_matching_source_and_target_bmh_digests()
         "capi_pivot_succeeded": True,
         "source_cluster_absent": True,
         "target_cluster_ownership_verified": True,
+        "target_controllers_ready": True,
         "source_cluster_uid": "source-cluster-uid",
         "target_cluster_uid": "target-cluster-uid",
+        "target_source_cluster_uid_annotation": "source-cluster-uid",
         "source_bmh_identities": identities,
         "target_bmh_identities": identities,
         "source_bmh_digest": digest,
@@ -253,6 +255,7 @@ def test_cloud_control_accepts_complete_attestation_from_verified_pivot_replay()
         "target_cluster_uid": "target-cluster-uid",
         "target_source_cluster_uid_annotation": "source-cluster-uid",
         "source_bmh_identities": identities,
+        "target_bmh_identities": identities,
         "source_bmh_digest": digest,
         "target_bmh_digest": digest,
     }
