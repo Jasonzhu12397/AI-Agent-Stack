@@ -6,7 +6,13 @@ import uuid
 
 from django.utils import timezone
 
-from core.models import AgentCommand, ClusterDeployment, ClusterDeploymentCheckpoint
+from core.models import (
+    AgentCommand,
+    ClusterDeployment,
+    ClusterDeploymentCheckpoint,
+    ClusterDeploymentPivotEvent,
+    ClusterDeploymentPivotOperation,
+)
 
 
 def _payload_hash(command_type: str, payload: dict) -> str:
@@ -50,6 +56,128 @@ def _canonical_capi_inventory(items: list[dict]) -> list[dict]:
             str(item.get("uid", "")),
         ),
     )
+
+
+def _record_capi_pivot_event(
+    deployment: ClusterDeployment,
+    state: str,
+    event_type: str,
+    evidence: dict | None = None,
+    actor_node=None,
+    *,
+    source_identity: dict | None = None,
+    inventory: list | None = None,
+    inventory_sha256: str | None = None,
+    approval_hash: str | None = None,
+    target_ack: dict | None = None,
+    target_identity: dict | None = None,
+    last_error: dict | None = None,
+) -> ClusterDeploymentPivotOperation | None:
+    operation = (
+        ClusterDeploymentPivotOperation.objects.select_for_update()
+        .filter(deployment=deployment)
+        .first()
+    )
+    if operation is None:
+        return None
+    allowed = {
+        ClusterDeploymentPivotOperation.State.PREPARED: {
+            ClusterDeploymentPivotOperation.State.WAITING_TARGET_ACK,
+            ClusterDeploymentPivotOperation.State.READY,
+            ClusterDeploymentPivotOperation.State.FAILED,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.WAITING_TARGET_ACK: {
+            ClusterDeploymentPivotOperation.State.READY,
+            ClusterDeploymentPivotOperation.State.FAILED,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.READY: {
+            ClusterDeploymentPivotOperation.State.EXECUTING,
+            ClusterDeploymentPivotOperation.State.FAILED,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.EXECUTING: {
+            ClusterDeploymentPivotOperation.State.VERIFYING,
+            ClusterDeploymentPivotOperation.State.UNCERTAIN,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.VERIFYING: {
+            ClusterDeploymentPivotOperation.State.COMPLETED,
+            ClusterDeploymentPivotOperation.State.UNCERTAIN,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.UNCERTAIN: {
+            ClusterDeploymentPivotOperation.State.VERIFYING,
+            ClusterDeploymentPivotOperation.State.COMPLETED,
+            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+        },
+        ClusterDeploymentPivotOperation.State.COMPLETED: set(),
+        ClusterDeploymentPivotOperation.State.FAILED: set(),
+        ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY: set(),
+    }
+    if state != operation.state and state not in allowed.get(operation.state, set()):
+        raise ValueError(
+            f"Invalid CAPI pivot state transition: {operation.state} -> {state}"
+        )
+    previous_state = operation.state
+    operation.state = state
+    operation.version += 1
+    if source_identity is not None:
+        operation.source_identity = source_identity
+    if inventory is not None:
+        operation.inventory = inventory
+    if inventory_sha256 is not None:
+        operation.inventory_sha256 = inventory_sha256
+    if approval_hash is not None:
+        operation.approval_hash = approval_hash
+    if target_ack is not None:
+        operation.target_ack = target_ack
+    if target_identity is not None:
+        operation.target_identity = target_identity
+    if last_error is not None:
+        operation.last_error = last_error
+    if state == ClusterDeploymentPivotOperation.State.EXECUTING and operation.started_at is None:
+        operation.started_at = timezone.now()
+    if state == ClusterDeploymentPivotOperation.State.COMPLETED:
+        operation.completed_at = timezone.now()
+    operation.journal = {
+        **(operation.journal or {}),
+        "last_event": event_type,
+        "last_evidence": evidence or {},
+        "last_transition_at": timezone.now().isoformat(),
+    }
+    operation.save(
+        update_fields=[
+            "state",
+            "version",
+            "source_identity",
+            "inventory",
+            "inventory_sha256",
+            "approval_hash",
+            "target_ack",
+            "target_identity",
+            "last_error",
+            "started_at",
+            "completed_at",
+            "journal",
+            "updated_at",
+        ]
+    )
+    last_sequence = (
+        operation.events.order_by("-sequence").values_list("sequence", flat=True).first()
+        or 0
+    )
+    ClusterDeploymentPivotEvent.objects.create(
+        operation=operation,
+        sequence=last_sequence + 1,
+        actor_node=actor_node,
+        event_type=event_type,
+        from_state=previous_state,
+        to_state=state,
+        evidence=evidence or {},
+    )
+    return operation
 
 
 def _spec_hash(spec: dict) -> str:
