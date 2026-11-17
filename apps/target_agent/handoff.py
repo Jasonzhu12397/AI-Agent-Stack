@@ -73,6 +73,8 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         if evidence.get("ready_master_count", 0) < 3:
             raise HandoffError("HANDOFF_THREE_TARGET_MASTERS_REQUIRED")
         normalized["ironic_internal_ntp_ip"] = _require_internal_ntp_ip(evidence)
+        _require(evidence, "target_control_plane_ntp_profile_verified")
+        _require(evidence, "target_control_plane_ntp_external_sync_verified")
         _require(evidence, "ironic_internal_ntp_service_reachable")
     elif phase is HandoffPhase.TARGET_AGENT_READY:
         _require(evidence, "target_agent_ready")
