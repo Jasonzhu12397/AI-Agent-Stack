@@ -1333,6 +1333,8 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "target_cluster_uid": target_uid,
         "source_cluster_uid": source_uid,
         "cluster_identity_preserved": True,
+        "source_cluster_identity_annotation": "ai-agent-stack.io/source-cluster-uid",
+        "source_cluster_identity_annotation_written": True,
         "source_cluster_absent": True,
         "ownership_transferred": True,
         "automatic_retry_allowed": False,
