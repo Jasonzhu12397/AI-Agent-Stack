@@ -1070,7 +1070,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
                 r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
                 value,
             ):
-                raise NodeAgentError("INVALID_TIME_DNS_NTP_SERVER")
+                raise NodeAgentError("INVALID_TIME_DNS_NTP_SERVER") from None
         if value in normalized_ntp:
             raise NodeAgentError("DUPLICATE_TIME_DNS_NTP_SERVER")
         normalized_ntp.append(value)
