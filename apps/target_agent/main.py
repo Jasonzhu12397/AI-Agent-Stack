@@ -36,6 +36,7 @@ from .ntp_policy import (
     render_control_plane_chrony_pre_kubeadm_command,
     render_worker_chrony_config,
     render_worker_chrony_pre_kubeadm_command,
+    probe_ironic_internal_ntp_endpoint,
     validate_control_plane_ntp_profile,
     validate_worker_ntp_sources,
 )
@@ -48,6 +49,7 @@ CAPABILITIES = [
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
     "target.ntp.control_plane.render",
+    "target.ntp.internal.probe",
     "target.handoff.evaluate",
 ]
 
@@ -258,6 +260,15 @@ def execute(
                 raise HandoffError("HANDOFF_CHECKPOINT_MISSING")
             next_phase = str(payload.get("next_phase", ""))
             evidence = payload.get("evidence", {})
+            if next_phase == HandoffPhase.TARGET_CONTROL_PLANE_READY.value:
+                ntp_probe = probe_ironic_internal_ntp_endpoint(
+                    evidence.get("ironic_internal_ntp_ip", "")
+                )
+                evidence = {
+                    **evidence,
+                    "ironic_internal_ntp_service_reachable": True,
+                    "ironic_internal_ntp_probe": ntp_probe,
+                }
             if next_phase == HandoffPhase.BMH_REGISTRY_MIGRATED.value:
                 observed_ownership = _observe_target_metal3_ownership(payload)
                 evidence = {**evidence, **observed_ownership}
@@ -305,6 +316,26 @@ def execute(
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
+                "output": {},
+                "side_effects": False,
+            }
+    if action == "target.ntp.internal.probe":
+        payload = command.get("payload", {})
+        try:
+            probe = probe_ironic_internal_ntp_endpoint(
+                payload.get("ironic_internal_ntp_ip", ""),
+                float(payload.get("timeout_seconds", 3.0)),
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": probe,
+                "side_effects": False,
+            }
+        except (NtpPolicyError, TypeError, ValueError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc),
                 "output": {},
                 "side_effects": False,
             }
