@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ("operation_id", models.UUIDField(editable=False, unique=True)),
-                ("state", models.CharField(choices=[("prepared", "Prepared"), ("waiting_target_ack", "Waiting for target acknowledgement"), ("ready", "Ready"), ("executing", "Executing"), ("verifying", "Verifying"), ("uncertain", "Uncertain"), ("completed", "Completed"), ("failed", "Failed"), ("manual_recovery", "Manual recovery required")], default="prepared", max_length=24)),
+                ("state", models.CharField(choices=[("prepared", "Prepared"), ("waiting_approval", "Waiting for approval"), ("waiting_target_ack", "Waiting for target acknowledgement"), ("ready", "Ready"), ("executing", "Executing"), ("verifying", "Verifying"), ("uncertain", "Uncertain"), ("completed", "Completed"), ("failed", "Failed"), ("manual_recovery", "Manual recovery required")], default="prepared", max_length=24)),
                 ("source_identity", models.JSONField(default=dict)),
                 ("inventory", models.JSONField(default=list)),
                 ("inventory_sha256", models.CharField(max_length=64)),
