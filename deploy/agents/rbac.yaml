@@ -352,3 +352,31 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: network-inventory-agent-configmap-writer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-cluster-agent-leader-election
+  namespace: ai-agent-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+    resourceNames: ["target-cluster-agent-leader"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-cluster-agent-leader-election
+  namespace: ai-agent-system
+subjects:
+  - kind: ServiceAccount
+    name: target-cluster-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-cluster-agent-leader-election
