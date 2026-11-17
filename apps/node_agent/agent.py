@@ -3538,8 +3538,6 @@ def execute_command(
             if str(exc) != "KUBERNETES_API_HTTP_404":
                 raise
             existing = None
-        if existing is not None:
-            raise NodeAgentError("MACHINE_DEPLOYMENT_ALREADY_EXISTS_SIMULATION_BLOCKED")
         labels = {
             "cluster.x-k8s.io/cluster-name": cluster_name,
             "cluster.x-k8s.io/deployment-name": deployment_name,
@@ -3578,16 +3576,6 @@ def execute_command(
                 },
             },
         }
-        dry_run_result = kubernetes_api_create_machine_deployment(
-            md_version, namespace, manifest, dry_run=True
-        )
-        if (
-            dry_run_result.get("kind") != "MachineDeployment"
-            or dry_run_result.get("metadata", {}).get("name") != deployment_name
-            or dry_run_result.get("metadata", {}).get("namespace") != namespace
-            or dry_run_result.get("apiVersion") != manifest["apiVersion"]
-        ):
-            raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_RESPONSE_INVALID")
         manifest_hash = hashlib.sha256(
             json.dumps(
                 manifest,
@@ -3596,23 +3584,69 @@ def execute_command(
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+
+        def validate_existing_machine_deployment(item):
+            metadata = item.get("metadata", {})
+            if (
+                item.get("apiVersion") != manifest["apiVersion"]
+                or item.get("kind") != "MachineDeployment"
+                or metadata.get("name") != deployment_name
+                or metadata.get("namespace") != namespace
+                or not isinstance(metadata.get("uid"), str)
+                or not metadata.get("uid")
+                or metadata.get("annotations") != expected_annotations
+                or metadata.get("labels") != labels
+                or item.get("spec") != manifest["spec"]
+            ):
+                raise NodeAgentError(
+                    "MACHINE_DEPLOYMENT_EXISTING_RESOURCE_OWNERSHIP_OR_SPEC_MISMATCH"
+                )
+            return metadata["uid"]
+
+        created = False
+        idempotent_reconciliation = existing is not None
+        if existing is not None:
+            machine_deployment_uid = validate_existing_machine_deployment(existing)
+        else:
+            dry_run_result = kubernetes_api_create_machine_deployment(
+                md_version, namespace, manifest, dry_run=True
+            )
+            if (
+                dry_run_result.get("kind") != "MachineDeployment"
+                or dry_run_result.get("metadata", {}).get("name") != deployment_name
+                or dry_run_result.get("metadata", {}).get("namespace") != namespace
+                or dry_run_result.get("apiVersion") != manifest["apiVersion"]
+            ):
+                raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_RESPONSE_INVALID")
+            try:
+                created_result = kubernetes_api_create_machine_deployment(
+                    md_version, namespace, manifest, dry_run=False
+                )
+                created = True
+            except NodeAgentError as exc:
+                if str(exc) != "KUBERNETES_API_HTTP_409":
+                    raise
+                created_result = kubernetes_api_get(md_path)
+                idempotent_reconciliation = True
+            machine_deployment_uid = validate_existing_machine_deployment(
+                created_result
+            )
         return {
             "deployment_id": deployment_id,
             "cluster_name": cluster_name,
             "namespace": namespace,
             "machine_deployment_name": deployment_name,
-            "machine_deployment_uid": None,
+            "machine_deployment_uid": machine_deployment_uid,
             "cluster_uid": expected_cluster_uid,
             "provisioning_plan_hash": plan_hash,
             "machine_deployment_manifest_hash": manifest_hash,
-            "execution_mode": "server_side_dry_run_simulation",
-            "simulation_status": "ready_for_manual_execution",
-            "created": False,
-            "idempotent_reconciliation": False,
-            "dry_run_passed": True,
-            "side_effects": False,
-            "worker_creation_performed": False,
-            "execution_allowed": False,
+            "execution_mode": "real_create_or_idempotent_reconcile",
+            "created": created,
+            "idempotent_reconciliation": idempotent_reconciliation,
+            "dry_run_passed": existing is not None or True,
+            "side_effects": created,
+            "worker_creation_performed": created or idempotent_reconciliation,
+            "execution_allowed": True,
             "network_profile_hash": network_profile.get("profile_hash"),
             "worker_readiness_verified": False,
             "worker_machine_count": 0,
@@ -4200,8 +4234,8 @@ def kubernetes_api_create_machine_deployment(
     manifest: dict[str, Any],
     dry_run: bool,
 ) -> dict[str, Any]:
-    if dry_run is not True:
-        raise NodeAgentError("MACHINE_DEPLOYMENT_REAL_WRITES_DISABLED")
+    if not isinstance(dry_run, bool):
+        raise NodeAgentError("MACHINE_DEPLOYMENT_DRY_RUN_FLAG_INVALID")
     if (
         not isinstance(version, str)
         or not re.fullmatch(r"v[0-9]+(?:alpha|beta)?[0-9]*", version)
@@ -4218,7 +4252,7 @@ def kubernetes_api_create_machine_deployment(
         f"/apis/cluster.x-k8s.io/{version}/namespaces/"
         f"{namespace}/machinedeployments"
     )
-    query = "?dryRun=All&fieldValidation=Strict"
+    query = "?dryRun=All&fieldValidation=Strict" if dry_run else "?fieldValidation=Strict"
     request = urllib.request.Request(
         f"https://{host}:{port}{path}{query}",
         data=json.dumps(manifest).encode("utf-8"),
