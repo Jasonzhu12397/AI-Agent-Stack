@@ -2870,6 +2870,7 @@ def execute_command(
         expected_spec_sha256 = payload.get("expected_cluster_spec_sha256")
         expected_target_uid = payload.get("expected_target_cluster_uid")
         operation_id = payload.get("operation_id")
+        expected_time_dns_profile_hash = payload.get("expected_time_dns_profile_hash")
         if (
             not isinstance(cluster_name, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
@@ -2884,6 +2885,11 @@ def execute_command(
             raise NodeAgentError("INVALID_NAMESPACE")
         if not isinstance(expected_uid, str) or not expected_uid:
             raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
+        if (
+            not isinstance(expected_time_dns_profile_hash, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", expected_time_dns_profile_hash)
+        ):
+            raise NodeAgentError("EXPECTED_TIME_DNS_PROFILE_HASH_REQUIRED")
         if (
             not isinstance(expected_api_version, str)
             or not expected_api_version
@@ -3200,6 +3206,56 @@ def execute_command(
         if len(set(machine_names)) != len(machine_names):
             raise NodeAgentError("INVALID_TARGET_MACHINE_IDENTITY")
         not_ready_machines = sorted(set(machine_names) - set(ready_machines))
+        node_document = kubernetes_api_get("/api/v1/nodes")
+        if not isinstance(node_document, dict):
+            raise NodeAgentError("INVALID_TARGET_NODE_INVENTORY")
+        node_items = node_document.get("items")
+        if not isinstance(node_items, list) or any(
+            not isinstance(node, dict) for node in node_items
+        ):
+            raise NodeAgentError("INVALID_TARGET_NODE_INVENTORY")
+        nodes_by_name = {}
+        for node in node_items:
+            node_metadata = node.get("metadata")
+            if not isinstance(node_metadata, dict):
+                raise NodeAgentError("INVALID_TARGET_NODE_METADATA")
+            node_name = node_metadata.get("name")
+            if not isinstance(node_name, str) or not node_name or node_name in nodes_by_name:
+                raise NodeAgentError("INVALID_TARGET_NODE_IDENTITY")
+            nodes_by_name[node_name] = node
+        time_dns_verified_machines = []
+        time_dns_unverified_machines = []
+        for machine in cluster_machines:
+            machine_metadata = machine["metadata"]
+            machine_name = machine_metadata["name"]
+            machine_status = machine.get("status")
+            node_ref = (
+                machine_status.get("nodeRef")
+                if isinstance(machine_status, dict)
+                else None
+            )
+            node_name = node_ref.get("name") if isinstance(node_ref, dict) else None
+            node = nodes_by_name.get(node_name) if isinstance(node_name, str) else None
+            node_metadata = node.get("metadata") if isinstance(node, dict) else None
+            node_labels = (
+                node_metadata.get("labels")
+                if isinstance(node_metadata, dict)
+                else None
+            )
+            if (
+                machine_name in not_ready_machines
+                or not isinstance(node_labels, dict)
+                or node_labels.get("ai-agent-stack.io/chrony-synced") != "true"
+                or node_labels.get("ai-agent-stack.io/time-dns-profile-hash")
+                != expected_time_dns_profile_hash
+            ):
+                time_dns_unverified_machines.append(machine_name)
+            else:
+                time_dns_verified_machines.append(machine_name)
+        time_dns_verified = (
+            bool(machine_names)
+            and len(time_dns_verified_machines) == len(machine_names)
+        )
         expected_controllers = {
             "capi-system": "capi-controller-manager",
             "capi-kubeadm-bootstrap-system": "capi-kubeadm-bootstrap-controller-manager",
@@ -3250,7 +3306,9 @@ def execute_command(
             )
         controllers_ready = all(item["ready"] for item in controller_states)
         machine_inventory_ready = bool(machine_names) and len(ready_machines) == len(machine_names)
-        adoption_verified = controllers_ready and machine_inventory_ready
+        adoption_verified = (
+            controllers_ready and machine_inventory_ready and time_dns_verified
+        )
         return {
             "cluster_name": cluster_name,
             "namespace": namespace,
@@ -3271,6 +3329,11 @@ def execute_command(
             "machine_inventory_ready": machine_inventory_ready,
             "controllers": controller_states,
             "controllers_ready": controllers_ready,
+            "time_dns_verified": time_dns_verified,
+            "time_dns_profile_hash": expected_time_dns_profile_hash,
+            "time_dns_node_count": len(time_dns_verified_machines),
+            "time_dns_verified_machine_names": time_dns_verified_machines[:200],
+            "time_dns_unverified_machine_names": time_dns_unverified_machines[:200],
             "pivot_adoption_verified": adoption_verified,
             "side_effects": False,
         }
