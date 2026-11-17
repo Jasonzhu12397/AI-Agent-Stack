@@ -50,6 +50,8 @@ REQUIRED_EVIDENCE = {
     ),
     "workers_ready": (
         "expected_workers_ready",
+        "eph_chronyd_verified",
+        "target_control_plane_chronyd_verified",
         "worker_chronyd_verified",
         "worker_network_postflight_passed",
     ),
@@ -71,25 +73,31 @@ def validate_topology(topology: dict[str, Any]) -> dict[str, Any]:
         raise DeliveryLifecycleError("EPH_MUST_BE_SINGLE_NODE")
     if topology.get("target_agent_placement") != "target_control_plane":
         raise DeliveryLifecycleError("TARGET_AGENT_MUST_RUN_ON_CONTROL_PLANE")
-    if topology.get("worker_chronyd_scope") != "target_workers_only":
-        raise DeliveryLifecycleError("CHRONYD_SCOPE_MUST_BE_TARGET_WORKERS_ONLY")
+    if topology.get("chronyd_scope") != "eph_and_target_kubernetes_nodes":
+        raise DeliveryLifecycleError("CHRONYD_SCOPE_MUST_INCLUDE_EPH_AND_TARGET_NODES")
     return {
         "valid": True,
         "eph_kubernetes_node_count": 1,
         "eph_mode": "single_node",
         "target_agent_placement": "target_control_plane",
-        "worker_chronyd_scope": "target_workers_only",
+        "chronyd_scope": "eph_and_target_kubernetes_nodes",
     }
 
 
 def validate_chronyd_scope(node_role: str, action: str) -> dict[str, Any]:
-    if node_role == "eph" and action in {"install", "enable", "configure"}:
-        raise DeliveryLifecycleError("CHRONYD_NOT_APPLICABLE_TO_EPH")
-    if node_role != "target_worker":
-        raise DeliveryLifecycleError("CHRONYD_ONLY_ALLOWED_ON_TARGET_WORKERS")
-    if action not in {"install", "enable", "configure", "verify"}:
+    allowed_roles = {"eph", "target_control_plane", "target_worker"}
+    allowed_actions = {"install", "configure", "enable", "verify"}
+    if node_role not in allowed_roles:
+        raise DeliveryLifecycleError("CHRONYD_NODE_ROLE_INVALID")
+    if action not in allowed_actions:
         raise DeliveryLifecycleError("CHRONYD_ACTION_INVALID")
-    return {"allowed": True, "node_role": node_role, "action": action}
+    return {
+        "allowed": True,
+        "node_role": node_role,
+        "action": action,
+        "required_before_kubeadm": node_role in {"eph", "target_control_plane"},
+        "required_before_node_join": node_role == "target_worker",
+    }
 
 
 def evaluate_transition(
