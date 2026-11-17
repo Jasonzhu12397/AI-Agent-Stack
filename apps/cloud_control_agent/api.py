@@ -121,6 +121,9 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
         output.get("capi_pivot_succeeded") is not True
         or output.get("source_cluster_absent") is not True
         or output.get("target_cluster_ownership_verified") is not True
+        or output.get("target_controllers_ready") is not True
+        or output.get("target_source_cluster_uid_annotation")
+        != output.get("source_cluster_uid")
         or not isinstance(output.get("source_cluster_uid"), str)
         or not output.get("source_cluster_uid")
         or not isinstance(output.get("target_cluster_uid"), str)
@@ -897,8 +900,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ):
                         attestation = (
                             _validated_eph_pivot_attestation(document.get("output"))
-                            if document.get("side_effects") is True
-                            and document.get("retryable") is False
+                            if (
+                                document.get("retryable") is False
+                                and (
+                                    document.get("side_effects") is True
+                                    or document.get("output", {}).get("already_pivoted") is True
+                                )
+                            )
                             else None
                         )
                         if attestation is not None:
