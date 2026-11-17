@@ -390,7 +390,7 @@ def execute(
                 command.get("payload", {}),
                 lease_lost_event=lease_lost_event,
             )
-        except (WorkerProvisioningError, TypeError, ValueError) as exc:
+        except (WorkerProvisioningError, TypeError, ValueError, AttributeError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "WORKER_PROVISIONING_REJECTED",
