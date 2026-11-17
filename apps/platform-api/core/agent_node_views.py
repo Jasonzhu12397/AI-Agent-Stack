@@ -2648,6 +2648,24 @@ class AgentRuntimePollView(APIView):
                             ]
                         )
                     return Response({"command": None})
+            if command.command_type == "cluster.capi.pivot.execute":
+                deployment = ClusterDeployment.objects.select_for_update().get(
+                    pk=command.deployment_id,
+                    eph_node=node,
+                )
+                _record_capi_pivot_event(
+                    deployment,
+                    ClusterDeploymentPivotOperation.State.READY,
+                    "pivot_approval_and_target_ack_revalidated",
+                    {
+                        "command_id": str(command.id),
+                        "approved_by_id": str(command.approved_by_id),
+                        "approved_at": command.approved_at.isoformat(),
+                        "approval_hash": command.approved_plan_hash,
+                    },
+                    actor_node=node,
+                    approval_hash=command.approved_plan_hash,
+                )
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
