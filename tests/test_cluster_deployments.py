@@ -21,6 +21,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.cluster_deployment_services import (
+    _payload_hash,
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
@@ -334,6 +335,117 @@ def test_expired_running_pivot_lease_moves_deployment_to_reconciliation_required
     assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
     assert deployment.error["command_id"] == str(command.id)
     assert deployment.plan_result["dual_agent"]["phase"] == "pivot_outcome_unknown"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
+@pytest.mark.django_db
+def test_pivot_poll_rejects_expired_target_agent_acknowledgement(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="expired-target-pivot-ack",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_token = "expired-target-pivot-ack-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="expired-pivot-ack-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name=deployment.cluster_name,
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+    deployment.save(update_fields=["target_node", "status", "updated_at"])
+    target_result = {"target_management_plane_ready": True}
+    old_finished_at = timezone.now() - datetime.timedelta(minutes=6)
+    target_command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        result=target_result,
+        finished_at=old_finished_at,
+        idempotency_key=f"expired-target-pivot-ack:{deployment.id}",
+    )
+    acknowledgement = {
+        "node_id": str(target_node.id),
+        "command_id": str(target_command.id),
+        "result_sha256": hashlib.sha256(
+            json.dumps(
+                target_result,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+        "acknowledged_at": old_finished_at.isoformat(),
+    }
+    payload = {
+        "deployment_id": str(deployment.id),
+        "cluster_name": deployment.cluster_name,
+        "namespace": "default",
+        "operation_id": str(uuid.uuid4()),
+        "source_cluster_uid": "source-cluster-uid",
+        "source_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+        "source_cluster_spec_sha256": "a" * 64,
+        "source_inventory_sha256": "b" * 64,
+        "target_agent_ack": acknowledgement,
+    }
+    plan_hash = _payload_hash("cluster.capi.pivot.execute", payload)
+    approver = get_user_model().objects.create_user(
+        username="expired-pivot-ack-approver",
+        password="test-password",
+    )
+    TenantMembership.objects.create(
+        tenant=tenant,
+        user=approver,
+        role=TenantMembership.Role.ADMIN,
+    )
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        approved_by=approver,
+        approved_at=timezone.now(),
+        approved_plan_hash=plan_hash,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+        payload=payload,
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key=f"expired-target-pivot-command:{deployment.id}",
+        plan_hash=plan_hash,
+    )
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    command.refresh_from_db()
+    deployment.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["command"] is None
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED"
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED"
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
 
