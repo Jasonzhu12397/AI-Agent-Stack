@@ -772,6 +772,7 @@ def test_ci_kubeadm_smoke_callback_requires_ready_node_and_workload():
     assert "KUBERNETES_WORKLOAD_SMOKE_READY=true" in workflow
     assert "EPH_AGENT_POD_READY=true" in workflow
     assert "deployment/eph-node-agent" in workflow
+    assert 'execute("eject", {"device": cdrom["device"], "force": True})' in workflow
     assert "eph-bootstrap.service" in workflow
     assert "mock-control-plane.py" in workflow
     assert "Dockerfile.node-agent" in workflow
