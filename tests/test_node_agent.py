@@ -1997,7 +1997,14 @@ def test_target_agent_verifies_pivot_adoption_by_preserved_cluster_uid(monkeypat
             ]
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "target-uid", "annotations": {"ai-agent-stack.io/source-cluster-uid": "source-uid"}}
+            "metadata": {
+                "name": "edge-lab",
+                "namespace": "metal3",
+                "uid": "target-uid",
+                "annotations": {
+                    "ai-agent-stack.io/source-cluster-uid": "source-uid"
+                },
+            }
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
@@ -2087,7 +2094,14 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
             ]
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": {
-            "metadata": {"name": "edge-lab", "namespace": "metal3", "uid": "target-uid", "annotations": {"ai-agent-stack.io/source-cluster-uid": "source-uid"}}
+            "metadata": {
+                "name": "edge-lab",
+                "namespace": "metal3",
+                "uid": "target-uid",
+                "annotations": {
+                    "ai-agent-stack.io/source-cluster-uid": "source-uid"
+                },
+            }
         },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
