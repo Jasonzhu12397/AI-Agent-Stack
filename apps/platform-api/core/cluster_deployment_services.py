@@ -271,7 +271,26 @@ def _advance_deployment_checkpoint(
 
 
 def _update_capi_pivot_provider_compatibility(deployment: ClusterDeployment) -> None:
-    plan_result = deployment.plan_result or {}
+    raw_plan_result = deployment.plan_result
+    if raw_plan_result is None:
+        plan_result = {}
+    elif isinstance(raw_plan_result, dict):
+        plan_result = raw_plan_result
+    else:
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_PLAN_STATE_INVALID"}
+        deployment.plan_result = {
+            "dual_agent": {
+                "phase": "pivot_plan_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            }
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
     source = plan_result.get("capi_pivot_source_preflight", {})
     target = plan_result.get("capi_pivot_preflight", {})
     source_versions = source.get("provider_versions")
@@ -1119,6 +1138,24 @@ def handle_deployment_command_result(
         ClusterDeployment.Status.FAILED,
         ClusterDeployment.Status.RECONCILIATION_REQUIRED,
     }:
+        return
+    if deployment.plan_result is not None and not isinstance(
+        deployment.plan_result,
+        dict,
+    ):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_PLAN_STATE_INVALID"}
+        deployment.plan_result = {
+            "dual_agent": {
+                "phase": "pivot_plan_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            }
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
         return
     if deployment.started_at is None:
         deployment.started_at = timezone.now()
