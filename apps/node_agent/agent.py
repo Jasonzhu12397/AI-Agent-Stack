@@ -1103,7 +1103,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
             not isinstance(domain, str)
             or not re.fullmatch(
                 r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-                r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+                r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
                 domain.strip(),
             )
         ):
