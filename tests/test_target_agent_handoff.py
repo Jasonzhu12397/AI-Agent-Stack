@@ -127,3 +127,34 @@ def test_capi_pivot_rejects_source_uid_annotation_mismatch():
                 "target_cluster_ownership_verified": True,
             },
         )
+
+
+
+def test_handoff_blocks_workers_until_control_plane_chronyd_is_verified():
+    with pytest.raises(HandoffError, match="EVIDENCE_REQUIRED:target_control_plane_ntp_profile_verified"):
+        evaluate_transition(
+            "eph_single_node_ready",
+            "target_control_plane_ready",
+            {
+                "target_control_plane_ready": True,
+                "ready_master_count": 3,
+                "ironic_internal_ntp_ip": "10.130.60.84",
+                "ironic_internal_ntp_service_reachable": True,
+            },
+        )
+
+
+def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
+    result = evaluate_transition(
+        "eph_single_node_ready",
+        "target_control_plane_ready",
+        {
+            "target_control_plane_ready": True,
+            "ready_master_count": 3,
+            "ironic_internal_ntp_ip": "10.130.60.84",
+            "target_control_plane_ntp_profile_verified": True,
+            "target_control_plane_ntp_external_sync_verified": True,
+            "ironic_internal_ntp_service_reachable": True,
+        },
+    )
+    assert result["accepted"] is True
