@@ -811,6 +811,7 @@ def handle_deployment_command_result(
             and isinstance(expected_target_uid, str)
             and bool(expected_target_uid)
             and result.get("cluster_uid") == expected_target_uid
+            and result.get("target_cluster_uid") == expected_target_uid
             and result.get("source_cluster_uid") == expected_uid
             and result.get("pivot_adoption_verified") is True
             and result.get("machine_inventory_ready") is True
@@ -894,6 +895,7 @@ def handle_deployment_command_result(
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("cluster_uid") == expected_target_uid
+            and result.get("target_cluster_uid") == expected_target_uid
             and result.get("source_cluster_uid") == source_identity.get("uid")
             and result.get("cluster_identity_preserved") is True
             and result.get("side_effects") is False
