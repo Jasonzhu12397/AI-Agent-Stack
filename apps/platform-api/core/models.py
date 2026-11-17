@@ -677,7 +677,7 @@ class ClusterDeployment(models.Model):
 class ClusterDeploymentCheckpoint(models.Model):
     deployment = models.OneToOneField(
         ClusterDeployment,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="checkpoint",
     )
     agent_node = models.ForeignKey(
@@ -1102,6 +1102,9 @@ class ClusterDeploymentPivotOperation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def delete(self, *args, **kwargs):
+        raise ValueError("CAPI pivot operation journals cannot be deleted.")
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -1123,7 +1126,7 @@ class ClusterDeploymentPivotOperation(models.Model):
 class ClusterDeploymentPivotEvent(models.Model):
     operation = models.ForeignKey(
         ClusterDeploymentPivotOperation,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="events",
     )
     sequence = models.PositiveBigIntegerField()
