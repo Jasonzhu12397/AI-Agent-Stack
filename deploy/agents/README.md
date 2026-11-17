@@ -46,7 +46,7 @@ The EPH client certificate Common Name must equal the configured Agent UUID. EPH
 
 ### Target cluster
 
-- `target-agent-credentials`: `control-url`, `agent-id`, `installation-id`, `cluster-id`.
+- `target-agent-credentials`: `control-url`, `agent-id`, `installation-id`, `cluster-id`, `ironic-api-url`, `ironic-api-token`. The Ironic endpoint must use HTTPS and its certificate must chain to a CA trusted by the Target Agent image. The token is loaded from the Kubernetes Secret and is never included in command payloads or logs.
 - `agent-control-plane-mtls`: `ca.crt`, `tls.crt`, `tls.key`.
 
 All three Target replicas share one logical Agent UUID and installation/cluster identity. Their per-pod `AGENT_INSTANCE_ID` is populated from the Pod name. The Target client certificate Common Name must equal the logical Agent UUID.
@@ -100,4 +100,4 @@ bash deploy.sh
 
 ## Current implementation boundary
 
-The current fresh runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, read-only CAPI/Metal3 observation and Worker NTP policy validation/command rendering. The EPH Agent now has a dry-run and approval-digest-gated `clusterctl move` adapter with provider-version and Target-master controller-placement checks. It has not yet been validated against the selected live provider compatibility matrix. Autonomous EPH cleanup, Worker provisioning, host-level chronyd application/synchronization, and end-to-end integration with the existing platform API are not yet enabled. They must be implemented as explicit adapters and verified with the selected CAPI/Metal3/Ironic provider versions before production use.
+The current fresh runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, read-only CAPI/Metal3 observation, live TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH Agent now has a dry-run and approval-digest-gated `clusterctl move` adapter with provider-version and Target-master controller-placement checks. It has not yet been validated against the selected live provider compatibility matrix. Autonomous EPH cleanup, Worker provisioning, host-level chronyd application/synchronization, and end-to-end integration with the existing platform API are not yet enabled. They must be implemented as explicit adapters and verified with the selected CAPI/Metal3/Ironic provider versions before production use.
