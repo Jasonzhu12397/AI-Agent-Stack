@@ -51,6 +51,7 @@ from .ntp_policy import (
     validate_ironic_internal_ntp_ip,
     validate_worker_ntp_sources,
 )
+from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
@@ -63,6 +64,7 @@ CAPABILITIES = [
     "target.ntp.control_plane.verify_bootstrap",
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
+    "target.worker.provision",
 ]
 
 
@@ -382,6 +384,19 @@ def execute(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    if action == "target.worker.provision":
+        try:
+            return execute_worker_provisioning(
+                command.get("payload", {}),
+                lease_lost_event=lease_lost_event,
+            )
+        except (WorkerProvisioningError, TypeError, ValueError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "WORKER_PROVISIONING_REJECTED",
+                "output": {},
+                "side_effects": False,
+            }
     if action == "target.cluster.observe":
         result = _kubectl(["get", "nodes", "-o", "json"])
         return {
