@@ -104,6 +104,7 @@ def test_target_agent_cannot_skip_or_rewrite_checkpoint_phases(
         ("eph", "eph.capi.pivot"),
         ("target", "target.cluster.observe"),
         ("target", "target.handoff.evaluate"),
+        ("target", "target.worker.provision"),
     ],
 )
 def test_cloud_control_accepts_only_role_owned_agent_capabilities(role, action):
@@ -136,8 +137,8 @@ def test_cloud_control_accepts_only_capabilities_owned_by_agent_role():
     ) == ["eph.preflight", "eph.capi.pivot"]
     assert _validate_reported_capabilities(
         "target",
-        ["target.cluster.observe", "target.handoff.evaluate"],
-    ) == ["target.cluster.observe", "target.handoff.evaluate"]
+        ["target.cluster.observe", "target.handoff.evaluate", "target.worker.provision"],
+    ) == ["target.cluster.observe", "target.handoff.evaluate", "target.worker.provision"]
 
 
 @pytest.mark.parametrize(
