@@ -411,13 +411,16 @@ def test_target_agent_rejects_capi_pivot_when_live_target_source_uid_annotation_
 
 
 
+
 def _target_metal3_observation_documents():
     hosts = [
         {
             "metadata": {"namespace": "metal3", "name": f"host-{index}"},
             "spec": {},
             "status": {
-                "provisioning": {"ID": f"12345678-1234-1234-1234-123456789ab{index}"},
+                "provisioning": {
+                    "ID": f"12345678-1234-1234-1234-123456789ab{index}",
+                },
             },
         }
         for index in range(1, 3)
@@ -436,24 +439,41 @@ def _target_metal3_observation_documents():
     }
 
 
-def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatch):
-    documents = _target_metal3_observation_documents()
-    calls = []
+def _fake_target_metal3_kubectl(documents):
+    resource_names = {
+        "cluster.cluster.x-k8s.io": "cluster",
+        "machines.cluster.x-k8s.io": "machines",
+        "metal3machines.infrastructure.cluster.x-k8s.io": "metal3machines",
+    }
 
     def fake_kubectl(arguments, **_kwargs):
-        resource = arguments[1]
-        key = (
-            "cluster" if resource == "cluster.cluster.x-k8s.io"
-            else "machines" if resource == "machines.cluster.x-k8s.io"
-            else "metal3machines" if resource == "metal3machines.infrastructure.cluster.x-k8s.io"
-            else "bmhs"
-        )
+        key = resource_names.get(arguments[1], "bmhs")
         return {
             "available": True,
             "returncode": 0,
             "stdout": json.dumps(documents[key]),
             "stderr": "",
         }
+
+    return fake_kubectl
+
+
+def _stub_target_metal3_ownership(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "verify_metal3_ownership",
+        lambda *_args: {
+            "target_bmh_identities": [],
+            "target_metal3_ownership_verified": True,
+            "target_metal3_reconciliation_healthy": True,
+            "side_effects": False,
+        },
+    )
+
+
+def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatch):
+    documents = _target_metal3_observation_documents()
+    calls = []
 
     def fake_ironic(node_uuid):
         calls.append(node_uuid)
@@ -465,13 +485,12 @@ def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatc
             "last_error": None,
         }
 
-    monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
-    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
-        "target_bmh_identities": [],
-        "target_metal3_ownership_verified": True,
-        "target_metal3_reconciliation_healthy": True,
-        "side_effects": False,
-    })
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        _fake_target_metal3_kubectl(documents),
+    )
+    _stub_target_metal3_ownership(monkeypatch)
     monkeypatch.setattr(target_main, "get_ironic_node", fake_ironic)
     monkeypatch.setenv("IRONIC_API_URL", "https://ironic.internal.example")
     monkeypatch.setenv("IRONIC_API_TOKEN", "test-token")
@@ -502,25 +521,9 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
     monkeypatch.setattr(
         target_main,
         "_kubectl",
-        lambda arguments, **_kwargs: {
-            "available": True,
-            "returncode": 0,
-            "stdout": json.dumps(documents[
-                {
-                    "cluster.cluster.x-k8s.io": "cluster",
-                    "machines.cluster.x-k8s.io": "machines",
-                    "metal3machines.infrastructure.cluster.x-k8s.io": "metal3machines",
-                }.get(arguments[1], "bmhs")
-            ]),
-            "stderr": "",
-        },
+        _fake_target_metal3_kubectl(documents),
     )
-    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
-        "target_bmh_identities": [],
-        "target_metal3_ownership_verified": True,
-        "target_metal3_reconciliation_healthy": True,
-        "side_effects": False,
-    })
+    _stub_target_metal3_ownership(monkeypatch)
     monkeypatch.delenv("IRONIC_API_URL", raising=False)
     monkeypatch.delenv("IRONIC_API_TOKEN", raising=False)
 
@@ -530,12 +533,12 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
             "namespace": "metal3",
             "cluster_name": "target-cluster",
             "source_bmh_identities": [
-            {
-                "namespace": "metal3",
-                "name": "host-1",
-                "hardware_identity": "id-1",
-            },
-        ],
+                {
+                    "namespace": "metal3",
+                    "name": "host-1",
+                    "hardware_identity": "id-1",
+                },
+            ],
         },
     })
 
@@ -549,32 +552,20 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
     monkeypatch.setattr(
         target_main,
         "_kubectl",
-        lambda arguments, **_kwargs: {
-            "available": True,
-            "returncode": 0,
-            "stdout": json.dumps(documents[
-                {
-                    "cluster.cluster.x-k8s.io": "cluster",
-                    "machines.cluster.x-k8s.io": "machines",
-                    "metal3machines.infrastructure.cluster.x-k8s.io": "metal3machines",
-                }.get(arguments[1], "bmhs")
-            ]),
-            "stderr": "",
+        _fake_target_metal3_kubectl(documents),
+    )
+    _stub_target_metal3_ownership(monkeypatch)
+    monkeypatch.setattr(
+        target_main,
+        "get_ironic_node",
+        lambda node_uuid: {
+            "uuid": node_uuid,
+            "provision_state": "active",
+            "maintenance": True,
+            "target_provision_state": None,
+            "last_error": None,
         },
     )
-    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
-        "target_bmh_identities": [],
-        "target_metal3_ownership_verified": True,
-        "target_metal3_reconciliation_healthy": True,
-        "side_effects": False,
-    })
-    monkeypatch.setattr(target_main, "get_ironic_node", lambda node_uuid: {
-        "uuid": node_uuid,
-        "provision_state": "active",
-        "maintenance": True,
-        "target_provision_state": None,
-        "last_error": None,
-    })
     monkeypatch.setenv("IRONIC_API_URL", "https://ironic.internal.example")
     monkeypatch.setenv("IRONIC_API_TOKEN", "test-token")
 
@@ -584,12 +575,12 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
             "namespace": "metal3",
             "cluster_name": "target-cluster",
             "source_bmh_identities": [
-            {
-                "namespace": "metal3",
-                "name": "host-1",
-                "hardware_identity": "id-1",
-            },
-        ],
+                {
+                    "namespace": "metal3",
+                    "name": "host-1",
+                    "hardware_identity": "id-1",
+                },
+            ],
         },
     })
 
