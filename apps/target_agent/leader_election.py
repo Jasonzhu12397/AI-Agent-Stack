@@ -127,7 +127,7 @@ class KubernetesLeaseElector:
             "spec": {
                 "holderIdentity": self.identity,
                 "leaseDurationSeconds": self.duration_seconds,
-                "acquireTime": spec.get("acquireTime") or now_text,
+                "acquireTime": now_text if holder != self.identity else (spec.get("acquireTime") or now_text),
                 "renewTime": now_text,
                 "leaseTransitions": int(spec.get("leaseTransitions") or 0)
                 + (1 if holder not in (None, self.identity) else 0),
