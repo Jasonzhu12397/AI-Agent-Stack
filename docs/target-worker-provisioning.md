@@ -40,7 +40,7 @@ The `workers_ready` handoff phase independently re-reads the MachineDeployment, 
 
 The Target Agent needs read access to Nodes, Machines and MachineDeployments; create/get access to versioned KubeadmConfigTemplates and Metal3MachineTemplates; and create/patch/get/list/watch access to MachineDeployments. The leader Lease is pre-created by the deployment manifest, so the Agent only needs get/update on that named Lease.
 
-The current ClusterRole grants the worker-resource write verbs at cluster scope. Before production rollout, the deployment generator should bind equivalent write permissions through a namespace-scoped Role in the configured CAPI namespace. Do not grant delete, Secret, BMH or Ironic write permissions as part of Worker provisioning.
+Worker-resource write verbs are granted through a namespace-scoped Role and RoleBinding, not the cluster-wide observer ClusterRole. The deploy script renders `TARGET_CAPI_NAMESPACE` (default `metal3`) into both RBAC objects and the Target Agent environment; the executor rejects any command targeting a different namespace. Set `TARGET_CAPI_NAMESPACE` to the actual target CAPI namespace when deploying. Do not grant delete, Secret, BMH or Ironic write permissions as part of Worker provisioning.
 
 ## Verification boundary
 
