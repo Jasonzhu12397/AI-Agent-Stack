@@ -70,6 +70,8 @@ def verify_metal3_ownership(
         raise Metal3OwnershipError("TARGET_METAL3MACHINE_INVENTORY_EMPTY")
     if not bmhs:
         raise Metal3OwnershipError("TARGET_BMH_INVENTORY_EMPTY")
+    if len(bmhs) > 2500:
+        raise Metal3OwnershipError("TARGET_BMH_INVENTORY_LIMIT_EXCEEDED")
     if not isinstance(source_bmh_identities, list) or not source_bmh_identities:
         raise Metal3OwnershipError("SOURCE_BMH_IDENTITY_SET_REQUIRED")
 
