@@ -65,15 +65,6 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd is required for chronyd and systemd-resolved" >&2
   exit 1
 fi
-if systemctl list-unit-files chronyd.service >/dev/null 2>&1 && systemctl cat chronyd.service >/dev/null 2>&1; then
-  chrony_unit=chronyd.service
-elif systemctl cat chrony.service >/dev/null 2>&1; then
-  chrony_unit=chrony.service
-else
-  echo "chrony service unit not found; verify the target image package repository" >&2
-  exit 1
-fi
-systemctl enable --now "$chrony_unit"
 if ! systemctl cat systemd-resolved.service >/dev/null 2>&1; then
   echo "systemd-resolved is required by this DNS cloud-init profile" >&2
   exit 1
@@ -85,9 +76,23 @@ if [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
 fi
 ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved.service
+if systemctl cat chronyd.service >/dev/null 2>&1; then
+  chrony_unit=chronyd.service
+elif systemctl cat chrony.service >/dev/null 2>&1; then
+  chrony_unit=chrony.service
+else
+  echo "chrony service unit not found; verify the target image package repository" >&2
+  exit 1
+fi
+systemctl enable --now "$chrony_unit"
+systemctl restart "$chrony_unit"
+chronyc waitsync 10 0.1
 chronyc -n tracking
+resolvectl query __DNS_TEST_NAME__
 resolvectl status
 """
+
+    apply_script = apply_script.replace("__DNS_TEST_NAME__", args.dns_test_name)
 
     files = [
         ("/etc/chrony/chrony.conf", chrony_content, "0644"),
