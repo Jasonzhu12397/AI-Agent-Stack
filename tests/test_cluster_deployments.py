@@ -1879,6 +1879,7 @@ def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
             "cluster_name": "edge-lab",
             "namespace": "default",
             "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
