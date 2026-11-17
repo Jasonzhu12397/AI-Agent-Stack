@@ -2077,6 +2077,8 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
             "phase": "target_agent_verification_pending",
             "target_agent_owns_cluster": False,
             "eph_reclaim_allowed": False,
+            "target_cluster_uid_after_move": "target-generated-uid",
+            "pivot_operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
@@ -2100,6 +2102,7 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
             "namespace": "metal3",
             "cluster_uid": "target-generated-uid",
             "source_cluster_uid": "source-cluster-uid",
+            "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
             "cluster_api_version": "cluster.x-k8s.io/v1beta1",
             "cluster_spec_sha256": "d" * 64,
             "cluster_identity_preserved": True,
@@ -2174,6 +2177,8 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
             "phase": "target_agent_verification_pending",
             "target_agent_owns_cluster": False,
             "eph_reclaim_allowed": False,
+            "target_cluster_uid_after_move": "target-cluster-uid",
+            "pivot_operation_id": "b4f1a3c2-7e45-4a6e-8b21-1e4f5a6d7890",
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
@@ -2197,6 +2202,7 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
             "namespace": "metal3",
             "cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
+            "operation_id": "b4f1a3c2-7e45-4a6e-8b21-1e4f5a6d7890",
             "cluster_api_version": "cluster.x-k8s.io/v1beta1",
             "cluster_spec_sha256": "c" * 64,
             "cluster_identity_preserved": True,
