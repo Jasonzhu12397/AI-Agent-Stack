@@ -84,6 +84,27 @@ the Target Agent has independently verified pivot and BMH ownership; the EPH cle
 must revoke it as part of the credential retirement phase.
 
 
+## EPH pivot hardware provenance
+
+The EPH Agent's successful `eph.capi.pivot` result is the only source of the source-side
+BMH identity set used by Target Agent ownership verification. Cloud Control validates the
+pivot result under the EPH agent's authenticated command lease, checks both source and
+target BMH digests, and persists the resulting attestation in a dedicated deployment
+`trusted_context` field. This context is separate from Target Agent's mutable phase
+checkpoint state.
+
+When Target Agent claims a command, Cloud Control exposes this trusted context separately
+from the command payload. Target Agent recomputes the source BMH digest, checks the adopted
+Cluster's source-UID annotation, checks the target Cluster UID, and compares the source
+identity set with the live target BMH/Metal3/Ironic inventory. A caller-supplied
+`source_bmh_identities` payload field is never accepted as provenance. Missing, malformed,
+replayed or digest-mismatched pivot evidence blocks BMH registry migration.
+
+The Cloud Control database creates and upgrades the `trusted_context` JSONB column
+independently of the mutable checkpoint `state` column. Only target-role claims receive
+the EPH pivot attestation; the EPH agent cannot read target deployment context through
+command claims.
+
 ## Handoff evidence semantics
 
 A Target Agent handoff phase is accepted only from live observations or a fail-closed bootstrap
