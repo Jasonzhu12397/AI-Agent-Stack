@@ -4750,15 +4750,15 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
 
 def test_worker_chrony_pre_kubeadm_command_is_valid_shell():
     command = agent.render_worker_chrony_pre_kubeadm_command("10.130.60.84")
-    checked = subprocess.run(
+    checked = subprocess.Popen(
         ["bash", "-n"],
-        input=command.encode("utf-8"),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=False,
     )
+    _, stderr = checked.communicate(command.encode("utf-8"))
 
-    assert checked.returncode == 0, checked.stderr.decode("utf-8", errors="replace")
+    assert checked.returncode == 0, stderr.decode("utf-8", errors="replace")
     assert "server 10.130.60.84 iburst" in command
     assert "pool " not in command
     assert "pool.ntp.org" not in command
