@@ -262,3 +262,44 @@ def test_verify_ntp_server_rejects_response_from_non_ntp_source_port(monkeypatch
 
     with pytest.raises(ChronyError, match="IRONIC_INTERNAL_NTP_RESPONSE_INVALID"):
         chrony.verify_ntp_server("10.130.60.84")
+
+
+def test_control_plane_ipv6_ntp_listener_is_verified(monkeypatch):
+    commands = []
+
+    monkeypatch.setattr(chrony.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(chrony.Path, "resolve", lambda self: chrony.Path("/"))
+    monkeypatch.setattr(
+        chrony,
+        "_read_os_release",
+        lambda path: {"ID": "ubuntu"},
+    )
+    monkeypatch.setattr(chrony, "_write_managed_config", lambda path, block: None)
+    monkeypatch.setattr(chrony.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        chrony,
+        "_verify_sync",
+        lambda runner, chronyc, expected, offset: {
+            "synchronized": True,
+            "selected_sources": ["time.example.net"],
+        },
+    )
+
+    def fake_run(runner, command, timeout=60):
+        commands.append(command)
+        if command[0] == "/usr/bin/ss":
+            return "UNCONN 0 0 [fd00::10]:123 [::]:*"
+        if command[-2:] == ["is-active", "chrony"]:
+            return "active"
+        return ""
+
+    monkeypatch.setattr(chrony, "_run", fake_run)
+
+    result = chrony.configure_chrony(
+        "target_control_plane",
+        ["time.example.net"],
+        ironic_internal_ip="fd00::10",
+        allowed_clients=["fd00::/64"],
+    )
+
+    assert result["internal_ntp_listener_verified"] is True
