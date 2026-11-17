@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 import os
@@ -150,7 +151,6 @@ def _snapshot_source_inventory(
     runner,
     kubectl: str,
     kubeconfig: Path,
-    namespace: str,
     process_env: dict[str, str],
 ) -> list[dict[str, Any]]:
     resources = (
@@ -1158,6 +1158,20 @@ def run_capi_pivot(
         or not re.fullmatch(r"[a-f0-9]{64}", acknowledgement["result_sha256"])
     ):
         raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_REQUIRED")
+    try:
+        acknowledged_at = datetime.datetime.fromisoformat(
+            acknowledgement["acknowledged_at"].replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_TIMESTAMP_INVALID") from exc
+    if acknowledged_at.tzinfo is None:
+        raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_TIMESTAMP_INVALID")
+    acknowledgement_age = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - acknowledged_at.astimezone(datetime.timezone.utc)
+    ).total_seconds()
+    if acknowledgement_age < -30 or acknowledgement_age > 300:
+        raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED")
 
     dry_run_payload = {
         key: payload[key]
@@ -1228,7 +1242,6 @@ def run_capi_pivot(
         preflight_runner,
         kubectl,
         source_kubeconfig,
-        namespace,
         process_env,
     )
     live_inventory_digest = hashlib.sha256(
