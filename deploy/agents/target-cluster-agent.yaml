@@ -179,6 +179,13 @@ spec:
                 secretKeyRef:
                   name: target-agent-credentials
                   key: worker-network-cidrs
+            - name: TARGET_REQUIRED_CONTROLLER_DEPLOYMENTS
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: required-controller-deployments
+            - name: CAPI_PIVOT_SOURCE_KUBECONFIG
+              value: /var/run/secrets/ai-agent/source-observer/config
             - name: AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
@@ -216,6 +223,9 @@ spec:
           volumeMounts:
             - name: agent-tmp
               mountPath: /tmp
+            - name: source-cluster-observer
+              mountPath: /var/run/secrets/ai-agent/source-observer
+              readOnly: true
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
               readOnly: true
@@ -238,6 +248,13 @@ spec:
         - name: agent-tmp
           emptyDir:
             sizeLimit: 16Mi
+        - name: source-cluster-observer
+          secret:
+            secretName: target-agent-source-observer
+            items:
+              - key: kubeconfig
+                path: config
+            defaultMode: 0440
         - name: control-plane-tls
           secret:
             secretName: agent-control-plane-mtls
