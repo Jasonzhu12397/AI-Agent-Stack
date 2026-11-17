@@ -780,6 +780,14 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
                 update_fields=["status", "error", "plan_result", "updated_at"]
             )
             return
+    elif operation.state == state.READY and command_state == AgentCommand.Status.RUNNING:
+        _record_capi_pivot_event(
+            deployment,
+            state.EXECUTING,
+            "pivot_command_started",
+            {"command_id": str(command.id)},
+            actor_node=deployment.eph_node,
+        )
     elif operation.state == state.WAITING_APPROVAL and command_state in {
         AgentCommand.Status.QUEUED,
         AgentCommand.Status.RUNNING,
@@ -876,6 +884,7 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             approval_hash=command.plan_hash,
             target_ack=persisted_ack,
         )
+    operation.refresh_from_db()
     deployment.plan_result = {
         **plan_result,
         "dual_agent": {
