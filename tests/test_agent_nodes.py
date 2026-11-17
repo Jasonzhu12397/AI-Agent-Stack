@@ -869,11 +869,11 @@ def test_agent_runtime_rejects_malformed_node_id(node_workspace):
 
 
 @pytest.mark.django_db
-def test_mutating_command_approval_expires_before_agent_dispatch(node_workspace):
+def test_pivot_command_dispatch_is_not_blocked_by_legacy_approval_fields(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
-        {"name": "eph-expiring-approval", "node_type": "eph_node"},
+        {"name": "eph-autonomous-pivot", "node_type": "eph_node"},
         format="json",
     )
     node_id = enrolled.data["id"]
@@ -885,27 +885,10 @@ def test_mutating_command_approval_expires_before_agent_dispatch(node_workspace)
             "payload": {"cluster_spec": {"cluster_name": "edge-lab"}},
         },
         format="json",
-        HTTP_IDEMPOTENCY_KEY="approval-expiry-test",
-    )
-    approver = get_user_model().objects.create_user(
-        username="node-expiry-approver",
-        password="test-password",
-    )
-    TenantMembership.objects.create(
-        tenant=tenant,
-        user=approver,
-        role=TenantMembership.Role.ADMIN,
-    )
-    approver_client = APIClient()
-    approver_client.force_authenticate(user=approver)
-    approved = approver_client.post(
-        f"/api/v1/agent-commands/{created.data['id']}/approve/",
-        {"plan_hash": created.data["plan_hash"]},
-        format="json",
+        HTTP_IDEMPOTENCY_KEY="autonomous-pivot-dispatch",
     )
     command = AgentCommand.objects.get(pk=created.data["id"])
-    command.approved_at = command.approved_at - datetime.timedelta(minutes=16)
-    command.save(update_fields=["approved_at"])
+    assert command.approved_at is None
 
     poll = APIClient().post(
         "/api/v1/agent-runtime/commands/poll/",
@@ -915,11 +898,10 @@ def test_mutating_command_approval_expires_before_agent_dispatch(node_workspace)
     )
 
     command.refresh_from_db()
-    assert approved.status_code == 200
     assert poll.status_code == 200
-    assert poll.data["command"] is None
-    assert command.status == AgentCommand.Status.FAILED
-    assert command.error["code"] == "APPROVAL_EXPIRED"
+    assert poll.data["command"]["id"] == str(command.id)
+    assert poll.data["command"]["command_type"] == "cluster.capi.pivot.execute"
+    assert command.status == AgentCommand.Status.RUNNING
 
 
 
