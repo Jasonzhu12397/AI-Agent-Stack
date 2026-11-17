@@ -245,8 +245,10 @@ def test_control_plane_uses_external_ntp_sources():
         "target_control_plane",
         ["time.example.net", "192.0.2.10"],
         source_scope="external",
+        ironic_internal_ip="10.130.60.84",
     )
     assert result["serves_internal_worker_ntp"] is True
+    assert result["internal_ntp_listener_ip"] == "10.130.60.84"
 
 
 def test_worker_uses_only_ironic_internal_ntp_ip():
