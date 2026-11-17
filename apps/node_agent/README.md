@@ -20,8 +20,8 @@ Runs as a Pod in the temporary EPH single-node Kubernetes cluster on the reserve
 - Report host health and validate the temporary management environment.
 - Inspect source Kubernetes, Cluster API, Metal3 and Ironic inventory.
 - Produce a validated deployment plan and source-side Pivot preflight.
-- Execute an explicitly approved `cluster.capi.pivot.execute` simulation after read-only source/target preflight.
-- Never transfer ownership from the EPH Agent; a successful simulation is not a real Pivot.
+- Execute an explicitly approved `cluster.capi.pivot.execute` command. With an operation ID and the exact approved payload, the Node Agent performs the real `clusterctl move` path after rechecking the source inventory, target management-plane readiness and Metal3 handoff.
+- Report the move result without declaring Target ownership complete. The Target Agent must independently verify the adopted CAPI inventory and run Metal3/Ironic postflight before the deployment can advance.
 
 ### Target Agent (AGENT_NODE_TYPE=target_cluster)
 
@@ -41,7 +41,7 @@ Build the Node Agent image using `deploy/agents/build-node-agent.sh` with explic
 
 ## Safety
 
-The current `cluster.capi.pivot.execute` command is simulation-only. It never invokes mutating `clusterctl move`, never writes Kubernetes resources, and never changes Agent ownership. EPH reclaim remains fail-closed. The node image includes kubectl and clusterctl only for the bounded, typed operations implemented by this runtime; arbitrary shell, arbitrary manifest apply and arbitrary command payloads are not supported.
+The `cluster.capi.pivot.execute` command has a real mutating path: it invokes `clusterctl move` only when the cloud control plane dispatches the exact operation-bound command after independent approval and Target Agent acknowledgement. The EPH Agent rechecks the approved source inventory digest and target/Metal3 preflight immediately before mutation. A successful command result is not proof of Target adoption and does not enable EPH reclaim. The Target Agent must independently verify the target Cluster identity, adopted inventory, controller readiness and applicable Metal3/Ironic postflight. Ambiguous or interrupted execution requires reconciliation; it must not be replayed automatically. EPH reclaim remains fail-closed until the separate Target adoption and hardware verification gates complete. The node image includes kubectl and clusterctl only for the bounded, typed operations implemented by this runtime; arbitrary shell, arbitrary manifest apply and arbitrary command payloads are not supported.
 
 ## Dual-network inspection
 
