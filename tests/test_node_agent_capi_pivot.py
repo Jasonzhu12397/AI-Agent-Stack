@@ -1629,10 +1629,14 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
             result = base_runner(command, **kwargs)
             moved["value"] = result.returncode == 0
             return result
-        if command[0].endswith("kubectl") and "clusters.cluster.x-k8s.io" in command:
+        if command[0].endswith("kubectl"):
             kubeconfig = command[command.index("--kubeconfig") + 1]
-            named_get = "target-cluster" in command
-            if named_get and kubeconfig.endswith("source.kubeconfig"):
+            named_cluster_get = (
+                "get" in command
+                and "clusters.cluster.x-k8s.io" in command
+                and "target-cluster" in command
+            )
+            if named_cluster_get and kubeconfig.endswith("source.kubeconfig"):
                 if moved["value"]:
                     return subprocess.CompletedProcess(
                         command,
@@ -1658,7 +1662,7 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
                 return subprocess.CompletedProcess(
                     command, 0, json.dumps({"items": []}), ""
                 )
-            if named_get and kubeconfig.endswith("target.kubeconfig"):
+            if named_cluster_get and kubeconfig.endswith("target.kubeconfig"):
                 return subprocess.CompletedProcess(command, 0, json.dumps(target_cluster), "")
             if (
                 moved["value"]
