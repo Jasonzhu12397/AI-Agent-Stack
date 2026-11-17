@@ -33,7 +33,13 @@ def _cluster_list(*names: str) -> str:
             "apiVersion": "cluster.x-k8s.io/v1beta1",
             "kind": "ClusterList",
             "items": [
-                {"metadata": {"name": name, "namespace": "metal3"}}
+                {
+                    "metadata": {
+                        "name": name,
+                        "namespace": "metal3",
+                        "uid": f"uid-{name}",
+                    }
+                }
                 for name in names
             ],
         }
