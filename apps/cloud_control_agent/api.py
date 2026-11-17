@@ -45,6 +45,20 @@ def _validate_action_role(role: str, action: str) -> None:
         raise ControlApiError("COMMAND_ACTION_NOT_ALLOWED_FOR_AGENT_ROLE")
 
 
+def _validate_reported_capabilities(role: str, capabilities: Any) -> list[str]:
+    if (
+        not isinstance(capabilities, list)
+        or len(capabilities) > 100
+        or any(not isinstance(item, str) or not item for item in capabilities)
+        or len(capabilities) != len(set(capabilities))
+    ):
+        raise ControlApiError("HEARTBEAT_CAPABILITIES_INVALID")
+    allowed = EPH_ACTIONS if role == "eph" else TARGET_ACTIONS if role == "target" else frozenset()
+    if not set(capabilities).issubset(allowed):
+        raise ControlApiError("HEARTBEAT_CAPABILITY_NOT_ALLOWED_FOR_AGENT_ROLE")
+    return capabilities
+
+
 CHECKPOINT_PHASES = (
     "eph_single_node_ready",
     "target_control_plane_ready",
@@ -484,12 +498,18 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             sequence = document.get("sequence")
             readiness = document.get("readiness")
             capabilities = document.get("capabilities", [])
-            if not isinstance(sequence, int) or sequence < 1:
+            if (
+                not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or sequence < 1
+            ):
                 raise ControlApiError("HEARTBEAT_SEQUENCE_INVALID")
             if readiness not in ("ready", "degraded", "not_ready"):
                 raise ControlApiError("HEARTBEAT_READINESS_INVALID")
-            if not isinstance(capabilities, list) or len(capabilities) > 100:
-                raise ControlApiError("HEARTBEAT_CAPABILITIES_INVALID")
+            capabilities = _validate_reported_capabilities(
+                identity["role"],
+                capabilities,
+            )
             with psycopg.connect(database_url) as connection:
                 updated = connection.execute(
                     """
