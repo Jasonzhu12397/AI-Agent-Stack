@@ -170,3 +170,80 @@ def test_eph_role_defers_time_dns_execution_until_before_kubeadm(tmp_path):
     assert "write_files:" in content
     assert "runcmd:" not in content
     assert "ai-agent-site-time-dns-apply" in content
+
+
+
+def test_renderer_emits_capi_pre_kubeadm_files_for_target_masters_and_workers(tmp_path):
+    profile = {
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": ["time.cloudflare.com"],
+        "dns_servers": ["1.1.1.1"],
+        "search_domains": ["lab.example"],
+        "dns_probe_name": "time.cloudflare.com",
+    }
+    profile_path = tmp_path / "time-dns-profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    output = tmp_path / "target-kubeadm-fragment.yaml"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--role",
+            "target-os",
+            "--profile-json",
+            str(profile_path),
+            "--format",
+            "capi-kubeadm",
+            "--output",
+            str(output),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    content = output.read_text(encoding="utf-8")
+    assert "files:" in content
+    assert "/etc/chrony/chrony.conf" in content
+    assert "/etc/systemd/resolved.conf.d/90-ai-agent-site-dns.conf" in content
+    assert "/usr/local/sbin/ai-agent-site-time-dns-apply" in content
+    assert "preKubeadmCommands:" in content
+    assert "chronyc waitsync 10 0.1" in content
+    assert "DNS=1.1.1.1" in content
+    assert "Domains=~. lab.example" in content
+    assert "runcmd:" not in content
+
+
+def test_capi_kubeadm_format_rejects_eph_live_os_role(tmp_path):
+    profile = {
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": ["time.cloudflare.com"],
+        "dns_servers": ["1.1.1.1"],
+        "search_domains": [],
+        "dns_probe_name": "time.cloudflare.com",
+    }
+    profile_path = tmp_path / "time-dns-profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--role",
+            "eph-live-os",
+            "--profile-json",
+            str(profile_path),
+            "--format",
+            "capi-kubeadm",
+            "--output",
+            str(tmp_path / "invalid.yaml"),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    assert "CAPI_KUBEADM_FORMAT_REQUIRES_TARGET_OS_ROLE" in result.stderr
