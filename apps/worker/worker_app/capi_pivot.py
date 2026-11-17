@@ -142,7 +142,10 @@ def _get_object(
             retry_safe=False,
         )
     try:
-        return json.loads(result.stdout)
+        document = json.loads(result.stdout)
+        if not isinstance(document, dict):
+            raise ValueError("Kubernetes object response must be a JSON object")
+        return document
     except (TypeError, ValueError) as exc:
         raise PivotVerificationError(
             f"Invalid JSON while reading {item.kind}/{item.name}",
@@ -171,10 +174,13 @@ def verify_pivot_inventory(
                 f"Target object {item.kind}/{item.name} has invalid metadata",
                 retry_safe=False,
             )
+        target_uid = target_metadata.get("uid")
         if (
             target.get("kind") != item.kind
             or target_metadata.get("name") != item.name
             or target_metadata.get("namespace") != item.namespace
+            or not isinstance(target_uid, str)
+            or not target_uid
             or (
                 item.api_version is not None
                 and target.get("apiVersion") != item.api_version
@@ -217,6 +223,8 @@ def _inventory_digest(objects: tuple[CapiObjectRef, ...]) -> str:
             "name": item.name,
             "namespace": item.namespace,
             "uid": item.uid,
+            "api_version": item.api_version,
+            "spec_sha256": item.spec_sha256,
         }
         for item in sorted(
             objects,
@@ -358,9 +366,43 @@ def pivot_cluster_api(
                 retry_safe=False,
             )
         if state in {"executing", "verifying", "uncertain"}:
+            # A worker may have crashed after clusterctl completed but before the
+            # durable journal reached "completed". Reconcile both API servers first.
+            # Only the exact target inventory plus source absence proves completion.
+            if verify_pivot_inventory(
+                runner,
+                source_kubeconfig,
+                target_kubeconfig,
+                objects,
+                timeout=command_timeout,
+            ):
+                _save_journal(
+                    journal,
+                    operation_id,
+                    {
+                        "state": "completed",
+                        "inventory_sha256": digest,
+                        "namespace": namespace,
+                        "inventory_objects": len(objects),
+                        "target_agent_acknowledged": True,
+                        "ownership_transferred": True,
+                        "recovered_after_interruption": True,
+                    },
+                )
+                return {
+                    **result,
+                    "state": "completed",
+                    "pivot_executed": True,
+                    "pivot_simulated": False,
+                    "execution_mode": "clusterctl_move_recovered",
+                    "ownership_transferred": True,
+                    "side_effects": True,
+                    "target_agent_acknowledged": True,
+                    "recovered_after_interruption": True,
+                }
             raise PivotVerificationError(
-                "Pivot operation has an ambiguous prior execution; inspect both clusters "
-                "and reconcile before retry",
+                "Pivot operation has an ambiguous prior execution and ownership "
+                "is not fully transferred; inspect both clusters before retry",
                 retry_safe=False,
             )
         if state != "preflight_complete":
