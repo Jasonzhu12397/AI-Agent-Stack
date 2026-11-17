@@ -152,6 +152,17 @@ def _pivot_runner_for(
                     _cluster_list() if moved["value"] else _cluster_list("target-cluster"),
                     "",
                 )
+            if (
+                "get" in command
+                and "clusters.cluster.x-k8s.io" in command
+                and "target-cluster" in command
+            ):
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"metadata": {"uid": "uid-target-cluster"}}),
+                    "",
+                )
             if "metal3-ironic" in command:
                 containers = [{"name": "ironic"}]
                 if target_keepalived:
