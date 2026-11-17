@@ -1033,6 +1033,103 @@ def build_capi_owner_graph(
 
 
 
+def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        raise NodeAgentError("INVALID_TIME_DNS_PROFILE")
+    if profile.get("version") != "v1":
+        raise NodeAgentError("UNSUPPORTED_TIME_DNS_PROFILE_VERSION")
+    if profile.get("chrony_required") is not True:
+        raise NodeAgentError("CHRONY_REQUIRED_FOR_SITE_NODES")
+    if profile.get("resolver_backend") != "systemd-resolved":
+        raise NodeAgentError("UNSUPPORTED_DNS_RESOLVER_BACKEND")
+    roles = profile.get("apply_to")
+    if not isinstance(roles, list) or set(roles) != {"eph_live_os", "target_os"}:
+        raise NodeAgentError("TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS")
+
+    ntp_servers = profile.get("ntp_servers")
+    if (
+        not isinstance(ntp_servers, list)
+        or not ntp_servers
+        or len(ntp_servers) > 8
+        or any(not isinstance(item, str) or not item.strip() for item in ntp_servers)
+    ):
+        raise NodeAgentError("TIME_DNS_NTP_SERVERS_REQUIRED")
+    normalized_ntp = []
+    for server in ntp_servers:
+        value = server.strip()
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            if not re.fullmatch(
+                r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+                value,
+            ):
+                raise NodeAgentError("INVALID_TIME_DNS_NTP_SERVER")
+        if value in normalized_ntp:
+            raise NodeAgentError("DUPLICATE_TIME_DNS_NTP_SERVER")
+        normalized_ntp.append(value)
+
+    dns_servers = profile.get("dns_servers")
+    if (
+        not isinstance(dns_servers, list)
+        or not dns_servers
+        or len(dns_servers) > 8
+    ):
+        raise NodeAgentError("TIME_DNS_RESOLVERS_REQUIRED")
+    normalized_dns = []
+    for server in dns_servers:
+        if not isinstance(server, str):
+            raise NodeAgentError("INVALID_TIME_DNS_RESOLVER")
+        try:
+            value = str(ipaddress.ip_address(server.strip()))
+        except ValueError as exc:
+            raise NodeAgentError("INVALID_TIME_DNS_RESOLVER") from exc
+        if value in normalized_dns:
+            raise NodeAgentError("DUPLICATE_TIME_DNS_RESOLVER")
+        normalized_dns.append(value)
+
+    search_domains = profile.get("search_domains", [])
+    if not isinstance(search_domains, list) or len(search_domains) > 8:
+        raise NodeAgentError("INVALID_TIME_DNS_SEARCH_DOMAINS")
+    normalized_domains = []
+    for domain in search_domains:
+        if (
+            not isinstance(domain, str)
+            or not re.fullmatch(
+                r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+                domain.strip(),
+            )
+        ):
+            raise NodeAgentError("INVALID_TIME_DNS_SEARCH_DOMAIN")
+        normalized_domains.append(domain.strip())
+
+    dns_probe_name = profile.get("dns_probe_name")
+    if (
+        not isinstance(dns_probe_name, str)
+        or not re.fullmatch(
+            r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+            r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+            dns_probe_name.strip(),
+        )
+    ):
+        raise NodeAgentError("TIME_DNS_PROBE_NAME_REQUIRED")
+
+    return {
+        "valid": True,
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": normalized_ntp,
+        "dns_servers": normalized_dns,
+        "search_domains": normalized_domains,
+        "dns_probe_name": dns_probe_name.strip(),
+        "profile_hash": canonical_hash(profile),
+    }
+
+
 def validate_network_profile(profile: Any) -> dict[str, Any]:
     if not isinstance(profile, dict):
         raise NodeAgentError("INVALID_NETWORK_PROFILE")
@@ -4569,7 +4666,12 @@ def execute_command(
         network_profile_result = None
         if "network_profile" in spec:
             network_profile_result = validate_network_profile(spec["network_profile"])
+        time_dns_profile_result = None
+        if "time_dns_profile" in spec:
+            time_dns_profile_result = validate_time_dns_profile(spec["time_dns_profile"])
         missing_requirements = []
+        if time_dns_profile_result is None:
+            missing_requirements.append("time_dns_profile")
         for key in [
             "cluster_api",
             "bootstrap_kubeadm",
@@ -4627,6 +4729,7 @@ def execute_command(
             "worker_replicas": worker_replicas,
             "plan_hash": canonical_hash(spec),
             "network_profile": network_profile_result,
+            "time_dns_profile": time_dns_profile_result,
             "side_effects": False,
             "provisioning_ready": not missing_requirements,
             "missing_requirements": missing_requirements,
@@ -4638,6 +4741,8 @@ def execute_command(
                 "ironic_and_ipa_versions",
                 "machine_template_compatibility",
                 "network_and_image_configuration",
+                "host_chrony_and_dns_bootstrap",
+                "host_time_sync_and_dns_resolution",
                 "baremetal_host_and_bmc_reference_validation",
             ],
         }
