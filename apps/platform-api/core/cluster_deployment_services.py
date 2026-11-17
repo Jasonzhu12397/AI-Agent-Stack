@@ -1482,7 +1482,7 @@ def handle_deployment_command_result(
             and pivot_operation.state == ClusterDeploymentPivotOperation.State.VERIFYING
             and isinstance(pivot_operation.target_identity, dict)
             and pivot_operation.target_identity.get("uid") == expected_target_uid
-            isinstance(expected_uid, str)
+            and isinstance(expected_uid, str)
             and bool(expected_uid)
             and isinstance(expected_spec_sha256, str)
             and bool(re.fullmatch(r"[a-f0-9]{64}", expected_spec_sha256))
