@@ -4769,9 +4769,14 @@ def kubernetes_api_lease_request(
     expected_prefix = "/apis/coordination.k8s.io/v1/namespaces/"
     if (
         method not in {"POST", "PUT"}
+        or not isinstance(path, str)
         or not path.startswith(expected_prefix)
-        or "/leases" not in path
         or ".." in path
+        or (method == "POST" and not path.endswith("/leases"))
+        or (method == "PUT" and not re.fullmatch(
+            r"/apis/coordination[.]k8s[.]io/v1/namespaces/[a-z0-9-]+/leases/[a-z0-9-]+",
+            path,
+        ))
     ):
         raise NodeAgentError("KUBERNETES_LEASE_REQUEST_NOT_ALLOWLISTED")
     host, port, token, context = _kubernetes_api_identity()
@@ -4819,11 +4824,17 @@ class KubernetesLeaseLeaderElector:
         renew_interval_seconds: int = 5,
     ):
         if (
-            not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            not isinstance(namespace, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or not isinstance(lease_name, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", lease_name)
             or not isinstance(identity, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", identity)
             or len(identity) > 128
+            or not isinstance(lease_duration_seconds, int)
+            or isinstance(lease_duration_seconds, bool)
+            or not isinstance(renew_interval_seconds, int)
+            or isinstance(renew_interval_seconds, bool)
             or lease_duration_seconds < 15
             or renew_interval_seconds < 1
             or renew_interval_seconds >= lease_duration_seconds
