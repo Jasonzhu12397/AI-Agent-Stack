@@ -277,6 +277,66 @@ def test_deployment_cancel_marks_running_mutating_command_outcome_unknown(
     assert deployment.error["command_ids"] == [str(command.id)]
 
 
+@pytest.mark.django_db
+def test_expired_running_pivot_lease_moves_deployment_to_reconciliation_required(
+    cluster_delivery_workspace,
+):
+    _, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="expired-running-pivot-lease",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    command = AgentCommand.objects.get(deployment=deployment)
+    command.command_type = "cluster.capi.pivot.execute"
+    command.status = AgentCommand.Status.RUNNING
+    command.attempts = 1
+    command.lease_token = uuid.uuid4()
+    command.lease_expires_at = timezone.now() - datetime.timedelta(seconds=1)
+    command.save(
+        update_fields=[
+            "command_type",
+            "status",
+            "attempts",
+            "lease_token",
+            "lease_expires_at",
+            "updated_at",
+        ]
+    )
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.plan_result = {
+        "dual_agent": {
+            "phase": "pivot_executing",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        }
+    }
+    deployment.save(update_fields=["status", "plan_result", "updated_at"])
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    command.refresh_from_db()
+    deployment.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["command"] is None
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == (
+        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["command_id"] == str(command.id)
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_outcome_unknown"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
 
 @pytest.mark.django_db
 def test_target_postflight_rejects_dry_run_plan_even_if_prerequisites_are_present(
