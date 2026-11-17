@@ -4908,15 +4908,16 @@ class KubernetesLeaseLeaderElector:
             or not isinstance(duration, int)
             or isinstance(duration, bool)
             or duration < 1
+            or duration > 3600
         ):
             raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
-        if holder not in {None, "", self.identity}:
+        if holder is not None and not isinstance(holder, str):
+            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
+        if holder and holder != self.identity:
             if renew_time is None:
                 raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_TIME_INVALID")
             if (now - renew_time).total_seconds() < duration:
                 return False
-        elif holder not in {None, "", self.identity} and renew_time is None:
-            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_TIME_INVALID")
 
         transitions = spec.get("leaseTransitions", 0)
         if (
