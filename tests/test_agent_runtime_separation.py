@@ -53,3 +53,23 @@ def test_cloud_and_cluster_agent_entrypoints_are_not_the_same():
     node = (ROOT / "Dockerfile.node-agent").read_text(encoding="utf-8")
     assert "worker_app.main" in cloud
     assert "apps.target_agent.main" in node
+
+
+def test_three_agent_roles_have_distinct_entrypoints_and_target_runs_on_control_plane():
+    eph_entrypoint = (ROOT / "apps/eph_agent/main.py").read_text(encoding="utf-8")
+    target_entrypoint = (ROOT / "apps/target_agent/main.py").read_text(encoding="utf-8")
+    eph_manifest = yaml.safe_load(
+        (ROOT / "deploy/agents/eph-node-agent.yaml").read_text(encoding="utf-8")
+    )
+    target_manifest = yaml.safe_load(
+        (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(encoding="utf-8")
+    )
+
+    assert 'expected_node_type="eph_node"' in eph_entrypoint
+    assert 'expected_node_type="target_cluster"' in target_entrypoint
+    assert not (ROOT / "apps/node_agent/agent.py").exists()
+    assert "apps.eph_agent.main" in str(eph_manifest["spec"]["template"]["spec"]["containers"][0]["command"])
+    assert "apps.target_agent.main" in str(target_manifest["spec"]["template"]["spec"]["containers"][0]["command"])
+    assert target_manifest["spec"]["template"]["spec"]["nodeSelector"] == {
+        "node-role.kubernetes.io/control-plane": ""
+    }
