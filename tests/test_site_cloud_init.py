@@ -63,6 +63,16 @@ def test_renderer_rejects_non_ip_dns_server(tmp_path):
     assert "DNS server must be an IPv4 or IPv6 address" in result.stderr
 
 
+def test_renderer_rejects_shell_injection_in_dns_probe_name(tmp_path):
+    result, _ = _render(
+        tmp_path,
+        "--dns-test-name",
+        "time.example;touch /tmp/pwned",
+    )
+    assert result.returncode != 0
+    assert "invalid DNS search domain" in result.stderr
+
+
 def test_renderer_records_distinct_os_role(tmp_path):
     output = tmp_path / "eph-user-data.yaml"
     result = subprocess.run(
