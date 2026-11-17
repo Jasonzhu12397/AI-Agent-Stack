@@ -677,7 +677,7 @@ class ClusterDeployment(models.Model):
 class ClusterDeploymentCheckpoint(models.Model):
     deployment = models.OneToOneField(
         ClusterDeployment,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="checkpoint",
     )
     agent_node = models.ForeignKey(
