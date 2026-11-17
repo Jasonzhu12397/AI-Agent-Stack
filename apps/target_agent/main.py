@@ -283,6 +283,86 @@ def _observe_ready_master_count(cluster_name: str) -> int:
     return ready_masters
 
 
+def _observe_target_agent_readiness() -> dict[str, Any]:
+    namespace = os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system")
+    deployment_name = os.environ.get("TARGET_AGENT_DEPLOYMENT_NAME", "target-agent")
+    lease_name = os.environ.get("AGENT_LEASE_NAME", "target-agent-leader")
+    instance_id = os.environ.get("AGENT_INSTANCE_ID", "")
+    if not instance_id:
+        raise HandoffError("TARGET_AGENT_INSTANCE_ID_CONFIGURATION_REQUIRED")
+    for value in (namespace, deployment_name, lease_name):
+        if not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value):
+            raise HandoffError("TARGET_AGENT_READINESS_RESOURCE_NAME_INVALID")
+
+    deployment_result = _kubectl([
+        "get",
+        "deployment",
+        deployment_name,
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ])
+    if not deployment_result["available"]:
+        raise HandoffError("TARGET_AGENT_DEPLOYMENT_OBSERVATION_FAILED")
+    try:
+        deployment = json.loads(deployment_result["stdout"])
+    except ValueError as exc:
+        raise HandoffError("TARGET_AGENT_DEPLOYMENT_JSON_INVALID") from exc
+    deployment_spec = deployment.get("spec", {})
+    deployment_status = deployment.get("status", {})
+    desired = deployment_spec.get("replicas")
+    if (
+        desired != 3
+        or deployment_status.get("observedGeneration", 0)
+        < deployment.get("metadata", {}).get("generation", 0)
+        or deployment_status.get("updatedReplicas", 0) != 3
+        or deployment_status.get("availableReplicas", 0) != 3
+        or deployment_status.get("readyReplicas", 0) != 3
+    ):
+        raise HandoffError("TARGET_AGENT_THREE_REPLICA_DEPLOYMENT_NOT_READY")
+
+    lease_result = _kubectl([
+        "get",
+        "lease.coordination.k8s.io",
+        lease_name,
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ])
+    if not lease_result["available"]:
+        raise HandoffError("TARGET_AGENT_LEADER_LEASE_OBSERVATION_FAILED")
+    try:
+        lease = json.loads(lease_result["stdout"])
+    except ValueError as exc:
+        raise HandoffError("TARGET_AGENT_LEADER_LEASE_JSON_INVALID") from exc
+    lease_spec = lease.get("spec", {})
+    holder = lease_spec.get("holderIdentity")
+    renew_time = KubernetesLeaseElector._parse_time(lease_spec.get("renewTime"))
+    duration = lease_spec.get("leaseDurationSeconds")
+    if (
+        holder != instance_id
+        or renew_time is None
+        or not isinstance(duration, int)
+        or isinstance(duration, bool)
+        or duration < 10
+        or datetime.now(UTC) >= renew_time + __import__("datetime").timedelta(
+            seconds=duration
+        )
+    ):
+        raise HandoffError("TARGET_AGENT_LEADER_LEASE_NOT_HELD_OR_EXPIRED")
+    return {
+        "target_agent_ready": True,
+        "target_agent_leader_elected": True,
+        "target_agent_replica_count": 3,
+        "target_agent_available_replicas": 3,
+        "target_agent_leader_identity": holder,
+        "target_agent_lease_renew_time": renew_time.isoformat(),
+        "side_effects": False,
+    }
+
+
 def _observe_target_capi_pivot(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     cluster_name = payload.get("cluster_name")
@@ -626,6 +706,13 @@ def execute(
                     "ironic_internal_ntp_service_reachable": True,
                     "ironic_internal_ntp_probe": ntp_probe,
                 }
+            if next_phase == HandoffPhase.TARGET_AGENT_READY.value:
+                evidence = {
+                    **evidence,
+                    **_observe_target_agent_readiness(),
+                }
+            if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
+                raise HandoffError("WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED")
             if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
                 configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
                     evidence.get("ironic_internal_ntp_ip")
