@@ -164,7 +164,7 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
     monkeypatch.setattr(
         target_main,
         "_observe_target_metal3_ownership",
-        lambda payload: observed,
+        lambda payload, deployment_context: observed,
     )
     result = execute_target({
         "action": "target.handoff.evaluate",
@@ -173,6 +173,7 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
             "sequence": 4,
             "state": {},
         },
+        "deployment_context": _trusted_eph_pivot_context(),
         "payload": {
             "namespace": "metal3",
             "cluster_name": "target-cluster",
@@ -455,6 +456,33 @@ def test_target_agent_rejects_capi_pivot_when_live_target_source_uid_annotation_
 
 
 
+def _trusted_eph_pivot_context():
+    identities = [{
+        "namespace": "metal3",
+        "name": "host-1",
+        "hardware_identity": "system-uuid:sha256:abc",
+    }]
+    digest = hashlib.sha256(
+        json.dumps(
+            identities,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "eph_pivot_attestation": {
+            "source_cluster_uid": "source-cluster-uid",
+            "target_cluster_uid": "cluster-uid",
+            "source_bmh_identities": identities,
+            "source_bmh_digest": digest,
+            "target_bmh_digest": digest,
+            "source_agent_id": "eph-agent-id",
+            "command_id": "pivot-command-id",
+            "attested_at": "2026-11-17T00:00:00+00:00",
+        }
+    }
+
+
 def _target_metal3_observation_documents():
     hosts = [
         {
@@ -474,6 +502,9 @@ def _target_metal3_observation_documents():
                 "name": "target-cluster",
                 "namespace": "metal3",
                 "uid": "cluster-uid",
+                "annotations": {
+                    "ai-agent-stack.io/source-cluster-uid": "source-cluster-uid",
+                },
             },
         },
         "machines": {"items": []},
@@ -538,17 +569,13 @@ def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatc
     monkeypatch.setenv("IRONIC_API_URL", "https://ironic.internal.example")
     monkeypatch.setenv("IRONIC_API_TOKEN", "test-token")
 
-    evidence = target_main._observe_target_metal3_ownership({
-        "namespace": "metal3",
-        "cluster_name": "target-cluster",
-        "source_bmh_identities": [
-            {
-                "namespace": "metal3",
-                "name": "host-1",
-                "hardware_identity": "id-1",
-            },
-        ],
-    })
+    evidence = target_main._observe_target_metal3_ownership(
+        {
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+        },
+        _trusted_eph_pivot_context(),
+    )
 
     assert calls == [
         "12345678-1234-1234-1234-123456789ab1",
@@ -572,6 +599,7 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
 
     result = execute_target({
         "action": "target.metal3.verify_ownership",
+        "deployment_context": _trusted_eph_pivot_context(),
         "payload": {
             "namespace": "metal3",
             "cluster_name": "target-cluster",
@@ -579,7 +607,7 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
                 {
                     "namespace": "metal3",
                     "name": "host-1",
-                    "hardware_identity": "id-1",
+                    "hardware_identity": "forged-payload-identity",
                 },
             ],
         },
@@ -614,6 +642,7 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
 
     result = execute_target({
         "action": "target.metal3.verify_ownership",
+        "deployment_context": _trusted_eph_pivot_context(),
         "payload": {
             "namespace": "metal3",
             "cluster_name": "target-cluster",
@@ -621,7 +650,7 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
                 {
                     "namespace": "metal3",
                     "name": "host-1",
-                    "hardware_identity": "id-1",
+                    "hardware_identity": "forged-payload-identity",
                 },
             ],
         },
