@@ -74,10 +74,12 @@ def test_target_agent_takes_over_expired_lease_with_resource_version(monkeypatch
         - datetime.timedelta(seconds=90)
     ).isoformat().replace("+00:00", "Z")
     calls = []
+    current_lease = _lease("target-cluster-agent-1", expired, transitions=4)
+    current_lease["metadata"]["annotations"] = {"managed-by": "kubectl"}
     monkeypatch.setattr(
         agent,
         "kubernetes_api_get",
-        lambda path: _lease("target-cluster-agent-1", expired, transitions=4),
+        lambda path: current_lease,
     )
     monkeypatch.setattr(
         agent,
@@ -90,6 +92,7 @@ def test_target_agent_takes_over_expired_lease_with_resource_version(monkeypatch
     assert calls[0][2]["metadata"]["resourceVersion"] == "7"
     assert calls[0][2]["spec"]["holderIdentity"] == "target-cluster-agent-0"
     assert calls[0][2]["spec"]["leaseTransitions"] == 5
+    assert calls[0][2]["metadata"]["annotations"] == {"managed-by": "kubectl"}
 
 
 def test_target_agent_rejects_malformed_lease_holder(monkeypatch):
