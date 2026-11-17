@@ -7,8 +7,8 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
 from threading import Event
+from typing import Any
 
 
 class CapiPivotError(RuntimeError):
