@@ -247,6 +247,16 @@ The target-side architecture contains one logical Target Agent service deployed 
 The Target Agent replicas use the pre-created target-cluster-agent-leader Kubernetes Lease before polling the cloud command queue or executing any side effect. Standby replicas do not poll, heartbeat as independent identities or submit command results. The current target Deployment declares three replicas, enforces required pod anti-affinity across distinct control-plane/master nodes, tolerates both control-plane and legacy master NoSchedule taints, and includes a PodDisruptionBudget with two available replicas. The runtime renews the Lease every five seconds with a 30-second duration, stops polling when leadership is lost, and cancels active command execution without submitting a stale result. The Target ServiceAccount can only get and update the named pre-created Lease. Actual target-cluster rollout and failover still require environment-level verification.
 
 
+The Target Agent must verify every Machine-backed Kubernetes Node has
+`ai-agent-stack.io/chrony-synced=true` and the exact
+`ai-agent-stack.io/time-dns-profile-hash` from the immutable deployment plan
+before reporting adoption success or authorizing EPH reclaim. The generated
+CAPI fragment must be merged into both
+`KubeadmControlPlane.spec.kubeadmConfigSpec` and
+`KubeadmConfigTemplate.spec.template.spec`, including the pre-kubeadm command
+and kubelet node labels. This gives the Target Agent host-time evidence without
+introducing a per-node resident Agent or DaemonSet.
+
 ## Mandatory host NTP and DNS configuration
 
 NTP and DNS are host operating-system requirements, not Agent-Pod packages. Every EPH host booted into the temporary Live OS and every Target Kubernetes master must install and run `chronyd` (the service unit may be named `chrony.service` on Debian/Ubuntu). The final Target OS must receive its own configuration; the temporary EPH Live OS configuration disappears when the host is re-imaged.
