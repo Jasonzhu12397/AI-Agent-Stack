@@ -2119,7 +2119,12 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
     }
     deployment.status = ClusterDeployment.Status.PROVISIONING
     deployment.save(update_fields=["target_node", "spec", "plan_result", "status"])
@@ -2150,7 +2155,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
     result = {
         "ready": True,
         "cluster_name": "edge-lab",
-        "cluster_uid": "source-cluster-uid",
+        "cluster_uid": "target-cluster-uid",
         "namespace": "default",
         "expected_worker_replicas": 4,
         "machine_deployment_name": "edge-workers",
@@ -2218,7 +2223,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
 
 
 @pytest.mark.django_db
-def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
+def test_control_plane_rejects_worker_preflight_without_target_cluster_uid(
     cluster_delivery_workspace,
 ):
     deployment, command, result = _worker_preflight_fixture(
@@ -2228,7 +2233,12 @@ def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
     deployment.plan_result = {
         **deployment.plan_result,
         "capi_pivot_source_preflight": {
-            "source_cluster_identity": {"uid": None}
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": None,
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
         },
         "dual_agent": {"target_agent_owns_cluster": True},
     }
