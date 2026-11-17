@@ -2844,6 +2844,7 @@ def execute_command(
             or metadata.get("name") != cluster_name
             or metadata.get("namespace") != namespace
             or actual_uid != expected_target_uid
+            or actual_uid == expected_uid
             or actual_api_version != expected_api_version
             or not isinstance(actual_spec, dict)
         ):
