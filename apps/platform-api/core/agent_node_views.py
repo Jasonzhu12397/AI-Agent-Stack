@@ -32,7 +32,10 @@ from core.eph_pki import (
     EPHCertificateSignerUnavailable,
     sign_eph_csr,
 )
-from core.cluster_deployment_services import handle_deployment_command_result
+from core.cluster_deployment_services import (
+    _record_capi_pivot_event,
+    handle_deployment_command_result,
+)
 from core.models import (
     AgentCommand,
     AgentMachine,
@@ -40,6 +43,7 @@ from core.models import (
     EPHSeedArtifact,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
+    ClusterDeploymentPivotOperation,
     Project,
     ProjectMembership,
     Tenant,
@@ -2540,6 +2544,14 @@ class AgentRuntimePollView(APIView):
                 acknowledgement = payload.get("target_agent_ack")
                 target_command = None
                 target_node = deployment.target_node if deployment is not None else None
+                pivot_operation = (
+                    ClusterDeploymentPivotOperation.objects.select_for_update().filter(
+                        deployment=deployment,
+                        operation_id=payload.get("operation_id"),
+                    ).first()
+                    if deployment is not None
+                    else None
+                )
                 if isinstance(acknowledgement, dict):
                     target_command = AgentCommand.objects.filter(
                         pk=acknowledgement.get("command_id"),
@@ -2550,6 +2562,9 @@ class AgentRuntimePollView(APIView):
                     ).first()
                 acknowledgement_valid = (
                     deployment is not None
+                    and pivot_operation is not None
+                    and pivot_operation.state == ClusterDeploymentPivotOperation.State.READY
+                    and str(pivot_operation.operation_id) == payload.get("operation_id")
                     and target_node is not None
                     and target_node.status == AgentNode.Status.ONLINE
                     and target_node.last_seen_at is not None
@@ -2625,6 +2640,22 @@ class AgentRuntimePollView(APIView):
                     "updated_at",
                 ]
             )
+            if command.command_type == "cluster.capi.pivot.execute":
+                deployment = ClusterDeployment.objects.select_for_update().get(
+                    pk=command.deployment_id,
+                    eph_node=node,
+                )
+                _record_capi_pivot_event(
+                    deployment,
+                    ClusterDeploymentPivotOperation.State.EXECUTING,
+                    "eph_agent_execution_started",
+                    {
+                        "command_id": str(command.id),
+                        "operation_id": command.payload.get("operation_id"),
+                        "attempt": command.attempts,
+                    },
+                    actor_node=node,
+                )
         return Response(
             {
                 "command": {
