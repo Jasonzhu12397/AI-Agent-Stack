@@ -40,7 +40,6 @@ from .leader_election import (
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
-from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 from .ntp_policy import (
     NtpPolicyError,
     probe_ironic_internal_ntp_endpoint,
@@ -52,6 +51,7 @@ from .ntp_policy import (
     validate_ironic_internal_ntp_ip,
     validate_worker_ntp_sources,
 )
+from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
