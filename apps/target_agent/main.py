@@ -400,7 +400,6 @@ def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, A
         documents["machines"],
         documents["kubeadmconfigs"],
         approved_sources,
-        approved_sources,
         worker_networks,
         payload.get("cluster_name"),
     )
