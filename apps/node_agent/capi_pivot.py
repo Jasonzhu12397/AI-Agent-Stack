@@ -251,6 +251,103 @@ def _kubectl_json(runner, kubectl, kubeconfig, args, process_env, error_code):
     return document
 
 
+CAPI_SOURCE_CLUSTER_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
+
+
+def _ensure_source_cluster_identity_annotation(
+    runner,
+    kubectl,
+    source_kubeconfig,
+    namespace,
+    cluster_name,
+    source_cluster_uid,
+    process_env,
+):
+    get_args = [
+        "--namespace",
+        namespace,
+        "get",
+        "clusters.cluster.x-k8s.io",
+        cluster_name,
+        "-o",
+        "json",
+    ]
+    source_cluster = _kubectl_json(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        get_args,
+        process_env,
+        "CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_READ_FAILED",
+    )
+
+    def validate_identity(document):
+        metadata = document.get("metadata", {})
+        annotations = metadata.get("annotations", {})
+        if (
+            metadata.get("name") != cluster_name
+            or metadata.get("namespace") != namespace
+            or metadata.get("uid") != source_cluster_uid
+            or not isinstance(annotations, dict)
+        ):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_CHANGED")
+        current = annotations.get(CAPI_SOURCE_CLUSTER_UID_ANNOTATION)
+        if current not in (None, source_cluster_uid):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_ANNOTATION_CONFLICT")
+        return current == source_cluster_uid
+
+    if validate_identity(source_cluster):
+        return False
+
+    command = [
+        kubectl,
+        "--kubeconfig",
+        str(source_kubeconfig),
+        "--namespace",
+        namespace,
+        "annotate",
+        "clusters.cluster.x-k8s.io",
+        cluster_name,
+        CAPI_SOURCE_CLUSTER_UID_ANNOTATION + "=" + source_cluster_uid,
+    ]
+    try:
+        completed = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env=process_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_ANNOTATION_FAILED") from exc
+
+    if completed.returncode != 0:
+        current = _kubectl_json(
+            runner,
+            kubectl,
+            source_kubeconfig,
+            get_args,
+            process_env,
+            "CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_READ_FAILED",
+        )
+        if not validate_identity(current):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_ANNOTATION_FAILED")
+
+    verified = _kubectl_json(
+        runner,
+        kubectl,
+        source_kubeconfig,
+        get_args,
+        process_env,
+        "CAPI_PIVOT_SOURCE_CLUSTER_ANNOTATION_VERIFY_FAILED",
+    )
+    if not validate_identity(verified):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_ANNOTATION_VERIFY_FAILED")
+    return completed.returncode == 0
+
+
 def _verify_target_management_plane(
     runner,
     kubectl,
