@@ -13,13 +13,14 @@ class NtpAttestationError(ValueError):
 def verify_control_plane_ntp_bootstrap(
     machines_document: dict[str, Any],
     kubeadmconfigs_document: dict[str, Any],
+    configured_external_sources: Any,
     approved_external_sources: Any,
     worker_networks: Any,
     required_master_count: int = 3,
 ) -> dict[str, Any]:
     try:
         approved, networks = validate_control_plane_ntp_profile(
-            approved_external_sources,
+            configured_external_sources,
             approved_external_sources,
             worker_networks,
         )
