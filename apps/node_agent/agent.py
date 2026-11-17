@@ -1066,7 +1066,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
         except ValueError:
             if not re.fullmatch(
                 r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-                r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+                r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
                 value,
             ):
                 raise NodeAgentError("INVALID_TIME_DNS_NTP_SERVER")
