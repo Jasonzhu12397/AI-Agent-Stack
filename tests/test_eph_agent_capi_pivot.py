@@ -43,7 +43,11 @@ def test_capi_pivot_blocks_when_approval_digest_does_not_match_plan(monkeypatch,
         "_kubernetes_cluster_uid",
         lambda path: "source-api" if path == str(source) else "target-api",
     )
-    monkeypatch.setattr(capi_pivot, "_provider_preflight", lambda *_args: {"target_ready_master_names": []})
+    monkeypatch.setattr(
+        capi_pivot,
+        "_provider_preflight",
+        lambda *_args: {"target_ready_master_names": []},
+    )
     monkeypatch.setattr(
         capi_pivot,
         "_cluster",
@@ -87,7 +91,11 @@ def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
     target.write_text("target", encoding="utf-8")
     monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
     monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
-    monkeypatch.setattr(capi_pivot, "_kubernetes_cluster_uid", lambda path: "source-api" if path == str(source) else "target-api")
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubernetes_cluster_uid",
+        lambda path: "source-api" if path == str(source) else "target-api",
+    )
     monkeypatch.setattr(capi_pivot, "_provider_preflight", lambda *_args: {
         "target_ready_master_names": ["master-1", "master-2", "master-3"],
         "target_controllers": {"ready": True},
@@ -102,7 +110,11 @@ def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
         {"namespace": "metal3", "name": "host-1", "hardware_identity": "system-uuid:abc"}
     ]
     monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: bmhs)
-    monkeypatch.setattr(capi_pivot, "_kubectl", lambda *_args: {"items": [{"metadata": {"name": "cluster-1"}}]})
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubectl",
+        lambda *_args: {"items": [{"metadata": {"name": "cluster-1"}}]},
+    )
     calls = []
     monkeypatch.setattr(capi_pivot, "_run", lambda command, *_args, **_kwargs: (
         calls.append(command) or {"ok": True, "stdout": "dry run output", "returncode": 0}
