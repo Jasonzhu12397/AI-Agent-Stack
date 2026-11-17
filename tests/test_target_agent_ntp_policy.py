@@ -1,7 +1,6 @@
 import pytest
 
 from apps.target_agent import ntp_policy
-
 from apps.target_agent.ntp_policy import (
     NtpPolicyError,
     render_control_plane_chrony_config,
