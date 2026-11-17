@@ -22,16 +22,16 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
-from .ironic_client import (
-    IronicObservationError,
-    get_ironic_node,
-    ironic_api_configured,
-)
 from .handoff import (
     HandoffError,
     HandoffPhase,
     evaluate_transition,
     validate_phase_evidence,
+)
+from .ironic_client import (
+    IronicObservationError,
+    get_ironic_node,
+    ironic_api_configured,
 )
 from .leader_election import (
     KubernetesLeaseElector,
