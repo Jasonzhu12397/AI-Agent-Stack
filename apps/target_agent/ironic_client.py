@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import json
+import math
+import os
+import ssl
+import urllib.error
+import urllib.request
+from collections.abc import Mapping
+from typing import Any
+from uuid import UUID
+
+
+MAX_IRONIC_RESPONSE_BYTES = 1024 * 1024
+
+
+class IronicObservationError(ValueError):
+    pass
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, new_url):
+        return None
+
+
+def ironic_api_configured(environ: Mapping[str, str] | None = None) -> bool:
+    values = os.environ if environ is None else environ
+    return bool(values.get("IRONIC_API_URL") and values.get("IRONIC_API_TOKEN"))
+
+
+def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
+    endpoint = environ.get("IRONIC_API_URL", "").strip()
+    token = environ.get("IRONIC_API_TOKEN", "")
+    microversion = environ.get("IRONIC_API_MICROVERSION", "1.82").strip()
+    if not endpoint or not token:
+        raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
+    if any(character in token for character in ("\r", "\n")):
+        raise IronicObservationError("IRONIC_API_TOKEN_INVALID")
+    parsed = urllib.request.urlparse(endpoint) if hasattr(
+        urllib.request, "urlparse"
+    ) else None
+    if parsed is None:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(endpoint)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise IronicObservationError("IRONIC_API_URL_INVALID")
+    try:
+        timeout = float(environ.get("IRONIC_API_TIMEOUT_SECONDS", "10"))
+    except (TypeError, ValueError) as exc:
+        raise IronicObservationError("IRONIC_API_TIMEOUT_INVALID") from exc
+    if not math.isfinite(timeout) or not 0 < timeout <= 60:
+        raise IronicObservationError("IRONIC_API_TIMEOUT_INVALID")
+    if not microversion or any(character in microversion for character in ("\r", "\n")):
+        raise IronicObservationError("IRONIC_API_MICROVERSION_INVALID")
+    return endpoint.rstrip("/"), token, microversion, timeout
+
+
+def get_ironic_node(
+    node_uuid: str,
+    environ: Mapping[str, str] | None = None,
+    opener: Any = None,
+) -> dict[str, Any]:
+    try:
+        normalized_uuid = str(UUID(node_uuid))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise IronicObservationError("IRONIC_NODE_UUID_INVALID") from exc
+    if normalized_uuid != node_uuid.lower():
+        raise IronicObservationError("IRONIC_NODE_UUID_INVALID")
+    values = os.environ if environ is None else environ
+    endpoint, token, microversion, timeout = _configuration(values)
+    request = urllib.request.Request(
+        f"{endpoint}/v1/nodes/{normalized_uuid}",
+        headers={
+            "Accept": "application/json",
+            "X-Auth-Token": token,
+            "X-OpenStack-Ironic-API-Version": microversion,
+        },
+        method="GET",
+    )
+    context = ssl.create_default_context()
+    active_opener = opener or urllib.request.build_opener(_NoRedirectHandler())
+    try:
+        response = active_opener(
+            request,
+            context=context,
+            timeout=timeout,
+        )
+        with response:
+            content_type = response.headers.get("Content-Type", "")
+            if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                raise IronicObservationError("IRONIC_API_CONTENT_TYPE_INVALID")
+            raw = response.read(MAX_IRONIC_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        raise IronicObservationError(f"IRONIC_API_HTTP_{exc.code}") from None
+    except IronicObservationError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise IronicObservationError("IRONIC_API_UNAVAILABLE") from exc
+    if len(raw) > MAX_IRONIC_RESPONSE_BYTES:
+        raise IronicObservationError("IRONIC_API_RESPONSE_TOO_LARGE")
+    try:
+        document = json.loads(
+            raw,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+        )
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_JSON") from exc
+    if not isinstance(document, dict):
+        raise IronicObservationError("IRONIC_API_RESPONSE_INVALID_OBJECT")
+    if document.get("uuid") != normalized_uuid:
+        raise IronicObservationError("IRONIC_NODE_IDENTITY_MISMATCH")
+    provision_state = document.get("provision_state")
+    maintenance = document.get("maintenance")
+    if not isinstance(provision_state, str) or not provision_state:
+        raise IronicObservationError("IRONIC_NODE_STATE_INVALID")
+    if not isinstance(maintenance, bool):
+        raise IronicObservationError("IRONIC_NODE_MAINTENANCE_STATE_INVALID")
+    target_state = document.get("target_provision_state")
+    if target_state is not None and not isinstance(target_state, str):
+        raise IronicObservationError("IRONIC_NODE_TARGET_STATE_INVALID")
+    return {
+        "uuid": normalized_uuid,
+        "provision_state": provision_state,
+        "maintenance": maintenance,
+        "target_provision_state": target_state,
+        "last_error": document.get("last_error"),
+        "maintenance_reason": document.get("maintenance_reason"),
+    }
