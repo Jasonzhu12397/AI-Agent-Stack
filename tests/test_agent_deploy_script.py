@@ -26,7 +26,10 @@ def test_three_agent_deploy_validates_role_specific_secrets():
     assert "cloud-control-agent-database database-url" in script
     assert "cloud-control-agent-mtls tls.crt tls.key client-ca.crt" in script
     assert "eph-agent-credentials control-url agent-id installation-id" in script
-    assert "target-agent-credentials control-url agent-id installation-id cluster-id" in script
+    assert (
+        "target-agent-credentials control-url agent-id installation-id cluster-id "
+        "ironic-api-url ironic-api-token"
+    ) in script
     assert "capi-pivot-source-kubeconfig kubeconfig" in script
     assert "capi-pivot-target-kubeconfig" not in script
 
@@ -82,3 +85,16 @@ def test_new_build_script_builds_three_independent_images():
     assert "Dockerfile.target-agent" in script
     assert "Dockerfile.node-agent" not in script
     assert "ONLY_LINUX_AMD64_IS_CURRENTLY_VERIFIED" in script
+
+
+
+def test_target_agent_receives_ironic_credentials_only_from_kubernetes_secret():
+    manifest = list(yaml.safe_load_all(
+        (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(encoding="utf-8")
+    ))
+    deployment = next(item for item in manifest if item.get("kind") == "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    environment = {item["name"]: item for item in container["env"]}
+    assert environment["IRONIC_API_URL"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-url"
+    assert environment["IRONIC_API_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-token"
+    assert environment["IRONIC_API_MICROVERSION"]["value"] == "1.82"
