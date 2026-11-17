@@ -43,19 +43,40 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     action = command.get("action")
     if action == "eph.preflight":
         source_kubeconfig = Path(os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", ""))
-        target_kubeconfig = Path(os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG", ""))
+        nodes = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])
+        node_count = None
+        ready_nodes = []
+        if nodes["available"]:
+            try:
+                node_document = json.loads(nodes["stdout"])
+                node_items = node_document.get("items", [])
+                node_count = len(node_items)
+                ready_nodes = [
+                    item.get("metadata", {}).get("name")
+                    for item in node_items
+                    if any(
+                        condition.get("type") == "Ready" and condition.get("status") == "True"
+                        for condition in item.get("status", {}).get("conditions", [])
+                    )
+                ]
+            except (ValueError, TypeError, AttributeError):
+                node_count = None
         evidence = {
             "role": "eph",
             "single_node_cluster_expected": True,
             "source_kubeconfig_present": source_kubeconfig.is_file(),
-            "target_kubeconfig_present": target_kubeconfig.is_file(),
+            "node_count": node_count,
+            "ready_nodes": ready_nodes,
+            "node_observation_available": nodes["available"],
             "clusterctl": _run_read_only(["clusterctl", "version"]),
             "kubectl": _run_read_only(["kubectl", "version", "--client"]),
             "observed_at": datetime.now(timezone.utc).isoformat(),
         }
         ready = (
             evidence["source_kubeconfig_present"]
-            and evidence["target_kubeconfig_present"]
+            and evidence["node_observation_available"]
+            and evidence["node_count"] == 1
+            and len(evidence["ready_nodes"]) == 1
             and evidence["clusterctl"]["available"]
             and evidence["kubectl"]["available"]
         )
