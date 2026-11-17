@@ -1730,6 +1730,7 @@ def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory
             "cluster_name": "edge-lab",
             "namespace": "default",
             "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
@@ -1749,6 +1750,87 @@ def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory
     assert deployment.error["not_ready_worker_machine_names"] == [
         "edge-lab-worker-04"
     ]
+
+
+@pytest.mark.django_db
+def test_control_plane_requeues_incomplete_worker_readiness_postflight(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="retry-capi-worker-postflight",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="retry-postflight-worker-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"retry-postflight-worker-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.save(update_fields=["target_node", "status", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.postflight",
+        payload={
+            "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+        },
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"retry-capi-worker-postflight:{deployment.id}:attempt:0",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
+            "node_count": 5,
+            "ready": False,
+            "not_ready_nodes": ["edge-lab-worker-04"],
+            "worker_machine_count": 4,
+            "ready_worker_machine_count": 3,
+            "not_ready_worker_machine_names": ["edge-lab-worker-04"],
+            "worker_node_names": ["worker-01", "worker-02", "worker-03"],
+            "capi_worker_inventory_complete": False,
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    retry = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+        idempotency_key=(
+            f"cluster-deployment:{deployment.id}:cluster.postflight:attempt:1"
+        ),
+    )
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
+    assert deployment.error is None
+    assert deployment.finished_at is None
+    assert retry.status == AgentCommand.Status.QUEUED
+    assert retry.payload["readiness_attempt"] == 1
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
 
 @pytest.mark.django_db
