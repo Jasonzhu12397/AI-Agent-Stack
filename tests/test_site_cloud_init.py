@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -95,3 +96,40 @@ def test_renderer_records_distinct_os_role(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "eph-live-os" in output.read_text(encoding="utf-8")
+
+
+
+def test_renderer_consumes_the_same_versioned_time_dns_plan_profile(tmp_path):
+    profile = {
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": ["time.cloudflare.com"],
+        "dns_servers": ["1.1.1.1", "8.8.8.8"],
+        "search_domains": ["lab.example"],
+        "dns_probe_name": "time.cloudflare.com",
+    }
+    profile_path = tmp_path / "time-dns-profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    output = tmp_path / "target-user-data.yaml"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--role",
+            "target-os",
+            "--profile-json",
+            str(profile_path),
+            "--output",
+            str(output),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    content = output.read_text(encoding="utf-8")
+    assert "server time.cloudflare.com iburst" in content
+    assert "DNS=1.1.1.1 8.8.8.8" in content
+    assert "Domains=lab.example" in content
+    assert "target-os" in content
