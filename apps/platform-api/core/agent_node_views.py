@@ -1859,12 +1859,16 @@ class AgentCommandApproveView(APIView):
                     else None
                 )
                 payload = command.payload if isinstance(command.payload, dict) else {}
-                expected_ack = (
-                    (deployment.plan_result or {}).get("dual_agent", {}).get(
-                        "target_agent_ack"
-                    )
+                deployment_plan = (
+                    deployment.plan_result
                     if deployment is not None
                     and isinstance(deployment.plan_result, dict)
+                    else {}
+                )
+                deployment_dual_agent = deployment_plan.get("dual_agent", {})
+                expected_ack = (
+                    deployment_dual_agent.get("target_agent_ack")
+                    if isinstance(deployment_dual_agent, dict)
                     else None
                 )
                 if (
