@@ -359,7 +359,7 @@ def test_eph_capi_pivot_command_is_queued_without_cloud_approval_and_is_leased(n
         {"plan_hash": created.data["plan_hash"]},
         format="json",
     )
-    assert self_approval.status_code == 409
+    assert self_approval.status_code == 403
 
     polled = APIClient().post(
         "/api/v1/agent-runtime/commands/poll/",
