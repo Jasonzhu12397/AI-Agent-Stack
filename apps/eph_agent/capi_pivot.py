@@ -298,13 +298,26 @@ def _provider_versions(
             _valid_name(target_ref.get("namespace"), "TARGET_PROVIDER_NAMESPACE"),
             _valid_name(target_ref.get("name"), "TARGET_PROVIDER_DEPLOYMENT"),
         )
+        source_status = source.get("status", {})
+        if source_status.get("readyReplicas", 0) < 1:
+            raise CapiPivotError(f"CAPI_PIVOT_SOURCE_PROVIDER_NOT_READY:{provider}")
+        source_container_list = (
+            source.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("containers", [])
+        )
+        target_container_list = (
+            target.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("containers", [])
+        )
         source_containers = {
-            item.get("name"): item.get("image")
-            for item in source.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            item.get("name"): item.get("image") for item in source_container_list
         }
         target_containers = {
-            item.get("name"): item.get("image")
-            for item in target.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            item.get("name"): item.get("image") for item in target_container_list
         }
         if (
             not source_containers
@@ -319,8 +332,8 @@ def _provider_versions(
                 raise CapiPivotError(f"CAPI_PIVOT_TARGET_PROVIDER_OLDER_THAN_SOURCE:{provider}")
         evidence.append({
             "provider": provider,
-            "source_images": source_images,
-            "target_images": target_images,
+            "source_images": list(source_containers.values()),
+            "target_images": list(target_containers.values()),
             "target_version_at_least_source": True,
         })
     return evidence
