@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from apps.eph_agent.main import execute as execute_eph
+from apps.target_agent import main as target_main
 from apps.target_agent.main import execute as execute_target
 
 
@@ -142,3 +143,40 @@ def test_target_agent_handoff_recognizes_already_persisted_checkpoint():
     })
     assert result["status"] == "succeeded"
     assert result["output"]["already_applied"] is True
+
+
+
+def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypatch):
+    source_identities = [{
+        "namespace": "metal3",
+        "name": "host-1",
+        "hardware_identity": "system-uuid:sha256:abc",
+    }]
+    observed = {
+        "target_bmh_identities": source_identities,
+        "target_metal3_ownership_verified": True,
+        "target_metal3_reconciliation_healthy": True,
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        lambda payload: observed,
+    )
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "capi_pivot_verified",
+            "sequence": 4,
+            "state": {},
+        },
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "next_phase": "bmh_registry_migrated",
+            "evidence": {
+                "source_bmh_identities": source_identities,
+            },
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["evidence"]["target_metal3_ownership_verified"] is True
