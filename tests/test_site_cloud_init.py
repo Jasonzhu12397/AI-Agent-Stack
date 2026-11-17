@@ -40,8 +40,8 @@ def test_renderer_includes_chrony_and_systemd_resolved_configuration(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     content = output.read_text(encoding="utf-8")
-    assert "package_update: true" in content
-    assert "  - chrony" in content
+    assert "apt-get update" in content
+    assert "DEBIAN_FRONTEND=noninteractive apt-get install -y chrony" in content
     assert "server time.cloudflare.com iburst" in content
     assert "server time.google.com iburst" in content
     assert "DNS=1.1.1.1 8.8.8.8" in content
@@ -50,6 +50,7 @@ def test_renderer_includes_chrony_and_systemd_resolved_configuration(tmp_path):
     assert "systemd-resolved.service" in content
     assert "chronyc waitsync 10 0.1" in content
     assert "resolvectl query time.cloudflare.com" in content
+    assert "/run/systemd/resolve/resolv.conf /etc/resolv.conf" in content
 
 
 def test_renderer_rejects_shell_injection_in_ntp_server(tmp_path):
@@ -133,3 +134,39 @@ def test_renderer_consumes_the_same_versioned_time_dns_plan_profile(tmp_path):
     assert "DNS=1.1.1.1 8.8.8.8" in content
     assert "Domains=lab.example" in content
     assert "target-os" in content
+
+
+
+def test_eph_role_defers_time_dns_execution_until_before_kubeadm(tmp_path):
+    profile = {
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": ["time.cloudflare.com"],
+        "dns_servers": ["1.1.1.1"],
+        "search_domains": [],
+        "dns_probe_name": "time.cloudflare.com",
+    }
+    profile_path = tmp_path / "time-dns-profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    output = tmp_path / "eph-user-data.yaml"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--role",
+            "eph-live-os",
+            "--profile-json",
+            str(profile_path),
+            "--output",
+            str(output),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    content = output.read_text(encoding="utf-8")
+    assert "write_files:" in content
+    assert "runcmd:" not in content
+    assert "ai-agent-site-time-dns-apply" in content
