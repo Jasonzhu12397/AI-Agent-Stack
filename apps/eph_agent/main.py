@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from .capi_pivot import execute_capi_pivot
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -22,7 +23,12 @@ from packages.agent_transport import (
 )
 
 LOG = logging.getLogger("eph-agent")
-CAPABILITIES = ["eph.preflight", "eph.source.observe"]
+CAPABILITIES = [
+    "eph.preflight",
+    "eph.source.observe",
+    "eph.capi.pivot.dry_run",
+    "eph.capi.pivot",
+]
 
 
 def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
@@ -95,6 +101,8 @@ def execute(
             "output": evidence,
             "side_effects": False,
         }
+    if action in ("eph.capi.pivot.dry_run", "eph.capi.pivot"):
+        return execute_capi_pivot(command, lease_lost_event)
     if action == "eph.source.observe":
         result = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])
         return {
