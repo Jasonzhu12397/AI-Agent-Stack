@@ -55,4 +55,4 @@ def test_time_dns_profile_rejects_duplicate_servers():
     profile = copy.deepcopy(VALID_PROFILE)
     profile["ntp_servers"] = ["time.cloudflare.com", "time.cloudflare.com"]
     with pytest.raises(agent.NodeAgentError, match="DUPLICATE_TIME_DNS_NTP_SERVER"):
-        validate_time_dns_profile(profile)
+        agent.validate_time_dns_profile(profile)
