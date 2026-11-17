@@ -3,6 +3,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+
 from apps.target_agent.ironic_client import (
     IronicObservationError,
     _NoRedirectHandler,
