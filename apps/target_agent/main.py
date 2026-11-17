@@ -51,7 +51,11 @@ from .ntp_policy import (
     validate_ironic_internal_ntp_ip,
     validate_worker_ntp_sources,
 )
-from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
+from .worker_provisioning import (
+    WorkerProvisioningError,
+    execute_worker_provisioning,
+    observe_worker_readiness,
+)
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
@@ -486,6 +490,13 @@ def execute(
                     **evidence,
                     "ironic_internal_ntp_ip": configured_ntp_ip,
                 }
+            if next_phase == HandoffPhase.WORKERS_READY.value:
+                observed_workers = observe_worker_readiness(
+                    payload.get("namespace", ""),
+                    payload.get("machine_deployment_name", ""),
+                    evidence.get("ironic_internal_ntp_ip", ""),
+                )
+                evidence = {**evidence, **observed_workers}
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
                 observed_pivot = _observe_target_capi_pivot({
                     **payload,
@@ -539,7 +550,7 @@ def execute(
                 "output": transition,
                 "side_effects": False,
             }
-        except (HandoffError, AttributeError, TypeError, ValueError) as exc:
+        except (HandoffError, WorkerProvisioningError, AttributeError, TypeError, ValueError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
