@@ -7,6 +7,7 @@ import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 from typing import Any
 from uuid import UUID
 
@@ -36,13 +37,7 @@ def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
         raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
     if any(character in token for character in ("\r", "\n")):
         raise IronicObservationError("IRONIC_API_TOKEN_INVALID")
-    parsed = urllib.request.urlparse(endpoint) if hasattr(
-        urllib.request, "urlparse"
-    ) else None
-    if parsed is None:
-        from urllib.parse import urlsplit
-
-        parsed = urlsplit(endpoint)
+    parsed = urlsplit(endpoint)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -86,13 +81,19 @@ def get_ironic_node(
         method="GET",
     )
     context = ssl.create_default_context()
-    active_opener = opener or urllib.request.build_opener(_NoRedirectHandler())
     try:
-        response = active_opener(
-            request,
-            context=context,
-            timeout=timeout,
-        )
+        if opener is None:
+            active_opener = urllib.request.build_opener(
+                _NoRedirectHandler(),
+                urllib.request.HTTPSHandler(context=context),
+            )
+            response = active_opener.open(request, timeout=timeout)
+        else:
+            response = opener(
+                request,
+                context=context,
+                timeout=timeout,
+            )
         with response:
             content_type = response.headers.get("Content-Type", "")
             if content_type.split(";", 1)[0].strip().lower() != "application/json":
