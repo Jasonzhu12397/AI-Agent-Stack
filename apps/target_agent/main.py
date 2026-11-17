@@ -22,6 +22,11 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
+from .ironic_client import (
+    IronicObservationError,
+    get_ironic_node,
+    ironic_api_configured,
+)
 from .handoff import (
     HandoffError,
     HandoffPhase,
@@ -191,7 +196,7 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
             documents[name] = json.loads(result["stdout"])
         except ValueError as exc:
             raise Metal3OwnershipError(f"TARGET_METAL3_JSON_INVALID:{name}") from exc
-    return verify_metal3_ownership(
+    ownership = verify_metal3_ownership(
         documents["cluster"],
         documents["machines"],
         documents["metal3machines"],
@@ -199,6 +204,37 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("source_bmh_identities")
         or payload.get("evidence", {}).get("source_bmh_identities"),
     )
+    if not ironic_api_configured():
+        raise Metal3OwnershipError("TARGET_IRONIC_API_CONFIGURATION_REQUIRED")
+    ironic_nodes = []
+    for host in documents["bmhs"].get("items", []):
+        host_name = host.get("metadata", {}).get("name", "unknown")
+        ironic_uuid = host.get("status", {}).get("provisioning", {}).get("ID")
+        if not isinstance(ironic_uuid, str) or not ironic_uuid:
+            raise Metal3OwnershipError(f"TARGET_BMH_IRONIC_UUID_MISSING:{host_name}")
+        try:
+            ironic_node = get_ironic_node(ironic_uuid)
+        except IronicObservationError as exc:
+            raise Metal3OwnershipError(
+                f"TARGET_IRONIC_NODE_OBSERVATION_FAILED:{host_name}:{exc}"
+            ) from exc
+        if ironic_node["maintenance"]:
+            raise Metal3OwnershipError(f"TARGET_IRONIC_NODE_IN_MAINTENANCE:{host_name}")
+        if ironic_node["target_provision_state"] is not None:
+            raise Metal3OwnershipError(f"TARGET_IRONIC_NODE_TRANSITIONING:{host_name}")
+        if ironic_node["provision_state"] not in {"active", "available"}:
+            raise Metal3OwnershipError(f"TARGET_IRONIC_NODE_NOT_STABLE:{host_name}")
+        if ironic_node["last_error"]:
+            raise Metal3OwnershipError(f"TARGET_IRONIC_NODE_HAS_ERROR:{host_name}")
+        ironic_nodes.append({
+            "uuid": ironic_node["uuid"],
+            "provision_state": ironic_node["provision_state"],
+            "maintenance": ironic_node["maintenance"],
+        })
+    ownership["target_ironic_inventory_verified"] = True
+    ownership["ironic_node_count"] = len(ironic_nodes)
+    ownership["ironic_nodes"] = ironic_nodes
+    return ownership
 
 
 def _observe_ready_master_count() -> int:
