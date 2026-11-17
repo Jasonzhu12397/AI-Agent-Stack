@@ -31,6 +31,7 @@ RESOURCE_TYPES = {
     ),
 }
 NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+NTP_DIRECTIVE_PATTERN = re.compile(r"(?im)^\\s*(?:server|pool)\\s+")
 
 
 class WorkerProvisioningError(RuntimeError):
@@ -94,11 +95,15 @@ def _object_identity(document: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def _selector_labels(machine_deployment: dict[str, Any]) -> dict[str, str]:
-    spec = machine_deployment.get("spec", {})
-    selector = spec.get("selector", {}).get("matchLabels")
-    template_labels = (
-        spec.get("template", {}).get("metadata", {}).get("labels")
-    )
+    spec = machine_deployment.get("spec")
+    if not isinstance(spec, dict):
+        raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_SPEC_REQUIRED")
+    selector_spec = spec.get("selector")
+    template_spec = spec.get("template")
+    if not isinstance(selector_spec, dict) or not isinstance(template_spec, dict):
+        raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_SELECTOR_INVALID")
+    selector = selector_spec.get("matchLabels")
+    template_labels = template_spec.get("metadata", {}).get("labels")
     if (
         not isinstance(selector, dict)
         or not selector
@@ -152,14 +157,16 @@ def _prepare_resources(
         raise WorkerProvisioningError("WORKER_MACHINE_DEPLOYMENT_REPLICA_MISMATCH")
     selector = _selector_labels(machine_deployment)
     template_spec = md_spec.get("template", {}).get("spec", {})
-    bootstrap_ref = template_spec.get("bootstrap", {}).get("configRef", {})
-    infrastructure_ref = template_spec.get("infrastructureRef", {})
+    bootstrap = template_spec.get("bootstrap")
+    bootstrap_ref = bootstrap.get("configRef") if isinstance(bootstrap, dict) else None
+    infrastructure_ref = template_spec.get("infrastructureRef")
     for reference, kind, document in (
         (bootstrap_ref, "KubeadmConfigTemplate", bootstrap_template),
         (infrastructure_ref, "Metal3MachineTemplate", infrastructure_template),
     ):
         if (
-            reference.get("kind") != kind
+            not isinstance(reference, dict)
+            or reference.get("kind") != kind
             or reference.get("name") != document["metadata"]["name"]
             or reference.get("namespace", namespace) != namespace
             or reference.get("apiVersion") != document["apiVersion"]
@@ -171,6 +178,8 @@ def _prepare_resources(
     commands = bootstrap_spec.get("preKubeadmCommands", [])
     if not isinstance(commands, list) or any(not isinstance(item, str) for item in commands):
         raise WorkerProvisioningError("WORKER_PRE_KUBEADM_COMMANDS_INVALID")
+    if any(NTP_DIRECTIVE_PATTERN.search(command) for command in commands):
+        raise WorkerProvisioningError("WORKER_EXTERNAL_OR_DUPLICATE_NTP_DIRECTIVE_REJECTED")
     ntp_command = render_worker_chrony_pre_kubeadm_command(ntp_ip)
     bootstrap_spec["preKubeadmCommands"] = [*commands, ntp_command]
     return (
