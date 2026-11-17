@@ -29,7 +29,7 @@ EPH cleanup is not a Cloud approval operation. It is an autonomous Target Agent 
 
 1. Target Agent is running on a Target Control Plane master and has restored the deployment checkpoint.
 2. CAPI pivot has completed and target controllers are healthy.
-3. Target Cluster UID and CAPI object ownership are preserved.
+3. The source and target Kubernetes object UIDs are recorded separately. The migrated target CAPI Cluster must carry the source UID in the `ai-agent-stack.io/source-cluster-uid` annotation, preserve the stable logical cluster identity, and have verified Target ownership. Do not require source and target Kubernetes UIDs to be equal; Kubernetes assigns a new UID when the object is recreated in the target API server.
 4. BMH source/target identity sets match and target Metal3 controller ownership is verified.
 5. Required CAPI/Metal3 management components no longer depend on the EPH API.
 6. Cleanup is idempotent, checkpointed, and revokes EPH-only credentials.
@@ -47,4 +47,4 @@ Only Target Agent provisions Target Workers. Each worker's host preparation incl
 
 ## Implementation boundary
 
-The node-agent lifecycle policy module enforces topology, phase ordering, BMH identity equality, Target ownership evidence and chronyd role scope. These checks are policy and validation primitives; they do not claim to perform a live clusterctl move, delete EPH Pods, mutate BMH objects or install chronyd. Those external side effects remain behind versioned Kubernetes/CAPI/Metal3/host adapters and must be tested against the selected provider versions before production enablement.
+The new `apps/target_agent/handoff.py` module enforces topology, phase ordering, stable BMH hardware-identity equality and Target ownership evidence. The new `apps/target_agent/ntp_policy.py` module enforces Worker chronyd source scope. These checks are policy and validation primitives; they do not claim to perform a live clusterctl move, delete EPH Pods, mutate BMH objects or install chronyd. Those external side effects remain behind versioned Kubernetes/CAPI/Metal3/host adapters and must be tested against the selected provider versions before production enablement.
