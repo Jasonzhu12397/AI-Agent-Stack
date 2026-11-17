@@ -121,6 +121,28 @@ def _pivot_runner_for(
             else:
                 kubeconfig = ""
             if kubeconfig.endswith("source.kubeconfig"):
+                if "annotate" in command:
+                    return subprocess.CompletedProcess(
+                        command, 0, "cluster annotated", ""
+                    )
+                if (
+                    "get" in command
+                    and "clusters.cluster.x-k8s.io" in command
+                    and "target-cluster" in command
+                ):
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps({
+                            "metadata": {
+                                "name": "target-cluster",
+                                "namespace": "metal3",
+                                "uid": "uid-target-cluster",
+                                "annotations": {},
+                            }
+                        }),
+                        "",
+                    )
                 if "baremetalhosts.metal3.io" in command:
                     return subprocess.CompletedProcess(
                         command,
@@ -160,7 +182,16 @@ def _pivot_runner_for(
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"metadata": {"uid": "uid-target-cluster"}}),
+                    json.dumps({
+                        "metadata": {
+                            "name": "target-cluster",
+                            "namespace": "metal3",
+                            "uid": "uid-target-cluster-target",
+                            "annotations": {
+                                "ai-agent-stack.io/source-cluster-uid": "uid-target-cluster"
+                            },
+                        }
+                    }),
                     "",
                 )
             if "metal3-ironic" in command:
@@ -460,7 +491,9 @@ def test_pivot_execution_runs_preflight_and_real_clusterctl_move(tmp_path):
     assert result["side_effects"] is True
     assert result["ownership_transferred"] is True
     assert result["source_cluster_absent"] is True
-    assert result["target_cluster_uid"] == "uid-target-cluster"
+    assert result["target_cluster_uid"] == "uid-target-cluster-target"
+    assert result["source_cluster_uid"] == "uid-target-cluster"
+    assert result["cluster_identity_preserved"] is True
     assert result["automatic_retry_allowed"] is False
     assert result["target_management_plane_verified"] is True
     assert result["target_controllers_ready"] is True
@@ -796,7 +829,15 @@ def _postflight_runner(
         calls.append(command)
         resource = command[command.index("get") + 1]
         if resource == "clusters.cluster.x-k8s.io":
-            document = {"metadata": {"name": "target-cluster", "uid": "cluster-uid"}}
+            document = {
+                "metadata": {
+                    "name": "target-cluster",
+                    "uid": "target-cluster-uid",
+                    "annotations": {
+                        "ai-agent-stack.io/source-cluster-uid": "source-cluster-uid"
+                    },
+                }
+            }
         elif resource == "deployment":
             name = command[command.index("deployment") + 1]
             ready = controller_ready or name != "capm3-controller-manager"
