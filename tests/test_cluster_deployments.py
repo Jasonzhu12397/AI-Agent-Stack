@@ -138,7 +138,7 @@ def test_provider_compatibility_rejects_corrupt_deployment_plan_state(
 def test_deployment_command_idempotency_conflict_requires_reconciliation(
     cluster_delivery_workspace,
 ):
-    _, _, _, eph_node, _, client = cluster_delivery_workspace
+    _, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(client, tenant, project, eph_node)
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
 
