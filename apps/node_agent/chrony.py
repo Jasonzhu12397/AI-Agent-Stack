@@ -401,6 +401,9 @@ def verify_ntp_server(server_ip: str, timeout: float = 3.0) -> dict[str, Any]:
         raise ChronyError("IRONIC_INTERNAL_NTP_PEER_INVALID") from exc
     if (
         peer_address != address
+        or not isinstance(peer, tuple)
+        or len(peer) < 2
+        or peer[1] != 123
         or mode != 4
         or version not in {3, 4}
         or leap == 3
