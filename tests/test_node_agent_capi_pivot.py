@@ -1521,3 +1521,69 @@ def test_pivot_execution_resolves_m3m_by_consumer_ref_not_bmh_name(tmp_path):
 
     assert result["pivot_simulated"] is True
     assert result["side_effects"] is False
+
+
+def test_real_pivot_requires_cloud_bound_target_agent_ack_before_mutation(tmp_path):
+    calls, runner = _pivot_runner_for()
+    payload = {
+        "deployment_id": "deployment-123",
+        "cluster_name": "target-cluster",
+        "namespace": "metal3",
+        "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+        "source_cluster_uid": "source-cluster-uid",
+        "source_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+        "source_cluster_spec_sha256": "a" * 64,
+        "source_inventory_sha256": "b" * 64,
+    }
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_EXECUTION_AUTHORIZATION_INVALID",
+    ):
+        run_capi_pivot(
+            payload,
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
+
+
+def test_real_pivot_rejects_malformed_target_agent_ack_before_mutation(tmp_path):
+    calls, runner = _pivot_runner_for()
+    payload = {
+        "deployment_id": "deployment-123",
+        "cluster_name": "target-cluster",
+        "namespace": "metal3",
+        "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+        "source_cluster_uid": "source-cluster-uid",
+        "source_cluster_api_version": "cluster.x-k8s.io/v1beta1",
+        "source_cluster_spec_sha256": "a" * 64,
+        "source_inventory_sha256": "b" * 64,
+        "target_agent_ack": {
+            "node_id": "target-node",
+            "command_id": "target-command",
+            "result_sha256": "not-a-digest",
+            "acknowledged_at": "2026-11-17T00:00:00+00:00",
+        },
+    }
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_TARGET_AGENT_ACK_REQUIRED",
+    ):
+        run_capi_pivot(
+            payload,
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        item[0][0].endswith("clusterctl") and "--dry-run" not in item[0]
+        for item in calls
+    )
