@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import secrets
 import ssl
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import UUID, uuid4
@@ -446,7 +445,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
 
         def _claim(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             lease_id = uuid4()
             lease_token = secrets.token_urlsafe(40)
             token_hash = hashlib.sha256(lease_token.encode()).hexdigest()

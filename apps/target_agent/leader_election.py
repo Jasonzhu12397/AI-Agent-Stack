@@ -6,7 +6,7 @@ import ssl
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +95,7 @@ class KubernetesLeaseElector:
 
     def try_acquire_or_renew(self) -> bool:
         status, lease = self._request("GET", self.lease_url)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_text = now.isoformat(timespec="seconds").replace("+00:00", "Z")
         if status == 404:
             body = {

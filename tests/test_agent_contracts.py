@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -35,7 +35,7 @@ def test_eph_identity_rejects_target_cluster_scope():
 
 
 def test_lease_rejects_naive_timestamps():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(ValidationError):
         CommandLease(
             lease_id=uuid4(),
@@ -46,7 +46,7 @@ def test_lease_rejects_naive_timestamps():
 
 
 def test_command_lease_must_not_outlive_deadline():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(ValidationError):
         CommandEnvelope(
             command_id=uuid4(),
@@ -68,7 +68,7 @@ def test_command_lease_must_not_outlive_deadline():
 
 
 def test_command_rejects_unknown_fields():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     data = {
         "command_id": uuid4(),
         "idempotency_key": "idempotency-key-0001",
@@ -92,7 +92,7 @@ def test_command_rejects_unknown_fields():
 
 
 def test_failed_result_requires_error_code():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(ValidationError):
         CommandResult(
             command_id=uuid4(),

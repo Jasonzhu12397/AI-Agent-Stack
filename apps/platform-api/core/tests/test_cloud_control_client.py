@@ -6,7 +6,6 @@ import pytest
 
 from core.cloud_control_client import CloudControlClient
 
-
 def _client(tmp_path, transport):
     files = []
     for name in ("ca.crt", "client.crt", "client.key"):

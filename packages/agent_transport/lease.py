@@ -6,7 +6,6 @@ from typing import Any
 
 from .client import AgentControlClient
 
-
 LOG = logging.getLogger(__name__)
 
 

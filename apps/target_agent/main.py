@@ -10,7 +10,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -522,7 +522,7 @@ def _result(
     outcome: dict[str, Any],
     started_at: datetime,
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
         "schema_version": "v1",
@@ -594,7 +594,7 @@ def main() -> int:
                     client.heartbeat(sequence, "ready", CAPABILITIES)
                     command = client.claim()
                     if command is not None:
-                        started_at = datetime.now(timezone.utc)
+                        started_at = datetime.now(UTC)
                         leader_guard = LeaderLeaseGuard(elector)
                         leader_guard.start()
                         command_guard = CommandLeaseGuard(client, command)

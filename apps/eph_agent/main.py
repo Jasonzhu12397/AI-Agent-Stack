@@ -8,7 +8,7 @@ import os
 import signal
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -86,7 +86,7 @@ def execute(
             "node_observation_available": nodes["available"],
             "clusterctl": _run_read_only(["clusterctl", "version"]),
             "kubectl": _run_read_only(["kubectl", "version", "--client"]),
-            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observed_at": datetime.now(UTC).isoformat(),
         }
         ready = (
             evidence["source_kubeconfig_present"]
@@ -126,7 +126,7 @@ def _result(
     outcome: dict[str, Any],
     started_at: datetime,
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
         "schema_version": "v1",
@@ -181,7 +181,7 @@ def main() -> int:
                 client.heartbeat(sequence, "ready", CAPABILITIES)
                 command = client.claim()
                 if command is not None:
-                    started_at = datetime.now(timezone.utc)
+                    started_at = datetime.now(UTC)
                     guard = CommandLeaseGuard(client, command)
                     guard.start()
                     try:
