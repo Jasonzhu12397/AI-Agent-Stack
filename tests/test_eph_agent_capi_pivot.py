@@ -287,6 +287,67 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
     assert commands[1][0] == "clusterctl"
 
 
+def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_path):
+    source = tmp_path / "source.kubeconfig"
+    target = tmp_path / "target.kubeconfig"
+    source.write_text("source", encoding="utf-8")
+    target.write_text("target", encoding="utf-8")
+    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
+    monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubernetes_cluster_uid",
+        lambda path: "source-api" if path == str(source) else "target-api",
+    )
+    monkeypatch.setattr(
+        capi_pivot,
+        "_provider_preflight",
+        lambda *_args: {
+            "target_ready_master_names": ["master-1", "master-2", "master-3"],
+            "target_controllers": {"ready": True},
+        },
+    )
+    identities = [{
+        "namespace": "metal3",
+        "name": "host-1",
+        "hardware_identity": "system-uuid:abc",
+    }]
+    target_cluster = {
+        "metadata": {
+            "uid": "target-cluster-uid",
+            "annotations": {
+                capi_pivot.SOURCE_UID_ANNOTATION: "source-cluster-uid",
+                capi_pivot.STABLE_ID_ANNOTATION: "logical-cluster-1",
+            },
+        }
+    }
+    monkeypatch.setattr(
+        capi_pivot,
+        "_cluster",
+        lambda kubeconfig, *_args: (
+            target_cluster if kubeconfig == str(target) else None
+        ),
+    )
+    monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: identities)
+    result = capi_pivot.execute_capi_pivot({
+        "action": "eph.capi.pivot",
+        "approval_digest": "a" * 64,
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "cluster-1",
+            "stable_cluster_identity": "logical-cluster-1",
+            "expected_source_cluster_uid": "source-cluster-uid",
+            "expected_source_bmh_identities": identities,
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["side_effects"] is False
+    assert result["output"]["already_pivoted"] is True
+    assert result["output"]["capi_pivot_succeeded"] is True
+    assert result["output"]["target_cluster_ownership_verified"] is True
+    assert result["output"]["source_bmh_digest"] == result["output"]["target_bmh_digest"]
+
+
 def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
     source = tmp_path / "source.kubeconfig"
     target = tmp_path / "target.kubeconfig"
