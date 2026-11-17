@@ -10,6 +10,14 @@ def _worker_provisioning():
     return worker_provisioning
 
 
+def _execute_worker(payload, **kwargs):
+    return _execute_worker(payload, **kwargs)
+
+
+def _worker_error():
+    return _worker_provisioning().WorkerProvisioningError
+
+
 NTP_IP = "10.130.60.84"
 
 
@@ -123,7 +131,7 @@ def _success_runner(calls):
 def test_worker_provisioning_creates_templates_and_waits_for_ready_nodes(monkeypatch):
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
     calls = []
-    result = _worker_provisioning().execute_worker_provisioning(
+    result = _execute_worker(
         _payload(),
         runner=_success_runner(calls),
         sleep=lambda _seconds: None,
@@ -148,8 +156,11 @@ def test_worker_provisioning_rejects_external_ntp_before_any_mutation(monkeypatc
     payload = _payload()
     payload["ironic_internal_ntp_ip"] = "1.1.1.1"
     calls = []
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="CONFIGURATION_MISMATCH"):
-        _worker_provisioning().execute_worker_provisioning(payload, runner=lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(_worker_error(), match="CONFIGURATION_MISMATCH"):
+        _execute_worker(
+            payload,
+            runner=lambda *args, **kwargs: calls.append(args),
+        )
     assert calls == []
 
 
@@ -158,8 +169,8 @@ def test_worker_provisioning_rejects_machine_deployment_reference_mismatch(monke
     payload = _payload()
     payload["resources"][2]["spec"]["template"]["spec"]["infrastructureRef"]["name"] = "wrong"
     calls = []
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="REFERENCE_MISMATCH"):
-        _worker_provisioning().execute_worker_provisioning(payload, runner=lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(_worker_error(), match="REFERENCE_MISMATCH"):
+        _execute_worker(payload, runner=lambda *args, **kwargs: calls.append(args))
     assert calls == []
 
 
@@ -177,8 +188,10 @@ def test_worker_provisioning_rejects_non_matching_template_replacement(monkeypat
             }
         return {"ok": True, "stdout": "", "stderr": ""}
 
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="IMMUTABLE_TEMPLATE_CONFLICT"):
-        _worker_provisioning().execute_worker_provisioning(_payload(), runner=runner)
+    with pytest.raises(
+        _worker_error(), match="IMMUTABLE_TEMPLATE_CONFLICT"
+    ):
+        _execute_worker(_payload(), runner=runner)
     assert not any(call[0] == "apply" for call in calls)
 
 
@@ -187,8 +200,8 @@ def test_worker_provisioning_stops_before_mutation_when_command_lease_is_lost(mo
     lost = Event()
     lost.set()
     calls = []
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="LEASE_LOST"):
-        _worker_provisioning().execute_worker_provisioning(
+    with pytest.raises(_worker_error(), match="LEASE_LOST"):
+        _execute_worker(
             _payload(),
             lease_lost_event=lost,
             runner=lambda *args, **kwargs: calls.append(args),
@@ -200,8 +213,8 @@ def test_worker_provisioning_rejects_invalid_replica_count(monkeypatch):
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
     payload = _payload()
     payload["desired_worker_count"] = 0
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="DESIRED_COUNT_INVALID"):
-        _worker_provisioning().execute_worker_provisioning(payload)
+    with pytest.raises(_worker_error(), match="DESIRED_COUNT_INVALID"):
+        _execute_worker(payload)
 
 
 
@@ -212,8 +225,8 @@ def test_worker_provisioning_rejects_external_chrony_directives(monkeypatch):
         "cat > /etc/chrony/chrony.conf <<EOF\\npool pool.ntp.org iburst\\nEOF"
     ]
     calls = []
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="NTP_DIRECTIVE_REJECTED"):
-        _worker_provisioning().execute_worker_provisioning(payload, runner=lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(_worker_error(), match="NTP_DIRECTIVE_REJECTED"):
+        _execute_worker(payload, runner=lambda *args, **kwargs: calls.append(args))
     assert calls == []
 
 
@@ -426,8 +439,8 @@ def test_worker_provisioning_rejects_unconfigured_namespace_before_mutation(monk
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
     monkeypatch.setenv("TARGET_CAPI_NAMESPACE", "ccd-sig1-capi")
     calls = []
-    with pytest.raises(_worker_provisioning().WorkerProvisioningError, match="CAPI_NAMESPACE_NOT_ALLOWED"):
-        _worker_provisioning().execute_worker_provisioning(
+    with pytest.raises(_worker_error(), match="CAPI_NAMESPACE_NOT_ALLOWED"):
+        _execute_worker(
             _payload(),
             runner=lambda *args, **kwargs: calls.append(args),
         )
