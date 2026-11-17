@@ -110,7 +110,14 @@ def _verify_source_namespace_scope(
         raise CapiPivotError("CAPI_PIVOT_SOURCE_SCOPE_INVALID")
     if names != [cluster_name]:
         raise CapiPivotError("CAPI_PIVOT_NAMESPACE_MUST_CONTAIN_ONLY_TARGET_CLUSTER")
-    return {"source_cluster_count": len(items), "source_cluster_name": cluster_name}
+    cluster_uid = items[0].get("metadata", {}).get("uid") if items else None
+    if not isinstance(cluster_uid, str) or not cluster_uid:
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_INVALID")
+    return {
+        "source_cluster_count": len(items),
+        "source_cluster_name": cluster_name,
+        "source_cluster_uid": cluster_uid,
+    }
 
 
 def run_capi_pivot_dry_run(
@@ -207,6 +214,7 @@ def run_capi_pivot_dry_run(
         "source_kubeconfig_configured": True,
         "target_kubeconfig_configured": True,
         "source_cluster_count": source_scope["source_cluster_count"],
+        "source_cluster_uid": source_scope["source_cluster_uid"],
         "namespace_scope": "all_capi_objects_in_namespace",
         "namespace_scope_warning": True,
         "status_subresources_migrated": False,
@@ -740,8 +748,12 @@ def run_capi_pivot(
         "-v",
         "5",
     ]
+    _raise_if_cancelled(
+        cancellation_event,
+        "CAPI_PIVOT_CANCELLED_DURING_EXECUTION",
+    )
     try:
-        completed = preflight_runner(
+        completed = runner(
             command,
             check=False,
             capture_output=True,
@@ -754,6 +766,10 @@ def run_capi_pivot(
         raise CapiPivotError("CAPI_PIVOT_EXECUTION_TIMEOUT") from exc
     except OSError as exc:
         raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
+    _raise_if_cancelled(
+        cancellation_event,
+        "CAPI_PIVOT_CANCELLED_DURING_EXECUTION",
+    )
     stdout = _safe_output(completed.stdout or "")
     stderr = _safe_output(completed.stderr or "")
     if completed.returncode != 0:
@@ -797,6 +813,8 @@ def run_capi_pivot(
     ).get("items")
     if not isinstance(target_uid, str) or not target_uid:
         raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_IDENTITY_INVALID")
+    if target_uid != dry_run["source_cluster_uid"]:
+        raise CapiPivotError("CAPI_PIVOT_CLUSTER_UID_NOT_PRESERVED")
     if not isinstance(source_clusters, list):
         raise CapiPivotError("CAPI_PIVOT_SOURCE_POST_MOVE_VERIFY_FAILED")
     if any(
