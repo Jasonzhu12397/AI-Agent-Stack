@@ -686,8 +686,31 @@ def queue_deployment_command(
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         identity = source.get("source_cluster_identity", {})
         dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
+        namespace = _deployment_capi_namespace(deployment)
+        operation = ClusterDeploymentPivotOperation.objects.filter(
+            deployment=deployment
+        ).first()
+        if operation is None or not isinstance(operation.inventory, list):
+            raise ValueError("CAPI_PIVOT_DURABLE_INVENTORY_REQUIRED")
+        expected_inventory = _canonical_capi_inventory(
+            [
+                item
+                for item in operation.inventory
+                if isinstance(item, dict) and item.get("namespace") == namespace
+            ]
+        )
+        if not expected_inventory:
+            raise ValueError("CAPI_PIVOT_NAMESPACE_INVENTORY_EMPTY")
+        expected_inventory_sha256 = hashlib.sha256(
+            json.dumps(
+                expected_inventory,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
         payload["cluster_name"] = deployment.cluster_name
-        payload["namespace"] = _deployment_capi_namespace(deployment)
+        payload["namespace"] = namespace
         payload["expected_cluster_uid"] = identity.get("uid")
         payload["expected_cluster_api_version"] = identity.get("api_version")
         payload["expected_cluster_spec_sha256"] = identity.get("spec_sha256")
@@ -695,6 +718,8 @@ def queue_deployment_command(
             "target_cluster_uid_after_move"
         )
         payload["operation_id"] = dual_agent.get("pivot_operation_id")
+        payload["expected_inventory"] = expected_inventory
+        payload["expected_inventory_sha256"] = expected_inventory_sha256
     elif command_type == "cluster.capi.pivot.postflight":
         target_verification = (deployment.plan_result or {}).get(
             "capi_pivot_target_verification",
