@@ -369,6 +369,10 @@ def execute_worker_provisioning(
                 "output": {
                     **last_state,
                     "worker_ntp_source": ntp_ip,
+                    "worker_ntp_sources": {
+                        name: [ntp_ip] for name in ready_nodes
+                    },
+                    "worker_ntp_synchronized": sorted(ready_nodes),
                     "worker_ntp_bootstrap_injected": True,
                     "workers_ready": True,
                 },
