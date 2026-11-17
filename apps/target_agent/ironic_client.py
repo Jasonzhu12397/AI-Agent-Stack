@@ -6,8 +6,7 @@ import os
 import ssl
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 from uuid import UUID
 
