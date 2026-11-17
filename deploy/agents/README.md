@@ -46,7 +46,7 @@ The EPH client certificate Common Name must equal the configured Agent UUID. EPH
 
 ### Target cluster
 
-- `target-agent-credentials`: `control-url`, `agent-id`, `installation-id`, `cluster-id`, `ironic-api-url`, `ironic-api-token`. The Ironic endpoint must use HTTPS and its certificate must chain to a CA trusted by the Target Agent image. The token is loaded from the Kubernetes Secret and is never included in command payloads or logs.
+- `target-agent-credentials`: `control-url`, `agent-id`, `installation-id`, `cluster-id`, `ironic-api-url`, `ironic-api-token`, `ironic-internal-ntp-ip`. The Ironic API endpoint must use HTTPS and its certificate must chain to a CA trusted by the Target Agent image. The NTP IP is a separately pinned internal service/VIP address; Target Agent rejects command payloads that request any other NTP server. The API token is loaded from the Kubernetes Secret and is never included in command payloads or logs.
 - `agent-control-plane-mtls`: `ca.crt`, `tls.crt`, `tls.key`.
 
 All three Target replicas share one logical Agent UUID and installation/cluster identity. Their per-pod `AGENT_INSTANCE_ID` is populated from the Pod name. The Target client certificate Common Name must equal the logical Agent UUID.
