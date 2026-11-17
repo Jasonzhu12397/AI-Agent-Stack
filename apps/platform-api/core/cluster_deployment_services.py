@@ -193,18 +193,18 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             "deployment": deployment,
             "command_type": "cluster.capi.pivot.execute",
             "payload": payload,
-            "status": AgentCommand.Status.WAITING_APPROVAL,
+            "status": AgentCommand.Status.QUEUED,
             "plan_hash": _payload_hash("cluster.capi.pivot.execute", payload),
         },
     )
     deployment.plan_result = {
         **plan_result,
         "dual_agent": {
-            "phase": "pivot_waiting_approval",
+            "phase": "pivot_queued_for_eph_agent",
             "source_agent_id": str(deployment.eph_node_id),
             "target_agent_id": str(deployment.target_node_id),
             "pivot_command_id": str(command.id),
-            "approval_required": True,
+            "approval_required": False,
             "target_agent_owns_cluster": False,
             "eph_reclaim_allowed": False,
         },
@@ -307,14 +307,7 @@ def queue_deployment_command(
             "deployment": deployment,
             "command_type": command_type,
             "payload": payload,
-            "status": (
-                AgentCommand.Status.WAITING_APPROVAL
-                if command_type in {
-                    "cluster.capi.pivot.execute",
-                    "cluster.capi.worker.provision",
-                }
-                else AgentCommand.Status.QUEUED
-            ),
+            "status": AgentCommand.Status.QUEUED,
             "plan_hash": _payload_hash(command_type, payload),
         },
     )
@@ -735,11 +728,7 @@ def handle_deployment_command_result(
         source_identity = source.get("source_cluster_identity", {})
         valid_simulation = (
             command.status == AgentCommand.Status.SUCCEEDED
-            and command.approved_at is not None
-            and command.approved_by_id is not None
-            and command.approved_by_id != command.requested_by_id
-            and command.approved_plan_hash == command.plan_hash
-            and command.plan_hash == _payload_hash(command.command_type, command.payload)
+             and command.plan_hash == _payload_hash(command.command_type, command.payload)
             and command.node.node_type == "eph_node"
             and command.node_id == deployment.eph_node_id
             and result.get("pivot_simulated") is True
@@ -1072,7 +1061,7 @@ def handle_deployment_command_result(
             "worker_provisioning_preflight": result,
             "dual_agent": {
                 **((deployment.plan_result or {}).get("dual_agent", {})),
-                "phase": "worker_preflight_passed_waiting_provisioning_approval",
+                "phase": "worker_preflight_passed",
                 "target_agent_owns_cluster": True,
                 "worker_preflight_validated": True,
                 "eph_reclaim_allowed": False,
@@ -1085,7 +1074,7 @@ def handle_deployment_command_result(
             "worker_provisioning_preflight",
             "worker_provisioning",
         )
-        deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+        deployment.status = ClusterDeployment.Status.PROVISIONING
         deployment.error = None
         provision_command = queue_deployment_command(
             deployment,
@@ -1097,7 +1086,7 @@ def handle_deployment_command_result(
             "dual_agent": {
                 **((deployment.plan_result or {}).get("dual_agent", {})),
                 "worker_provisioning_command_id": str(provision_command.id),
-                "worker_provisioning_approval_required": True,
+                "worker_provisioning_approval_required": False,
             },
         }
         deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
