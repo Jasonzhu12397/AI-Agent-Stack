@@ -5,11 +5,12 @@ StartLimitBurst=5
 Wants=network-online.target containerd.service
 After=network-online.target containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 After=cloud-config.service
-Requires=containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
+Requires=cloud-config.service containerd.service var-lib-containerd.mount var-lib-kubelet.mount var-lib-etcd.mount
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/default/eph-node
+ExecStartPre=/usr/local/sbin/ai-agent-site-time-dns-apply
 ExecStart=/usr/bin/bash /usr/local/sbin/eph-kubeadm-init.sh
 RemainAfterExit=yes
 Restart=on-failure
