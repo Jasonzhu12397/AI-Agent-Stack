@@ -2559,18 +2559,18 @@ def execute_command(
                     if not isinstance(owner_references, list) or not isinstance(labels, dict):
                         raise NodeAgentError("CAPI_SOURCE_INVENTORY_INVALID")
                     spec_sha256 = None
-                    if resource_key == "cluster.x-k8s.io/clusters":
-                        cluster_spec = item.get("spec")
-                        if not isinstance(cluster_spec, dict):
-                            raise NodeAgentError("CAPI_SOURCE_CLUSTER_SPEC_INVALID")
+                    item_spec = item.get("spec")
+                    if isinstance(item_spec, dict):
                         spec_sha256 = hashlib.sha256(
                             json.dumps(
-                                cluster_spec,
+                                item_spec,
                                 sort_keys=True,
                                 separators=(",", ":"),
                                 ensure_ascii=False,
                             ).encode("utf-8")
                         ).hexdigest()
+                    elif resource_key == "cluster.x-k8s.io/clusters":
+                        raise NodeAgentError("CAPI_SOURCE_CLUSTER_SPEC_INVALID")
                     consumer_ref = None
                     if resource_key == "metal3.io/baremetalhosts":
                         host_spec = item.get("spec")
