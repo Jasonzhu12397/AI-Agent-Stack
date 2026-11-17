@@ -63,10 +63,8 @@ spec:
               mountPath: /var/run/secrets/cloud-control/tls
               readOnly: true
           readinessProbe:
-            httpGet:
-              scheme: HTTPS
-              path: /readyz
-              port: mtls-api
+            exec:
+              command: ["python", "-m", "apps.cloud_control_agent.main", "--readiness-check"]
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
@@ -97,7 +95,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-control-agent
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app.kubernetes.io/name: cloud-control-agent
   ports:
