@@ -4846,10 +4846,6 @@ class KubernetesLeaseLeaderElector:
             f"{'/apis/coordination.k8s.io/v1/namespaces/'}"
             f"{namespace}/leases/{lease_name}"
         )
-        self.collection_path = (
-            f"{'/apis/coordination.k8s.io/v1/namespaces/'}"
-            f"{namespace}/leases"
-        )
 
     @staticmethod
     def _parse_time(value: Any) -> datetime.datetime | None:
@@ -4863,13 +4859,9 @@ class KubernetesLeaseLeaderElector:
             return None
         return parsed.astimezone(datetime.UTC)
 
-    def _write_lease(self, lease: dict[str, Any], create: bool) -> bool:
+    def _write_lease(self, lease: dict[str, Any]) -> bool:
         try:
-            kubernetes_api_lease_request(
-                "POST" if create else "PUT",
-                self.collection_path if create else self.lease_path,
-                lease,
-            )
+            kubernetes_api_lease_request("PUT", self.lease_path, lease)
         except NodeAgentError as exc:
             if str(exc) == "KUBERNETES_API_HTTP_409":
                 return False
@@ -4882,24 +4874,9 @@ class KubernetesLeaseLeaderElector:
         try:
             current = kubernetes_api_get(self.lease_path)
         except NodeAgentError as exc:
-            if str(exc) != "KUBERNETES_API_HTTP_404":
-                raise
-            lease = {
-                "apiVersion": "coordination.k8s.io/v1",
-                "kind": "Lease",
-                "metadata": {
-                    "name": self.lease_name,
-                    "namespace": self.namespace,
-                },
-                "spec": {
-                    "holderIdentity": self.identity,
-                    "leaseDurationSeconds": self.lease_duration_seconds,
-                    "acquireTime": now_text,
-                    "renewTime": now_text,
-                    "leaseTransitions": 0,
-                },
-            }
-            return self._write_lease(lease, create=True)
+            if str(exc) == "KUBERNETES_API_HTTP_404":
+                raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MISSING") from exc
+            raise
 
         metadata = current.get("metadata")
         spec = current.get("spec")
@@ -4955,7 +4932,7 @@ class KubernetesLeaseLeaderElector:
             },
             "spec": updated_spec,
         }
-        return self._write_lease(updated, create=False)
+        return self._write_lease(updated)
 
     def maintain(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
