@@ -44,7 +44,7 @@ rendered_apply() {
         sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_CAPI_NAMESPACE|$CAPI_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply --dry-run=server -f -
     else
-        sed "s|$placeholder|$image|g" "$file" |
+        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_CAPI_NAMESPACE|$CAPI_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply -f -
     fi
 }
