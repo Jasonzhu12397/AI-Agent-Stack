@@ -50,3 +50,59 @@ def render_worker_chrony_config(ironic_internal_ip: str) -> str:
         "logdir /var/log/chrony",
         "",
     ))
+
+
+
+def render_worker_chrony_pre_kubeadm_command(ironic_internal_ip: str) -> str:
+    endpoint = validate_ironic_internal_ntp_ip(ironic_internal_ip)
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+NTP_SERVER='{endpoint}'
+if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y chrony
+    CHRONY_CONF=/etc/chrony/chrony.conf
+    CHRONY_SERVICE=chrony
+elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install chrony
+    CHRONY_CONF=/etc/chrony.conf
+    CHRONY_SERVICE=chronyd
+elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y chrony
+    CHRONY_CONF=/etc/chrony.conf
+    CHRONY_SERVICE=chronyd
+elif command -v yum >/dev/null 2>&1; then
+    yum install -y chrony
+    CHRONY_CONF=/etc/chrony.conf
+    CHRONY_SERVICE=chronyd
+else
+    echo 'Unsupported package manager for chrony' >&2
+    exit 1
+fi
+
+install -d -m 0755 "$(dirname "$CHRONY_CONF")"
+cat > "$CHRONY_CONF" <<EOF
+server $NTP_SERVER iburst prefer
+makestep 1.0 3
+rtcsync
+driftfile /var/lib/chrony/drift
+EOF
+
+systemctl enable "$CHRONY_SERVICE"
+systemctl restart "$CHRONY_SERVICE"
+
+for attempt in $(seq 1 30); do
+    if chronyc -n sources | awk -v server="$NTP_SERVER" '
+        $1 == "^*" && $2 == server {{ selected = 1 }}
+        END {{ exit !selected }}
+    ' && chronyc tracking | grep -Eiq '^Leap status[[:space:]]*:[[:space:]]*Normal'; then
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "Chrony did not synchronize with the required Ironic internal NTP endpoint" >&2
+exit 1
+"""
