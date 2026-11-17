@@ -602,7 +602,9 @@ def test_corrupt_target_preflight_refresh_state_fails_closed(
             "inventory_summary_truncated": False,
         },
         "capi_pivot_preflight": {"preflight_validated": True},
-        "capi_pivot_provider_compatibility": {"compatible": True},
+        "capi_pivot_provider_compatibility": {
+            "compatible": not isinstance(dual_agent_state, list)
+        },
         "dual_agent": dual_agent_state,
     }
     deployment.save(update_fields=["target_node", "plan_result", "updated_at"])
