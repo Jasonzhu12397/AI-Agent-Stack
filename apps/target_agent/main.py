@@ -248,7 +248,10 @@ def _observe_target_metal3_ownership(
     if (
         calculated_digest != source_digest
         or attestation.get("target_bmh_digest") != source_digest
-        or payload.get("source_cluster_uid") != source_cluster_uid
+        or (
+            payload.get("source_cluster_uid")
+            or payload.get("evidence", {}).get("source_cluster_uid")
+        ) != source_cluster_uid
     ):
         raise Metal3OwnershipError("SOURCE_BMH_PIVOT_ATTESTATION_DIGEST_MISMATCH")
     ownership = verify_metal3_ownership(
