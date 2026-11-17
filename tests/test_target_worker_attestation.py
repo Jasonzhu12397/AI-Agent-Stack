@@ -54,7 +54,8 @@ def _documents(ntp_ip: str = "10.0.0.10"):
                 "systemctl restart chrony",
                 "chronyc -n sources",
                 "chronyc tracking",
-                "if ! chronyc tracking | grep -Eiq '^Leap status[[:space:]]*:[[:space:]]*Normal'; then exit 1; fi",
+                "if ! chronyc tracking | grep -Eiq '^Leap status[[:space:]]*:
+                "[[:space:]]*Normal'; then exit 1; fi",
             ],
         },
     }
