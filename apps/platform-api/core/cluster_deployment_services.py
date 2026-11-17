@@ -1025,6 +1025,21 @@ def queue_deployment_command(
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+        plan_result = deployment.plan_result
+        time_dns_profile = (
+            plan_result.get("time_dns_profile")
+            if isinstance(plan_result, dict)
+            else None
+        )
+        time_dns_profile_hash = (
+            time_dns_profile.get("profile_hash")
+            if isinstance(time_dns_profile, dict)
+            else None
+        )
+        if not isinstance(time_dns_profile_hash, str) or not re.fullmatch(
+            r"[a-f0-9]{64}", time_dns_profile_hash
+        ):
+            raise ValueError("CAPI_PIVOT_TIME_DNS_PROFILE_HASH_REQUIRED")
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = namespace
         payload["expected_cluster_uid"] = identity.get("uid")
@@ -1036,6 +1051,7 @@ def queue_deployment_command(
         payload["operation_id"] = dual_agent.get("pivot_operation_id")
         payload["expected_inventory"] = expected_inventory
         payload["expected_inventory_sha256"] = expected_inventory_sha256
+        payload["expected_time_dns_profile_hash"] = time_dns_profile_hash
     elif command_type == "cluster.capi.pivot.postflight":
         target_verification = (deployment.plan_result or {}).get(
             "capi_pivot_target_verification",
@@ -1895,6 +1911,16 @@ def handle_deployment_command_result(
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+        time_dns_profile = (
+            deployment.plan_result.get("time_dns_profile")
+            if isinstance(deployment.plan_result, dict)
+            else None
+        )
+        expected_time_dns_profile_hash = (
+            time_dns_profile.get("profile_hash")
+            if isinstance(time_dns_profile, dict)
+            else None
+        )
         valid_verification = (
             pivot_operation is not None
             and str(pivot_operation.operation_id) == operation_id
@@ -1929,6 +1955,10 @@ def handle_deployment_command_result(
             and result.get("pivot_adoption_verified") is True
             and result.get("machine_inventory_ready") is True
             and result.get("controllers_ready") is True
+            and result.get("time_dns_verified") is True
+            and result.get("time_dns_profile_hash") == expected_time_dns_profile_hash
+            and result.get("time_dns_node_count") == result.get("machine_count")
+            and result.get("time_dns_unverified_machine_names") == []
             and isinstance(result.get("machine_count"), int)
             and not isinstance(result.get("machine_count"), bool)
             and result.get("machine_count") > 0
