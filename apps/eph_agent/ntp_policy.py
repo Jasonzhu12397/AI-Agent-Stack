@@ -63,7 +63,7 @@ def render_eph_chrony_config(approved_sources: Iterable[str]) -> str:
 def render_eph_chrony_pre_kubeadm_command(approved_sources: Iterable[str]) -> str:
     sources = validate_eph_bootstrap_ntp_sources(approved_sources, approved_sources)
     config = render_eph_chrony_config(sources)
-    config_lines = "\\n".join(config.rstrip("\\n").splitlines())
+    config_lines = "\n".join(config.rstrip("\n").splitlines())
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
