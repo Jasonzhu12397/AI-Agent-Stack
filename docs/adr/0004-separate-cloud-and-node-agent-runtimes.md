@@ -15,7 +15,7 @@ Build and deploy three separate artifacts:
 2. Cloud AI Agent image (`Dockerfile.cloud-agent`): the cloud task runtime (`worker_app.main`) for LLM/model routing, tools, RAG, workflow execution, task leases and orchestration. It includes the API/domain Python packages needed by Django models but excludes the Node Agent source tree.
 3. Kubernetes Node Agent image (`Dockerfile.node-agent`): only `apps/node_agent`, PyYAML and checksum-verified kubectl/clusterctl binaries. It excludes Django, worker/API packages, cloud database clients and cloud model credentials.
 
-EPH and Target Agents share the Node Agent image but use separate Kubernetes ServiceAccounts, enrollment identities, credentials, command allowlists and deployments. The cloud Agent and Node Agent communicate through the versioned Agent command/heartbeat API, authenticated by per-agent credentials and the configured mTLS ingress.
+There are three Agent roles: Cloud Control Agent, EPH Agent and Target Agent. EPH and Target may share the minimal cluster-side adapter image, but they have distinct executable entrypoints (`apps.eph_agent.main` and `apps.target_agent.main`), Kubernetes ServiceAccounts, enrollment identities, credentials, command allowlists and deployments. The Target Agent is pinned to a Target Control Plane master and must start before Target Workers are provisioned. EPH is a temporary Single-Node management environment and is never automatically reclassified as a Target Worker. The Cloud Control Agent and both node-side Agents communicate through the versioned Agent command/heartbeat API, authenticated by per-agent credentials and the configured mTLS ingress.
 
 ## Consequences
 
