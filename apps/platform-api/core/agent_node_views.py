@@ -1846,6 +1846,82 @@ class AgentCommandApproveView(APIView):
                     {"detail": "Approval plan hash does not match the immutable command payload."},
                     status=409,
                 )
+            pivot_operation = None
+            if command.command_type == "cluster.capi.pivot.execute":
+                deployment = ClusterDeployment.objects.select_for_update().filter(
+                    pk=command.deployment_id,
+                ).first()
+                pivot_operation = (
+                    ClusterDeploymentPivotOperation.objects.select_for_update()
+                    .filter(deployment=deployment)
+                    .first()
+                    if deployment is not None
+                    else None
+                )
+                payload = command.payload if isinstance(command.payload, dict) else {}
+                expected_ack = (
+                    (deployment.plan_result or {}).get("dual_agent", {}).get(
+                        "target_agent_ack"
+                    )
+                    if deployment is not None
+                    and isinstance(deployment.plan_result, dict)
+                    else None
+                )
+                if (
+                    deployment is None
+                    or pivot_operation is None
+                    or pivot_operation.state
+                    != ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
+                    or str(pivot_operation.operation_id) != payload.get("operation_id")
+                    or pivot_operation.approval_hash != command.plan_hash
+                    or pivot_operation.inventory_sha256
+                    != payload.get("source_inventory_sha256")
+                    or pivot_operation.source_node_id != command.node_id
+                    or pivot_operation.target_node_id != deployment.target_node_id
+                    or pivot_operation.target_ack != payload.get("target_agent_ack")
+                    or pivot_operation.target_ack != expected_ack
+                    or deployment.status
+                    == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+                ):
+                    if deployment is not None:
+                        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+                        deployment.error = {
+                            "code": "CAPI_PIVOT_APPROVAL_JOURNAL_MISMATCH"
+                        }
+                        deployment.plan_result = {
+                            **(
+                                deployment.plan_result
+                                if isinstance(deployment.plan_result, dict)
+                                else {}
+                            ),
+                            "dual_agent": {
+                                **(
+                                    deployment.plan_result.get("dual_agent", {})
+                                    if isinstance(deployment.plan_result, dict)
+                                    and isinstance(
+                                        deployment.plan_result.get("dual_agent", {}),
+                                        dict,
+                                    )
+                                    else {}
+                                ),
+                                "phase": "pivot_approval_journal_mismatch",
+                                "target_agent_owns_cluster": False,
+                                "eph_reclaim_allowed": False,
+                                "manual_reconciliation_required": True,
+                            },
+                        }
+                        deployment.save(
+                            update_fields=[
+                                "status",
+                                "error",
+                                "plan_result",
+                                "updated_at",
+                            ]
+                        )
+                    return Response(
+                        {"detail": "Pivot operation journal does not match the approval request."},
+                        status=409,
+                    )
             command.status = AgentCommand.Status.QUEUED
             command.approved_plan_hash = current_hash
             command.approved_by = request.user
@@ -1859,6 +1935,30 @@ class AgentCommandApproveView(APIView):
                     "updated_at",
                 ]
             )
+            if pivot_operation is not None:
+                _record_capi_pivot_event(
+                    deployment,
+                    ClusterDeploymentPivotOperation.State.READY,
+                    "pivot_command_approved",
+                    {
+                        "command_id": str(command.id),
+                        "approved_by": str(request.user.id),
+                        "approved_at": command.approved_at.isoformat(),
+                        "approved_plan_hash": command.approved_plan_hash,
+                    },
+                )
+                deployment.plan_result = {
+                    **deployment.plan_result,
+                    "dual_agent": {
+                        **deployment.plan_result.get("dual_agent", {}),
+                        "phase": "pivot_approved_waiting_execution",
+                        "approval_required": False,
+                        "approval_command_id": str(command.id),
+                        "target_agent_owns_cluster": False,
+                        "eph_reclaim_allowed": False,
+                    },
+                }
+                deployment.save(update_fields=["plan_result", "updated_at"])
             record_audit_event(
                 request,
                 command.tenant,
