@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import ssl
 from datetime import datetime, timedelta, timezone
@@ -139,6 +140,22 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send(200, {"status": "ready"})
                 return
+            try:
+                if self.path.startswith("/api/v1/control/deployments/"):
+                    self._get_deployment(self.path.rsplit("/", 1)[-1])
+                    return
+                if self.path.startswith("/api/v1/control/commands/"):
+                    self._get_command(self.path.rsplit("/", 1)[-1])
+                    return
+                if self.path.startswith("/api/v1/control/agents/"):
+                    self._get_agent(self.path.rsplit("/", 1)[-1])
+                    return
+            except ControlApiError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            except psycopg.Error:
+                self._send(503, {"error": "PERSISTENCE_UNAVAILABLE"})
+                return
             self._send(404, {"error": "NOT_FOUND"})
 
         def do_POST(self) -> None:
@@ -159,6 +176,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/agent-control/commands/results":
                     self._result(document)
                     return
+                if self.path == "/api/v1/control/agents/register":
+                    self._register_agent(document)
+                    return
+                if self.path == "/api/v1/control/deployments":
+                    self._create_deployment(document)
+                    return
                 if self.path == "/api/v1/control/commands":
                     self._enqueue(document)
                     return
@@ -169,10 +192,147 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 self._send(503, {"error": "PERSISTENCE_UNAVAILABLE"})
 
 
-        def _enqueue(self, document: dict[str, Any]) -> None:
-            certificate = self.connection.getpeercert()
-            if _certificate_common_name(certificate) != "platform-api":
+
+        def _require_platform_api(self) -> None:
+            if _certificate_common_name(self.connection.getpeercert()) != "platform-api":
                 raise ControlApiError("PLATFORM_API_CERTIFICATE_REQUIRED")
+
+        def _register_agent(self, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            agent_id = _parse_uuid(document.get("agent_id"), "AGENT_ID")
+            installation_id = _parse_uuid(
+                document.get("installation_id"),
+                "INSTALLATION_ID",
+            )
+            role = document.get("role")
+            cluster_raw = document.get("cluster_id")
+            cluster_id = _parse_uuid(cluster_raw, "CLUSTER_ID") if cluster_raw else None
+            if role not in ("eph", "target"):
+                raise ControlApiError("AGENT_ROLE_INVALID")
+            if (role == "target" and cluster_id is None) or (
+                role == "eph" and cluster_id is not None
+            ):
+                raise ControlApiError("AGENT_CLUSTER_SCOPE_INVALID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    INSERT INTO agent_control_agents (
+                        agent_id, installation_id, role, cluster_id, enabled
+                    )
+                    VALUES (%s, %s, %s, %s, TRUE)
+                    ON CONFLICT (agent_id) DO UPDATE
+                    SET enabled = TRUE, updated_at = NOW()
+                    WHERE agent_control_agents.installation_id = EXCLUDED.installation_id
+                      AND agent_control_agents.role = EXCLUDED.role
+                      AND agent_control_agents.cluster_id IS NOT DISTINCT FROM EXCLUDED.cluster_id
+                    RETURNING agent_id
+                    """,
+                    (agent_id, installation_id, role, cluster_id),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("AGENT_REGISTRATION_IDENTITY_CONFLICT")
+            self._send(200, {"registered": True, "agent_id": str(agent_id)})
+
+        def _create_deployment(self, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            deployment_id = _parse_uuid(
+                document.get("deployment_id"),
+                "DEPLOYMENT_ID",
+            )
+            installation_id = _parse_uuid(
+                document.get("installation_id"),
+                "INSTALLATION_ID",
+            )
+            cluster_id = _parse_uuid(document.get("cluster_id"), "CLUSTER_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    connection.execute(
+                        """
+                        INSERT INTO agent_control_deployments (
+                            deployment_id, installation_id, cluster_id,
+                            phase, sequence, state
+                        )
+                        VALUES (%s, %s, %s, 'not_started', 0, '{}'::jsonb)
+                        ON CONFLICT (deployment_id) DO NOTHING
+                        """,
+                        (deployment_id, installation_id, cluster_id),
+                    )
+                    row = connection.execute(
+                        """
+                        SELECT installation_id, cluster_id, phase, sequence, state
+                        FROM agent_control_deployments
+                        WHERE deployment_id = %s
+                        """,
+                        (deployment_id,),
+                    ).fetchone()
+                    if (
+                        row is None
+                        or row["installation_id"] != installation_id
+                        or row["cluster_id"] != cluster_id
+                    ):
+                        raise ControlApiError("DEPLOYMENT_IDENTITY_CONFLICT")
+            self._send(200, {
+                "created": True,
+                "deployment_id": str(deployment_id),
+                "phase": row["phase"],
+                "sequence": row["sequence"],
+            })
+
+        def _get_deployment(self, raw_id: str) -> None:
+            self._require_platform_api()
+            deployment_id = _parse_uuid(raw_id, "DEPLOYMENT_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT deployment_id, installation_id, cluster_id, phase,
+                           sequence, state, updated_at
+                    FROM agent_control_deployments
+                    WHERE deployment_id = %s
+                    """,
+                    (deployment_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("DEPLOYMENT_NOT_FOUND")
+            self._send(200, row)
+
+        def _get_command(self, raw_id: str) -> None:
+            self._require_platform_api()
+            command_id = _parse_uuid(raw_id, "COMMAND_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT command_id, deployment_id, target_agent_id, required_role,
+                           action, status, result, lease_expires_at, deadline,
+                           approval_digest, created_at, updated_at
+                    FROM agent_control_commands
+                    WHERE command_id = %s
+                    """,
+                    (command_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("COMMAND_NOT_FOUND")
+            self._send(200, row)
+
+        def _get_agent(self, raw_id: str) -> None:
+            self._require_platform_api()
+            agent_id = _parse_uuid(raw_id, "AGENT_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT agent_id, installation_id, role, cluster_id, enabled,
+                           instance_id, heartbeat_sequence, readiness,
+                           capabilities, last_seen, updated_at
+                    FROM agent_control_agents
+                    WHERE agent_id = %s
+                    """,
+                    (agent_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("AGENT_NOT_FOUND")
+            self._send(200, row)
+
+        def _enqueue(self, document: dict[str, Any]) -> None:
+            self._require_platform_api()
             deployment_id = _parse_uuid(document.get("deployment_id"), "DEPLOYMENT_ID")
             target_agent_id = _parse_uuid(document.get("target_agent_id"), "TARGET_AGENT_ID")
             role = document.get("required_role")
@@ -202,12 +362,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             command_status = "queued"
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 agent = connection.execute(
-                    "SELECT role, enabled, cluster_id "
+                    "SELECT role, enabled, cluster_id, installation_id "
                     "FROM agent_control_agents WHERE agent_id = %s",
                     (target_agent_id,),
                 ).fetchone()
                 deployment = connection.execute(
-                    "SELECT deployment_id, cluster_id "
+                    "SELECT deployment_id, installation_id, cluster_id "
                     "FROM agent_control_deployments WHERE deployment_id = %s",
                     (deployment_id,),
                 ).fetchone()
@@ -215,6 +375,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("TARGET_AGENT_NOT_ELIGIBLE")
                 if not deployment:
                     raise ControlApiError("DEPLOYMENT_NOT_FOUND")
+                if agent["installation_id"] != deployment["installation_id"]:
+                    raise ControlApiError("AGENT_INSTALLATION_MISMATCH")
                 if role == "target" and agent["cluster_id"] != deployment["cluster_id"]:
                     raise ControlApiError("TARGET_AGENT_CLUSTER_MISMATCH")
                 inserted = connection.execute(
