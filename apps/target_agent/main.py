@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -17,6 +18,37 @@ from .leader_election import KubernetesLeaseElector, LeaseElectionError
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = ["target.cluster.observe", "target.capi.observe", "target.metal3.observe"]
+
+
+def _configure_in_cluster_kubeconfig() -> None:
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+    token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    if not host or not os.path.isfile(token_file) or not os.path.isfile(ca_file):
+        raise RuntimeError("In-cluster Kubernetes credentials are unavailable")
+    config = {
+        "apiVersion": "v1",
+        "kind": "Config",
+        "clusters": [{
+            "name": "target",
+            "cluster": {
+                "server": f"https://{host}:{port}",
+                "certificate-authority": ca_file,
+            },
+        }],
+        "users": [{"name": "target-agent", "user": {"tokenFile": token_file}}],
+        "contexts": [{
+            "name": "target",
+            "context": {"cluster": "target", "user": "target-agent"},
+        }],
+        "current-context": "target",
+    }
+    descriptor, path = tempfile.mkstemp(prefix="target-agent-", suffix=".kubeconfig", dir="/tmp")
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(config, stream)
+    os.environ["KUBECONFIG"] = path
 
 
 def _kubectl(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
@@ -83,6 +115,7 @@ def main() -> int:
         return 0
     try:
         settings = AgentSettings.from_environment("target")
+        _configure_in_cluster_kubeconfig()
         if args.readiness_check:
             check = _kubectl(["get", "nodes", "-o", "json"])
             if not check["available"]:
@@ -108,12 +141,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     try:
-        for _ in iter(int, 1):
+        for sequence in iter(time.time_ns, -1):
             if stopped:
                 break
             try:
                 if elector.try_acquire_or_renew():
-                    client.heartbeat(time.time_ns(), "ready", CAPABILITIES)
+                    client.heartbeat(sequence, "ready", CAPABILITIES)
                     command = client.claim()
                     if command is not None:
                         outcome = execute(command)
