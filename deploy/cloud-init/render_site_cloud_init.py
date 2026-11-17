@@ -62,8 +62,8 @@ def render(args):
         "[Resolve]",
         "DNS=" + " ".join(args.dns_server),
     ]
-    if args.search_domain:
-        resolved_lines.append("Domains=" + " ".join(args.search_domain))
+    domains = ["~.", *args.search_domain]
+    resolved_lines.append("Domains=" + " ".join(domains))
     resolved_content = "\n".join(resolved_lines) + "\n"
 
     apply_script = """#!/bin/sh
