@@ -86,7 +86,7 @@ fi
 
 install -d -m 0755 "$(dirname "$CHRONY_CONF")"
 cat > "$CHRONY_CONF" <<EOF
-server $NTP_SERVER iburst prefer
+server {endpoint} iburst prefer
 makestep 1.0 3
 rtcsync
 driftfile /var/lib/chrony/drift
