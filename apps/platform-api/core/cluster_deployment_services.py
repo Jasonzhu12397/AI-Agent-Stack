@@ -1221,6 +1221,8 @@ def handle_deployment_command_result(
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
             and result.get("expected_worker_replicas") == expected_worker_replicas
+            and result.get("readiness_attempt")
+            == command.payload.get("readiness_attempt", 0)
             and (
                 not isinstance(deployment.spec.get("worker_provisioning"), dict)
                 or result.get("machine_deployment_name")
@@ -1263,9 +1265,90 @@ def handle_deployment_command_result(
             deployment.status = ClusterDeployment.Status.SUCCEEDED
             deployment.error = None
         else:
+            attempt = command.payload.get("readiness_attempt", 0)
+            machine_deployment_status = result.get("machine_deployment_status")
+            pending_result = (
+                command.node.node_type == "target_cluster"
+                and command.node_id == deployment.target_node_id
+                and result.get("cluster_name") == deployment.cluster_name
+                and result.get("namespace") == _deployment_capi_namespace(deployment)
+                and result.get("expected_worker_replicas") == expected_worker_replicas
+                and result.get("readiness_attempt") == attempt
+                and result.get("side_effects") is False
+                and result.get("ready") is False
+                and isinstance(node_count, int)
+                and not isinstance(node_count, bool)
+                and node_count > 0
+                and isinstance(not_ready_nodes, list)
+                and isinstance(expected_worker_replicas, int)
+                and not isinstance(expected_worker_replicas, bool)
+                and expected_worker_replicas >= 0
+                and isinstance(worker_machine_count, int)
+                and not isinstance(worker_machine_count, bool)
+                and 0 <= worker_machine_count <= expected_worker_replicas
+                and isinstance(ready_worker_machine_count, int)
+                and not isinstance(ready_worker_machine_count, bool)
+                and 0 <= ready_worker_machine_count <= worker_machine_count
+                and isinstance(not_ready_worker_names, list)
+                and len(not_ready_worker_names)
+                == worker_machine_count - ready_worker_machine_count
+                and isinstance(worker_node_names, list)
+                and len(worker_node_names) == ready_worker_machine_count
+                and all(isinstance(name, str) and name for name in worker_node_names)
+                and len(set(worker_node_names)) == len(worker_node_names)
+                and result.get("capi_worker_inventory_complete") is False
+                and (
+                    not isinstance(deployment.spec.get("worker_provisioning"), dict)
+                    or (
+                        isinstance(machine_deployment_status, dict)
+                        and machine_deployment_status.get("found") is True
+                        and isinstance(machine_deployment_status.get("uid"), str)
+                        and bool(machine_deployment_status.get("uid"))
+                        and machine_deployment_status.get("desired_replicas")
+                        == expected_worker_replicas
+                    )
+                )
+            )
+            if pending_result and attempt < 180:
+                next_command = queue_deployment_command(
+                    deployment,
+                    "cluster.postflight",
+                    node=deployment.target_node,
+                    attempt=attempt + 1,
+                )
+                deployment.plan_result = {
+                    **(deployment.plan_result or {}),
+                    "postflight": result,
+                    "dual_agent": {
+                        **((deployment.plan_result or {}).get("dual_agent", {})),
+                        "phase": "worker_provisioning_waiting_for_readiness",
+                        "worker_postflight_attempt": attempt + 1,
+                        "worker_postflight_command_id": str(next_command.id),
+                        "eph_reclaim_allowed": False,
+                    },
+                }
+                deployment.status = ClusterDeployment.Status.PROVISIONING
+                deployment.error = None
+                deployment.finished_at = None
+                deployment.save(
+                    update_fields=[
+                        "plan_result",
+                        "status",
+                        "error",
+                        "finished_at",
+                        "started_at",
+                        "updated_at",
+                    ],
+                )
+                return
             deployment.status = ClusterDeployment.Status.FAILED
             deployment.error = {
-                "code": "TARGET_CLUSTER_POSTFLIGHT_FAILED",
+                "code": (
+                    "TARGET_WORKER_READINESS_TIMEOUT"
+                    if pending_result
+                    else "TARGET_CLUSTER_POSTFLIGHT_FAILED"
+                ),
+                "readiness_attempt": attempt,
                 "not_ready_nodes": (
                     [str(item)[:120] for item in not_ready_nodes[:100]]
                     if isinstance(not_ready_nodes, list)
