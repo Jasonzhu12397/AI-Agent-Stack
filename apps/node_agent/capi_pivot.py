@@ -723,31 +723,113 @@ def run_capi_pivot(
     )
     _raise_if_cancelled(
         cancellation_event,
-        "CAPI_PIVOT_CANCELLED_BEFORE_SIMULATION",
+        "CAPI_PIVOT_CANCELLED_BEFORE_EXECUTION",
     )
+    source_process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+        "KUBECONFIG": str(source_kubeconfig),
+    }
+    command = [
+        clusterctl,
+        "move",
+        "--to-kubeconfig",
+        str(target_kubeconfig),
+        "--namespace",
+        namespace,
+        "-v",
+        "5",
+    ]
+    try:
+        completed = preflight_runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=int(env.get("CAPI_PIVOT_EXECUTION_TIMEOUT", "900")),
+            stdin=subprocess.DEVNULL,
+            env=source_process_env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_TIMEOUT") from exc
+    except OSError as exc:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED") from exc
+    stdout = _safe_output(completed.stdout or "")
+    stderr = _safe_output(completed.stderr or "")
+    if completed.returncode != 0:
+        raise CapiPivotError("CAPI_PIVOT_EXECUTION_FAILED")
+
+    _raise_if_cancelled(
+        cancellation_event,
+        "CAPI_PIVOT_CANCELLED_AFTER_EXECUTION",
+    )
+    target_cluster = _kubectl_json(
+        preflight_runner,
+        kubectl,
+        target_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "clusters.cluster.x-k8s.io",
+            cluster_name,
+            "-o",
+            "json",
+        ],
+        target_process_env,
+        "CAPI_PIVOT_TARGET_CLUSTER_NOT_FOUND_AFTER_MOVE",
+    )
+    target_uid = target_cluster.get("metadata", {}).get("uid")
+    source_clusters = _kubectl_json(
+        preflight_runner,
+        kubectl,
+        source_kubeconfig,
+        [
+            "--namespace",
+            namespace,
+            "get",
+            "clusters.cluster.x-k8s.io",
+            "-o",
+            "json",
+        ],
+        source_process_env,
+        "CAPI_PIVOT_SOURCE_POST_MOVE_VERIFY_FAILED",
+    ).get("items")
+    if not isinstance(target_uid, str) or not target_uid:
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_IDENTITY_INVALID")
+    if not isinstance(source_clusters, list):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_POST_MOVE_VERIFY_FAILED")
+    if any(
+        isinstance(item, dict)
+        and item.get("metadata", {}).get("name") == cluster_name
+        for item in source_clusters
+    ):
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_STILL_PRESENT")
 
     return {
         "cluster_name": cluster_name,
         "namespace": namespace,
-        "pivot_executed": False,
-        "pivot_simulated": True,
-        "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "pivot_executed": True,
+        "pivot_simulated": False,
+        "execution_mode": "clusterctl_move",
+        "simulation_status": "not_applicable",
         "dry_run_passed": dry_run["dry_run_passed"],
         "source_namespace_scope_verified": True,
         "target_management_plane_verified": True,
         "target_provider_versions": target_preflight["provider_versions"],
         "target_controllers_ready": target_preflight["controllers_ready"],
         "target_cluster_name_available": target_preflight["target_cluster_name_available"],
+        "target_cluster_uid": target_uid,
+        "source_cluster_absent": True,
         "metal3_handoff": metal3_handoff,
-        "ownership_transferred": False,
-        "target_agent_acknowledgement_required": True,
+        "ownership_transferred": True,
+        "target_agent_acknowledgement_required": False,
         "postflight_required": True,
-        "side_effects": False,
-        "automatic_retry_allowed": True,
-        "exit_code": dry_run["exit_code"],
-        "stdout_summary": dry_run["stdout_summary"],
-        "stderr_summary": dry_run["stderr_summary"],
+        "side_effects": True,
+        "automatic_retry_allowed": False,
+        "exit_code": completed.returncode,
+        "stdout_summary": stdout,
+        "stderr_summary": stderr,
     }
 
 
