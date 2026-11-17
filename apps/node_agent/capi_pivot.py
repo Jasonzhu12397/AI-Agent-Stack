@@ -173,7 +173,7 @@ def _snapshot_source_inventory(
             runner,
             kubectl,
             kubeconfig,
-            ["--namespace", namespace, "get", resource_name + "." + group, "-o", "json"],
+            ["get", resource_name + "." + group, "-o", "json"],
             process_env,
             "CAPI_PIVOT_SOURCE_INVENTORY_RECHECK_FAILED",
         )
