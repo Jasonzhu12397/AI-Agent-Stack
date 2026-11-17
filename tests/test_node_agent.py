@@ -4780,7 +4780,7 @@ def test_worker_chrony_pre_kubeadm_command_is_valid_shell():
 
     assert checked.returncode == 0, stderr.decode("utf-8", errors="replace")
     assert "NTP_SERVER='10.130.60.84'" in command
-    assert 'server "$NTP_SERVER" iburst' in command
+    assert "server $NTP_SERVER iburst" in command
     assert "pool " not in command
     assert "pool.ntp.org" not in command
     assert "'^Leap status[[:space:]]*:[[:space:]]*Normal'; then" in command
