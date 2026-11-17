@@ -542,6 +542,106 @@ def test_stale_target_preflight_is_refreshed_before_pivot_approval(
 
 
 
+@pytest.mark.parametrize(
+    ("dual_agent_state", "expected_error"),
+    [
+        ([], "CAPI_PIVOT_DUAL_AGENT_STATE_INVALID"),
+        ({"target_preflight_refresh_count": True}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
+        ({"target_preflight_refresh_count": -1}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
+        ({"target_preflight_refresh_count": "3"}, "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"),
+    ],
+)
+@pytest.mark.django_db
+def test_corrupt_target_preflight_refresh_state_fails_closed(
+    cluster_delivery_workspace,
+    dual_agent_state,
+    expected_error,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key=f"corrupt-target-preflight-state-{expected_error.lower()}",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_token = "corrupt-target-preflight-state-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="corrupt-state-pivot-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name=deployment.cluster_name,
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "preflight_validated": True,
+            "source_cluster_identity": {
+                "uid": "source-cluster-uid",
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "spec_sha256": "a" * 64,
+            },
+            "inventory": [{"kind": "Cluster", "uid": "source-cluster-uid"}],
+            "inventory_total_count": 1,
+            "inventory_truncated": False,
+            "inventory_summary_truncated": False,
+        },
+        "capi_pivot_preflight": {"preflight_validated": True},
+        "capi_pivot_provider_compatibility": {"compatible": True},
+        "dual_agent": dual_agent_state,
+    }
+    deployment.save(update_fields=["target_node", "plan_result", "updated_at"])
+    old_finished_at = timezone.now() - datetime.timedelta(minutes=6)
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+        payload={},
+        result={"preflight_validated": True},
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=old_finished_at,
+        idempotency_key=f"corrupt-source-preflight:{deployment.id}",
+    )
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+        payload={},
+        result={"target_management_plane_ready": True},
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=old_finished_at,
+        idempotency_key=f"corrupt-target-preflight:{deployment.id}",
+    )
+
+    _maybe_queue_capi_pivot(deployment)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == expected_error
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+        status=AgentCommand.Status.QUEUED,
+    ).exists()
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+    ).exists()
+
+
 @pytest.mark.django_db
 def test_failed_pivot_execution_is_reconciliation_required_not_retryable(
     cluster_delivery_workspace,
