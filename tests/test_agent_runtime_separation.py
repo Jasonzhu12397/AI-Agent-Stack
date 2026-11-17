@@ -45,11 +45,11 @@ def test_node_agent_image_contains_only_cluster_runtime_and_minimal_dependency()
     assert "COPY pyproject.toml" not in dockerfile
     assert "COPY apps/platform-api" not in dockerfile
     assert "COPY apps/worker" not in dockerfile
-    assert 'CMD ["python", "-m", "apps.node_agent.agent"' in dockerfile
+    assert 'CMD ["python", "-m", "apps.target_agent.main"' in dockerfile
 
 
 def test_cloud_and_cluster_agent_entrypoints_are_not_the_same():
     cloud = (ROOT / "Dockerfile.cloud-agent").read_text(encoding="utf-8")
     node = (ROOT / "Dockerfile.node-agent").read_text(encoding="utf-8")
     assert "worker_app.main" in cloud
-    assert "apps.node_agent.agent" in node
+    assert "apps.target_agent.main" in node
