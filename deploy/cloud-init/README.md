@@ -41,7 +41,7 @@ DNS IP addresses, the DNS probe hostname and search domains, and writes cloud-in
 - installs the `chrony` package;
 - configures NTP servers with `iburst`, `makestep` and `rtcsync`;
 - enables the distro's `chrony.service` or `chronyd.service`;
-- configures systemd-resolved DNS and search domains;
+- configures systemd-resolved DNS, a route-only default domain (`~.`) and search domains so the approved resolvers are used for host lookups;
 - points the host resolver at systemd-resolved's upstream resolver file (not the 127.0.0.53 stub), so kubelet and CoreDNS can use the configured upstream DNS servers without a forwarding loop;
 - waits for chrony synchronization and resolves the configured DNS probe name;
 - fails cloud-init if chrony or systemd-resolved cannot be enabled or the probe fails.
