@@ -31,7 +31,7 @@ RESOURCE_TYPES = {
     ),
 }
 NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-NTP_DIRECTIVE_PATTERN = re.compile(r"(?im)^\\s*(?:server|pool)\\s+")
+NTP_DIRECTIVE_PATTERN = re.compile(r"(?im)^\s*(?:server|pool)\s+")
 
 
 class WorkerProvisioningError(RuntimeError):
