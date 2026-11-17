@@ -124,7 +124,7 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         if not isinstance(desired, int) or desired < 1 or ready != desired:
             raise HandoffError("HANDOFF_WORKER_READINESS_INCOMPLETE")
         ntp_ip = _require_internal_ntp_ip(evidence)
-        sources = evidence.get("worker_ntp_sources")
+        sources = evidence.get("worker_ntp_bootstrap_sources")
         if not isinstance(sources, dict) or len(sources) != desired:
             raise HandoffError("HANDOFF_WORKER_NTP_EVIDENCE_INCOMPLETE")
         for worker, configured in sources.items():
