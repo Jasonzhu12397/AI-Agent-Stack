@@ -2,6 +2,7 @@
 """Render role-specific cloud-init user-data for EPH Live OS or Target OS."""
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import re
@@ -227,7 +228,35 @@ resolvectl status
             "    permissions: '" + permissions + "'",
             "    content: " + json.dumps(content),
         ])
+    profile_bytes = json.dumps(
+        {
+            "version": "v1",
+            "chrony_required": True,
+            "resolver_backend": "systemd-resolved",
+            "apply_to": ["eph_live_os", "target_os"],
+            "ntp_servers": args.ntp_server,
+            "dns_servers": args.dns_server,
+            "search_domains": args.search_domain,
+            "dns_probe_name": args.dns_test_name,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    profile_hash = hashlib.sha256(profile_bytes).hexdigest()
+    readiness_labels = (
+        "ai-agent-stack.io/chrony-synced=true,"
+        "ai-agent-stack.io/time-dns-profile-hash=" + profile_hash
+    )
     output.extend([
+        "initConfiguration:",
+        "  nodeRegistration:",
+        "    kubeletExtraArgs:",
+        '      node-labels: "' + readiness_labels + '"',
+        "joinConfiguration:",
+        "  nodeRegistration:",
+        "    kubeletExtraArgs:",
+        '      node-labels: "' + readiness_labels + '"',
         "preKubeadmCommands:",
         "  - /usr/local/sbin/ai-agent-site-time-dns-apply",
     ])
