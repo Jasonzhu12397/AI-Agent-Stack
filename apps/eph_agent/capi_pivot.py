@@ -623,7 +623,7 @@ def execute_capi_pivot(
                     "source_bmh_identities": source_bmhs,
                     "source_bmh_digest": _inventory_digest(source_bmhs),
                     "provider_preflight": preflight,
-                    "clusterctl_output": dry_run["stdout"],
+                    "clusterctl_output": dry_run["stdout"][-8000:],
                     "side_effects": False,
                 },
                 "side_effects": False,
@@ -719,7 +719,7 @@ def execute_capi_pivot(
                 "source_bmh_digest": _inventory_digest(source_bmhs),
                 "target_bmh_digest": _inventory_digest(target_bmhs),
                 "provider_preflight": preflight,
-                "clusterctl_output": moved["stdout"],
+                "clusterctl_output": moved["stdout"][-8000:],
             },
             "side_effects": True,
         }
