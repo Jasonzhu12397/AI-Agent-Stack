@@ -116,6 +116,25 @@ def test_cluster_deployment_creates_idempotent_eph_preflight_command(
 
 
 @pytest.mark.django_db
+def test_provider_compatibility_rejects_corrupt_deployment_plan_state(
+    cluster_delivery_workspace,
+):
+    _, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, eph_node)
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    deployment.plan_result = ["corrupt"]
+    deployment.save(update_fields=["plan_result"])
+
+    _update_capi_pivot_provider_compatibility(deployment)
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == "CAPI_PIVOT_PLAN_STATE_INVALID"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.plan_result["dual_agent"]["manual_reconciliation_required"] is True
+
+
+@pytest.mark.django_db
 def test_deployment_command_idempotency_conflict_requires_reconciliation(
     cluster_delivery_workspace,
 ):
