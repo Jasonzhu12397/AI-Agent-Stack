@@ -952,6 +952,10 @@ def test_pivot_postflight_verifies_reconstructed_bmh_status(tmp_path):
 
     assert result["postflight_passed"] is True
     assert result["side_effects"] is False
+    assert result["cluster_uid"] == "target-cluster-uid"
+    assert result["target_cluster_uid"] == "target-cluster-uid"
+    assert result["source_cluster_uid"] == "source-cluster-uid"
+    assert result["cluster_identity_preserved"] is True
     assert result["verified_bmh_count"] == 1
     assert result["bmh_status_annotations_consumed"] is True
     assert result["verified_bmhs"][0]["baremetalhost"] == "worker-01"
