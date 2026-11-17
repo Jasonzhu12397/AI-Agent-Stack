@@ -1950,7 +1950,8 @@ class AgentRuntimePollView(APIView):
                         "updated_at",
                     ],
                 )
-            command = (
+            command = None
+            candidates = (
                 AgentCommand.objects.select_for_update(skip_locked=True)
                 .filter(node=node, command_type__in=allowed_commands)
                 .filter(
@@ -1960,66 +1961,96 @@ class AgentRuntimePollView(APIView):
                         lease_expires_at__lt=now,
                     )
                 )
-                .order_by("created_at")
-                .first()
+                .order_by("created_at", "id")
             )
+            for candidate in candidates:
+                if _command_is_fenced_by_cluster_ownership(candidate, node):
+                    _fail_fenced_command(candidate, now)
+                    continue
+
+                lease_expired_while_running = (
+                    candidate.status == AgentCommand.Status.RUNNING
+                )
+                if (
+                    candidate.attempts >= candidate.max_attempts
+                    or (
+                        lease_expired_while_running
+                        and candidate.command_type in MUTATING_COMMANDS
+                    )
+                ):
+                    candidate.status = AgentCommand.Status.FAILED
+                    candidate.error = {
+                        "code": (
+                            "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+                            if candidate.command_type == "cluster.capi.pivot.execute"
+                            and lease_expired_while_running
+                            else "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+                            if candidate.command_type in MUTATING_COMMANDS
+                            and lease_expired_while_running
+                            else "LEASE_EXPIRED"
+                        ),
+                        "retryable": False,
+                    }
+                    candidate.finished_at = now
+                    candidate.lease_token = None
+                    candidate.lease_expires_at = None
+                    candidate.save(
+                        update_fields=[
+                            "status",
+                            "error",
+                            "finished_at",
+                            "lease_token",
+                            "lease_expires_at",
+                            "updated_at",
+                        ]
+                    )
+                    continue
+
+                approval_expired = (
+                    candidate.approved_at is None
+                    or candidate.approved_at
+                    < now - datetime.timedelta(minutes=15)
+                )
+                approval_hash_invalid = (
+                    not candidate.approved_plan_hash
+                    or not hmac.compare_digest(
+                        candidate.approved_plan_hash,
+                        _payload_hash(candidate.command_type, candidate.payload),
+                    )
+                )
+                if candidate.command_type in APPROVAL_REQUIRED_COMMANDS and (
+                    approval_expired or approval_hash_invalid
+                ):
+                    candidate.status = AgentCommand.Status.FAILED
+                    candidate.error = {
+                        "code": (
+                            "APPROVAL_EXPIRED"
+                            if approval_expired
+                            else "APPROVAL_HASH_MISMATCH"
+                        ),
+                        "retryable": False,
+                    }
+                    candidate.finished_at = now
+                    candidate.lease_token = None
+                    candidate.lease_expires_at = None
+                    candidate.save(
+                        update_fields=[
+                            "status",
+                            "error",
+                            "finished_at",
+                            "lease_token",
+                            "lease_expires_at",
+                            "updated_at",
+                        ]
+                    )
+                    continue
+
+                command = candidate
+                break
+
             if command is None:
                 return Response({"command": None})
-            if _command_is_fenced_by_cluster_ownership(command, node):
-                _fail_fenced_command(command, now)
-                return Response({"command": None})
-            lease_expired_while_running = (
-                command.status == AgentCommand.Status.RUNNING
-            )
-            if (
-                command.attempts >= command.max_attempts
-                or (
-                    lease_expired_while_running
-                    and command.command_type in MUTATING_COMMANDS
-                )
-            ):
-                command.status = AgentCommand.Status.FAILED
-                command.error = {
-                    "code": (
-                        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
-                        if command.command_type == "cluster.capi.pivot.execute"
-                        and lease_expired_while_running
-                        else "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
-                        if command.command_type in MUTATING_COMMANDS
-                        and lease_expired_while_running
-                        else "LEASE_EXPIRED"
-                    ),
-                    "retryable": False,
-                }
-                command.finished_at = now
-                command.lease_token = None
-                command.lease_expires_at = None
-                command.save()
-                return Response({"command": None})
-            approval_expired = (
-                command.approved_at is None
-                or command.approved_at < now - datetime.timedelta(minutes=15)
-            )
-            approval_hash_invalid = (
-                not command.approved_plan_hash
-                or not hmac.compare_digest(
-                    command.approved_plan_hash,
-                    _payload_hash(command.command_type, command.payload),
-                )
-            )
-            if command.command_type in APPROVAL_REQUIRED_COMMANDS and (
-                approval_expired or approval_hash_invalid
-            ):
-                command.status = AgentCommand.Status.FAILED
-                error_code = (
-                    "APPROVAL_EXPIRED"
-                    if approval_expired
-                    else "APPROVAL_HASH_MISMATCH"
-                )
-                command.error = {"code": error_code, "retryable": False}
-                command.finished_at = now
-                command.save()
-                return Response({"command": None})
+
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
