@@ -1,5 +1,4 @@
 import pytest
-
 from node_agent import chrony
 from node_agent.chrony import (
     ChronyError,
@@ -7,7 +6,6 @@ from node_agent.chrony import (
     _validate_sources,
     configure_chrony,
 )
-
 
 
 def test_verify_ntp_server_checks_private_endpoint_and_valid_response(monkeypatch):
