@@ -37,6 +37,15 @@ class AgentControlClient:
             raise AgentTransportError("Control API returned a non-object response")
         return document
 
+    def check_ready(self) -> bool:
+        try:
+            response = self._client.get("/readyz")
+            response.raise_for_status()
+            document = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AgentTransportError("Control API readiness check failed") from exc
+        return isinstance(document, dict) and document.get("status") == "ready"
+
     def heartbeat(self, sequence: int, readiness: str, capabilities: list[str]) -> None:
         identity = {
             "agent_id": str(self.settings.agent_id),
