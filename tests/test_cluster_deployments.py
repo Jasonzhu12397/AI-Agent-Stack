@@ -11,6 +11,8 @@ from core.models import (
     AuditEvent,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
+    ClusterDeploymentPivotEvent,
+    ClusterDeploymentPivotOperation,
     Project,
     ProjectMembership,
     Tenant,
@@ -1594,6 +1596,19 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert deployment.plan_result["dual_agent"]["phase"] == "pivot_execution_result_rejected"
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    operation = ClusterDeploymentPivotOperation.objects.get(deployment=deployment)
+    assert operation.state == ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY
+    events = list(operation.events.order_by("sequence"))
+    assert [event.sequence for event in events] == [1, 2, 3]
+    assert [event.to_state for event in events] == [
+        ClusterDeploymentPivotOperation.State.READY,
+        ClusterDeploymentPivotOperation.State.EXECUTING,
+        ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+    ]
+    with pytest.raises(ValueError, match="append-only"):
+        events[0].save()
+    with pytest.raises(ValueError, match="cannot be deleted"):
+        events[0].delete()
     assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.capi.pivot.target.verify",
