@@ -81,7 +81,7 @@ if [ ! -e /run/systemd/resolve/resolv.conf ]; then
   echo "systemd-resolved upstream resolv.conf is missing" >&2
   exit 1
 fi
-ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+ln -sfn /run/systemd/resolve/resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved.service
 resolvectl query __DNS_TEST_NAME__
 if ! command -v chronyc >/dev/null 2>&1; then
