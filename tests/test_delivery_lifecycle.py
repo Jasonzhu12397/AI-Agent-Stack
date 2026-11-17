@@ -76,19 +76,19 @@ def test_target_agent_can_advance_without_cloud_approval():
     assert result["eph_cleanup_allowed"] is True
 
 
-def test_cloud_approval_is_not_a_handoff_dependency():
+def test_transition_does_not_require_cloud_approval():
     evidence = {
         "eph_agent_stopped": True,
         "eph_bootstrap_components_removed": True,
         "eph_credentials_revoked": True,
     }
-    with pytest.raises(DeliveryLifecycleError, match="CLOUD_APPROVAL_MUST_NOT_GATE_TARGET_HANDOFF"):
-        evaluate_transition(
-            "bmh_registry_migrated",
-            "eph_cleanup_verified",
-            evidence,
-            cloud_approval_present=True,
-        )
+    result = evaluate_transition(
+        "bmh_registry_migrated",
+        "eph_cleanup_verified",
+        evidence,
+    )
+    assert result["accepted"] is True
+    assert result["cloud_approval_required"] is False
 
 
 def test_cleanup_cannot_precede_bmh_migration():
@@ -145,3 +145,25 @@ def test_eph_agent_cannot_run_target_lifecycle_handoff_command():
             },
             "eph_node",
         )
+
+
+def test_rejects_boolean_as_eph_node_count():
+    with pytest.raises(DeliveryLifecycleError, match="EPH_MUST_BE_SINGLE_NODE"):
+        validate_topology({
+            "eph_mode": "single_node",
+            "eph_kubernetes_node_count": True,
+            "target_agent_placement": "target_control_plane",
+            "worker_chronyd_scope": "target_workers_only",
+        })
+
+
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        [{"name": "worker-01", "uid": "uid-01"}, {"name": "worker-01", "uid": "uid-02"}],
+        [{"name": "worker-01", "uid": "uid-01"}, {"name": "worker-02", "uid": "uid-01"}],
+    ],
+)
+def test_bmh_migration_rejects_duplicate_name_or_uid(hosts):
+    with pytest.raises(DeliveryLifecycleError, match="BMH_IDENTITY_DUPLICATED"):
+        validate_bmh_migration(hosts, hosts, target_controller_owns_inventory=True)
