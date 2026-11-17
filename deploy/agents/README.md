@@ -92,7 +92,7 @@ The Target Agent must not be required to create the first target Control Plane. 
 1. Enroll one logical target-cluster Agent identity with type `target_cluster`; all three replicas use that cluster-scoped identity.
 2. Create `target-cluster-agent-credentials` in `ai-agent-system` with keys `control-url`, `node-id` and `token`.
 3. Apply `namespace.yaml`, `rbac.yaml` and `target-cluster-agent.yaml` to the target cluster. The manifest requests three replicas and a PodDisruptionBudget with two available replicas.
-4. Verify the Pod is Ready and its Supervisor heartbeat/command lease works.
+4. Verify all three Pods are Ready and the elected replica maintains the Supervisor heartbeat/command lease.
 5. When the Supervisor assigns a deployment through the handoff API, the Target Agent discovers it in its heartbeat response and automatically retrieves its durable checkpoint before polling commands. Confirm the structured `deployment_checkpoint_restored` log event and the expected phase/sequence.
 6. If CAPI controllers and Cluster API objects were hosted in EPH, pivot them into the target cluster with `clusterctl move` (or a provider/version-tested equivalent) and verify reconciliation before stopping EPH or provisioning workers.
 7. Continue remaining Control Plane replicas and Data Plane workers from the target cluster management plane.
@@ -207,12 +207,12 @@ AGENT_IMAGE=<registry>/ai-agent-runtime@sha256:<64-hex-digest> \
 bash deploy/agents/deploy.sh
 ~~~
 
-The script verifies both API servers, checks required Secret keys without printing their values, server-side dry-runs all Agent workloads, applies them, and waits for both Deployments and the inventory DaemonSet to roll out. A successful rollout proves only that the Agent Pods started and became Ready. It does not prove CAPI pivot, Ironic provisioning, SR-IOV/DPDK traffic, or EPH reclaim; those require their respective runtime postflight and hardware tests. The script intentionally does not create the Cloud Control Plane services or apply site-specific Calico, Multus, OVS, SR-IOV CNI, device-plugin or DPDK configuration.
+The script verifies both API servers, checks required Secret keys without printing their values, server-side dry-runs the EPH and Target Agent Deployments, applies them, and waits for both Deployments to roll out. A successful rollout proves only that the Agent Pods started and became Ready. It does not prove CAPI pivot, Ironic provisioning, SR-IOV/DPDK traffic, or EPH reclaim; those require their respective runtime postflight and hardware tests. The script intentionally does not create the Cloud Control Plane services or apply site-specific Calico, Multus, OVS, SR-IOV CNI, device-plugin or DPDK configuration.
 
 
 ## Target Agent placement and HA requirement
 
-The Target Agent is a cluster-level service and must run as three Pods distributed across the three target Kubernetes control-plane/master nodes. It is not a separate Node Agent installed on each physical machine. All three Pods share the Target Agent service role; command polling and side-effect execution must be single-active through Kubernetes Lease leader election, with standby Pods performing no command polling or execution. The current `target-cluster-agent.yaml` declares three replicas with required anti-affinity across the control-plane/master nodes. The runtime uses Kubernetes Lease leader election, so only the elected Pod may poll or execute commands while standby replicas remain idle.
+The Target Agent is a cluster-level service deployed as three Pods, one on each target Kubernetes control-plane/master node. It is not a separate Node Agent installed on each physical machine. All three Pods share one cluster-scoped Target Agent identity. Required pod anti-affinity distributes replicas across distinct masters, and Kubernetes Lease leader election ensures only one replica polls or executes commands.
 
 ### Target Agent single-active execution
 
