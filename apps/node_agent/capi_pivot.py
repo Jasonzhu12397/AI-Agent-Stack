@@ -1018,9 +1018,18 @@ def run_capi_pivot_postflight(
         process_env,
         "CAPI_PIVOT_POSTFLIGHT_CLUSTER_NOT_FOUND",
     )
-    cluster_uid = cluster_list.get("metadata", {}).get("uid")
+    cluster_metadata = cluster_list.get("metadata", {})
+    cluster_uid = cluster_metadata.get("uid")
+    cluster_annotations = cluster_metadata.get("annotations", {})
+    source_cluster_uid = (
+        cluster_annotations.get(CAPI_SOURCE_CLUSTER_UID_ANNOTATION)
+        if isinstance(cluster_annotations, dict)
+        else None
+    )
     if not isinstance(cluster_uid, str) or not cluster_uid:
         raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_CLUSTER_IDENTITY_INVALID")
+    if not isinstance(source_cluster_uid, str) or not source_cluster_uid:
+        raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_SOURCE_IDENTITY_ANNOTATION_MISSING")
 
     required_controllers = {
         "capi-system": "capi-controller-manager",
@@ -1299,6 +1308,8 @@ def run_capi_pivot_postflight(
     return {
         "cluster_name": cluster_name,
         "cluster_uid": cluster_uid,
+        "source_cluster_uid": source_cluster_uid,
+        "cluster_identity_preserved": True,
         "namespace": namespace,
         "baremetal_host_namespace": host_namespace,
         "postflight_passed": True,
