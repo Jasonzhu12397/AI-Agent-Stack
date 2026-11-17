@@ -140,11 +140,20 @@ def validate_ntp_topology(
     if node_role == "target_control_plane":
         if source_scope != "external":
             raise DeliveryLifecycleError("CONTROL_PLANE_NTP_MUST_USE_EXTERNAL_SOURCES")
+        if not isinstance(ironic_internal_ip, str):
+            raise DeliveryLifecycleError("CONTROL_PLANE_IRONIC_INTERNAL_IP_REQUIRED")
+        try:
+            internal_ip = ipaddress.ip_address(ironic_internal_ip)
+        except ValueError as exc:
+            raise DeliveryLifecycleError("IRONIC_INTERNAL_IP_INVALID") from exc
+        if not internal_ip.is_private:
+            raise DeliveryLifecycleError("IRONIC_INTERNAL_IP_MUST_BE_PRIVATE")
         return {
             "valid": True,
             "node_role": node_role,
             "source_scope": source_scope,
             "sources": sources,
+            "internal_ntp_listener_ip": str(internal_ip),
             "serves_internal_worker_ntp": True,
         }
 
