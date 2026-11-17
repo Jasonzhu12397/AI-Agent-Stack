@@ -3,7 +3,10 @@ import pytest
 from apps.target_agent.ntp_policy import (
     NtpPolicyError,
     render_worker_chrony_config,
+    render_control_plane_chrony_config,
+    render_control_plane_chrony_pre_kubeadm_command,
     render_worker_chrony_pre_kubeadm_command,
+    validate_control_plane_ntp_profile,
     validate_worker_ntp_sources,
 )
 
@@ -50,3 +53,50 @@ def test_worker_pre_kubeadm_command_installs_chrony_and_verifies_exact_internal_
     assert "pool " not in command
     assert command.count("server ") == 1
     assert "did not synchronize with the required Ironic internal NTP endpoint" in command
+
+
+
+def test_control_plane_ntp_profile_accepts_only_approved_external_sources():
+    sources, networks = validate_control_plane_ntp_profile(
+        ["192.0.2.10", "ntp1.example.net"],
+        ["ntp1.example.net", "192.0.2.10"],
+        ["10.130.60.80/28", "10.130.61.96/28"],
+    )
+    assert sources == ("192.0.2.10", "ntp1.example.net")
+    assert networks == ("10.130.60.80/28", "10.130.61.96/28")
+
+
+def test_control_plane_ntp_profile_rejects_unapproved_source():
+    with pytest.raises(NtpPolicyError, match="NOT_APPROVED"):
+        validate_control_plane_ntp_profile(
+            ["pool.ntp.org"],
+            ["192.0.2.10"],
+            ["10.130.60.80/28"],
+        )
+
+
+def test_control_plane_chrony_config_serves_only_worker_networks():
+    config = render_control_plane_chrony_config(
+        ["192.0.2.10", "ntp1.example.net"],
+        ["10.130.60.80/28"],
+    )
+    assert "server 192.0.2.10 iburst" in config
+    assert "server ntp1.example.net iburst" in config
+    assert "allow 10.130.60.80/28" in config
+    assert "port 123" in config
+    assert "cmdport 0" in config
+    assert "pool " not in config
+
+
+def test_control_plane_chrony_bootstrap_installs_and_verifies_udp_123():
+    command = render_control_plane_chrony_pre_kubeadm_command(
+        ["192.0.2.10"],
+        ["10.130.60.80/28"],
+    )
+    assert "apt-get install -y chrony iproute2" in command
+    assert "zypper --non-interactive install chrony iproute2" in command
+    assert "chronyc -n sources" in command
+    assert "chronyc tracking" in command
+    assert "ss -lun" in command
+    assert "allow 10.130.60.80/28" in command
+    assert "pool " not in command
