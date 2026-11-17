@@ -1762,6 +1762,10 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert approved.status_code == 200
     assert approved.data["status"] == AgentCommand.Status.QUEUED
 
+    pivot_operation.refresh_from_db()
+    assert pivot_operation.state == ClusterDeploymentPivotOperation.State.READY
+    assert pivot_operation.events.count() == 2
+
     deployment.refresh_from_db()
     _maybe_queue_capi_pivot(deployment)
     deployment.refresh_from_db()
