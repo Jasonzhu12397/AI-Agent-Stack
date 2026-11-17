@@ -615,7 +615,7 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
         },
         "dual_agent": {
             "target_agent_owns_cluster": True,
-            "target_agent_cluster_uid": "checkpoint-source-cluster-uid",
+            "target_agent_cluster_uid": "checkpoint-target-cluster-uid",
         },
     }
     deployment.save(update_fields=["plan_result"])
