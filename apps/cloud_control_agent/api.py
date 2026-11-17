@@ -895,8 +895,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         and updated["required_role"] == "eph"
                         and updated["action"] == "eph.capi.pivot"
                     ):
-                        attestation = _validated_eph_pivot_attestation(
-                            document.get("output")
+                        attestation = (
+                            _validated_eph_pivot_attestation(document.get("output"))
+                            if document.get("side_effects") is True
+                            and document.get("retryable") is False
+                            else None
                         )
                         if attestation is not None:
                             deployment = connection.execute(
