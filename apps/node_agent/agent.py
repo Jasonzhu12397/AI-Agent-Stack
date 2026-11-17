@@ -2568,8 +2568,16 @@ def execute_command(
         )
         metadata = cluster.get("metadata", {})
         actual_uid = metadata.get("uid")
-        if actual_uid != expected_uid:
-            raise NodeAgentError("TARGET_CLUSTER_UID_MISMATCH")
+        annotations = metadata.get("annotations", {})
+        source_uid_annotation = (
+            annotations.get("ai-agent-stack.io/source-cluster-uid")
+            if isinstance(annotations, dict)
+            else None
+        )
+        if not isinstance(actual_uid, str) or not actual_uid:
+            raise NodeAgentError("TARGET_CLUSTER_UID_INVALID")
+        if source_uid_annotation != expected_uid:
+            raise NodeAgentError("TARGET_SOURCE_CLUSTER_IDENTITY_ANNOTATION_MISMATCH")
         machines = kubernetes_api_get(
             f"/apis/cluster.x-k8s.io/{version}"
             f"/namespaces/{namespace}/machines"
