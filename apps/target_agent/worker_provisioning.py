@@ -44,6 +44,13 @@ def _name(value: Any, field: str) -> str:
     return value
 
 
+def _configured_capi_namespace() -> str:
+    return _name(
+        os.environ.get("TARGET_CAPI_NAMESPACE", "metal3"),
+        "CONFIGURED_CAPI_NAMESPACE",
+    )
+
+
 def _run_kubectl(
     arguments: list[str],
     input_text: str | None = None,
@@ -122,6 +129,8 @@ def _prepare_resources(
     ironic_internal_ntp_ip: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str]:
     namespace = _name(payload.get("namespace"), "NAMESPACE")
+    if namespace != _configured_capi_namespace():
+        raise WorkerProvisioningError("WORKER_CAPI_NAMESPACE_NOT_ALLOWED")
     desired = payload.get("desired_worker_count")
     if not isinstance(desired, int) or isinstance(desired, bool) or not 1 <= desired <= 500:
         raise WorkerProvisioningError("WORKER_DESIRED_COUNT_INVALID")
@@ -392,6 +401,8 @@ def observe_worker_readiness(
     runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     namespace = _name(namespace, "NAMESPACE")
+    if namespace != _configured_capi_namespace():
+        raise WorkerProvisioningError("WORKER_CAPI_NAMESPACE_NOT_ALLOWED")
     machine_deployment_name = _name(machine_deployment_name, "MACHINE_DEPLOYMENT_NAME")
     try:
         ntp_ip = validate_ironic_internal_ntp_ip(ironic_internal_ntp_ip)
