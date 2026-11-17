@@ -82,7 +82,7 @@ def _object_identity(document: dict[str, Any]) -> tuple[str, str, str]:
     if kind not in RESOURCE_TYPES:
         raise WorkerProvisioningError("WORKER_RESOURCE_KIND_NOT_ALLOWED")
     api_version = document.get("apiVersion")
-    expected_resource, expected_api_version = RESOURCE_TYPES[kind]
+    _expected_resource, expected_api_version = RESOURCE_TYPES[kind]
     if api_version != expected_api_version:
         raise WorkerProvisioningError(f"WORKER_{kind.upper()}_API_VERSION_UNSUPPORTED")
     metadata = document.get("metadata")
@@ -265,6 +265,13 @@ def execute_worker_provisioning(
         configured_ntp = validate_ironic_internal_ntp_ip(configured_ntp)
     except NtpPolicyError as exc:
         raise WorkerProvisioningError("WORKER_IRONIC_INTERNAL_NTP_IP_CONFIGURATION_REQUIRED") from exc
+    timeout_seconds = payload.get("timeout_seconds", 1800)
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or not 30 <= timeout_seconds <= 7200
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISION_TIMEOUT_INVALID")
     resources, selector, desired, namespace, ntp_ip = _prepare_resources(
         payload,
         configured_ntp,
@@ -275,13 +282,6 @@ def execute_worker_provisioning(
         _create_immutable_template(resource, active_runner)
     _check_lease(lease_lost_event)
     _apply_machine_deployment(resources[2], active_runner)
-    timeout_seconds = payload.get("timeout_seconds", 1800)
-    if (
-        not isinstance(timeout_seconds, int)
-        or isinstance(timeout_seconds, bool)
-        or not 30 <= timeout_seconds <= 7200
-    ):
-        raise WorkerProvisioningError("WORKER_PROVISION_TIMEOUT_INVALID")
     deadline = monotonic() + timeout_seconds
     selector_text = ",".join(f"{key}={value}" for key, value in sorted(selector.items()))
     last_state: dict[str, Any] = {}
