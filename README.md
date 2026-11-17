@@ -35,7 +35,7 @@ The new branch contains:
 - Target three-replica deployment, Control Plane scheduling constraints, Pod anti-affinity, PDB and Kubernetes Lease leader election.
 - Read-only Kubernetes/CAPI/Metal3 observation.
 - An ordered, fail-closed Target handoff state machine with exact BMH identity-set checks and durable compare-and-swap checkpoints.
-- Worker chrony configuration and pre-kubeadm command generation. Workers must use exactly the Ironic internal IP/VIP as their NTP source; no external pool or fallback is allowed.
+- Control Plane chrony profile and pre-kubeadm command generation from approved external sources, plus Worker chrony configuration and pre-kubeadm command generation. Workers must use exactly the Ironic internal IP/VIP as their NTP source; no external pool or fallback is allowed. The generated host commands are not yet injected into CAPI bootstrap templates or executed on physical hosts.
 
 **Not yet production-complete:** a new EPH CAPI Pivot adapter now supports dry-run and approval-digest-gated `clusterctl move`, including provider-version checks, Target Control Plane controller placement checks, source UID annotation and postflight identity verification. It has not yet been run against the selected live CAPI/Metal3/Ironic provider matrix. Autonomous EPH cleanup, Worker provisioning, applying the generated chrony command to actual hosts, full platform API/UI integration and physical BMC/Ironic acceptance remain outstanding. Other mutating actions fail closed. Unit tests or QEMU boot tests do not prove physical bare-metal provisioning.
 
