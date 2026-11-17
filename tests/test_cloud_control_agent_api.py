@@ -7,6 +7,7 @@ from apps.cloud_control_agent.api import (
     _certificate_common_name,
     _checkpoint_state_digest,
     _parse_uuid,
+    _validate_action_role,
     _validate_checkpoint_actor_transition,
 )
 
@@ -92,3 +93,35 @@ def test_target_agent_cannot_skip_or_rewrite_checkpoint_phases(
 ):
     with pytest.raises(ControlApiError):
         _validate_checkpoint_actor_transition("target", current_phase, next_phase)
+
+
+
+@pytest.mark.parametrize(
+    ("role", "action"),
+    [
+        ("eph", "eph.preflight"),
+        ("eph", "eph.capi.pivot"),
+        ("target", "target.cluster.observe"),
+        ("target", "target.handoff.evaluate"),
+    ],
+)
+def test_cloud_control_accepts_only_role_owned_agent_capabilities(role, action):
+    _validate_action_role(role, action)
+
+
+@pytest.mark.parametrize(
+    ("role", "action"),
+    [
+        ("eph", "target.handoff.evaluate"),
+        ("eph", "target.worker.provision"),
+        ("target", "eph.capi.pivot"),
+        ("target", "run.shell"),
+        ("cloud", "target.cluster.observe"),
+    ],
+)
+def test_cloud_control_rejects_cross_role_or_unregistered_agent_capabilities(
+    role,
+    action,
+):
+    with pytest.raises(ControlApiError, match="ACTION_NOT_ALLOWED"):
+        _validate_action_role(role, action)
