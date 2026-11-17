@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 
@@ -98,6 +99,64 @@ def validate_chronyd_scope(node_role: str, action: str) -> dict[str, Any]:
         "required_before_kubeadm": node_role in {"eph", "target_control_plane"},
         "required_before_node_join": node_role == "target_worker",
     }
+
+
+
+def validate_ntp_topology(
+    node_role: str,
+    configured_sources: list[str],
+    *,
+    source_scope: str,
+    ironic_internal_ip: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(configured_sources, list) or not configured_sources:
+        raise DeliveryLifecycleError("NTP_SOURCES_REQUIRED")
+    if any(not isinstance(source, str) or not source.strip() for source in configured_sources):
+        raise DeliveryLifecycleError("NTP_SOURCE_INVALID")
+    sources = [source.strip() for source in configured_sources]
+    if len(set(sources)) != len(sources):
+        raise DeliveryLifecycleError("NTP_SOURCE_DUPLICATED")
+
+    if node_role == "target_worker":
+        if source_scope != "ironic_internal" or not ironic_internal_ip:
+            raise DeliveryLifecycleError("WORKER_NTP_MUST_USE_IRONIC_INTERNAL_IP")
+        try:
+            expected_ip = ipaddress.ip_address(ironic_internal_ip)
+            actual_ips = [ipaddress.ip_address(source) for source in sources]
+        except ValueError as exc:
+            raise DeliveryLifecycleError("WORKER_NTP_SOURCE_MUST_BE_IP") from exc
+        if not expected_ip.is_private or actual_ips != [expected_ip]:
+            raise DeliveryLifecycleError("WORKER_NTP_MUST_USE_ONLY_IRONIC_INTERNAL_IP")
+        return {
+            "valid": True,
+            "node_role": node_role,
+            "source_scope": source_scope,
+            "sources": [str(expected_ip)],
+            "external_ntp_allowed": False,
+        }
+
+    if node_role == "target_control_plane":
+        if source_scope != "external":
+            raise DeliveryLifecycleError("CONTROL_PLANE_NTP_MUST_USE_EXTERNAL_SOURCES")
+        return {
+            "valid": True,
+            "node_role": node_role,
+            "source_scope": source_scope,
+            "sources": sources,
+            "serves_internal_worker_ntp": True,
+        }
+
+    if node_role == "eph":
+        if source_scope != "bootstrap":
+            raise DeliveryLifecycleError("EPH_NTP_BOOTSTRAP_SOURCE_REQUIRED")
+        return {
+            "valid": True,
+            "node_role": node_role,
+            "source_scope": source_scope,
+            "sources": sources,
+        }
+
+    raise DeliveryLifecycleError("CHRONYD_NODE_ROLE_INVALID")
 
 
 def evaluate_transition(
