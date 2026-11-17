@@ -27,6 +27,8 @@ REQUIRED_EVIDENCE = {
         "target_api_ready",
         "target_etcd_healthy",
         "target_core_network_ready",
+        "target_control_plane_chronyd_verified",
+        "target_internal_ntp_service_ready",
     ),
     "target_agent_ready": (
         "target_agent_on_control_plane",
