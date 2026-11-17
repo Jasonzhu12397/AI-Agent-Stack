@@ -20,6 +20,7 @@ python3 deploy/cloud-init/render_site_cloud_init.py \
   --ntp-server time.google.com \
   --dns-server 1.1.1.1 \
   --dns-server 8.8.8.8 \
+  --dns-test-name time.cloudflare.com \
   --search-domain lab.example \
   --output build/cloud-init/eph-live-os.user-data
 
@@ -35,13 +36,14 @@ python3 deploy/cloud-init/render_site_cloud_init.py \
 
 The renderer requires explicit NTP and DNS values. It does not silently inject
 public resolvers into a production deployment. It validates NTP hostnames/IPs,
-DNS IP addresses and search domains, and writes cloud-init user-data that:
+DNS IP addresses, the DNS probe hostname and search domains, and writes cloud-init user-data that:
 - installs the `chrony` package;
 - configures NTP servers with `iburst`, `makestep` and `rtcsync`;
 - enables the distro's `chrony.service` or `chronyd.service`;
 - configures systemd-resolved DNS and search domains;
 - makes the systemd-resolved stub resolver the host resolver;
-- fails cloud-init if chrony or systemd-resolved cannot be enabled.
+- waits for chrony synchronization and resolves the configured DNS probe name;
+- fails cloud-init if chrony or systemd-resolved cannot be enabled or the probe fails.
 
 The current profile explicitly requires systemd and systemd-resolved. Validate
 that the selected EPH Live OS and Target OS images include systemd-resolved.
