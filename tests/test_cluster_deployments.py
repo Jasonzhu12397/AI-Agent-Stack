@@ -2105,6 +2105,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
         "machine_deployment_name": "edge-workers",
         "infrastructure_template_name": "edge-worker-template",
         "bootstrap_template_name": "edge-worker-bootstrap",
+        "ironic_internal_ip": "10.0.0.123",
         "baremetal_host_namespace": "metal3-system",
         "host_selector": {"pool": "workers"},
         "network_profile": network_profile,
