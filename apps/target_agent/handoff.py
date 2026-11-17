@@ -48,12 +48,12 @@ def _bmh_identity_set(value: Any, field: str) -> set[tuple[str, str, str]]:
             raise HandoffError(f"HANDOFF_BMH_IDENTITY_INVALID:{field}")
         namespace = item.get("namespace")
         name = item.get("name")
-        system_uuid = item.get("system_uuid")
+        hardware_identity = item.get("hardware_identity")
         if not all(isinstance(part, str) and part.strip() for part in (
-            namespace, name, system_uuid
+            namespace, name, hardware_identity
         )):
             raise HandoffError(f"HANDOFF_BMH_IDENTITY_INVALID:{field}")
-        identities.append((namespace, name, system_uuid.lower()))
+        identities.append((namespace, name, hardware_identity.strip().lower()))
     if len(identities) != len(set(identities)):
         raise HandoffError(f"HANDOFF_BMH_IDENTITY_DUPLICATE:{field}")
     return set(identities)
@@ -84,10 +84,21 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         _require(evidence, "target_controllers_ready")
         source_uid = evidence.get("source_cluster_uid")
         target_uid = evidence.get("target_cluster_uid")
+        source_annotation = evidence.get("target_source_cluster_uid_annotation")
+        source_identity = evidence.get("source_stable_cluster_identity")
+        target_identity = evidence.get("target_stable_cluster_identity")
         if not isinstance(source_uid, str) or not source_uid:
             raise HandoffError("HANDOFF_SOURCE_CLUSTER_UID_REQUIRED")
-        if target_uid != source_uid:
-            raise HandoffError("HANDOFF_CLUSTER_IDENTITY_NOT_PRESERVED")
+        if not isinstance(target_uid, str) or not target_uid:
+            raise HandoffError("HANDOFF_TARGET_CLUSTER_UID_REQUIRED")
+        if source_annotation != source_uid:
+            raise HandoffError("HANDOFF_SOURCE_UID_ANNOTATION_MISMATCH")
+        if not isinstance(source_identity, str) or not source_identity:
+            raise HandoffError("HANDOFF_SOURCE_STABLE_IDENTITY_REQUIRED")
+        if target_identity != source_identity:
+            raise HandoffError("HANDOFF_STABLE_CLUSTER_IDENTITY_NOT_PRESERVED")
+        _require(evidence, "source_cluster_absent")
+        _require(evidence, "target_cluster_ownership_verified")
     elif phase is HandoffPhase.BMH_REGISTRY_MIGRATED:
         source = _bmh_identity_set(evidence.get("source_bmh_identities"), "source")
         target = _bmh_identity_set(evidence.get("target_bmh_identities"), "target")
