@@ -1299,7 +1299,9 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_command_data["id"] == str(pivot_command.id)
     assert pivot_command_data["command_type"] == "cluster.capi.pivot.execute"
 
-    source_uid = deployment.plan_result["capi_pivot_source_preflight"]["source_cluster_identity"]["uid"]
+    source_uid = deployment.plan_result["capi_pivot_source_preflight"][
+        "source_cluster_identity"
+    ]["uid"]
     pivot_result = {
         "pivot_executed": True,
         "pivot_simulated": False,
@@ -1333,7 +1335,10 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_submitted.status_code == 200
     assert pivot_command.status == AgentCommand.Status.SUCCEEDED
     assert deployment.error is None
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_executed_waiting_target_verification"
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "pivot_executed_waiting_target_verification"
+    )
     assert deployment.plan_result["dual_agent"]["pivot_executed"] is True
     assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
