@@ -1816,6 +1816,10 @@ def inspect_cluster_node_hardware_inventory(
         if not isinstance(node_name, str) or not node_name:
             missing_node_names.append("unknown")
             continue
+        node_uid = metadata.get("uid")
+        if not isinstance(node_uid, str) or not node_uid:
+            missing_node_names.append(node_name)
+            continue
         if not isinstance(status, dict):
             status = {}
         if not isinstance(spec, dict):
@@ -1855,7 +1859,7 @@ def inspect_cluster_node_hardware_inventory(
         reports.append(
             {
                 "node_name": node_name,
-                "node_uid": metadata.get("uid"),
+                "node_uid": node_uid,
                 "provider_id": spec.get("providerID"),
                 "ready": (
                     ready_condition.get("status") == "True"
@@ -1870,12 +1874,12 @@ def inspect_cluster_node_hardware_inventory(
                 "container_runtime_version": node_status.get("containerRuntimeVersion"),
                 "capacity": {
                     key: value
-                    for key, value in capacity.items()
+                    for key, value in list(capacity.items())[:256]
                     if isinstance(key, str) and isinstance(value, (str, int, float))
                 },
                 "allocatable": {
                     key: value
-                    for key, value in allocatable.items()
+                    for key, value in list(allocatable.items())[:256]
                     if isinstance(key, str) and isinstance(value, (str, int, float))
                 },
                 "extended_resource_names": resource_names[:256],
@@ -2275,11 +2279,9 @@ def inspect_network_environment(
         "limitations": [
             "Pod namespace interfaces are not host NIC inventory.",
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
-            (
-                "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA "
-                "and device binding validation.",
+            "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA "
+            "and device binding validation.",
             "Target Agent reports Kubernetes-visible node resources only; host-only PCI/VF/NUMA details require an approved infrastructure API.",
-            ),
             "Component presence is inferred from Pod names, not dataplane connectivity tests.",
         ],
         "side_effects": False,
