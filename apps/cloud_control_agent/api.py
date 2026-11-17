@@ -143,6 +143,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/agent-control/commands/lease/renew":
                     self._renew_lease(document)
                     return
+                if self.path == "/api/v1/agent-control/deployments/checkpoints":
+                    self._persist_checkpoint(document)
+                    return
                 if self.path == "/api/v1/agent-control/commands/results":
                     self._result(document)
                     return
@@ -279,16 +282,22 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 with connection.transaction():
                     row = connection.execute(
                         """
-                        SELECT command_id, deployment_id, target_agent_id, required_role,
-                               action, idempotency_key, payload, approval_digest, created_at
-                        FROM agent_control_commands
-                        WHERE target_agent_id = %s AND required_role = %s
-                          AND (deadline IS NULL OR deadline > NOW())
+                        SELECT c.command_id, c.deployment_id, c.target_agent_id,
+                               c.required_role, c.action, c.idempotency_key,
+                               c.payload, c.approval_digest, c.created_at,
+                               d.phase AS deployment_phase,
+                               d.sequence AS checkpoint_sequence,
+                               d.state AS checkpoint_state
+                        FROM agent_control_commands AS c
+                        JOIN agent_control_deployments AS d
+                          ON d.deployment_id = c.deployment_id
+                        WHERE c.target_agent_id = %s AND c.required_role = %s
+                          AND (c.deadline IS NULL OR c.deadline > NOW())
                           AND (
-                              status = 'queued'
-                              OR (status = 'leased' AND lease_expires_at <= NOW())
+                              c.status = 'queued'
+                              OR (c.status = 'leased' AND c.lease_expires_at <= NOW())
                           )
-                        ORDER BY created_at
+                        ORDER BY c.created_at
                         LIMIT 1
                         FOR UPDATE SKIP LOCKED
                         """,
@@ -320,6 +329,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "action": row["action"],
                     "payload": row["payload"],
                     "approval_digest": row["approval_digest"],
+                    "deployment_checkpoint": {
+                        "phase": row["deployment_phase"],
+                        "sequence": row["checkpoint_sequence"],
+                        "state": row["checkpoint_state"],
+                    },
                     "issued_at": now.isoformat(),
                     "deadline": deadline.isoformat(),
                     "lease": {
@@ -363,6 +377,82 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 raise ControlApiError("COMMAND_LEASE_NOT_RENEWABLE")
             self._send(200, {"renewed": True, "expires_at": row["lease_expires_at"].isoformat()})
+
+
+        def _persist_checkpoint(self, document: dict[str, Any]) -> None:
+            identity = self._authenticated_agent(document)
+            if identity["role"] != "target" or identity["cluster_id"] is None:
+                raise ControlApiError("TARGET_AGENT_IDENTITY_REQUIRED")
+            deployment_id = _parse_uuid(document.get("deployment_id"), "DEPLOYMENT_ID")
+            expected_phase = document.get("expected_phase")
+            expected_sequence = document.get("expected_sequence")
+            next_phase = document.get("phase")
+            state_digest = document.get("state_digest")
+            evidence = document.get("evidence")
+            if not isinstance(expected_phase, str) or not expected_phase:
+                raise ControlApiError("CHECKPOINT_EXPECTED_PHASE_INVALID")
+            if not isinstance(expected_sequence, int) or expected_sequence < 0:
+                raise ControlApiError("CHECKPOINT_SEQUENCE_INVALID")
+            if not isinstance(next_phase, str) or not next_phase:
+                raise ControlApiError("CHECKPOINT_PHASE_INVALID")
+            if not isinstance(state_digest, str) or len(state_digest) != 64:
+                raise ControlApiError("CHECKPOINT_DIGEST_INVALID")
+            try:
+                int(state_digest, 16)
+            except ValueError as exc:
+                raise ControlApiError("CHECKPOINT_DIGEST_INVALID") from exc
+            if not isinstance(evidence, dict) or len(_json_bytes(evidence)) > MAX_BODY_BYTES:
+                raise ControlApiError("CHECKPOINT_EVIDENCE_INVALID")
+            state = {"state_digest": state_digest, "evidence": evidence}
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    updated = connection.execute(
+                        """
+                        UPDATE agent_control_deployments
+                        SET phase = %s, sequence = %s, state = %s, updated_at = NOW()
+                        WHERE deployment_id = %s AND cluster_id = %s
+                          AND phase = %s AND sequence = %s
+                        RETURNING phase, sequence
+                        """,
+                        (
+                            next_phase,
+                            expected_sequence + 1,
+                            Jsonb(state),
+                            deployment_id,
+                            identity["cluster_id"],
+                            expected_phase,
+                            expected_sequence,
+                        ),
+                    ).fetchone()
+                    if updated is None:
+                        current = connection.execute(
+                            """
+                            SELECT phase, sequence, state
+                            FROM agent_control_deployments
+                            WHERE deployment_id = %s AND cluster_id = %s
+                            """,
+                            (deployment_id, identity["cluster_id"]),
+                        ).fetchone()
+                        if (
+                            current
+                            and current["phase"] == next_phase
+                            and current["sequence"] == expected_sequence + 1
+                            and current["state"].get("state_digest") == state_digest
+                        ):
+                            self._send(200, {
+                                "persisted": True,
+                                "already_applied": True,
+                                "phase": current["phase"],
+                                "sequence": current["sequence"],
+                            })
+                            return
+                        raise ControlApiError("CHECKPOINT_COMPARE_AND_SWAP_FAILED")
+            self._send(200, {
+                "persisted": True,
+                "already_applied": False,
+                "phase": next_phase,
+                "sequence": expected_sequence + 1,
+            })
 
         def _result(self, document: dict[str, Any]) -> None:
             agent_id = _parse_uuid(document.get("agent_id"), "AGENT_ID")
