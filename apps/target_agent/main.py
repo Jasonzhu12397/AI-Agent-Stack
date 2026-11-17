@@ -325,7 +325,7 @@ def main() -> int:
                                 and not outcome["output"].get("already_applied")
                                 and not guard.lost.is_set()
                             ):
-                            try:
+                                try:
                                     checkpoint_result = client.persist_checkpoint(
                                         command,
                                         outcome["output"]["to_phase"],
