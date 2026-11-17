@@ -596,27 +596,51 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     persisted_payload = command.payload if isinstance(command.payload, dict) else {}
     operation_id = persisted_payload.get("operation_id")
     inventory_digest = persisted_payload.get("source_inventory_sha256")
-    if isinstance(operation_id, str) and isinstance(inventory_digest, str):
-        operation_uuid = uuid.UUID(operation_id)
-        persisted_ack = persisted_payload.get("target_agent_ack")
+    try:
+        operation_uuid = uuid.UUID(operation_id) if isinstance(operation_id, str) else None
+    except (TypeError, ValueError, AttributeError):
+        operation_uuid = None
+    if (
+        operation_uuid is None
+        or not isinstance(inventory_digest, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", inventory_digest)
+        or not isinstance(persisted_payload.get("target_agent_ack"), dict)
+    ):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_COMMAND_PAYLOAD_INVALID"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **dual_agent_state,
+                "phase": "pivot_command_payload_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
+    persisted_ack = persisted_payload["target_agent_ack"]
     operation, operation_created = ClusterDeploymentPivotOperation.objects.get_or_create(
         deployment=deployment,
         defaults={
-            "operation_id": uuid.UUID(persisted_payload["operation_id"]),
+            "operation_id": operation_uuid,
             "source_node": deployment.eph_node,
             "target_node": deployment.target_node,
             "state": ClusterDeploymentPivotOperation.State.PREPARED,
             "source_identity": source_identity,
             "inventory": source_inventory,
-            "inventory_sha256": persisted_payload["source_inventory_sha256"],
+            "inventory_sha256": inventory_digest,
             "approval_hash": command.plan_hash,
             "target_ack": persisted_ack,
             "journal": {"created_from_command_id": str(command.id)},
         },
     )
     if (
-        operation.operation_id != uuid.UUID(persisted_payload["operation_id"])
-        or operation.inventory_sha256 != persisted_payload["source_inventory_sha256"]
+        operation.operation_id != operation_uuid
+        or operation.inventory_sha256 != inventory_digest
         or operation.source_node_id != deployment.eph_node_id
         or operation.target_node_id != deployment.target_node_id
     ):
@@ -641,7 +665,19 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     ):
         _record_capi_pivot_event(
             deployment,
-            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+            (
+                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY
+                if operation.state
+                in {
+                    ClusterDeploymentPivotOperation.State.PREPARED,
+                    ClusterDeploymentPivotOperation.State.WAITING_TARGET_ACK,
+                    ClusterDeploymentPivotOperation.State.READY,
+                    ClusterDeploymentPivotOperation.State.EXECUTING,
+                    ClusterDeploymentPivotOperation.State.VERIFYING,
+                    ClusterDeploymentPivotOperation.State.UNCERTAIN,
+                }
+                else operation.state
+            ),
             "pivot_operation_state_conflicts_with_pending_approval",
             {
                 "operation_state": operation.state,
