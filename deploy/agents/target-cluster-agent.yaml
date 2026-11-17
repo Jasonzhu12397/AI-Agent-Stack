@@ -40,6 +40,43 @@ spec:
     matchLabels:
       app.kubernetes.io/name: target-agent
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-agent-observer
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "pods", "events", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machines", "metal3machinetemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: target-agent-observer
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-agent-observer
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -149,6 +186,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            - name: agent-tmp
+              mountPath: /tmp
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
               readOnly: true
@@ -168,6 +207,9 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
       volumes:
+        - name: agent-tmp
+          emptyDir:
+            sizeLimit: 16Mi
         - name: control-plane-tls
           secret:
             secretName: agent-control-plane-mtls
