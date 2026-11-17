@@ -557,6 +557,7 @@ def execute_capi_pivot(
                     "error_code": None,
                     "output": {
                         "already_pivoted": True,
+                        "capi_pivot_succeeded": True,
                         "source_cluster_uid": annotations[SOURCE_UID_ANNOTATION],
                         "target_cluster_uid": target_cluster.get("metadata", {}).get("uid"),
                         "target_source_cluster_uid_annotation": annotations[SOURCE_UID_ANNOTATION],
@@ -566,6 +567,10 @@ def execute_capi_pivot(
                         "target_cluster_ownership_verified": True,
                         "source_bmh_identities": payload["expected_source_bmh_identities"],
                         "target_bmh_identities": target_bmhs,
+                        "source_bmh_digest": _inventory_digest(
+                            payload["expected_source_bmh_identities"]
+                        ),
+                        "target_bmh_digest": _inventory_digest(target_bmhs),
                         "target_controllers_ready": preflight["target_controllers"]["ready"],
                         "provider_preflight": preflight,
                     },
