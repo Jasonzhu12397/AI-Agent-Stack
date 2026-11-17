@@ -16,8 +16,8 @@ from uuid import UUID
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
-    CommandLeaseGuard,
     AgentTransportError,
+    CommandLeaseGuard,
     ConfigurationError,
 )
 
