@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 import uuid
@@ -8,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.agent_node_views import _authenticate_node
+from core.cluster_deployment_services import _canonical_capi_inventory
 from core.models import (
     AgentNode,
     ClusterDeployment,
@@ -32,7 +34,7 @@ def _fresh_node(request, node_id):
         node is None
         or node.status != AgentNode.Status.ONLINE
         or node.last_seen_at is None
-        or node.last_seen_at < timezone.now() - timezone.timedelta(seconds=60)
+        or node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
     ):
         return None
     return node
@@ -128,7 +130,7 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     or not isinstance(operation_id, str)
                 ):
                     return Response({"detail": "Source identity and complete inventory are required."}, status=400)
-                if _digest(inventory) != inventory_sha256:
+                if _digest(_canonical_capi_inventory(inventory)) != inventory_sha256:
                     return Response({"detail": "Inventory digest does not match submitted inventory."}, status=409)
                 if deployment.target_node_id is None:
                     return Response({"detail": "A target agent must be assigned before pivot."}, status=409)
