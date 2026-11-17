@@ -245,7 +245,19 @@ def _observe_target_metal3_ownership(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    cluster_annotations = documents["cluster"].get("metadata", {}).get("annotations", {})
+    cluster_document = documents["cluster"]
+    cluster_metadata = (
+        cluster_document.get("metadata")
+        if isinstance(cluster_document, dict)
+        else None
+    )
+    cluster_annotations = (
+        cluster_metadata.get("annotations", {})
+        if isinstance(cluster_metadata, dict)
+        else None
+    )
+    if not isinstance(cluster_annotations, dict):
+        raise Metal3OwnershipError("TARGET_CLUSTER_ANNOTATIONS_INVALID")
     if (
         calculated_digest != source_digest
         or attestation.get("target_bmh_digest") != source_digest
