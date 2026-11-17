@@ -2453,6 +2453,14 @@ class AgentRuntimePollView(APIView):
                         eph_node=node,
                     ).first()
                     if deployment is not None:
+                        _record_capi_pivot_event(
+                            deployment,
+                            ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                            "eph_agent_lease_expired",
+                            {"command_id": str(command.id), "attempts": command.attempts},
+                            actor_node=node,
+                            last_error=command.error,
+                        )
                         plan_result = deployment.plan_result or {}
                         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
                         deployment.error = {
@@ -2512,6 +2520,14 @@ class AgentRuntimePollView(APIView):
                         eph_node=node,
                     ).first()
                     if deployment is not None:
+                        _record_capi_pivot_event(
+                            deployment,
+                            ClusterDeploymentPivotOperation.State.FAILED,
+                            "pivot_approval_invalid",
+                            {"command_id": str(command.id), "reason": error_code},
+                            actor_node=node,
+                            last_error={"code": error_code},
+                        )
                         plan_result = deployment.plan_result or {}
                         deployment.status = ClusterDeployment.Status.FAILED
                         deployment.error = {
@@ -2602,6 +2618,14 @@ class AgentRuntimePollView(APIView):
                         ]
                     )
                     if deployment is not None:
+                        _record_capi_pivot_event(
+                            deployment,
+                            ClusterDeploymentPivotOperation.State.FAILED,
+                            "target_agent_ack_expired",
+                            {"command_id": str(command.id)},
+                            actor_node=node,
+                            last_error={"code": "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED"},
+                        )
                         plan_result = deployment.plan_result or {}
                         deployment.status = ClusterDeployment.Status.FAILED
                         deployment.error = {
