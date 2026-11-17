@@ -130,10 +130,11 @@ resolvectl status
             "    permissions: '" + permissions + "'",
             "    content: " + json.dumps(content),
         ])
-    output.extend([
-        "runcmd:",
-        "  - [ /usr/local/sbin/ai-agent-site-time-dns-apply ]",
-    ])
+    if args.role == "target-os":
+        output.extend([
+            "runcmd:",
+            "  - [ /usr/local/sbin/ai-agent-site-time-dns-apply ]",
+        ])
     return "\n".join(output) + "\n"
 
 
