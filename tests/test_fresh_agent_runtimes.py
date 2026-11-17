@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 
 from apps.eph_agent.main import execute as execute_eph
@@ -86,3 +88,57 @@ def test_target_agent_blocks_handoff_phase_skips():
     })
     assert result["status"] == "blocked"
     assert result["side_effects"] is False
+
+
+
+def test_target_agent_handoff_uses_cloud_checkpoint_not_payload_phase():
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "not_started",
+            "sequence": 0,
+            "state": {},
+        },
+        "payload": {
+            "current_phase": "target_control_plane_ready",
+            "next_phase": "eph_single_node_ready",
+            "evidence": {
+                "eph_ready": True,
+                "eph_node_count": 1,
+                "eph_source_preflight_passed": True,
+            },
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["from_phase"] is None
+    assert result["output"]["to_phase"] == "eph_single_node_ready"
+
+
+def test_target_agent_handoff_recognizes_already_persisted_checkpoint():
+    evidence = {
+        "eph_ready": True,
+        "eph_node_count": 1,
+        "eph_source_preflight_passed": True,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            evidence,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "eph_single_node_ready",
+            "sequence": 1,
+            "state": {"state_digest": digest, "evidence": evidence},
+        },
+        "payload": {
+            "next_phase": "eph_single_node_ready",
+            "evidence": evidence,
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["already_applied"] is True
