@@ -1330,7 +1330,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     pivot_command.refresh_from_db()
     assert pivot_submitted.status_code == 200
     assert pivot_command.status == AgentCommand.Status.SUCCEEDED
-     assert deployment.error is None
+    assert deployment.error is None
     assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
     assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
     assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
@@ -1530,7 +1530,7 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval_and_does_not_transfer_ownership(
+def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval(
     cluster_delivery_workspace,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
