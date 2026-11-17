@@ -247,8 +247,48 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                 objects = evidence.get("objects")
                 if not isinstance(objects, list) or len(objects) != len(operation.inventory):
                     return Response({"detail": "Target object inventory is incomplete."}, status=409)
-                if any(not isinstance(item, dict) or not isinstance(item.get("uid"), str) or not item["uid"] for item in objects):
-                    return Response({"detail": "Every adopted target object must have an API-server UID."}, status=409)
+                expected = {}
+                for source_item in operation.inventory:
+                    if not isinstance(source_item, dict):
+                        return Response({"detail": "Stored source inventory is invalid."}, status=409)
+                    key = (
+                        source_item.get("kind"),
+                        source_item.get("namespace"),
+                        source_item.get("name"),
+                    )
+                    if not all(isinstance(part, str) and part for part in key) or key in expected:
+                        return Response({"detail": "Stored source inventory identity is invalid or duplicated."}, status=409)
+                    expected[key] = source_item
+                observed = set()
+                target_uids = set()
+                for target_item in objects:
+                    if not isinstance(target_item, dict):
+                        return Response({"detail": "Target inventory entry is invalid."}, status=409)
+                    key = (
+                        target_item.get("kind"),
+                        target_item.get("namespace"),
+                        target_item.get("name"),
+                    )
+                    source_item = expected.get(key)
+                    target_uid = target_item.get("uid")
+                    if (
+                        source_item is None
+                        or key in observed
+                        or not isinstance(target_uid, str)
+                        or not target_uid
+                        or target_uid in target_uids
+                        or target_uid == source_item.get("uid")
+                        or target_item.get("api_version") != source_item.get("api_version")
+                        or (
+                            source_item.get("spec_sha256") is not None
+                            and target_item.get("spec_sha256") != source_item.get("spec_sha256")
+                        )
+                    ):
+                        return Response({"detail": "Target object identity or spec does not match source inventory."}, status=409)
+                    observed.add(key)
+                    target_uids.add(target_uid)
+                if observed != set(expected):
+                    return Response({"detail": "Target inventory does not cover the complete source inventory."}, status=409)
                 target_cluster_identity = evidence.get("target_cluster_identity")
                 if (
                     not isinstance(target_cluster_identity, dict)
@@ -271,8 +311,14 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     return Response({"detail": "Source absence verification is not allowed."}, status=409)
                 if not isinstance(operation.target_identity, dict) or not isinstance(operation.target_identity.get("verified_objects"), list):
                     return Response({"detail": "Target inventory must be independently verified first."}, status=409)
-                if evidence.get("source_cluster_absent") is not True or evidence.get("remaining_source_objects") != 0:
-                    return Response({"detail": "Source ownership is not proven absent."}, status=409)
+                if (
+                    evidence.get("source_cluster_absent") is not True
+                    or evidence.get("remaining_source_objects") != 0
+                    or evidence.get("inventory_sha256") != operation.inventory_sha256
+                    or evidence.get("source_cluster_uid") != operation.source_identity.get("uid")
+                    or evidence.get("target_cluster_uid") != operation.target_identity.get("cluster_uid")
+                ):
+                    return Response({"detail": "Source ownership is not proven absent for this exact pivot inventory."}, status=409)
                 operation.completed_at = timezone.now()
                 _append_event(operation, node, "source_inventory_absent", ClusterDeploymentPivotOperation.State.COMPLETED, evidence)
                 return Response(self._serialize(operation))
