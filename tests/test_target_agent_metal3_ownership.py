@@ -43,11 +43,14 @@ def test_metal3_ownership_verifies_cluster_machine_m3m_and_bmh_chain():
             },
             "spec": {
                 "infrastructureRef": {
+                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                     "kind": "Metal3Machine",
                     "name": m3m_name,
                     "namespace": "metal3",
                 }
             },
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
         })
         metal3machines.append({
             "metadata": {
@@ -55,7 +58,8 @@ def test_metal3_ownership_verifies_cluster_machine_m3m_and_bmh_chain():
                 "namespace": "metal3",
                 "uid": m3m_uid,
                 "ownerReferences": [_owner("Machine", machine_name, machine_uid)],
-            }
+            },
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
         })
         bmhs.append({
             "metadata": {"name": host_name, "namespace": "metal3"},
