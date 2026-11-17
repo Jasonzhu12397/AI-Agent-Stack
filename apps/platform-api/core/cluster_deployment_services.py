@@ -446,6 +446,47 @@ def handle_deployment_command_result(
     if deployment.started_at is None:
         deployment.started_at = timezone.now()
     if outcome == "failed":
+        if command.command_type == "cluster.capi.pivot.execute":
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "capi_pivot_reconciliation": {
+                    "state": "outcome_unknown",
+                    "command_id": str(command.id),
+                    "operation_id": (
+                        command.payload.get("operation_id")
+                        if isinstance(command.payload, dict)
+                        else None
+                    ),
+                    "error": error or {"code": "AGENT_COMMAND_FAILED"},
+                    "side_effects": "unknown",
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "phase": "pivot_outcome_unknown",
+                    "pivot_completed": False,
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.error = {
+                "code": "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+                "command_id": str(command.id),
+                "retry_allowed": False,
+            }
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "plan_result",
+                    "error",
+                    "started_at",
+                    "updated_at",
+                ],
+            )
+            return
         if command.command_type == "cluster.capi.worker.provision":
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.plan_result = {
