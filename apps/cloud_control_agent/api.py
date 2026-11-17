@@ -32,6 +32,7 @@ TARGET_ACTIONS = frozenset({
     "target.metal3.observe",
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
+    "target.worker.provision",
     "target.ntp.control_plane.render",
     "target.ntp.control_plane.verify_bootstrap",
     "target.ntp.internal.probe",
