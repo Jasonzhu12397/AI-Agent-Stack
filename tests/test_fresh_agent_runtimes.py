@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from apps.eph_agent.main import execute as execute_eph
 from apps.target_agent.main import execute as execute_target
 
@@ -45,3 +47,28 @@ def test_target_agent_blocks_worker_external_ntp_fallback():
     })
     assert result["status"] == "blocked"
     assert result["side_effects"] is False
+
+
+
+def test_fresh_agent_entrypoints_do_not_import_legacy_node_agent_runtime():
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "apps/cloud_control_agent",
+        root / "apps/eph_agent",
+        root / "apps/target_agent",
+        root / "packages/agent_transport",
+    ]
+    for path in paths:
+        for source in path.rglob("*.py"):
+            text = source.read_text(encoding="utf-8")
+            assert "apps.node_agent" not in text
+            assert "node_agent.runtime" not in text
+
+
+def test_new_deployment_path_does_not_reference_legacy_node_agent_images():
+    root = Path(__file__).resolve().parents[1]
+    deployment = (root / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
+    build = (root / "deploy/agents/build-agents.sh").read_text(encoding="utf-8")
+    assert "ai-agent-node-agent" not in deployment
+    assert "Dockerfile.node-agent" not in build
+    assert "network-inventory-agent" not in deployment
