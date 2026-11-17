@@ -97,37 +97,15 @@ def test_configure_rejects_offline_root_instead_of_running_host_mutations(tmp_pa
         )
 
 
-def test_configure_installs_enables_and_verifies_on_ubuntu(tmp_path, monkeypatch):
-    (tmp_path / "etc/chrony").mkdir(parents=True)
+def test_configure_does_not_mutate_an_offline_root(tmp_path, monkeypatch):
+    (tmp_path / "etc").mkdir()
     (tmp_path / "etc/os-release").write_text('ID="ubuntu"\n', encoding="utf-8")
     monkeypatch.setattr("node_agent.chrony.os.geteuid", lambda: 0)
-    calls = []
-
-    class Result:
-        def __init__(self, stdout=""):
-            self.returncode = 0
-            self.stdout = stdout
-            self.stderr = ""
-
-    def runner(command, **kwargs):
-        calls.append(command)
-        if command[-2:] == ["is-active", "chrony"]:
-            return Result("active\n")
-        if command[1:3] == ["-n", "sources"]:
-            return Result("^* 10.20.0.10 2 6 377 25 -12us[ -1us] +/- 10ms\n")
-        if command[1:] == ["tracking"]:
-            return Result("System time     : 0.000012 seconds fast of NTP time\nLeap status     : Normal\n")
-        return Result()
-
-    result = configure_chrony(
-        "eph",
-        ["10.20.0.10"],
-        root="/",
-        runner=runner,
-        executable_lookup=lambda name: "/usr/bin/" + name,
-    )
-    assert result["configured"] is True
-    assert result["synchronized"] is True
-    assert ["apt-get", "install", "-y", "chrony"] in calls
-    assert ["/usr/bin/systemctl", "enable", "--now", "chrony"] in calls
-    assert (tmp_path / "etc/chrony/chrony.conf").exists() is False
+    with pytest.raises(ChronyError, match="CHRONY_OFFLINE_ROOT_EXECUTION_UNSUPPORTED"):
+        configure_chrony(
+            "eph",
+            ["10.20.0.10"],
+            root=str(tmp_path),
+            require_root=False,
+            executable_lookup=lambda name: "/usr/bin/" + name,
+        )
