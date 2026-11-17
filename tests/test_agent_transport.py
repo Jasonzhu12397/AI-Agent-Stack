@@ -138,8 +138,8 @@ def test_agent_client_persists_checkpoint_with_active_lease(tmp_path, monkeypatc
         assert request.url.path == "/api/v1/agent-control/deployments/checkpoints"
         payload = json.loads(request.content)
         assert payload["agent_id"] == str(agent_id)
-        assert payload["expected_phase"] == "not_started"
-        assert payload["expected_sequence"] == 0
+        assert payload["expected_phase"] == "eph_single_node_ready"
+        assert payload["expected_sequence"] == 1
         assert payload["lease_token"] == "x" * 40
         return httpx.Response(
             200,
@@ -159,8 +159,8 @@ def test_agent_client_persists_checkpoint_with_active_lease(tmp_path, monkeypatc
                 "command_id": str(uuid4()),
                 "lease": {"lease_id": str(uuid4()), "token": "x" * 40},
                 "deployment_checkpoint": {
-                    "phase": "not_started",
-                    "sequence": 0,
+                    "phase": "eph_single_node_ready",
+                    "sequence": 1,
                     "state": {},
                 },
             },
