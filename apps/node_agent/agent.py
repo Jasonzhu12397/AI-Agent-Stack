@@ -22,18 +22,18 @@ from typing import Any
 import yaml
 
 from .capabilities import ROLE_CAPABILITIES
+from .capi_pivot import (
+    CapiPivotError,
+    run_capi_pivot,
+    run_capi_pivot_dry_run,
+    run_capi_pivot_postflight,
+)
 from .delivery_lifecycle import (
     DeliveryLifecycleError,
     evaluate_transition,
     validate_bmh_migration,
     validate_chronyd_scope,
     validate_topology,
-)
-from .capi_pivot import (
-    CapiPivotError,
-    run_capi_pivot,
-    run_capi_pivot_dry_run,
-    run_capi_pivot_postflight,
 )
 from .ironic_client import (
     IronicObservationError,
@@ -2087,8 +2087,13 @@ def execute_command(
         try:
             if action == "topology.validate" and set(payload) == {"action", "topology"}:
                 return validate_topology(payload["topology"])
-            if action == "chronyd.validate" and set(payload) == {"action", "node_role", "chronyd_action"}:
-                return validate_chronyd_scope(payload["node_role"], payload["chronyd_action"])
+            if (
+                action == "chronyd.validate"
+                and set(payload) == {"action", "node_role", "chronyd_action"}
+            ):
+                return validate_chronyd_scope(
+                    payload["node_role"], payload["chronyd_action"]
+                )
             if action == "bmh.migration.validate" and set(payload) == {
                 "action", "source_hosts", "target_hosts", "target_controller_owns_inventory"
             }:
