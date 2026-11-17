@@ -420,3 +420,16 @@ def test_handoff_workers_ready_requires_live_worker_observation(monkeypatch):
     assert result["status"] == "succeeded"
     assert result["output"]["evidence"]["ready_worker_count"] == 2
     assert result["output"]["evidence"]["worker_ntp_sources"]["worker-2"] == [NTP_IP]
+
+
+
+def test_worker_provisioning_rejects_unconfigured_namespace_before_mutation(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
+    monkeypatch.setenv("TARGET_CAPI_NAMESPACE", "ccd-sig1-capi")
+    calls = []
+    with pytest.raises(WorkerProvisioningError, match="CAPI_NAMESPACE_NOT_ALLOWED"):
+        execute_worker_provisioning(
+            _payload(),
+            runner=lambda *args, **kwargs: calls.append(args),
+        )
+    assert calls == []
