@@ -1599,8 +1599,9 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     operation = ClusterDeploymentPivotOperation.objects.get(deployment=deployment)
     assert operation.state == ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY
     events = list(operation.events.order_by("sequence"))
-    assert [event.sequence for event in events] == [1, 2, 3]
+    assert [event.sequence for event in events] == [1, 2, 3, 4]
     assert [event.to_state for event in events] == [
+        ClusterDeploymentPivotOperation.State.WAITING_APPROVAL,
         ClusterDeploymentPivotOperation.State.READY,
         ClusterDeploymentPivotOperation.State.EXECUTING,
         ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
