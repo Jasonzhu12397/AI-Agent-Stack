@@ -145,6 +145,14 @@ def _image_version(image: str, deployment: dict[str, Any]) -> tuple[int, int, in
     return _version(candidate)
 
 
+def _kubernetes_cluster_uid(kubeconfig: str) -> str:
+    document = _kubectl(kubeconfig, ["get", "namespace", "kube-system", "-o", "json"])
+    uid = document.get("metadata", {}).get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise CapiPivotError("CAPI_PIVOT_KUBERNETES_CLUSTER_UID_MISSING")
+    return uid
+
+
 def _ready_masters(kubeconfig: str) -> set[str]:
     document = _kubectl(kubeconfig, ["get", "nodes", "-o", "json"])
     masters = set()
@@ -441,6 +449,10 @@ def execute_capi_pivot(
         namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
         cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
         stable_identity = payload["stable_cluster_identity"].strip()
+        source_api_uid = _kubernetes_cluster_uid(source)
+        target_api_uid = _kubernetes_cluster_uid(target)
+        if source_api_uid == target_api_uid:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_AND_TARGET_API_ARE_IDENTICAL")
         preflight = _provider_preflight(payload, source, target)
         source_cluster = _cluster(source, namespace, cluster_name)
         target_cluster = _cluster(target, namespace, cluster_name)
