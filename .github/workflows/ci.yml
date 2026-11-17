@@ -602,7 +602,7 @@ jobs:
           )
           if not cdrom or not cdrom.get("device"):
               raise SystemExit("EPH_BOOT_ISO_DEVICE_NOT_FOUND")
-          execute("eject", {"device": cdrom["device"]})
+          execute("eject", {"device": cdrom["device"], "force": True})
           remaining = execute("query-block")
           if any(
               iso_name in str(item.get("inserted", {}).get("file", ""))
