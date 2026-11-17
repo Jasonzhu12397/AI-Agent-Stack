@@ -983,9 +983,14 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.capi.worker.preflight":
         config = deployment.spec.get("worker_provisioning")
         expected_workers = deployment.spec.get("worker_replicas")
-        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
-        source_identity = source.get("source_cluster_identity", {})
-        expected_uid = source_identity.get("uid")
+        target_verification = (deployment.plan_result or {}).get(
+            "capi_pivot_target_verification", {}
+        )
+        expected_target_uid = (
+            target_verification.get("cluster_uid")
+            if isinstance(target_verification, dict)
+            else None
+        )
         infrastructure = result.get("infrastructure_template")
         bootstrap = result.get("bootstrap_template")
         hosts = result.get("selected_baremetal_hosts")
@@ -998,13 +1003,13 @@ def handle_deployment_command_result(
             and command.payload.get("worker_provisioning") == config
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
-            and isinstance(expected_uid, str)
-            and bool(expected_uid)
+            and isinstance(expected_target_uid, str)
+            and bool(expected_target_uid)
             and result.get("expected_worker_replicas") == expected_workers
             and isinstance(expected_workers, int)
             and not isinstance(expected_workers, bool)
             and expected_workers > 0
-            and result.get("cluster_uid") == expected_uid
+            and result.get("cluster_uid") == expected_target_uid
             and result.get("ready") is True
             and result.get("machine_deployment_exists") is False
             and result.get("execution_allowed") is False
@@ -1134,11 +1139,13 @@ def handle_deployment_command_result(
         deployment.save(update_fields=["plan_result", "status", "error", "updated_at"])
     elif command.command_type == "cluster.capi.worker.provision":
         expected = command.payload
-        source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
-        source_identity = (
-            source.get("source_cluster_identity", {})
-            if isinstance(source, dict)
-            else {}
+        target_verification = (deployment.plan_result or {}).get(
+            "capi_pivot_target_verification", {}
+        )
+        expected_target_uid = (
+            target_verification.get("cluster_uid")
+            if isinstance(target_verification, dict)
+            else None
         )
         approved_payload = dict(expected) if isinstance(expected, dict) else {}
         approved_provisioning_hash = approved_payload.pop(
@@ -1151,11 +1158,12 @@ def handle_deployment_command_result(
         manifest_hash = result.get("machine_deployment_manifest_hash")
         valid_result = (
             isinstance(expected, dict)
-            and isinstance(source_identity, dict)
+            and isinstance(expected_target_uid, str)
+            and bool(expected_target_uid)
             and command.status == AgentCommand.Status.SUCCEEDED
             and command.plan_hash == _payload_hash(command.command_type, expected)
             and approved_provisioning_hash == _spec_hash(approved_payload)
-            and expected.get("expected_cluster_uid") == source_identity.get("uid")
+            and expected.get("expected_cluster_uid") == expected_target_uid
             and expected.get("expected_worker_replicas") == deployment.spec.get("worker_replicas")
             and expected.get("worker_provisioning") == deployment.spec.get("worker_provisioning")
             and command.node.node_type == "target_cluster"
@@ -1167,7 +1175,7 @@ def handle_deployment_command_result(
             == deployment.spec.get("worker_provisioning", {}).get(
                 "machine_deployment_name"
             )
-            and result.get("cluster_uid") == expected.get("expected_cluster_uid")
+            and result.get("cluster_uid") == expected_target_uid
             and result.get("provisioning_plan_hash")
             == expected.get("provisioning_plan_hash")
             and isinstance(machine_uid, str)
