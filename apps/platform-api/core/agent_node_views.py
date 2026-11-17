@@ -190,12 +190,13 @@ def _command_is_fenced_by_cluster_ownership(command, node):
     plan_result = deployment.plan_result
     if plan_result is None or not isinstance(plan_result, dict):
         return True
-    if "dual_agent" not in plan_result:
-        return command.command_type == "cluster.capi.pivot.execute"
     dual_agent = plan_result.get("dual_agent")
     if not isinstance(dual_agent, dict):
         return True
-    return dual_agent.get("target_agent_owns_cluster") is True
+    target_owns_cluster = dual_agent.get("target_agent_owns_cluster")
+    if not isinstance(target_owns_cluster, bool):
+        return True
+    return target_owns_cluster
 
 
 def _fail_fenced_command(command, now):
