@@ -6,7 +6,6 @@ import os
 import ssl
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -24,7 +23,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def ironic_api_configured(environ: Mapping[str, str] | None = None) -> bool:
+def ironic_api_configured(environ: Any = None) -> bool:
     values = os.environ if environ is None else environ
     return bool(values.get("IRONIC_API_URL") and values.get("IRONIC_API_TOKEN"))
 
