@@ -3029,13 +3029,12 @@ def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch
 
     def fake_list(path, max_items=100000):
         calls.append(path)
-        if path == "/api/v1/namespaces/ai-agent-inventory/configmaps":
-            return []
         if path == "/api/v1/nodes":
             return [
                 {
                     "metadata": {
                         "name": "worker-01",
+                        "uid": "node-uid-01",
                         "labels": {"feature.node.kubernetes.io/network-sriov": "true"},
                     },
                     "status": {
@@ -3097,6 +3096,12 @@ def test_network_inspection_command_is_available_to_both_agent_roles(monkeypatch
     assert result["node_network_resources"][0]["allocatable_network_resources"][
         "intel.com/sriov_netdevice"
     ] == "8"
+    inventory = result["physical_node_hardware_inventory"]
+    assert inventory["scope"] == "kubernetes_node_api"
+    assert inventory["nodes"][0]["node_uid"] == "node-uid-01"
+    assert "intel.com/sriov_netdevice" in inventory["nodes"][0]["extended_resource_names"]
+    assert inventory["host_only_hardware_details_available"] is False
+    assert "/api/v1/namespaces/ai-agent-inventory/configmaps" not in calls
     assert result["agent_pod_network"]["interfaces"] == ["eth0"]
     assert "Pod namespace interfaces are not host NIC inventory." in result["limitations"]
     assert "/api/v1/namespaces/kube-system/pods" in calls
@@ -3209,7 +3214,6 @@ def test_network_inspection_verifies_expected_multus_attachments_on_workload_pod
         if path in {
             "/api/v1/nodes",
             "/api/v1/namespaces/kube-system/pods",
-            "/api/v1/namespaces/ai-agent-inventory/configmaps",
         }:
             return []
         if path == "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions":
@@ -3610,94 +3614,71 @@ def test_host_sysfs_inspection_is_explicitly_unavailable_without_mount(monkeypat
     assert result["scope"] == "host_sysfs"
 
 
-def test_target_agent_aggregates_only_valid_per_node_hardware_reports(monkeypatch):
-    reports = [
+def test_target_agent_reports_kubernetes_visible_node_hardware_only():
+    nodes = [
         {
             "metadata": {
-                "name": agent.network_inventory_configmap_name("worker-01"),
-                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+                "name": "worker-01",
+                "uid": "node-uid-01",
+                "labels": {"feature.node.kubernetes.io/network-sriov": "true"},
             },
-            "data": {
-                "inventory.json": json.dumps(
-                    {
-                        "schema_version": "v1",
-                        "node_name": "worker-01",
-                        "node_uid": "node-uid-01",
-                        "collected_at": datetime.datetime.now(datetime.UTC).isoformat(),
-                        "hardware": {
-                            "status": "observed",
-                            "interfaces": [{"name": "eno1"}],
-                            "pci_network_devices": [{"pci_address": "0000:03:00.0"}],
-                            "hugepages": [{"page_size": "hugepages-2Mi", "free": "512"}],
-                            "numa_nodes": [{"node": "node0"}],
-                        },
-                    }
-                )
+            "spec": {
+                "providerID": "metal3://machine-01",
+                "taints": [{"key": "node-role.kubernetes.io/worker", "effect": "NoSchedule"}],
             },
-        },
-        {
-            "metadata": {
-                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "nodeInfo": {
+                    "architecture": "x86_64",
+                    "operatingSystem": "linux",
+                    "osImage": "Ubuntu 24.04",
+                    "kernelVersion": "6.8.0",
+                    "kubeletVersion": "v1.32.2",
+                    "containerRuntimeVersion": "containerd://2.0.0",
+                },
+                "capacity": {"cpu": "32", "memory": "256Gi"},
+                "allocatable": {
+                    "cpu": "30",
+                    "memory": "240Gi",
+                    "intel.com/sriov_netdevice": "8",
+                    "hugepages-2Mi": "1Gi",
+                },
             },
-            "data": {"inventory.json": "{invalid-json"},
-        },
-        {
-            "metadata": {"labels": {"app.kubernetes.io/name": "unrelated-configmap"}},
-            "data": {},
-        },
-    ]
-
-    monkeypatch.setattr(
-        agent,
-        "list_all_kubernetes_items",
-        lambda path, max_items=100000: reports,
-    )
-
-    result = agent.inspect_cluster_node_hardware_inventory(
-        [{"metadata": {"name": "worker-01", "uid": "node-uid-01"}}]
-    )
-
-    assert result["status"] == "observed"
-    assert result["node_count"] == 1
-    assert result["inventory_complete"] is True
-    assert result["missing_node_names"] == []
-    assert result["nodes"][0]["node_name"] == "worker-01"
-    assert result["nodes"][0]["interfaces"][0]["name"] == "eno1"
-    assert result["nodes"][0]["pci_network_devices"][0]["pci_address"] == "0000:03:00.0"
-
-
-def test_target_agent_does_not_accept_stale_hardware_inventory_reports(monkeypatch):
-    report = {
-        "schema_version": "v1",
-        "node_name": "worker-old",
-        "node_uid": "node-uid-old",
-        "collected_at": "2020-01-01T00:00:00+00:00",
-        "hardware": {"status": "observed", "interfaces": []},
-    }
-    configmaps = [
-        {
-            "metadata": {
-                "name": agent.network_inventory_configmap_name("worker-old"),
-                "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
-            },
-            "data": {"inventory.json": json.dumps(report)},
         }
     ]
-    monkeypatch.setattr(
-        agent,
-        "list_all_kubernetes_items",
-        lambda path, max_items=100000: configmaps,
-    )
 
+    result = agent.inspect_cluster_node_hardware_inventory(nodes)
+
+    assert result["status"] == "observed"
+    assert result["scope"] == "kubernetes_node_api"
+    assert result["node_count"] == 1
+    assert result["inventory_complete"] is True
+    assert result["nodes"][0]["node_name"] == "worker-01"
+    assert result["nodes"][0]["node_uid"] == "node-uid-01"
+    assert result["nodes"][0]["provider_id"] == "metal3://machine-01"
+    assert result["nodes"][0]["ready"] is True
+    assert "intel.com/sriov_netdevice" in result["nodes"][0]["extended_resource_names"]
+    assert result["nodes"][0]["host_only_hardware_details"] == (
+        "not_available_via_kubernetes_node_api"
+    )
+    assert "pci_network_devices" not in result["nodes"][0]
+
+
+def test_target_agent_marks_malformed_node_entries_as_incomplete():
     result = agent.inspect_cluster_node_hardware_inventory(
-        [{"metadata": {"name": "worker-old", "uid": "node-uid-old"}}]
+        [
+            {
+                "metadata": {"name": "worker-01", "uid": "node-uid-01"},
+                "status": {"allocatable": {"cpu": "8"}},
+            },
+            {"metadata": []},
+        ]
     )
 
-    assert result["node_count"] == 0
+    assert result["node_count"] == 1
+    assert result["expected_node_count"] == 2
     assert result["inventory_complete"] is False
-    assert result["missing_node_names"] == ["worker-old"]
-    assert result["stale_node_names"] == ["worker-old"]
-
+    assert result["missing_node_names"] == ["unknown"]
 
 
 def test_worker_provisioning_preflight_is_target_agent_only():
@@ -4934,57 +4915,29 @@ def test_machine_deployment_dry_run_rejects_invalid_api_endpoint(
 
 
 
-@pytest.mark.parametrize(
-    "configmap_name,interfaces",
-    [
-        ("unrelated-configmap", [{"name": "eno1"}]),
-        (None, "not-a-list"),
-    ],
-)
-def test_target_agent_rejects_misbound_or_malformed_network_inventory(
-    monkeypatch,
-    configmap_name,
-    interfaces,
-):
-    report = {
-        "schema_version": "v1",
-        "node_name": "worker-01",
-        "node_uid": "node-uid-01",
-        "collected_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "hardware": {
-            "status": "observed",
-            "interfaces": interfaces,
-            "pci_network_devices": [],
-            "hugepages": [],
-            "numa_nodes": [],
-        },
-    }
-    metadata = {
-        "labels": {"app.kubernetes.io/name": "network-inventory-agent"}
-    }
-    if configmap_name is not None:
-        metadata["name"] = configmap_name
-    else:
-        metadata["name"] = agent.network_inventory_configmap_name("worker-01")
-    configmaps = [
-        {
-            "metadata": metadata,
-            "data": {"inventory.json": json.dumps(report)},
-        }
-    ]
-    monkeypatch.setattr(
-        agent,
-        "list_all_kubernetes_items",
-        lambda path, max_items=100000: configmaps,
-    )
-
+def test_target_agent_does_not_infer_host_pci_details_from_node_labels():
     result = agent.inspect_cluster_node_hardware_inventory(
-        [{"metadata": {"name": "worker-01", "uid": "node-uid-01"}}]
+        [
+            {
+                "metadata": {
+                    "name": "worker-01",
+                    "uid": "node-uid-01",
+                    "labels": {"feature.node.kubernetes.io/network-sriov": "true"},
+                },
+                "status": {
+                    "allocatable": {"intel.com/sriov_netdevice": "8"},
+                },
+            }
+        ]
     )
 
-    assert result["node_count"] == 0
-    assert result["inventory_complete"] is False
-    assert result["missing_node_names"] == ["worker-01"]
+    node = result["nodes"][0]
+    assert "intel.com/sriov_netdevice" in node["extended_resource_names"]
+    assert node["host_only_hardware_details"] == (
+        "not_available_via_kubernetes_node_api"
+    )
+    assert "interfaces" not in node
+    assert "pci_network_devices" not in node
 
 
 def test_capi_pivot_postflight_combines_capi_metal3_and_ironic_evidence(monkeypatch):
