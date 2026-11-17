@@ -1,3 +1,4 @@
+import importlib
 import json
 import subprocess
 import sys
@@ -5,6 +6,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "deploy" / "cloud-init" / "render_site_cloud_init.py"
+AGENT = importlib.import_module("apps.node_agent.agent")
 
 
 def _render(tmp_path, *extra):
@@ -213,6 +215,8 @@ def test_renderer_emits_capi_pre_kubeadm_files_for_target_masters_and_workers(tm
     assert "chronyc waitsync 10 0.1" in content
     assert "DNS=1.1.1.1" in content
     assert "Domains=~. lab.example" in content
+    expected_hash = AGENT.validate_time_dns_profile(profile)["profile_hash"]
+    assert f"ai-agent-stack.io/time-dns-profile-hash={expected_hash}" in content
     assert "runcmd:" not in content
 
 
