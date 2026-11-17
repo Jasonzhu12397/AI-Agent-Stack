@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 class ChronyError(RuntimeError):
@@ -68,7 +69,7 @@ def _validate_sources(role: str, sources: list[str], ironic_internal_ip: str | N
             ipaddress.ip_address(source)
         except ValueError:
             if not hostname_pattern.fullmatch(source):
-                raise ChronyError("CHRONY_SOURCE_INVALID")
+                raise ChronyError("CHRONY_SOURCE_INVALID") from None
     if role == "target_worker":
         if not isinstance(ironic_internal_ip, str):
             raise ChronyError("WORKER_NTP_MUST_USE_IRONIC_INTERNAL_IP")
@@ -149,7 +150,16 @@ def _write_managed_config(path: Path, block: str):
 
 
 def _service_name(os_id: str) -> str:
-    return "chronyd" if os_id in {"sles", "opensuse", "opensuse-leap", "rhel", "centos", "rocky", "almalinux"} else "chrony"
+    server_distros = {
+        "sles",
+        "opensuse",
+        "opensuse-leap",
+        "rhel",
+        "centos",
+        "rocky",
+        "almalinux",
+    }
+    return "chronyd" if os_id in server_distros else "chrony"
 
 
 def _verify_sync(runner, chronyc: str, expected_source: str | None, max_offset_seconds: float):
@@ -207,7 +217,11 @@ def configure_chrony(
     lookup = executable_lookup or shutil.which
     if require_root and os.geteuid() != 0:
         raise ChronyError("CHRONY_ROOT_REQUIRED")
-    if not isinstance(max_offset_seconds, (int, float)) or isinstance(max_offset_seconds, bool) or max_offset_seconds <= 0:
+    if (
+        not isinstance(max_offset_seconds, (int, float))
+        or isinstance(max_offset_seconds, bool)
+        or max_offset_seconds <= 0
+    ):
         raise ChronyError("CHRONY_MAX_OFFSET_INVALID")
     normalized = _validate_sources(node_role, sources, ironic_internal_ip)
     root_path = Path(root).resolve()
