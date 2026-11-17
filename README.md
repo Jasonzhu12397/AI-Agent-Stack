@@ -16,7 +16,7 @@ The long-term infrastructure product scope is documented in [Omni-Inspired Infra
 - **Infrastructure control:** a central remote control plane can enroll the EPH Agent and Target Agent separately. A persisted Cluster Delivery Plan orchestrates EPH preflight → CAPI/Metal3 plan validation, stores the plan hash and missing prerequisites, and exposes status/cancellation in Vue. Commands are typed, tenant/project scoped, persisted and lease-protected.
 - **Site-side Agents:** the shared EPH/Target runtime supports EPH preflight, typed Metal3/CAPI plan validation, operation-bound CAPI Pivot execution through clusterctl after approval and Target ACK, plus Target-side adoption/postflight verification. It does not expose arbitrary shell execution.
 - **Object and vector storage:** S3-compatible storage and pgvector are planned integration points.
-- **Deployment:** Docker Compose is limited to the local Cloud Control Plane development stack and the production cloud Control Plane profile. EPH and Target Agents run only as Kubernetes Pods from dedicated Deployments; the EPH Agent runs inside the temporary single-node EPH Kubernetes cluster. The target network-inventory publisher runs as a DaemonSet.
+- **Deployment:** Docker Compose is limited to the local Cloud Control Plane development stack and the production cloud Control Plane profile. EPH and Target Agents run only as Kubernetes Pods from dedicated Deployments; the EPH Agent runs inside the temporary single-node EPH Kubernetes cluster. The Target Agent is deployed as three Pods across the target control-plane/master nodes; no per-node Agent DaemonSet is deployed.
 
 The FastAPI and React implementation has been replaced. The Vue UI follows the layout and interaction patterns in [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), ported from its React implementation rather than embedding React into this Vue application. The navigation includes Dashboard, Model Manager, Agent Studio, Workflow DAG, Integration Hub, Knowledge Bases, Metal3 Fleet, Governance, Audit & Activity, Organization and Docs & Matrix. The previous verified workflow milestone passed full CI in [run 41421574449](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41421574449), commit `56d29c006031fa9363e79c88f2c365aa1649ebf2`; this branch's dual-agent work is awaiting its own PR CI.
 
@@ -92,7 +92,7 @@ AGENT_IMAGE=<registry>/ai-agent-runtime@sha256:<64-hex-digest> \
 bash deploy/agents/deploy.sh
 ```
 
-The helper performs server-side dry-run validation, applies the EPH Deployment to the EPH single-node cluster, applies the Target Deployment and network-inventory DaemonSet to the target cluster, then waits for all workloads to become Ready. The EPH Pod is scheduled by the EPH Kubernetes scheduler and talks to the local Kubernetes API using its dedicated ServiceAccount. It does not run outside Kubernetes.
+The helper performs server-side dry-run validation, applies the EPH Deployment to the EPH single-node cluster, applies the three-replica Target Agent Deployment to the target cluster, then waits for both Deployments to become Ready. The EPH Pod is scheduled by the EPH Kubernetes scheduler and talks to the local Kubernetes API using its dedicated ServiceAccount. It does not run outside Kubernetes.
 
 6. In the Studio, dispatch `node.health` to both enrolled Agents. Use the **Metal3 / CAPI cluster plan** workflow on the EPH Agent to run the read-only preflight and plan checks.
 
@@ -128,11 +128,11 @@ npm run build
 - `docs/`: architecture decisions, threat model, verification matrix and delivery plan.
 - `tests/`: backend contract and integration tests.
 
-## Dual-agent infrastructure control
+## Three-agent infrastructure control
 
 See [Dual-Agent Infrastructure Architecture](docs/dual-agent-infrastructure-architecture.md) and [ADR 0003](docs/adr/0003-remote-dual-agent-control-plane.md).
 
-The control plane enrolls an `eph_node` and a `target_cluster` agent independently. Node enrollment returns a one-time token; only its SHA-256 hash is stored. The agent initiates outbound HTTPS heartbeats and command polls. PostgreSQL stores command state, idempotency key, attempts, lease token/expiry, result and error. Provisioning and target-agent bootstrap commands wait for a different tenant administrator to approve the exact plan hash.
+The Cloud Control Agent coordinates two site-side identities: one `eph_node` EPH Agent and one `target_cluster` logical Target Agent (three Pod replicas with Lease leader election). Node enrollment returns a one-time token; only its SHA-256 hash is stored. The agent initiates outbound HTTPS heartbeats and command polls. PostgreSQL stores command state, idempotency key, attempts, lease token/expiry, result and error. Provisioning and target-agent bootstrap commands wait for a different tenant administrator to approve the exact plan hash.
 
 The cluster plan workflow is created through `POST /api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/`. It persists the deployment, queues `host.preflight`, automatically queues `cluster.plan` after a successful preflight, and exposes the resulting plan via `GET /api/v1/cluster-deployments/{id}/`. The workflow stops at `PLAN_READY`; it does not install Kubernetes.
 
@@ -186,3 +186,8 @@ Loops, parallel/join, human approval, HTTP/Code nodes, scheduler/webhook trigger
 Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted. Authorization is enforced by server-side policy, never by model intent or client-supplied tenant identifiers.
 
 No production infrastructure writes or external write integrations are enabled in this milestone.
+
+
+### Mandatory NTP and DNS for EPH and Target hosts
+
+Generate cloud-init user-data separately for the temporary EPH Live OS and the final Target OS with [the site NTP/DNS renderer](deploy/cloud-init/README.md). Every EPH host and every Target master must have chrony installed, enabled and synchronized. DNS resolver IPs and search domains are injected at the host OS level; Agent Pods inherit host time and resolver behavior. The Target user-data must be merged into the selected CAPI/Metal3 provider's generated bootstrap data for every target node. The repository currently supplies the renderer and regression tests; provider-specific boot-server and CAPI template merge adapters remain to be connected before claiming fully automated injection.
