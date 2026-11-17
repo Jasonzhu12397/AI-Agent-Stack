@@ -48,6 +48,7 @@ from .ntp_policy import (
     render_worker_chrony_config,
     render_worker_chrony_pre_kubeadm_command,
     validate_control_plane_ntp_profile,
+    validate_ironic_internal_ntp_ip,
     validate_worker_ntp_sources,
 )
 
