@@ -1362,7 +1362,7 @@ def handle_deployment_command_result(
             == expected_payload.get("source_inventory_sha256")
             and pivot_operation.approval_hash == command.approved_plan_hash
             and pivot_operation.target_ack == target_ack == expected_ack
-            command.status == AgentCommand.Status.SUCCEEDED
+            and command.status == AgentCommand.Status.SUCCEEDED
             and command.approved_at is not None
             and command.approved_by_id is not None
             and command.approved_by_id != command.requested_by_id
