@@ -75,7 +75,7 @@ def test_control_plane_ntp_attestation_requires_all_master_bootstrap_scripts():
         "target-cluster",
     )
     assert result["target_control_plane_ntp_profile_verified" is True
-    assert result["target_control_plane_ntp_external_sync_verified"] is True
+    assert result["target_control_plane_ntp_bootstrap_sync_gate_verified"] is True
     assert result["verified_master_count"] == 3
 
 
@@ -96,7 +96,6 @@ def test_control_plane_ntp_attestation_rejects_external_fallback_pool():
         verify_control_plane_ntp_bootstrap(
             {"items": machines},
             {"items": configs},
-            ["192.0.2.10"],
             ["192.0.2.10"],
             ["10.130.60.80/28"],
             "target-cluster",
@@ -119,7 +118,6 @@ def test_control_plane_ntp_attestation_rejects_unapproved_configured_source():
         verify_control_plane_ntp_bootstrap(
             {"items": machines},
             {"items": configs},
-            ["pool.ntp.org"],
             ["192.0.2.10"],
             ["10.130.60.80/28"],
         )
