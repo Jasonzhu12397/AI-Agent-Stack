@@ -122,3 +122,60 @@ def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
     assert result["status"] == "succeeded"
     assert result["side_effects"] is False
     assert "--dry-run" in calls[0]
+
+
+
+def test_provider_version_check_rejects_target_older_than_source(monkeypatch):
+    deployments = {
+        "source-provider": {
+            "status": {"readyReplicas": 1},
+            "spec": {"template": {"spec": {"containers": [
+                {"name": "manager", "image": "registry.example.test/provider:v1.10.5"}
+            ]}}},
+        },
+        "target-provider": {
+            "status": {"readyReplicas": 1},
+            "spec": {"template": {"spec": {"containers": [
+                {"name": "manager", "image": "registry.example.test/provider:v1.10.4"}
+            ]}}},
+        },
+    }
+    monkeypatch.setattr(
+        capi_pivot,
+        "_deployment",
+        lambda _kubeconfig, _namespace, name: deployments[name],
+    )
+    with pytest.raises(capi_pivot.CapiPivotError, match="OLDER_THAN_SOURCE"):
+        capi_pivot._provider_versions(
+            "source.kubeconfig",
+            "target.kubeconfig",
+            [{
+                "provider": "capm3",
+                "source": {"namespace": "system", "name": "source-provider"},
+                "target": {"namespace": "system", "name": "target-provider"},
+            }],
+        )
+
+
+def test_provider_version_check_accepts_target_same_as_source(monkeypatch):
+    deployment = {
+        "status": {"readyReplicas": 1},
+        "spec": {"template": {"spec": {"containers": [
+            {"name": "manager", "image": "registry.example.test/provider:v1.10.5"}
+        ]}}},
+    }
+    monkeypatch.setattr(
+        capi_pivot,
+        "_deployment",
+        lambda *_args: deployment,
+    )
+    result = capi_pivot._provider_versions(
+        "source.kubeconfig",
+        "target.kubeconfig",
+        [{
+            "provider": "capm3",
+            "source": {"namespace": "system", "name": "source-provider"},
+            "target": {"namespace": "system", "name": "target-provider"},
+        }],
+    )
+    assert result[0]["target_version_at_least_source"] is True
