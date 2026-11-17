@@ -82,6 +82,12 @@ def verify_metal3_ownership(
             raise Metal3OwnershipError("TARGET_CAPI_MACHINE_IDENTITY_INVALID")
         if not _owner_reference(metadata, "Cluster", cluster_name, cluster_uid):
             raise Metal3OwnershipError(f"TARGET_MACHINE_CLUSTER_OWNER_MISMATCH:{name}")
+        ready = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in machine.get("status", {}).get("conditions", [])
+        )
+        if not ready:
+            raise Metal3OwnershipError(f"TARGET_CAPI_MACHINE_NOT_READY:{name}")
         machine_by_name[name] = machine
 
     metal3machine_by_name = {}
@@ -106,7 +112,31 @@ def verify_metal3_ownership(
         machine = machine_by_name[machine_owner["name"]]
         if machine_owner.get("uid") != machine.get("metadata", {}).get("uid"):
             raise Metal3OwnershipError(f"TARGET_METAL3MACHINE_MACHINE_UID_MISMATCH:{name}")
+        ready = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in metal3machine.get("status", {}).get("conditions", [])
+        )
+        if not ready:
+            raise Metal3OwnershipError(f"TARGET_METAL3MACHINE_NOT_READY:{name}")
         metal3machine_by_name[name] = metal3machine
+
+    if len(metal3machine_by_name) != len(machine_by_name):
+        raise Metal3OwnershipError("TARGET_MACHINE_METAL3MACHINE_COUNT_MISMATCH")
+    for machine_name, machine in machine_by_name.items():
+        infrastructure_ref = machine.get("spec", {}).get("infrastructureRef", {})
+        metal3machine = metal3machine_by_name.get(infrastructure_ref.get("name"))
+        if (
+            infrastructure_ref.get("kind") != "Metal3Machine"
+            or not metal3machine
+            or (infrastructure_ref.get("namespace") or namespace)
+            != metal3machine.get("metadata", {}).get("namespace")
+            or not str(infrastructure_ref.get("apiVersion", "")).startswith(
+                "infrastructure.cluster.x-k8s.io/"
+            )
+        ):
+            raise Metal3OwnershipError(
+                f"TARGET_MACHINE_INFRASTRUCTURE_REFERENCE_MISMATCH:{machine_name}"
+            )
 
     source_set = set()
     for identity in source_bmh_identities:
@@ -120,7 +150,11 @@ def verify_metal3_ownership(
         if not all(isinstance(value, str) and value for value in values):
             raise Metal3OwnershipError("SOURCE_BMH_IDENTITY_INVALID")
         source_set.add((values[0], values[1], values[2].lower()))
-    if len(source_set) != len(source_bmh_identities):
+    source_hardware_ids = [item[2].lower() for item in source_set]
+    if (
+        len(source_set) != len(source_bmh_identities)
+        or len(source_hardware_ids) != len(set(source_hardware_ids))
+    ):
         raise Metal3OwnershipError("SOURCE_BMH_IDENTITY_DUPLICATE")
 
     target_identities = []
@@ -159,8 +193,13 @@ def verify_metal3_ownership(
                 or consumer.get("kind") != "Metal3Machine"
                 or consumer_namespace != metal3machine.get("metadata", {}).get("namespace")
                 or consumer.get("uid") != metal3machine.get("metadata", {}).get("uid")
+                or not str(consumer.get("apiVersion", "")).startswith(
+                    "infrastructure.cluster.x-k8s.io/"
+                )
             ):
                 raise Metal3OwnershipError(f"TARGET_BMH_CONSUMER_REFERENCE_MISMATCH:{host_name}")
+        elif state not in {"available", "ready"}:
+            raise Metal3OwnershipError(f"TARGET_BMH_CONSUMER_REFERENCE_MISSING:{host_name}")
     target_set = {
         (item["namespace"], item["name"], item["hardware_identity"])
         for item in target_identities
