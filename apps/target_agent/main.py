@@ -40,6 +40,7 @@ from .leader_election import (
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
+from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 from .ntp_policy import (
     NtpPolicyError,
     probe_ironic_internal_ntp_endpoint,
@@ -377,6 +378,60 @@ def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, A
     )
 
 
+
+def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
+    namespace = payload.get("namespace")
+    deployment_name = payload.get("machine_deployment_name")
+    if (
+        not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace)
+        or not isinstance(deployment_name, str)
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", deployment_name)
+    ):
+        raise WorkerAttestationError("WORKER_ATTESTATION_NAMESPACE_OR_DEPLOYMENT_INVALID")
+    ntp_ip = os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
+    if not ntp_ip:
+        raise WorkerAttestationError("IRONIC_INTERNAL_NTP_IP_CONFIGURATION_REQUIRED")
+    queries = (
+        ("deployment", [
+            "get", "machinedeployment.cluster.x-k8s.io", deployment_name,
+            "--namespace", namespace, "-o", "json",
+        ]),
+        ("machines", [
+            "get", "machines.cluster.x-k8s.io", "--namespace", namespace, "-o", "json",
+        ]),
+        ("kubeadmconfigs", [
+            "get", "kubeadmconfigs.bootstrap.cluster.x-k8s.io",
+            "--namespace", namespace, "-o", "json",
+        ]),
+        ("nodes", ["get", "nodes", "-o", "json"]),
+    )
+    documents = {}
+    for name, arguments in queries:
+        result = _kubectl(arguments, timeout=60, max_output_bytes=16 * 1024 * 1024)
+        if not result["available"]:
+            raise WorkerAttestationError(f"WORKER_ATTESTATION_OBSERVATION_FAILED:{name}")
+        try:
+            documents[name] = json.loads(result["stdout"])
+        except ValueError as exc:
+            raise WorkerAttestationError(
+                f"WORKER_ATTESTATION_INVALID_JSON:{name}"
+            ) from exc
+    deployment_metadata = documents["deployment"].get("metadata", {})
+    if (
+        deployment_metadata.get("name") != deployment_name
+        or deployment_metadata.get("namespace") != namespace
+    ):
+        raise WorkerAttestationError("WORKER_ATTESTATION_DEPLOYMENT_IDENTITY_MISMATCH")
+    return verify_worker_readiness(
+        documents["deployment"],
+        documents["machines"],
+        documents["kubeadmconfigs"],
+        documents["nodes"],
+        ntp_ip,
+    )
+
+
 def execute(
     command: dict[str, Any],
     lease_lost_event: Any = None,
@@ -460,17 +515,31 @@ def execute(
                     "ironic_internal_ntp_service_reachable": True,
                     "ironic_internal_ntp_probe": ntp_probe,
                 }
-            if next_phase in {
-                HandoffPhase.WORKER_PROVISIONING.value,
-                HandoffPhase.WORKERS_READY.value,
-            }:
+            if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
                 configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
                     evidence.get("ironic_internal_ntp_ip")
                 )
+                ntp_probe = probe_ironic_internal_ntp_endpoint(configured_ntp_ip)
                 evidence = {
                     **evidence,
                     "ironic_internal_ntp_ip": configured_ntp_ip,
+                    "ironic_internal_ntp_service_reachable": True,
+                    "ironic_internal_ntp_probe": ntp_probe,
                 }
+            if next_phase == HandoffPhase.WORKERS_READY.value:
+                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                    evidence.get("ironic_internal_ntp_ip")
+                )
+                observed_workers = _observe_worker_readiness(payload)
+                if observed_workers.get("ironic_internal_ntp_ip") != configured_ntp_ip:
+                    raise HandoffError("HANDOFF_WORKER_NTP_SOURCE_MISMATCH")
+                evidence = {
+                    **evidence,
+                    **observed_workers,
+                    "ironic_internal_ntp_ip": configured_ntp_ip,
+                }
+            if next_phase == HandoffPhase.EPH_CLEANUP_VERIFIED.value:
+                raise HandoffError("EPH_CLEANUP_EXECUTOR_NOT_REGISTERED")
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
                 observed_pivot = _observe_target_capi_pivot({
                     **payload,
