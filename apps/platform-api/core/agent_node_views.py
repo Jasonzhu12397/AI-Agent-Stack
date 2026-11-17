@@ -2499,6 +2499,37 @@ class AgentRuntimePollView(APIView):
                 command.error = {"code": error_code, "retryable": False}
                 command.finished_at = now
                 command.save()
+                if (
+                    command.command_type == "cluster.capi.pivot.execute"
+                    and command.deployment_id is not None
+                ):
+                    deployment = ClusterDeployment.objects.select_for_update().filter(
+                        pk=command.deployment_id,
+                        eph_node=node,
+                    ).first()
+                    if deployment is not None:
+                        plan_result = deployment.plan_result or {}
+                        deployment.status = ClusterDeployment.Status.FAILED
+                        deployment.error = {
+                            "code": "CAPI_PIVOT_APPROVAL_INVALID",
+                            "command_id": str(command.id),
+                            "reason": error_code,
+                            "retry_allowed": False,
+                        }
+                        deployment.plan_result = {
+                            **plan_result,
+                            "dual_agent": {
+                                **plan_result.get("dual_agent", {}),
+                                "phase": "pivot_approval_invalid",
+                                "target_agent_owns_cluster": False,
+                                "eph_reclaim_allowed": False,
+                            },
+                        }
+                        deployment.save(
+                            update_fields=[
+                                "status", "error", "plan_result", "updated_at"
+                            ]
+                        )
                 return Response({"command": None})
             if command.command_type == "cluster.capi.pivot.execute":
                 deployment = ClusterDeployment.objects.select_for_update().filter(
