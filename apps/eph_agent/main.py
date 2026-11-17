@@ -96,10 +96,13 @@ def main() -> int:
         return 0
     try:
         settings = AgentSettings.from_environment("eph")
-        if args.readiness_check:
-            print(json.dumps({"service": "eph-agent", "status": "ready"}))
-            return 0
         client = AgentControlClient(settings)
+        if args.readiness_check:
+            preflight = execute({"action": "eph.preflight"})
+            ready = preflight["status"] == "succeeded" and client.check_ready()
+            client.close()
+            print(json.dumps({"service": "eph-agent", "status": "ready" if ready else "not_ready"}))
+            return 0 if ready else 1
     except (ConfigurationError, AgentTransportError) as exc:
         LOG.error("%s", exc)
         return 1
