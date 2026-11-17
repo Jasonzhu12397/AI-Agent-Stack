@@ -1035,7 +1035,7 @@ def queue_deployment_command(
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
-    command, created = AgentCommand.objects.get_or_create(
+    command, _ = AgentCommand.objects.get_or_create(
         tenant=deployment.tenant,
         idempotency_key=idempotency_key,
         defaults={
