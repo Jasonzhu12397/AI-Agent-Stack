@@ -169,6 +169,16 @@ spec:
                 secretKeyRef:
                   name: target-agent-credentials
                   key: ironic-internal-ntp-ip
+            - name: APPROVED_EXTERNAL_NTP_SOURCES
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: approved-external-ntp-sources
+            - name: WORKER_NETWORK_CIDRS
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: worker-network-cidrs
             - name: AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
