@@ -4918,14 +4918,19 @@ class KubernetesLeaseLeaderElector:
         )
         if taking_over:
             updated_spec["acquireTime"] = now_text
+        updated_metadata = {
+            "name": self.lease_name,
+            "namespace": self.namespace,
+            "resourceVersion": resource_version,
+        }
+        for field in ("labels", "annotations", "finalizers", "ownerReferences"):
+            value = metadata.get(field)
+            if isinstance(value, (dict, list)):
+                updated_metadata[field] = value
         updated = {
             "apiVersion": "coordination.k8s.io/v1",
             "kind": "Lease",
-            "metadata": {
-                "name": self.lease_name,
-                "namespace": self.namespace,
-                "resourceVersion": resource_version,
-            },
+            "metadata": updated_metadata,
             "spec": updated_spec,
         }
         return self._write_lease(updated)
