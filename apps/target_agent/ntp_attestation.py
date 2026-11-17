@@ -16,6 +16,7 @@ def verify_control_plane_ntp_bootstrap(
     configured_external_sources: Any,
     approved_external_sources: Any,
     worker_networks: Any,
+    cluster_name: str,
     required_master_count: int = 3,
 ) -> dict[str, Any]:
     try:
@@ -43,7 +44,12 @@ def verify_control_plane_ntp_bootstrap(
     control_plane_machines = [
         item
         for item in machines_document.get("items", [])
-        if "cluster.x-k8s.io/control-plane" in item.get("metadata", {}).get("labels", {})
+        if (
+            "cluster.x-k8s.io/control-plane" in item.get("metadata", {}).get("labels", {})
+            and item.get("metadata", {}).get("labels", {}).get(
+                "cluster.x-k8s.io/cluster-name"
+            ) == cluster_name
+        )
     ]
     if len(control_plane_machines) < required_master_count:
         raise NtpAttestationError("TARGET_NTP_CONTROL_PLANE_MACHINE_INVENTORY_INCOMPLETE")
