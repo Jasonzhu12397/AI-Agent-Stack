@@ -2875,14 +2875,14 @@ def execute_command(
             )
         ):
             raise NodeAgentError("INVALID_BAREMETAL_HOST_SELECTOR")
+        network_profile = validate_network_profile(config.get("network_profile"))
+        if network_profile.get("dpdk_requested") is not True:
+            raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
         ntp_server_ip = config.get("ironic_internal_ip")
         try:
             ntp_observation = verify_ntp_server(ntp_server_ip)
         except ChronyError as exc:
             raise NodeAgentError("WORKER_IRONIC_INTERNAL_NTP_NOT_READY") from exc
-        network_profile = validate_network_profile(config.get("network_profile"))
-        if network_profile.get("dpdk_requested") is not True:
-            raise NodeAgentError("WORKER_DATA_PLANE_REQUIRES_SRIOV_DPDK")
         discovery = kubernetes_api_get("/apis")
         groups = {
             item.get("name"): item
