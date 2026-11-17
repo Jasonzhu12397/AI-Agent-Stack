@@ -91,3 +91,46 @@ and UDP/TCP 53 to the configured DNS resolvers. Add TCP/443 or the required
 site-specific ports for the cloud Control Plane, image registry, Kubernetes
 API and infrastructure services. Do not assume public NTP/DNS are reachable
 from a restricted data-center network.
+
+
+## Use the same profile that is hashed into the Cluster Delivery Plan
+
+The EPH `cluster.plan` payload must include a versioned `time_dns_profile`.
+The planner rejects a profile that omits chrony, does not cover both EPH Live OS
+and Target OS, has invalid NTP/DNS endpoints, or uses an unsupported resolver
+backend. The canonical cluster plan hash includes this profile.
+
+Example profile:
+
+```json
+{
+  "version": "v1",
+  "chrony_required": true,
+  "resolver_backend": "systemd-resolved",
+  "apply_to": ["eph_live_os", "target_os"],
+  "ntp_servers": ["time.cloudflare.com", "time.google.com"],
+  "dns_servers": ["1.1.1.1", "8.8.8.8"],
+  "search_domains": ["lab.example"],
+  "dns_probe_name": "time.cloudflare.com"
+}
+```
+
+Save the exact approved profile returned with the deployment plan, then render
+both role-specific user-data files from it:
+
+```bash
+python3 deploy/cloud-init/render_site_cloud_init.py \
+  --role eph-live-os \
+  --profile-json build/time-dns-profile.json \
+  --output build/cloud-init/eph-live-os.user-data
+
+python3 deploy/cloud-init/render_site_cloud_init.py \
+  --role target-os \
+  --profile-json build/time-dns-profile.json \
+  --output build/cloud-init/target-os.user-data
+```
+
+This prevents the operator from using a different NTP/DNS configuration than
+the one reviewed and hashed in the Cluster Delivery Plan. The profile is a
+configuration contract; the generated user-data still has to be injected by
+the EPH boot service and the selected CAPI/Metal3 bootstrap provider.
