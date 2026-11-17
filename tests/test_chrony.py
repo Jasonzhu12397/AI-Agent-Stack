@@ -194,3 +194,73 @@ def test_control_plane_requires_private_ironic_internal_bind_address():
             ["time.example.net"],
             ["10.130.60.80/28"],
         )
+
+
+def test_configure_chrony_restarts_an_already_running_service(monkeypatch):
+    commands = []
+
+    monkeypatch.setattr(chrony.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(chrony.Path, "resolve", lambda self: chrony.Path("/"))
+    monkeypatch.setattr(
+        chrony,
+        "_read_os_release",
+        lambda path: {"ID": "ubuntu"},
+    )
+    monkeypatch.setattr(chrony, "_write_managed_config", lambda path, block: None)
+    monkeypatch.setattr(
+        chrony.shutil,
+        "which",
+        lambda name: "/usr/bin/" + name,
+    )
+    monkeypatch.setattr(
+        chrony,
+        "_verify_sync",
+        lambda runner, chronyc, expected, offset: {
+            "synchronized": True,
+            "selected_sources": [expected],
+        },
+    )
+
+    def fake_run(runner, command, timeout=60):
+        commands.append(command)
+        return "active" if command[-2:] == ["is-active", "chrony"] else ""
+
+    monkeypatch.setattr(chrony, "_run", fake_run)
+
+    result = chrony.configure_chrony(
+        "target_worker",
+        ["10.130.60.84"],
+        ironic_internal_ip="10.130.60.84",
+    )
+
+    assert result["configured"] is True
+    assert ["/usr/bin/systemctl", "enable", "chrony"] in commands
+    assert ["/usr/bin/systemctl", "restart", "chrony"] in commands
+
+
+def test_verify_ntp_server_rejects_response_from_non_ntp_source_port(monkeypatch):
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def settimeout(self, timeout):
+            return None
+
+        def sendto(self, request, destination):
+            self.request = bytes(request)
+
+        def recvfrom(self, size):
+            response = bytearray(48)
+            response[0] = 0x24
+            response[1] = 2
+            response[24:32] = self.request[40:48]
+            response[40:48] = b"12345678"
+            return bytes(response), ("10.130.60.84", 124)
+
+    monkeypatch.setattr(chrony.socket, "socket", lambda *args: FakeSocket())
+
+    with pytest.raises(ChronyError, match="IRONIC_INTERNAL_NTP_RESPONSE_INVALID"):
+        chrony.verify_ntp_server("10.130.60.84")
