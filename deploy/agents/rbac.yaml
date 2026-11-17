@@ -304,7 +304,7 @@ metadata:
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "update"]
     resourceNames: ["target-cluster-agent-leader"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
