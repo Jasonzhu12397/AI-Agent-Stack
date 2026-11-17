@@ -45,7 +45,7 @@ def test_renderer_includes_chrony_and_systemd_resolved_configuration(tmp_path):
     assert "server time.cloudflare.com iburst" in content
     assert "server time.google.com iburst" in content
     assert "DNS=1.1.1.1 8.8.8.8" in content
-    assert "Domains=lab.example" in content
+    assert "Domains=~. lab.example" in content
     assert "chronyd.service" in content
     assert "systemd-resolved.service" in content
     assert "chronyc waitsync 10 0.1" in content
