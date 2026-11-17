@@ -43,6 +43,18 @@ The EPH Agent's optional `cluster.capi.pivot.dry-run` command requires a Secret 
 
 The dry-run invokes `clusterctl move --dry-run` only. It reports that the namespace scope includes all CAPI objects in the selected namespace; it does not perform a move, install providers, bootstrap the Target Agent, or authorize worker provisioning. A successful dry-run is not proof that a real pivot is safe.
 
+### Real CAPI pivot credential boundary
+
+The EPH Pod ServiceAccount remains read-only. A real `clusterctl move` uses the two separately mounted kubeconfigs, not the Pod ServiceAccount token. Treat those kubeconfigs as privileged, short-lived deployment credentials:
+
+- The source identity needs namespace-scoped read/list/watch plus create/update/patch/delete for the CAPI, Kubeadm, CAPM3/Metal3 resources in the selected pivot namespace, and the Secrets/ConfigMaps that those resources reference.
+- The target identity needs the corresponding namespace-scoped read/list/watch/create/update/patch permissions in the target pivot namespace. Do not grant either identity cluster-admin.
+- Both identities need cluster-scoped read-only discovery of API resources/CRDs and namespace metadata. Do not grant cluster-scoped writes.
+- Apply equivalent, namespace-scoped Role/RoleBinding policy in the source and target management clusters before enabling the execute command. The selected namespace must contain only the intended pivot inventory; cross-namespace owned objects and BMH consumer references block execution.
+- Mount both kubeconfigs read-only, never expose their contents in command payloads or logs, rotate/revoke them after the operation, and keep the Agent Pod ServiceAccount separate from these identities.
+
+The cloud Supervisor creates a durable Pivot Operation record and requires a separate approval. The EPH Agent re-reads the source CAPI/Metal3 inventory immediately before mutation, verifies the fresh Target Agent acknowledgement, executes `clusterctl move`, and verifies source inventory removal plus target Cluster UID/Spec identity. The Target Agent must independently verify the exact new target Cluster UID, Machines and controllers. Any interrupted or ambiguous move enters manual reconciliation; no automatic replay or EPH reclaim is allowed.
+
 ## EPH Node Agent (temporary RAM-boot EPH cluster)
 
 1. In the Studio, enroll a node with type `eph_node` in the intended tenant and project.
