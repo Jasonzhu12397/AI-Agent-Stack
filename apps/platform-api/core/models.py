@@ -1052,3 +1052,105 @@ class EPHSeedArtifact(models.Model):
 
 
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
+
+class ClusterDeploymentPivotOperation(models.Model):
+    class State(models.TextChoices):
+        PREPARED = "prepared", "Prepared"
+        WAITING_TARGET_ACK = "waiting_target_ack", "Waiting for target acknowledgement"
+        READY = "ready", "Ready"
+        EXECUTING = "executing", "Executing"
+        VERIFYING = "verifying", "Verifying"
+        UNCERTAIN = "uncertain", "Uncertain"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        MANUAL_RECOVERY = "manual_recovery", "Manual recovery required"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    deployment = models.OneToOneField(
+        ClusterDeployment,
+        on_delete=models.CASCADE,
+        related_name="capi_pivot_operation",
+    )
+    operation_id = models.UUIDField(unique=True, editable=False)
+    source_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="capi_pivot_source_operations",
+    )
+    target_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="capi_pivot_target_operations",
+    )
+    state = models.CharField(
+        max_length=24,
+        choices=State.choices,
+        default=State.PREPARED,
+    )
+    source_identity = models.JSONField(default=dict)
+    inventory = models.JSONField(default=list)
+    inventory_sha256 = models.CharField(max_length=64)
+    approval_hash = models.CharField(max_length=64, blank=True)
+    target_ack = models.JSONField(null=True, blank=True)
+    target_identity = models.JSONField(null=True, blank=True)
+    journal = models.JSONField(default=dict)
+    version = models.PositiveBigIntegerField(default=0)
+    last_error = models.JSONField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["state", "updated_at"],
+                name="capi_pivot_state_idx",
+            ),
+            models.Index(
+                fields=["source_node", "state"],
+                name="capi_pivot_source_idx",
+            ),
+            models.Index(
+                fields=["target_node", "state"],
+                name="capi_pivot_target_idx",
+            ),
+        ]
+
+
+class ClusterDeploymentPivotEvent(models.Model):
+    operation = models.ForeignKey(
+        ClusterDeploymentPivotOperation,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    sequence = models.PositiveBigIntegerField()
+    actor_node = models.ForeignKey(
+        AgentNode,
+        on_delete=models.PROTECT,
+        related_name="capi_pivot_events",
+        null=True,
+        blank=True,
+    )
+    event_type = models.CharField(max_length=64)
+    from_state = models.CharField(max_length=24, blank=True)
+    to_state = models.CharField(max_length=24)
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["operation", "sequence"],
+                name="uniq_capi_pivot_event_sequence",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["operation", "created_at"],
+                name="capi_pivot_event_time_idx",
+            )
+        ]
+
