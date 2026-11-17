@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import collections.abc
 import json
 import math
 import os
 import ssl
+import typing
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any
-from urllib.parse import urlsplit
-from uuid import UUID
-
+import uuid
 
 MAX_IRONIC_RESPONSE_BYTES = 1024 * 1024
 
@@ -28,7 +28,7 @@ def ironic_api_configured(environ: Any = None) -> bool:
     return bool(values.get("IRONIC_API_URL") and values.get("IRONIC_API_TOKEN"))
 
 
-def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
+def _configuration(environ: collections.abc.Mapping[str, str]) -> tuple[str, str, str, float]:
     endpoint = environ.get("IRONIC_API_URL", "").strip()
     token = environ.get("IRONIC_API_TOKEN", "")
     microversion = environ.get("IRONIC_API_MICROVERSION", "1.82").strip()
@@ -36,7 +36,7 @@ def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
         raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
     if any(character in token for character in ("\r", "\n", "\\r", "\\n")):
         raise IronicObservationError("IRONIC_API_TOKEN_INVALID")
-    parsed = urlsplit(endpoint)
+    parsed = urllib.parse.urlsplit(endpoint)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -60,10 +60,10 @@ def _configuration(environ: Mapping[str, str]) -> tuple[str, str, str, float]:
 def get_ironic_node(
     node_uuid: str,
     environ: Mapping[str, str] | None = None,
-    opener: Any = None,
-) -> dict[str, Any]:
+    opener: typing.Any = None,
+) -> dict[str, typing.Any]:
     try:
-        normalized_uuid = str(UUID(node_uuid))
+        normalized_uuid = str(uuid.UUID(node_uuid))
     except (TypeError, ValueError, AttributeError) as exc:
         raise IronicObservationError("IRONIC_NODE_UUID_INVALID") from exc
     if normalized_uuid != node_uuid.lower():
