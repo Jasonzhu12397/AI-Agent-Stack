@@ -365,9 +365,11 @@ def _hardware_identity(host: dict[str, Any]) -> str:
     boot_mac = spec.get("bootMACAddress")
     bmc_address = spec.get("bmc", {}).get("address")
     if isinstance(system_uuid, str) and system_uuid.strip():
-        return "system-uuid:" + system_uuid.strip().lower()
+        digest = hashlib.sha256(system_uuid.strip().lower().encode()).hexdigest()
+        return "system-uuid:sha256:" + digest
     if isinstance(serial, str) and serial.strip():
-        return "serial:" + serial.strip().lower()
+        digest = hashlib.sha256(serial.strip().lower().encode()).hexdigest()
+        return "serial:sha256:" + digest
     if (
         isinstance(boot_mac, str) and boot_mac.strip()
         and isinstance(bmc_address, str) and bmc_address.strip()
@@ -378,7 +380,9 @@ def _hardware_identity(host: dict[str, Any]) -> str:
             bmc_address.strip(),
             count=1,
         )
-        return "bmc-bootmac:" + safe_bmc_address.lower() + "|" + boot_mac.strip().lower()
+        material = safe_bmc_address.lower() + "|" + boot_mac.strip().lower()
+        digest = hashlib.sha256(material.encode()).hexdigest()
+        return "bmc-bootmac:sha256:" + digest
     raise CapiPivotError("CAPI_PIVOT_BMH_STABLE_HARDWARE_IDENTITY_MISSING")
 
 
@@ -561,7 +565,6 @@ def execute_capi_pivot(
                         "source_cluster_absent": True,
                         "target_cluster_ownership_verified": True,
                         "source_bmh_identities": payload["expected_source_bmh_identities"],
-                        "target_bmh_identities": target_bmhs,
                         "target_controllers_ready": preflight["target_controllers"]["ready"],
                         "provider_preflight": preflight,
                     },
@@ -715,7 +718,6 @@ def execute_capi_pivot(
                 "target_cluster_ownership_verified": True,
                 "target_controllers_ready": target_after_preflight["ready"],
                 "source_bmh_identities": source_bmhs,
-                "target_bmh_identities": target_bmhs,
                 "source_bmh_digest": _inventory_digest(source_bmhs),
                 "target_bmh_digest": _inventory_digest(target_bmhs),
                 "provider_preflight": preflight,
