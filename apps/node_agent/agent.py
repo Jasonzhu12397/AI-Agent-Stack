@@ -1043,7 +1043,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
     if profile.get("resolver_backend") != "systemd-resolved":
         raise NodeAgentError("UNSUPPORTED_DNS_RESOLVER_BACKEND")
     roles = profile.get("apply_to")
-    if not isinstance(roles, list) or set(roles) != {"eph_live_os", "target_os"}:
+    if (\n        not isinstance(roles, list)\n        or any(not isinstance(role, str) for role in roles)\n        or set(roles) != {"eph_live_os", "target_os"}\n    ):
         raise NodeAgentError("TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS")
 
     ntp_servers = profile.get("ntp_servers")
