@@ -51,12 +51,7 @@ def _documents(ntp_ip: str = "10.0.0.10"):
         "status": {"ready": True},
         "spec": {
             "preKubeadmCommands": [
-                f"server {ntp_ip} iburst prefer",
-                "systemctl restart chrony",
-                "chronyc -n sources | awk -v server=\\"$NTP_SERVER\\"",
-                "chronyc tracking",
-                "if ! chronyc tracking | grep -Eiq '^Leap status[[:space:]]*:
-                "[[:space:]]*Normal'; then exit 1; fi",
+                render_worker_chrony_pre_kubeadm_command(ntp_ip),
             ],
         },
     }
