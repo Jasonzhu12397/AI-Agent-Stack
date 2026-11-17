@@ -22,17 +22,21 @@ def validate_ntp_server(value):
     try:
         ipaddress.ip_address(value)
         return value
-    except ValueError:
+    except ValueError as exc:
         if not HOST_RE.fullmatch(value):
-            raise argparse.ArgumentTypeError("invalid NTP server hostname")
+            raise argparse.ArgumentTypeError(
+                "invalid NTP server hostname"
+            ) from exc
         return value
 
 
 def validate_dns_server(value):
     try:
         return str(ipaddress.ip_address(value.strip()))
-    except ValueError:
-        raise argparse.ArgumentTypeError("DNS server must be an IPv4 or IPv6 address")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "DNS server must be an IPv4 or IPv6 address"
+        ) from exc
 
 
 def validate_search_domain(value):
@@ -50,7 +54,7 @@ def render(args):
         "rtcsync",
         "leapsectz right/UTC",
     ]
-    chrony_lines.extend("server {} iburst".format(server) for server in args.ntp_server)
+    chrony_lines.extend(f"server {server} iburst" for server in args.ntp_server)
     chrony_content = "\n".join(chrony_lines) + "\n"
 
     resolved_lines = [
@@ -153,7 +157,7 @@ def main(argv=None):
     temporary = destination.with_name(destination.name + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(destination)
-    print("Generated {} cloud-init user-data for {}".format(destination, args.role))
+    print(f"Generated {destination} cloud-init user-data for {args.role}")
     return 0
 
 
