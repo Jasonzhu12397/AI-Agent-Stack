@@ -35,7 +35,23 @@ def _run(
 ) -> dict[str, Any]:
     if not Path(kubeconfig).is_file():
         raise CapiPivotError("CAPI_PIVOT_KUBECONFIG_MISSING")
-    environment = {**os.environ, "KUBECONFIG": kubeconfig}
+    allowed_environment = (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "XDG_CACHE_HOME",
+    )
+    environment = {
+        key: os.environ[key]
+        for key in allowed_environment
+        if key in os.environ
+    }
+    environment["KUBECONFIG"] = kubeconfig
     try:
         process = subprocess.Popen(
             command,
@@ -199,7 +215,7 @@ def _target_controllers_ready(
         namespace = _valid_name(item.get("namespace"), "CONTROLLER_NAMESPACE")
         name = _valid_name(item.get("name"), "CONTROLLER_NAME")
         minimum = item.get("minimum_ready_replicas", 1)
-        if not isinstance(minimum, int) or minimum < 1:
+        if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 1:
             raise CapiPivotError("CAPI_PIVOT_CONTROLLER_REPLICA_REQUIREMENT_INVALID")
         deployment = _deployment(kubeconfig, namespace, name)
         spec = deployment.get("spec", {})
@@ -325,7 +341,13 @@ def _hardware_identity(host: dict[str, Any]) -> str:
         isinstance(boot_mac, str) and boot_mac.strip()
         and isinstance(bmc_address, str) and bmc_address.strip()
     ):
-        return "bmc-bootmac:" + bmc_address.strip().lower() + "|" + boot_mac.strip().lower()
+        safe_bmc_address = re.sub(
+            r"(?<=://)[^/@]+@",
+            "",
+            bmc_address.strip(),
+            count=1,
+        )
+        return "bmc-bootmac:" + safe_bmc_address.lower() + "|" + boot_mac.strip().lower()
     raise CapiPivotError("CAPI_PIVOT_BMH_STABLE_HARDWARE_IDENTITY_MISSING")
 
 
@@ -402,7 +424,10 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     stable_identity = payload.get("stable_cluster_identity")
     expected_source_uid = payload.get("expected_source_cluster_uid")
     expected_bmh = payload.get("expected_source_bmh_identities")
-    if not isinstance(stable_identity, str) or not stable_identity.strip():
+    if (
+        not isinstance(stable_identity, str)
+        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", stable_identity)
+    ):
         raise CapiPivotError("CAPI_PIVOT_STABLE_CLUSTER_IDENTITY_REQUIRED")
     if not isinstance(expected_source_uid, str) or not expected_source_uid:
         raise CapiPivotError("CAPI_PIVOT_EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
