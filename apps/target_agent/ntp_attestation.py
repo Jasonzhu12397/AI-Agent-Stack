@@ -52,6 +52,12 @@ def verify_control_plane_ntp_bootstrap(
         metadata = machine.get("metadata", {})
         machine_name = metadata.get("name")
         machine_uid = metadata.get("uid")
+        machine_ready = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in machine.get("status", {}).get("conditions", [])
+        )
+        if not machine_ready:
+            raise NtpAttestationError(f"TARGET_NTP_CONTROL_PLANE_MACHINE_NOT_READY:{machine_name}")
         reference = machine.get("spec", {}).get("bootstrap", {}).get("configRef", {})
         if (
             not isinstance(machine_name, str)
