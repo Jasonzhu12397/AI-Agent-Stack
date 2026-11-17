@@ -1,4 +1,4 @@
-# Kubernetes deployment templates for the two node-agent roles
+# Kubernetes deployment templates for the EPH Agent and Target Agent
 
 These manifests are templates. They intentionally do not grant Kubernetes write permissions.
 
@@ -16,14 +16,14 @@ Validate actual Pod interfaces, IP addresses, MTU, routes and Data Plane reachab
 
 Build the repository image and push it to a registry accessible by both management and target clusters. Replace `REPLACE_WITH_REGISTRY/ai-agent-stack:VERSION` in both Deployment manifests with the exact immutable image tag or digest.
 
-## Build the CAPI pivot-capable node-agent image
+## Build the shared CAPI pivot-capable EPH/Target Agent runtime image
 
-Build the dedicated node-agent image with a Cluster API `clusterctl` version selected from the deployment compatibility matrix. Both tools are required at runtime: the Agent uses `kubectl` for the CAPI/Metal3 pivot and postflight gates, and `clusterctl` for the move operation. Both versions and checksums are mandatory and must be obtained from the trusted release artifacts used by your build pipeline:
+Build the dedicated shared Agent runtime image with a Cluster API `clusterctl` version selected from the deployment compatibility matrix. Both tools are required at runtime: the Agent uses `kubectl` for the CAPI/Metal3 pivot and postflight gates, and `clusterctl` for the move operation. Both versions and checksums are mandatory and must be obtained from the trusted release artifacts used by your build pipeline:
 
 ~~~bash
 docker login <registry>
 
-IMAGE_REPOSITORY=<registry>/ai-agent-node-agent \
+IMAGE_REPOSITORY=<registry>/ai-agent-runtime \
 IMAGE_TAG=<immutable-build-tag> \
 CLUSTERCTL_VERSION=<verified-release-tag> \
 CLUSTERCTL_SHA256_AMD64=<verified-clusterctl-amd64-sha256> \
@@ -37,7 +37,7 @@ bash deploy/agents/build-node-agent.sh
 
 The build script pushes the image and prints an immutable AGENT_IMAGE_REF=repository@sha256:... value. Pass that exact digest to the deployment helper below. For multi-architecture clusters, also provide CLUSTERCTL_SHA256_ARM64 and KUBECTL_SHA256_ARM64, then set PLATFORMS=linux/amd64,linux/arm64.
 
-Do not guess the Cluster API version or checksum. The image build fails if either argument is missing or the checksum does not match. Use this image in both node-agent Deployment templates when enabling pivot preflight, execution and postflight. The kubectl version must be compatible with the target cluster API server (prefer the same minor version); do not use an unverified latest download.
+Do not guess the Cluster API version or checksum. The image build fails if either argument is missing or the checksum does not match. Use this image in both EPH/Target Agent Deployment templates when enabling pivot preflight, execution and postflight. The kubectl version must be compatible with the target cluster API server (prefer the same minor version); do not use an unverified latest download.
 
 The EPH Agent's optional `cluster.capi.pivot.dry-run` command requires a Secret named `capi-pivot-kubeconfigs` in `ai-agent-system` with keys `source.kubeconfig` and `target.kubeconfig`. These are mounted read-only under `/var/run/secrets/ai-agent/capi-pivot`; the source file identifies the temporary EPH management cluster and the target file identifies the target management cluster. Grant only the Kubernetes permissions required for discovery and CAPI move dry-run. Do not place kubeconfig contents in command payloads or Git. The dual-agent deployment helper treats this Secret as optional during initial EPH/Target Agent installation; when it is present, both keys are mandatory and validated. Set `ENABLE_CAPI_PIVOT=true` when you want the deployment helper to require that Secret before proceeding; this flag is a deployment precondition, not a runtime feature toggle. The default is `false`; a missing Secret does not block initial Agent installation, while lookup errors other than NotFound fail closed. When the Secret is present, the Agent can use the mounted kubeconfigs for the separately authorized pivot dry-run.
 
@@ -70,7 +70,7 @@ Keep the lifecycle responsibilities separate:
 
 Do not infer successful Target OS installation from EPH shutdown, a successful Live OS command, a successful ISO boot, or a completed CAPI dry-run. The handoff is complete only after the Target Agent reports the expected target cluster/host identity and the applicable CAPI, Metal3 and Ironic postflight checks pass. The EPH Live OS can then be discarded; it is not upgraded into the Target OS.
 
-## EPH Node Agent (temporary RAM-boot EPH cluster)
+## EPH Agent (temporary RAM-boot EPH cluster)
 
 1. In the Studio, enroll a node with type `eph_node` in the intended tenant and project.
 2. Store the returned node UUID and one-time token in your secret manager.
@@ -214,3 +214,8 @@ bash deploy/agents/deploy.sh
 ~~~
 
 The script verifies both API servers, checks required Secret keys without printing their values, server-side dry-runs all Agent workloads, applies them, and waits for both Deployments and the inventory DaemonSet to roll out. A successful rollout proves only that the Agent Pods started and became Ready. It does not prove CAPI pivot, Ironic provisioning, SR-IOV/DPDK traffic, or EPH reclaim; those require their respective runtime postflight and hardware tests. The script intentionally does not create the Cloud Control Plane services or apply site-specific Calico, Multus, OVS, SR-IOV CNI, device-plugin or DPDK configuration.
+
+
+## Target Agent placement and HA requirement
+
+The Target Agent is a cluster-level service and must run as three Pods distributed across the three target Kubernetes control-plane/master nodes. It is not a separate Node Agent installed on each physical machine. All three Pods share the Target Agent service role; command polling and side-effect execution must be single-active through Kubernetes Lease leader election, with standby Pods performing no command polling or execution. The current `target-cluster-agent.yaml` still declares one replica and the runtime does not yet implement leader election. Therefore the three-master HA deployment is an explicit implementation gap, not a completed feature. Do not simply change `replicas` to three while all Pods share one enrollment credential; that would permit concurrent polling under one Agent identity.
