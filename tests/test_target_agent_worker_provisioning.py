@@ -2,13 +2,12 @@ import json
 from pathlib import Path
 from threading import Event
 
+import pytest
+
 from apps.target_agent.worker_provisioning import (
     WorkerProvisioningError,
     execute_worker_provisioning,
 )
-
-import pytest
-import yaml
 
 
 NTP_IP = "10.130.60.84"
@@ -242,6 +241,8 @@ def test_target_agent_dispatches_worker_provisioning(monkeypatch):
 
 
 def test_target_agent_rbac_precreates_lease_and_grants_only_required_worker_writes():
+    import yaml
+
     root = Path(__file__).resolve().parents[1]
     manifest = root / "deploy/agents/target-cluster-agent.yaml"
     documents = list(yaml.safe_load_all(manifest.read_text(encoding="utf-8")))
