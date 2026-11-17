@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import ipaddress
 import json
 import re
 import uuid
@@ -14,6 +15,100 @@ from core.models import (
     ClusterDeploymentPivotEvent,
     ClusterDeploymentPivotOperation,
 )
+
+
+def _validated_time_dns_profile(profile: object) -> dict | None:
+    if profile is None:
+        return None
+    if not isinstance(profile, dict):
+        raise ValueError("TIME_DNS_PROFILE_INVALID")
+    if (
+        profile.get("version") != "v1"
+        or profile.get("chrony_required") is not True
+        or profile.get("resolver_backend") != "systemd-resolved"
+    ):
+        raise ValueError("TIME_DNS_PROFILE_INVALID")
+    roles = profile.get("apply_to")
+    if (
+        not isinstance(roles, list)
+        or len(roles) != 2
+        or any(not isinstance(role, str) for role in roles)
+        or set(roles) != {"eph_live_os", "target_os"}
+    ):
+        raise ValueError("TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS")
+
+    ntp_servers = profile.get("ntp_servers")
+    if (
+        not isinstance(ntp_servers, list)
+        or not ntp_servers
+        or len(ntp_servers) > 8
+        or any(not isinstance(server, str) or not server.strip() for server in ntp_servers)
+    ):
+        raise ValueError("TIME_DNS_NTP_SERVERS_REQUIRED")
+    normalized_ntp = []
+    hostname_pattern = (
+        r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+        r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+    )
+    for server in ntp_servers:
+        value = server.strip()
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            if not re.fullmatch(hostname_pattern, value):
+                raise ValueError("TIME_DNS_NTP_SERVER_INVALID")
+        if value in normalized_ntp:
+            raise ValueError("TIME_DNS_NTP_SERVER_DUPLICATE")
+        normalized_ntp.append(value)
+
+    dns_servers = profile.get("dns_servers")
+    if not isinstance(dns_servers, list) or not dns_servers or len(dns_servers) > 8:
+        raise ValueError("TIME_DNS_RESOLVERS_REQUIRED")
+    normalized_dns = []
+    for server in dns_servers:
+        if not isinstance(server, str):
+            raise ValueError("TIME_DNS_RESOLVER_INVALID")
+        try:
+            value = str(ipaddress.ip_address(server.strip()))
+        except ValueError as exc:
+            raise ValueError("TIME_DNS_RESOLVER_INVALID") from exc
+        if value in normalized_dns:
+            raise ValueError("TIME_DNS_RESOLVER_DUPLICATE")
+        normalized_dns.append(value)
+
+    search_domains = profile.get("search_domains", [])
+    if not isinstance(search_domains, list) or len(search_domains) > 8:
+        raise ValueError("TIME_DNS_SEARCH_DOMAINS_INVALID")
+    normalized_domains = []
+    for domain in search_domains:
+        if not isinstance(domain, str) or not re.fullmatch(
+            hostname_pattern, domain.strip()
+        ):
+            raise ValueError("TIME_DNS_SEARCH_DOMAIN_INVALID")
+        normalized_domains.append(domain.strip())
+    dns_probe_name = profile.get("dns_probe_name")
+    if not isinstance(dns_probe_name, str) or not re.fullmatch(
+        hostname_pattern, dns_probe_name.strip()
+    ):
+        raise ValueError("TIME_DNS_PROBE_NAME_REQUIRED")
+
+    normalized = {
+        "version": "v1",
+        "chrony_required": True,
+        "resolver_backend": "systemd-resolved",
+        "apply_to": ["eph_live_os", "target_os"],
+        "ntp_servers": normalized_ntp,
+        "dns_servers": normalized_dns,
+        "search_domains": normalized_domains,
+        "dns_probe_name": dns_probe_name.strip(),
+    }
+    encoded = json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return {**normalized, "profile_hash": hashlib.sha256(encoded).hexdigest()}
 
 
 def _payload_hash(command_type: str, payload: dict) -> str:
