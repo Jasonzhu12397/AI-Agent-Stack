@@ -884,6 +884,88 @@ def _verify_source_metal3_handoff(
         "provisioning_endpoint_handoff_verified": True,
     }
 
+def _run_capi_pivot_preflight(
+    payload: dict[str, Any],
+    environ: dict[str, str] | None = None,
+    executable_lookup=None,
+    process_runner=None,
+    cancellation_event=None,
+) -> dict[str, Any]:
+    env = dict(os.environ if environ is None else environ)
+    lookup = executable_lookup or shutil.which
+    runner = process_runner or _cancellable_process_runner(cancellation_event)
+
+    def preflight_runner(*args, **kwargs):
+        _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT")
+        completed = runner(*args, **kwargs)
+        _raise_if_cancelled(cancellation_event, "CAPI_PIVOT_CANCELLED_DURING_PREFLIGHT")
+        return completed
+
+    dry_run = run_capi_pivot_dry_run(
+        payload,
+        environ=env,
+        executable_lookup=lookup,
+        process_runner=preflight_runner,
+    )
+    secret_root = Path(
+        env.get("CAPI_PIVOT_SECRET_DIR", "/var/run/secrets/ai-agent/capi-pivot")
+    )
+    target_kubeconfig = _resolve_kubeconfig(
+        env, "CAPI_PIVOT_TARGET_KUBECONFIG", secret_root
+    )
+    source_kubeconfig = _resolve_kubeconfig(
+        env, "CAPI_PIVOT_SOURCE_KUBECONFIG", secret_root
+    )
+    kubectl = lookup("kubectl")
+    if not kubectl:
+        raise CapiPivotError("KUBECTL_NOT_INSTALLED")
+    target_process_env = {
+        "PATH": env.get("PATH", ""),
+        "HOME": env.get("HOME", "/tmp"),
+    }
+    target_preflight = _verify_target_management_plane(
+        preflight_runner,
+        kubectl,
+        target_kubeconfig,
+        dry_run["namespace"],
+        dry_run["cluster_name"],
+        target_process_env,
+    )
+    metal3_handoff = _verify_source_metal3_handoff(
+        preflight_runner,
+        kubectl,
+        source_kubeconfig,
+        target_kubeconfig,
+        dry_run["namespace"],
+        dry_run["cluster_name"],
+        env,
+        env,
+    )
+    return {
+        "cluster_name": dry_run["cluster_name"],
+        "namespace": dry_run["namespace"],
+        "pivot_executed": False,
+        "pivot_simulated": True,
+        "execution_mode": "preflight_verified_simulation",
+        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "dry_run_passed": dry_run["dry_run_passed"],
+        "source_namespace_scope_verified": True,
+        "target_management_plane_verified": True,
+        "target_provider_versions": target_preflight["provider_versions"],
+        "target_controllers_ready": target_preflight["controllers_ready"],
+        "target_cluster_name_available": target_preflight["target_cluster_name_available"],
+        "metal3_handoff": metal3_handoff,
+        "ownership_transferred": False,
+        "target_agent_acknowledgement_required": True,
+        "postflight_required": True,
+        "side_effects": False,
+        "automatic_retry_allowed": True,
+        "exit_code": dry_run["exit_code"],
+        "stdout_summary": dry_run["stdout_summary"],
+        "stderr_summary": dry_run["stderr_summary"],
+    }
+
+
 def run_capi_pivot(
     payload: dict[str, Any],
     environ: dict[str, str] | None = None,
@@ -908,6 +990,14 @@ def run_capi_pivot(
         )
         return completed
 
+    if "operation_id" not in payload:
+        return _run_capi_pivot_preflight(
+            payload,
+            environ=environ,
+            executable_lookup=executable_lookup,
+            process_runner=process_runner,
+            cancellation_event=cancellation_event,
+        )
     allowed_fields = {
         "deployment_id",
         "cluster_name",
