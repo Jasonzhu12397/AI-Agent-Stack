@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from itertools import count
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -114,7 +113,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     try:
-        for sequence in count(1):
+        for sequence in iter(time.time_ns, -1):
             if stopped:
                 break
             try:
