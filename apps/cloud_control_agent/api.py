@@ -299,7 +299,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           )
                         ORDER BY c.created_at
                         LIMIT 1
-                        FOR UPDATE SKIP LOCKED
+                        FOR UPDATE OF c SKIP LOCKED
                         """,
                         (identity["agent_id"], identity["role"]),
                     ).fetchone()
@@ -384,6 +384,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if identity["role"] != "target" or identity["cluster_id"] is None:
                 raise ControlApiError("TARGET_AGENT_IDENTITY_REQUIRED")
             deployment_id = _parse_uuid(document.get("deployment_id"), "DEPLOYMENT_ID")
+            command_id = _parse_uuid(document.get("command_id"), "COMMAND_ID")
+            lease_id = _parse_uuid(document.get("lease_id"), "LEASE_ID")
+            lease_token = document.get("lease_token")
+            if not isinstance(lease_token, str) or len(lease_token) < 32:
+                raise ControlApiError("LEASE_TOKEN_INVALID")
+            token_hash = hashlib.sha256(lease_token.encode()).hexdigest()
             expected_phase = document.get("expected_phase")
             expected_sequence = document.get("expected_sequence")
             next_phase = document.get("phase")
@@ -406,6 +412,25 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             state = {"state_digest": state_digest, "evidence": evidence}
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 with connection.transaction():
+                    leased_command = connection.execute(
+                        """
+                        SELECT deployment_id FROM agent_control_commands
+                        WHERE command_id = %s AND deployment_id = %s
+                          AND target_agent_id = %s AND lease_id = %s
+                          AND lease_token_hash = %s AND status = 'leased'
+                          AND lease_expires_at > NOW()
+                        FOR UPDATE
+                        """,
+                        (
+                            command_id,
+                            deployment_id,
+                            identity["agent_id"],
+                            lease_id,
+                            token_hash,
+                        ),
+                    ).fetchone()
+                    if leased_command is None:
+                        raise ControlApiError("CHECKPOINT_COMMAND_LEASE_INVALID")
                     updated = connection.execute(
                         """
                         UPDATE agent_control_deployments
