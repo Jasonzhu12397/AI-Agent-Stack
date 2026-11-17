@@ -559,8 +559,6 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         deployment=deployment,
         command_type="cluster.capi.pivot.execute",
     ).first()
-    if existing is not None:
-        return
     payload = {
         "deployment_id": str(deployment.id),
         "cluster_name": deployment.cluster_name,
@@ -579,20 +577,50 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         ).hexdigest(),
         "target_agent_ack": target_ack,
     }
-    command, _ = AgentCommand.objects.get_or_create(
-        tenant=deployment.tenant,
-        idempotency_key=f"cluster-deployment:{deployment.id}:cluster.capi.pivot.execute",
-        defaults={
-            "project": deployment.project,
-            "node": deployment.eph_node,
-            "requested_by": deployment.requested_by,
-            "deployment": deployment,
-            "command_type": "cluster.capi.pivot.execute",
-            "payload": payload,
-            "status": AgentCommand.Status.WAITING_APPROVAL,
-            "plan_hash": _payload_hash("cluster.capi.pivot.execute", payload),
-        },
+    expected_idempotency_key = (
+        f"cluster-deployment:{deployment.id}:cluster.capi.pivot.execute"
     )
+    if existing is not None:
+        command = existing
+    else:
+        command, _ = AgentCommand.objects.get_or_create(
+            tenant=deployment.tenant,
+            idempotency_key=expected_idempotency_key,
+            defaults={
+                "project": deployment.project,
+                "node": deployment.eph_node,
+                "requested_by": deployment.requested_by,
+                "deployment": deployment,
+                "command_type": "cluster.capi.pivot.execute",
+                "payload": payload,
+                "status": AgentCommand.Status.WAITING_APPROVAL,
+                "plan_hash": _payload_hash("cluster.capi.pivot.execute", payload),
+            },
+        )
+    if (
+        command.tenant_id != deployment.tenant_id
+        or command.project_id != deployment.project_id
+        or command.deployment_id != deployment.id
+        or command.node_id != deployment.eph_node_id
+        or command.command_type != "cluster.capi.pivot.execute"
+        or command.idempotency_key != expected_idempotency_key
+    ):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_COMMAND_IDENTITY_CONFLICT"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **dual_agent_state,
+                "phase": "pivot_command_identity_conflict",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
     persisted_payload = command.payload if isinstance(command.payload, dict) else {}
     operation_id = persisted_payload.get("operation_id")
     inventory_digest = persisted_payload.get("source_inventory_sha256")
@@ -660,36 +688,163 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             update_fields=["status", "error", "plan_result", "updated_at"]
         )
         return
-    if not operation_created and operation.state != (
-        ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
-    ):
+    state = ClusterDeploymentPivotOperation.State
+    command_state = command.status
+    expected_states = {
+        state.WAITING_APPROVAL: {AgentCommand.Status.WAITING_APPROVAL},
+        state.READY: {AgentCommand.Status.QUEUED},
+        state.EXECUTING: {AgentCommand.Status.RUNNING},
+        state.COMPLETED: {AgentCommand.Status.SUCCEEDED},
+        state.FAILED: {AgentCommand.Status.FAILED},
+        state.MANUAL_RECOVERY: {
+            AgentCommand.Status.FAILED,
+            AgentCommand.Status.CANCELLED,
+        },
+    }
+    if operation_created:
+        if command_state == AgentCommand.Status.WAITING_APPROVAL:
+            _record_capi_pivot_event(
+                deployment,
+                state.WAITING_APPROVAL,
+                "target_agent_acknowledged_approval_required",
+                {
+                    "source_inventory_sha256": inventory_digest,
+                    "target_ack": persisted_ack,
+                    "command_id": str(command.id),
+                    "approval_required": True,
+                },
+                actor_node=deployment.target_node,
+                source_identity=source_identity,
+                inventory=source_inventory,
+                inventory_sha256=inventory_digest,
+                approval_hash=command.plan_hash,
+                target_ack=persisted_ack,
+            )
+        elif command_state in {
+            AgentCommand.Status.QUEUED,
+            AgentCommand.Status.RUNNING,
+        }:
+            _record_capi_pivot_event(
+                deployment,
+                state.WAITING_APPROVAL,
+                "pivot_command_recovered_after_approval",
+                {"command_id": str(command.id), "command_status": command_state},
+                actor_node=deployment.target_node,
+                source_identity=source_identity,
+                inventory=source_inventory,
+                inventory_sha256=inventory_digest,
+                approval_hash=command.approved_plan_hash or command.plan_hash,
+                target_ack=persisted_ack,
+            )
+            _record_capi_pivot_event(
+                deployment,
+                state.READY,
+                "pivot_approval_already_granted",
+                {
+                    "command_id": str(command.id),
+                    "approved_by": str(command.approved_by_id) if command.approved_by_id else None,
+                    "approved_at": command.approved_at.isoformat() if command.approved_at else None,
+                },
+                actor_node=deployment.target_node,
+            )
+            if command_state == AgentCommand.Status.RUNNING:
+                _record_capi_pivot_event(
+                    deployment,
+                    state.EXECUTING,
+                    "pivot_command_already_running",
+                    {"command_id": str(command.id)},
+                    actor_node=deployment.eph_node,
+                )
+        else:
+            _record_capi_pivot_event(
+                deployment,
+                state.MANUAL_RECOVERY,
+                "pivot_command_journal_gap_requires_reconciliation",
+                {"command_id": str(command.id), "command_status": command_state},
+                actor_node=deployment.eph_node,
+                last_error={"code": "CAPI_PIVOT_COMMAND_JOURNAL_GAP"},
+            )
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.error = {"code": "CAPI_PIVOT_COMMAND_JOURNAL_GAP"}
+            deployment.plan_result = {
+                **plan_result,
+                "dual_agent": {
+                    **dual_agent_state,
+                    "phase": "pivot_command_journal_gap",
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.save(
+                update_fields=["status", "error", "plan_result", "updated_at"]
+            )
+            return
+    elif operation.state == state.WAITING_APPROVAL and command_state in {
+        AgentCommand.Status.QUEUED,
+        AgentCommand.Status.RUNNING,
+    }:
+        _record_capi_pivot_event(
+            deployment,
+            state.READY,
+            "pivot_approval_granted",
+            {
+                "command_id": str(command.id),
+                "approved_by": str(command.approved_by_id) if command.approved_by_id else None,
+                "approved_at": command.approved_at.isoformat() if command.approved_at else None,
+            },
+            actor_node=deployment.target_node,
+        )
+        if command_state == AgentCommand.Status.RUNNING:
+            _record_capi_pivot_event(
+                deployment,
+                state.EXECUTING,
+                "pivot_command_started",
+                {"command_id": str(command.id)},
+                actor_node=deployment.eph_node,
+            )
+    elif command_state not in expected_states.get(operation.state, set()):
         _record_capi_pivot_event(
             deployment,
             (
-                ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY
-                if operation.state
-                in {
-                    ClusterDeploymentPivotOperation.State.PREPARED,
-                    ClusterDeploymentPivotOperation.State.WAITING_TARGET_ACK,
-                    ClusterDeploymentPivotOperation.State.READY,
-                    ClusterDeploymentPivotOperation.State.EXECUTING,
-                    ClusterDeploymentPivotOperation.State.VERIFYING,
-                    ClusterDeploymentPivotOperation.State.UNCERTAIN,
+                state.MANUAL_RECOVERY
+                if operation.state in {
+                    state.PREPARED,
+                    state.WAITING_APPROVAL,
+                    state.WAITING_TARGET_ACK,
+                    state.READY,
+                    state.EXECUTING,
+                    state.VERIFYING,
+                    state.UNCERTAIN,
                 }
                 else operation.state
             ),
-            "pivot_operation_state_conflicts_with_pending_approval",
+            "pivot_operation_command_state_conflict",
             {
                 "operation_state": operation.state,
+                "command_status": command_state,
                 "command_id": str(command.id),
-                "expected_state": ClusterDeploymentPivotOperation.State.WAITING_APPROVAL,
             },
             actor_node=deployment.target_node,
-            last_error={"code": "CAPI_PIVOT_OPERATION_STATE_CONFLICT"},
+            last_error={"code": "CAPI_PIVOT_OPERATION_COMMAND_STATE_CONFLICT"},
         )
         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
-        deployment.error = {"code": "CAPI_PIVOT_OPERATION_STATE_CONFLICT"}
+        deployment.error = {"code": "CAPI_PIVOT_OPERATION_COMMAND_STATE_CONFLICT"}
         deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **dual_agent_state,
+                "phase": "pivot_operation_command_state_conflict",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
+    deployment.plan_result = {
             **plan_result,
             "dual_agent": {
                 **dual_agent_state,
@@ -725,7 +880,15 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         **plan_result,
         "dual_agent": {
             **plan_result.get("dual_agent", {}),
-            "phase": "pivot_waiting_approval",
+            "phase": (
+                "pivot_waiting_approval"
+                if operation.state == state.WAITING_APPROVAL
+                else "pivot_approved_waiting_execution"
+                if operation.state == state.READY
+                else "pivot_execution_in_progress"
+                if operation.state == state.EXECUTING
+                else f"pivot_{operation.state}"
+            ),
             "source_agent_id": str(deployment.eph_node_id),
             "target_agent_id": str(deployment.target_node_id),
             "pivot_command_id": str(command.id),
