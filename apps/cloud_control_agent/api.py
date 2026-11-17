@@ -172,7 +172,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 not isinstance(idempotency_key, str)
                 or len(idempotency_key) < 16
                 or len(idempotency_key) > 200
-            ): 
+            ):
                 raise ControlApiError("IDEMPOTENCY_KEY_INVALID")
             if not isinstance(payload, dict) or len(_json_bytes(payload)) > MAX_BODY_BYTES:
                 raise ControlApiError("COMMAND_PAYLOAD_INVALID")
