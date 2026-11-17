@@ -70,11 +70,10 @@ def test_control_plane_ntp_attestation_requires_all_master_bootstrap_scripts():
         {"items": machines},
         {"items": configs},
         ["192.0.2.10"],
-        ["192.0.2.10"],
         ["10.130.60.80/28"],
         "target-cluster",
     )
-    assert result["target_control_plane_ntp_profile_verified" is True
+    assert result["target_control_plane_ntp_profile_verified"] is True
     assert result["target_control_plane_ntp_bootstrap_sync_gate_verified"] is True
     assert result["verified_master_count"] == 3
 
