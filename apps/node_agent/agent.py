@@ -3596,7 +3596,14 @@ def execute_command(
                 or not metadata.get("uid")
                 or metadata.get("annotations") != expected_annotations
                 or metadata.get("labels") != labels
-                or item.get("spec") != manifest["spec"]
+                or item.get("spec", {}).get("clusterName")
+                != manifest["spec"]["clusterName"]
+                or item.get("spec", {}).get("replicas")
+                != manifest["spec"]["replicas"]
+                or item.get("spec", {}).get("selector")
+                != manifest["spec"]["selector"]
+                or item.get("spec", {}).get("template")
+                != manifest["spec"]["template"]
             ):
                 raise NodeAgentError(
                     "MACHINE_DEPLOYMENT_EXISTING_RESOURCE_OWNERSHIP_OR_SPEC_MISMATCH"
@@ -3643,7 +3650,7 @@ def execute_command(
             "execution_mode": "real_create_or_idempotent_reconcile",
             "created": created,
             "idempotent_reconciliation": idempotent_reconciliation,
-            "dry_run_passed": existing is not None or True,
+            "dry_run_passed": existing is None,
             "side_effects": created,
             "worker_creation_performed": created or idempotent_reconciliation,
             "execution_allowed": True,
