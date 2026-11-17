@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import pytest
 
@@ -202,7 +203,7 @@ def test_target_agent_verifies_every_bmh_against_live_ironic_api(monkeypatch):
         return {
             "available": True,
             "returncode": 0,
-            "stdout": __import__("json").dumps(documents[resource]),
+            "stdout": json.dumps(documents[resource]),
             "stderr": "",
         }
 
@@ -243,7 +244,7 @@ def test_target_agent_fails_closed_when_ironic_api_is_not_configured(monkeypatch
         lambda arguments, **_kwargs: {
             "available": True,
             "returncode": 0,
-            "stdout": __import__("json").dumps(documents[arguments[1]]),
+            "stdout": json.dumps(documents[arguments[1]]),
             "stderr": "",
         },
     )
@@ -270,7 +271,7 @@ def test_target_agent_rejects_ironic_node_in_maintenance(monkeypatch):
         lambda arguments, **_kwargs: {
             "available": True,
             "returncode": 0,
-            "stdout": __import__("json").dumps(documents[arguments[1]]),
+            "stdout": json.dumps(documents[arguments[1]]),
             "stderr": "",
         },
     )
