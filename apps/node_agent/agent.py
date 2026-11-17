@@ -2734,6 +2734,8 @@ def execute_command(
         expected_uid = payload.get("expected_cluster_uid")
         expected_api_version = payload.get("expected_cluster_api_version")
         expected_spec_sha256 = payload.get("expected_cluster_spec_sha256")
+        expected_target_uid = payload.get("expected_target_cluster_uid")
+        operation_id = payload.get("operation_id")
         if (
             not isinstance(cluster_name, str)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
@@ -2753,8 +2755,15 @@ def execute_command(
             or not expected_api_version
             or not isinstance(expected_spec_sha256, str)
             or not re.fullmatch(r"[a-f0-9]{64}", expected_spec_sha256)
+            or not isinstance(expected_target_uid, str)
+            or not expected_target_uid
+            or not isinstance(operation_id, str)
+            or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                operation_id,
+            )
         ):
-            raise NodeAgentError("EXPECTED_SOURCE_CLUSTER_SPEC_IDENTITY_REQUIRED")
+            raise NodeAgentError("EXPECTED_SOURCE_AND_TARGET_CLUSTER_IDENTITY_REQUIRED")
         discovery = kubernetes_api_get("/apis")
         if not isinstance(discovery, dict):
             raise NodeAgentError("INVALID_TARGET_API_DISCOVERY")
@@ -2801,6 +2810,7 @@ def execute_command(
             or not actual_uid
             or metadata.get("name") != cluster_name
             or metadata.get("namespace") != namespace
+            or actual_uid != expected_target_uid
             or actual_api_version != expected_api_version
             or not isinstance(actual_spec, dict)
         ):
@@ -2918,6 +2928,7 @@ def execute_command(
             "namespace": namespace,
             "cluster_uid": actual_uid,
             "source_cluster_uid": expected_uid,
+            "operation_id": operation_id,
             "cluster_api_version": actual_api_version,
             "cluster_spec_sha256": actual_spec_sha256,
             "cluster_identity_preserved": True,
