@@ -16,6 +16,7 @@ from uuid import UUID
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
+    CommandLeaseGuard,
     AgentTransportError,
     ConfigurationError,
 )
@@ -44,7 +45,10 @@ def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
     }
 
 
-def execute(command: dict[str, Any]) -> dict[str, Any]:
+def execute(
+    command: dict[str, Any],
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
     action = command.get("action")
     if action == "eph.preflight":
         source_kubeconfig = Path(os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", ""))
@@ -169,8 +173,22 @@ def main() -> int:
                 command = client.claim()
                 if command is not None:
                     started_at = datetime.now(timezone.utc)
-                    outcome = execute(command)
-                    client.report_result(_result(command, settings.agent_id, outcome, started_at))
+                    guard = CommandLeaseGuard(client, command)
+                    guard.start()
+                    try:
+                        outcome = execute(command, guard.lost)
+                        if guard.lost.is_set():
+                            outcome = {
+                                "status": "failed",
+                                "error_code": "COMMAND_LEASE_LOST_DURING_EXECUTION",
+                                "output": outcome.get("output", {}),
+                                "side_effects": outcome.get("side_effects", False),
+                            }
+                        client.report_result(
+                            _result(command, settings.agent_id, outcome, started_at)
+                        )
+                    finally:
+                        guard.close()
             except (AgentTransportError, KeyError, TypeError, ValueError) as exc:
                 LOG.error("EPH control cycle failed: %s", type(exc).__name__)
             for _ in range(max(1, int(settings.poll_seconds * 10))):
