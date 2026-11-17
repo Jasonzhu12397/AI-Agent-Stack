@@ -1127,8 +1127,20 @@ def handle_deployment_command_result(
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"}
             deployment.finished_at = timezone.now()
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "phase": "target_adoption_verification_failed",
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
             deployment.save(
-                update_fields=["status", "error", "finished_at", "started_at", "updated_at"],
+                update_fields=[
+                    "status", "error", "finished_at", "plan_result", "started_at", "updated_at"
+                ],
             )
             return
         deployment.plan_result = {
