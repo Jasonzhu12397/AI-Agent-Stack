@@ -22,7 +22,8 @@ The seed volume must use the filesystem label `CIDATA` and contain these files a
 
 - `user-data`: cloud-config that writes the node bootstrap configuration and both CA trust anchors.
 - `meta-data`: unique instance ID and hostname.
-- `network-config`: cloud-init v2 network configuration for the site's interfaces.\n- `time-dns-profile.json`: the versioned, approved chrony/NTP/DNS profile applied to both the temporary EPH Live OS and final Target OS.
+- `network-config`: cloud-init v2 network configuration for the site's interfaces.
+- `time-dns-profile.json`: the versioned, approved chrony/NTP/DNS profile applied to both the temporary EPH Live OS and final Target OS.
 
 Example source files are in `eph-iso/examples/cloud-init/`. The seed builder requires all four files and merges the generated EPH time/DNS cloud-config as a MIME multipart part, preserving the enrollment user-data:
 
@@ -45,7 +46,18 @@ The bootstrap process reads the cloud-init files from `/etc/ai-agent-studio/eph-
 
 An additional read-only volume labeled `EPHBOOT` is optional. It is used only for site-specific systemd-networkd profiles under `network/*.network`, `network/*.netdev`, and `network/*.link`; it is not the Agent enrollment source. The network configuration service safely skips this media when it is absent.
 
-Create the seed archive and NoCloud ISO with the mandatory time/DNS profile:\n\n~~~bash\ncd eph-iso/examples/cloud-init\nzip /secure/path/eph-node-seed.zip user-data meta-data network-config time-dns-profile.json\ncd ../../..\nsudo bash eph-iso/create-seed-iso.sh /secure/path/eph-node-seed.zip /secure/path/eph-node-seed.iso\n~~~\n\nThe builder validates the profile, renders the EPH Live OS cloud-config, and merges it with the bootstrap user-data. The EPH kubeadm systemd unit runs the generated time/DNS readiness script before `kubeadm init`; boot fails closed if DNS does not resolve or chrony does not synchronize. The temporary Live OS includes chrony and systemd-resolved in its immutable image.\n\nFor production, the Cloud Control Plane must render a unique NoCloud user-data document per node. The example user-data contains placeholders and is not deployable as-is. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Protect the seed as secret material and destroy it after provisioning.
+Create the seed archive and NoCloud ISO with the mandatory time/DNS profile:
+
+~~~bash
+cd eph-iso/examples/cloud-init
+zip /secure/path/eph-node-seed.zip user-data meta-data network-config time-dns-profile.json
+cd ../../..
+sudo bash eph-iso/create-seed-iso.sh /secure/path/eph-node-seed.zip /secure/path/eph-node-seed.iso
+~~~
+
+The builder validates the profile, renders the EPH Live OS cloud-config, and merges it with the bootstrap user-data. The EPH kubeadm systemd unit runs the generated time/DNS readiness script before `kubeadm init`; boot fails closed if DNS does not resolve or chrony does not synchronize. The temporary Live OS includes chrony and systemd-resolved in its immutable image.
+
+For production, the Cloud Control Plane must render a unique NoCloud user-data document per node. The example user-data contains placeholders and is not deployable as-is. Never commit real enrollment tokens, private keys, kubeconfigs, or customer network details. Protect the seed as secret material and destroy it after provisioning.
 
 ## Network configuration
 
