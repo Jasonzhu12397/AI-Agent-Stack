@@ -1,11 +1,13 @@
 # Dual Node Agent Runtime
 
-The EPH Agent and Target Agent use the same isolated Kubernetes-side runtime image, with strict role-specific command allowlists. They are independently enrolled nodes with separate credentials, heartbeats, command leases and audit history. This runtime is not the cloud AI Agent.
+The system has three separately enrolled Agent roles: Cloud Control Agent, EPH Agent and Target Agent. EPH and Target use shared cluster-side adapters but separate executable entrypoints (`apps.eph_agent.main` and `apps.target_agent.main`), role-bound command allowlists, credentials, heartbeats, leases and audit history. Target Agent is pinned to a Target Control Plane master. This runtime is not the Cloud Control Agent.
 
 ## Runtime boundary
 
 - Cloud AI Agent: runs in the cloud deployment from `Dockerfile.cloud-agent`, starts `worker_app.main`, and owns model execution, tool routing, RAG, workflow orchestration, approvals and durable task state.
-- Kubernetes Node Agent: runs from `Dockerfile.node-agent`, starts `apps.node_agent.agent`, and contains only cluster-side inspection and execution adapters plus PyYAML, kubectl and clusterctl.
+- EPH Agent: runs from `Dockerfile.node-agent` with `apps.eph_agent.main`; it is only the temporary EPH Single-Node role.
+- Target Agent: runs from `Dockerfile.node-agent` with `apps.target_agent.main`; it is installed on a Target Control Plane master after the target API and etcd are healthy.
+- Shared node-side adapters live under `apps/node_agent/runtime.py` and supporting modules. The EPH and Target entrypoints reject the wrong `AGENT_NODE_TYPE` at startup.
 - Studio API: runs from `Dockerfile`, exposes user-facing APIs and the versioned Agent command/heartbeat API. It is a separate process and image from both Agent runtimes.
 
 The Node Agent image does not contain Django, the cloud worker package, the Studio API package, model-provider SDKs, PostgreSQL/Redis/Qdrant clients or cloud LLM credentials. It has no general-purpose shell command endpoint. The cloud Agent does not mount kubeconfigs, host sysfs, BMC credentials or Kubernetes ServiceAccount tokens.
@@ -16,7 +18,7 @@ Kubernetes API requests from the Node Agent validate the in-cluster service endp
 
 ### EPH Agent (AGENT_NODE_TYPE=eph_node)
 
-Runs as a Pod in the temporary EPH single-node Kubernetes cluster on the reserved physical host. Its responsibilities are:
+Runs as a Pod in the temporary EPH Single-Node Kubernetes cluster on the temporary bootstrap host. EPH is not a Target Worker and is never counted as a Target worker replica. Its responsibilities are:
 - Report host health and validate the temporary management environment.
 - Inspect source Kubernetes, Cluster API, Metal3 and Ironic inventory.
 - Produce a validated deployment plan and source-side Pivot preflight.
@@ -25,7 +27,7 @@ Runs as a Pod in the temporary EPH single-node Kubernetes cluster on the reserve
 
 ### Target Agent (AGENT_NODE_TYPE=target_cluster)
 
-Runs as a Pod in the target Kubernetes cluster after its API and control plane are healthy. Its responsibilities are:
+Runs as a Pod pinned to a Target Kubernetes Control Plane master after its API, etcd and core networking are healthy. It remains available before any Target Worker exists. Its responsibilities are:
 - Report target cluster health and Kubernetes identity.
 - Validate target CAPI/Metal3 APIs and controller readiness before handoff.
 - Verify expected Cluster identity and UID against an independently executed test fixture or controlled integration cluster.
