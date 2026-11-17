@@ -751,7 +751,6 @@ def execute(
                 "side_effects": False,
             }
     if action == "target.ntp.control_plane.render":
-        payload = command.get("payload", {})
         try:
             approved, worker_networks = _ntp_policy_from_environment()
             sources, networks = validate_control_plane_ntp_profile(
