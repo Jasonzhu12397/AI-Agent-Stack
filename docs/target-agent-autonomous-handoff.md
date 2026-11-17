@@ -11,7 +11,7 @@ This contract supersedes the older EPH-as-a-future-worker/reclamation flow.
 - Target Agent, not Cloud Control Agent, owns the handoff sequence. Cloud Control schedules work, stores durable state, relays events and observes progress; it does not approve Target adoption or EPH cleanup.
 - EPH cleanup removes the temporary EPH Agent/bootstrap workload and revokes EPH-only credentials only after CAPI pivot, Target Agent readiness and BMH migration are verified.
 - Target Agent then provisions all Target Worker nodes through CAPI/Metal3/Ironic.
-- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. EPH and Target Control Plane chronyd must be installed, configured, enabled and synchronization-verified before kubeadm init/join; Worker chronyd must pass verification before the worker joins the Target cluster.
+- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. Target Control Plane nodes synchronize from approved external NTP sources and provide the internal NTP service on the Ironic internal IP/VIP. Every Target Worker synchronizes only from that Ironic internal IP/VIP; workers must never be configured with external NTP sources. EPH uses its independent bootstrap NTP source because the Target Control Plane does not yet exist during EPH kubeadm initialization.
 
 ## Required ordered phases
 
@@ -36,9 +36,14 @@ EPH cleanup is not a Cloud approval operation. It is an autonomous Target Agent 
 
 A failure at any gate leaves EPH intact and reports a recoverable blocked state.
 
-## Worker and chronyd invariant
+## Hierarchical NTP and chronyd invariant
 
-Only Target Agent provisions Target Workers. Each worker's host preparation includes chronyd installation, configuration, enablement and synchronization verification, followed by CAPI Machine/Node readiness and network postflight. No chronyd operation is scheduled against the EPH Single-Node cluster.
+- EPH Single-Node: install/configure/enable chronyd and verify its independent bootstrap NTP source before `kubeadm init`. It must not depend on the not-yet-deployed Target Control Plane.
+- Target Control Plane: synchronize chronyd from approved external NTP sources. Expose a real internal NTP service on the Ironic internal IP/VIP over UDP/123, reachable from the Worker provisioning network.
+- Every Target Worker: install/configure/enable chronyd with exactly the Ironic internal IP/VIP as its NTP source. Do not configure public/external NTP pools or fallback sources on Workers. Verify reachability and synchronization before `kubeadm join`.
+- Target Control Plane must not be considered ready to provision Workers until its internal NTP service is listening and reachable. Worker NTP verification must prove it is using the configured Ironic internal endpoint, not merely that the local clock appears synchronized.
+
+Only Target Agent provisions Target Workers. Each worker's host preparation includes chronyd installation, configuration, enablement and synchronization verification, followed by CAPI Machine/Node readiness and network postflight.
 
 ## Implementation boundary
 
