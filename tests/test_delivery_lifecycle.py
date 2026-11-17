@@ -102,7 +102,7 @@ def test_worker_provisioning_requires_cleanup_phase():
 
 
 def test_target_agent_command_exposes_lifecycle_policy():
-    from node_agent.agent import NodeAgentError, execute_command
+    from node_agent.agent import execute_command
 
     result = execute_command(
         {
