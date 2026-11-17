@@ -187,7 +187,9 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
 
 
 
-def test_target_agent_renders_control_plane_chronyd_profile_without_claiming_host_changes(monkeypatch):
+def test_target_agent_renders_control_plane_chronyd_profile_without_claiming_host_changes(
+    monkeypatch,
+):
     monkeypatch.setenv("APPROVED_EXTERNAL_NTP_SOURCES", "192.0.2.10")
     monkeypatch.setenv("WORKER_NETWORK_CIDRS", "10.130.60.80/28")
     result = execute_target({
@@ -239,7 +241,10 @@ def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monk
     assert result["status"] == "succeeded"
     assert result["output"]["evidence"]["ready_master_count"] == 3
     assert result["output"]["evidence"]["ironic_internal_ntp_service_reachable"] is True
-    assert result["output"]["evidence"]["target_control_plane_ntp_bootstrap_sync_gate_verified"] is True
+    assert (
+        result["output"]["evidence"]["target_control_plane_ntp_bootstrap_sync_gate_verified"]
+        is True
+    )
 
 
 
@@ -315,11 +320,17 @@ def test_eph_preflight_emits_checkpoint_ready_evidence(monkeypatch, tmp_path):
 
 
 
-def test_target_agent_verifies_live_capi_pivot_annotations_and_cluster_readiness(monkeypatch, tmp_path):
+def test_target_agent_verifies_live_capi_pivot_annotations_and_cluster_readiness(
+    monkeypatch,
+    tmp_path,
+):
     source_kubeconfig = tmp_path / "source.kubeconfig"
     source_kubeconfig.write_text("source-observer", encoding="utf-8")
     monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source_kubeconfig))
-    monkeypatch.setenv("TARGET_REQUIRED_CONTROLLER_DEPLOYMENTS", "metal3-system/metal3-controller-manager")
+    monkeypatch.setenv(
+        "TARGET_REQUIRED_CONTROLLER_DEPLOYMENTS",
+        "metal3-system/metal3-controller-manager",
+    )
     cluster = {
         "metadata": {
             "uid": "target-cluster-object-uid",
@@ -336,13 +347,35 @@ def test_target_agent_verifies_live_capi_pivot_annotations_and_cluster_readiness
     }
     def fake_kubectl(arguments, **kwargs):
         if kwargs.get("kubeconfig") == str(source_kubeconfig):
-            return {"available": False, "returncode": 1, "stdout": "", "stderr": "Error from server (NotFound): clusters.cluster.x-k8s.io \"target-cluster\" not found"}
+            return {
+                "available": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": (
+                    'Error from server (NotFound): clusters.cluster.x-k8s.io '
+                    '"target-cluster" not found'
+                ),
+            }
         if arguments[1] == "deployments":
-            return {"available": True, "returncode": 0, "stdout": json.dumps({"items": [{
-                "metadata": {"namespace": "metal3-system", "name": "metal3-controller-manager", "generation": 2},
+            deployment = {
+                "metadata": {
+                    "namespace": "metal3-system",
+                    "name": "metal3-controller-manager",
+                    "generation": 2,
+                },
                 "spec": {"replicas": 1},
-                "status": {"observedGeneration": 2, "updatedReplicas": 1, "availableReplicas": 1},
-            }]}), "stderr": ""}
+                "status": {
+                    "observedGeneration": 2,
+                    "updatedReplicas": 1,
+                    "availableReplicas": 1,
+                },
+            }
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps({"items": [deployment]}),
+                "stderr": "",
+            }
         return {"available": True, "returncode": 0, "stdout": json.dumps(cluster), "stderr": ""}
     monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
     result = execute_target({
