@@ -140,6 +140,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/agent-control/commands/claim":
                     self._claim(document)
                     return
+                if self.path == "/api/v1/agent-control/commands/lease/renew":
+                    self._renew_lease(document)
+                    return
                 if self.path == "/api/v1/agent-control/commands/results":
                     self._result(document)
                     return
@@ -326,6 +329,39 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     },
                 }
             })
+
+
+        def _renew_lease(self, document: dict[str, Any]) -> None:
+            identity = self._authenticated_agent(document)
+            command_id = _parse_uuid(document.get("command_id"), "COMMAND_ID")
+            lease_id = _parse_uuid(document.get("lease_id"), "LEASE_ID")
+            lease_token = document.get("lease_token")
+            if not isinstance(lease_token, str) or len(lease_token) < 32:
+                raise ControlApiError("LEASE_TOKEN_INVALID")
+            token_hash = hashlib.sha256(lease_token.encode()).hexdigest()
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    UPDATE agent_control_commands
+                    SET lease_expires_at = LEAST(deadline, NOW() + (%s * INTERVAL '1 second')),
+                        updated_at = NOW()
+                    WHERE command_id = %s AND target_agent_id = %s
+                      AND lease_id = %s AND lease_token_hash = %s
+                      AND status = 'leased' AND lease_expires_at > NOW()
+                      AND deadline > NOW()
+                    RETURNING lease_expires_at
+                    """,
+                    (
+                        LEASE_SECONDS,
+                        command_id,
+                        identity["agent_id"],
+                        lease_id,
+                        token_hash,
+                    ),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("COMMAND_LEASE_NOT_RENEWABLE")
+            self._send(200, {"renewed": True, "expires_at": row["lease_expires_at"].isoformat()})
 
         def _result(self, document: dict[str, Any]) -> None:
             agent_id = _parse_uuid(document.get("agent_id"), "AGENT_ID")
