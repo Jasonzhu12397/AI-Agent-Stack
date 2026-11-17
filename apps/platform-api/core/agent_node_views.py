@@ -173,18 +173,29 @@ FORBIDDEN_PAYLOAD_KEYS = {
 def _command_is_fenced_by_cluster_ownership(command, node):
     if node.node_type != AgentNode.NodeType.EPH_NODE or command.deployment_id is None:
         return False
+    if command.command_type not in MUTATING_COMMANDS:
+        return False
     deployment = ClusterDeployment.objects.select_for_update().filter(
         pk=command.deployment_id,
     ).first()
     if deployment is None:
         return True
+    if deployment.status in {
+        ClusterDeployment.Status.CANCELLED,
+        ClusterDeployment.Status.FAILED,
+        ClusterDeployment.Status.SUCCEEDED,
+        ClusterDeployment.Status.RECONCILIATION_REQUIRED,
+    }:
+        return True
     plan_result = deployment.plan_result
-    if plan_result is None:
-        return False
-    if not isinstance(plan_result, dict):
-        return False
-    dual_agent = plan_result.get("dual_agent", {})
-    return isinstance(dual_agent, dict) and dual_agent.get("target_agent_owns_cluster") is True
+    if plan_result is None or not isinstance(plan_result, dict):
+        return True
+    if "dual_agent" not in plan_result:
+        return command.command_type == "cluster.capi.pivot.execute"
+    dual_agent = plan_result.get("dual_agent")
+    if not isinstance(dual_agent, dict):
+        return True
+    return dual_agent.get("target_agent_owns_cluster") is True
 
 
 def _fail_fenced_command(command, now):
