@@ -29,7 +29,8 @@ def test_target_agent_rejects_unknown_action():
 
 
 
-def test_target_agent_validates_worker_ntp_against_ironic_internal_ip():
+def test_target_agent_validates_worker_ntp_against_ironic_internal_ip(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
     result = execute_target({
         "action": "target.worker.ntp.validate",
         "payload": {
@@ -41,7 +42,8 @@ def test_target_agent_validates_worker_ntp_against_ironic_internal_ip():
     assert result["output"]["external_ntp_fallback_allowed"] is False
 
 
-def test_target_agent_blocks_worker_external_ntp_fallback():
+def test_target_agent_blocks_worker_external_ntp_fallback(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
     result = execute_target({
         "action": "target.worker.ntp.validate",
         "payload": {
@@ -203,6 +205,7 @@ def test_target_agent_renders_control_plane_chronyd_profile_without_claiming_hos
 
 
 def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
     monkeypatch.setattr(
         target_main,
         "_observe_control_plane_ntp_bootstrap",
@@ -586,4 +589,18 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
 
     assert result["status"] == "blocked"
     assert result["error_code"] == "TARGET_IRONIC_NODE_IN_MAINTENANCE:host-1"
+    assert result["side_effects"] is False
+
+
+def test_target_agent_rejects_worker_ntp_ip_not_pinned_in_target_secret(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
+    result = execute_target({
+        "action": "target.worker.ntp.validate",
+        "payload": {
+            "ironic_internal_ip": "10.130.60.85",
+            "ntp_sources": ["10.130.60.85"],
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "IRONIC_INTERNAL_NTP_IP_CONFIGURATION_MISMATCH"
     assert result["side_effects"] is False
