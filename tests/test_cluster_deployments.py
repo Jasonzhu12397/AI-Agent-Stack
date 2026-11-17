@@ -1762,6 +1762,20 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert approved.status_code == 200
     assert approved.data["status"] == AgentCommand.Status.QUEUED
 
+    deployment.refresh_from_db()
+    _maybe_queue_capi_pivot(deployment)
+    deployment.refresh_from_db()
+    pivot_operation.refresh_from_db()
+    assert pivot_operation.state == ClusterDeploymentPivotOperation.State.READY
+    assert pivot_operation.events.count() == 2
+    approval_event = pivot_operation.events.get(sequence=2)
+    assert approval_event.from_state == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
+    assert approval_event.to_state == ClusterDeploymentPivotOperation.State.READY
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "pivot_approved_waiting_execution"
+    )
+
     eph_agent_client = APIClient()
     pivot_poll = eph_agent_client.post(
         "/api/v1/agent-runtime/commands/poll/",
