@@ -2579,7 +2579,8 @@ class AgentRuntimePollView(APIView):
                 acknowledgement_valid = (
                     deployment is not None
                     and pivot_operation is not None
-                    and pivot_operation.state == ClusterDeploymentPivotOperation.State.READY
+                    and pivot_operation.state
+                    == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
                     and str(pivot_operation.operation_id) == payload.get("operation_id")
                     and target_node is not None
                     and target_node.status == AgentNode.Status.ONLINE
