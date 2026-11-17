@@ -19,6 +19,7 @@ from packages.agent_transport import (
     AgentTransportError,
     ConfigurationError,
 )
+from .handoff import HandoffError, evaluate_transition
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
 from .ntp_policy import (
     NtpPolicyError,
@@ -33,6 +34,7 @@ CAPABILITIES = [
     "target.capi.observe",
     "target.metal3.observe",
     "target.worker.ntp.validate",
+    "target.handoff.evaluate",
 ]
 
 
@@ -125,6 +127,27 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
             "output": result,
             "side_effects": False,
         }
+    if action == "target.handoff.evaluate":
+        payload = command.get("payload", {})
+        try:
+            transition = evaluate_transition(
+                payload.get("current_phase"),
+                str(payload.get("next_phase", "")),
+                payload.get("evidence", {}),
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": transition,
+                "side_effects": False,
+            }
+        except (HandoffError, AttributeError, TypeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
+                "output": {},
+                "side_effects": False,
+            }
     if action == "target.worker.ntp.validate":
         try:
             sources = validate_worker_ntp_sources(
