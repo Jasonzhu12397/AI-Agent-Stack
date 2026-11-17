@@ -319,6 +319,8 @@ def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
 @transaction.atomic
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+    if deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED:
+        return
     raw_plan_result = deployment.plan_result
     if raw_plan_result is None:
         plan_result = {}
@@ -1033,7 +1035,7 @@ def queue_deployment_command(
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
-    command, _ = AgentCommand.objects.get_or_create(
+    command, created = AgentCommand.objects.get_or_create(
         tenant=deployment.tenant,
         idempotency_key=idempotency_key,
         defaults={
@@ -1054,6 +1056,47 @@ def queue_deployment_command(
             "plan_hash": _payload_hash(command_type, payload),
         },
     )
+    expected_node = node or deployment.eph_node
+    expected_hash = _payload_hash(command_type, payload)
+    if (
+        command.tenant_id != deployment.tenant_id
+        or command.project_id != deployment.project_id
+        or command.node_id != expected_node.id
+        or command.deployment_id != deployment.id
+        or command.command_type != command_type
+        or command.idempotency_key != idempotency_key
+        or command.payload != payload
+        or command.plan_hash != expected_hash
+    ):
+        current_plan = (
+            deployment.plan_result
+            if isinstance(deployment.plan_result, dict)
+            else {}
+        )
+        current_dual_agent = current_plan.get("dual_agent", {})
+        if not isinstance(current_dual_agent, dict):
+            current_dual_agent = {}
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {
+            "code": "DEPLOYMENT_COMMAND_IDENTITY_CONFLICT",
+            "command_type": command_type,
+            "command_id": str(command.id),
+        }
+        deployment.plan_result = {
+            **current_plan,
+            "dual_agent": {
+                **current_dual_agent,
+                "phase": "deployment_command_identity_conflict",
+                "target_agent_owns_cluster": (
+                    current_dual_agent.get("target_agent_owns_cluster") is True
+                ),
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
     return command
 
 
