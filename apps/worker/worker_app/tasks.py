@@ -903,7 +903,9 @@ def reconcile_stale_capi_pivot_operations(
                     **plan_result.get("dual_agent", {}),
                     "phase": "pivot_watchdog_manual_recovery",
                     "target_agent_owns_cluster": (
-                        previous_state == ClusterDeploymentPivotOperation.State.VERIFYING
+                        isinstance(operation.journal, dict)
+                        and operation.journal.get("last_event")
+                        == "target_agent_adopted_cluster"
                     ),
                     "eph_reclaim_allowed": False,
                     "manual_reconciliation_required": True,
