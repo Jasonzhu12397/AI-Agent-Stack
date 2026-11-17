@@ -53,7 +53,7 @@ def _documents(ntp_ip: str = "10.0.0.10"):
             "preKubeadmCommands": [
                 f"server {ntp_ip} iburst prefer",
                 "systemctl restart chrony",
-                "chronyc -n sources",
+                "chronyc -n sources | awk -v server=\\"$NTP_SERVER\\"",
                 "chronyc tracking",
                 "if ! chronyc tracking | grep -Eiq '^Leap status[[:space:]]*:
                 "[[:space:]]*Normal'; then exit 1; fi",
@@ -72,7 +72,7 @@ def test_worker_readiness_uses_live_machine_node_and_ntp_evidence():
     result = verify_worker_readiness(*documents, "10.0.0.10")
     assert result["workers_ready"] is True
     assert result["ready_worker_count"] == 1
-    assert result["worker_ntp_sources"] == {"worker-01": ["10.0.0.10"]}
+    assert result["worker_ntp_bootstrap_sources"] == {"worker-01": ["10.0.0.10"]}
 
 
 def test_worker_readiness_rejects_external_ntp_source():
