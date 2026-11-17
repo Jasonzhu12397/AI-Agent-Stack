@@ -26,6 +26,7 @@ from core.cluster_deployment_services import (
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
+    queue_deployment_command,
 )
 
 
@@ -112,6 +113,28 @@ def test_cluster_deployment_creates_idempotent_eph_preflight_command(
     command = AgentCommand.objects.get(deployment_id=first.data["id"])
     assert command.command_type == "host.preflight"
     assert command.node_id == node.id
+
+
+@pytest.mark.django_db
+def test_deployment_command_idempotency_conflict_requires_reconciliation(
+    cluster_delivery_workspace,
+):
+    _, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, eph_node)
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+
+    command = queue_deployment_command(deployment, "cluster.plan")
+    command.payload = {"deployment_id": str(deployment.id), "cluster_name": "tampered"}
+    command.save(update_fields=["payload"])
+
+    replayed = queue_deployment_command(deployment, "cluster.plan")
+
+    deployment.refresh_from_db()
+    assert replayed.id == command.id
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == "DEPLOYMENT_COMMAND_IDENTITY_CONFLICT"
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+    assert deployment.plan_result["dual_agent"]["manual_reconciliation_required"] is True
 
 
 @pytest.mark.django_db
