@@ -32,6 +32,7 @@ def test_time_dns_profile_requires_chrony_and_both_os_lifecycles():
     [
         ({"chrony_required": False}, "CHRONY_REQUIRED_FOR_SITE_NODES"),
         ({"apply_to": ["target_os"]}, "TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS"),
+        ({"apply_to": ["eph_live_os", "target_os", "target_os"]}, "TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS"),
         ({"ntp_servers": []}, "TIME_DNS_NTP_SERVERS_REQUIRED"),
         ({"ntp_servers": ["time.example;touch /tmp/pwned"]}, "INVALID_TIME_DNS_NTP_SERVER"),
         ({"dns_servers": ["dns.example.net"]}, "INVALID_TIME_DNS_RESOLVER"),
