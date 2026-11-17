@@ -4123,7 +4123,12 @@ def test_original_requester_cannot_approve_recovery_review(
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "invalid_state",
-    ["reconciliation_required", "corrupt_plan_result", "corrupt_dual_agent"],
+    [
+        "reconciliation_required",
+        "corrupt_plan_result",
+        "corrupt_dual_agent",
+        "corrupt_ownership_flag",
+    ],
 )
 def test_eph_mutating_command_is_fenced_when_deployment_state_is_uncertain(
     cluster_delivery_workspace,
@@ -4157,8 +4162,12 @@ def test_eph_mutating_command_is_fenced_when_deployment_state_is_uncertain(
         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
     elif invalid_state == "corrupt_plan_result":
         deployment.plan_result = []
-    else:
+    elif invalid_state == "corrupt_dual_agent":
         deployment.plan_result = {"dual_agent": []}
+    else:
+        deployment.plan_result = {
+            "dual_agent": {"target_agent_owns_cluster": "false"}
+        }
     deployment.save(update_fields=["status", "plan_result"])
 
     response = APIClient().post(
