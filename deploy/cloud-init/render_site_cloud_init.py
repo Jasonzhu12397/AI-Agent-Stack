@@ -138,6 +138,102 @@ resolvectl status
     return "\n".join(output) + "\n"
 
 
+def render_capi_kubeadm(args):
+    if args.role != "target-os":
+        raise ValueError("CAPI_KUBEADM_FORMAT_REQUIRES_TARGET_OS_ROLE")
+    chrony_lines = [
+        "# Managed by AI-Agent-Stack cloud-init; do not edit by hand.",
+        "driftfile /var/lib/chrony/drift",
+        "makestep 1.0 3",
+        "rtcsync",
+        "leapsectz right/UTC",
+    ]
+    chrony_lines.extend("server {} iburst".format(server) for server in args.ntp_server)
+    chrony_content = "\n".join(chrony_lines) + "\n"
+    domains = ["~.", *args.search_domain]
+    resolved_content = "\n".join([
+        "# Managed by AI-Agent-Stack cloud-init; do not edit by hand.",
+        "[Resolve]",
+        "DNS=" + " ".join(args.dns_server),
+        "Domains=" + " ".join(domains),
+        "",
+    ])
+    apply_script = """#!/bin/sh
+set -eu
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "systemd is required for chronyd and systemd-resolved" >&2
+  exit 1
+fi
+if ! systemctl cat systemd-resolved.service >/dev/null 2>&1; then
+  echo "systemd-resolved is required by this DNS cloud-init profile" >&2
+  exit 1
+fi
+systemctl enable --now systemd-resolved.service
+if [ ! -e /run/systemd/resolve/resolv.conf ]; then
+  echo "systemd-resolved upstream resolv.conf is missing" >&2
+  exit 1
+fi
+ln -sfn /run/systemd/resolve/resolv.conf /etc/resolv.conf
+systemctl restart systemd-resolved.service
+resolvectl query __DNS_TEST_NAME__
+if ! command -v chronyc >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y chrony
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y chrony
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install chrony
+  else
+    echo "no supported package manager found to install chrony" >&2
+    exit 1
+  fi
+fi
+if systemctl cat chronyd.service >/dev/null 2>&1; then
+  chrony_unit=chronyd.service
+elif systemctl cat chrony.service >/dev/null 2>&1; then
+  chrony_unit=chrony.service
+else
+  echo "chrony service unit not found; verify the target image package repository" >&2
+  exit 1
+fi
+systemctl enable --now "$chrony_unit"
+systemctl restart "$chrony_unit"
+chronyc waitsync 10 0.1
+chronyc -n tracking
+resolvectl status
+"""
+    apply_script = apply_script.replace("__DNS_TEST_NAME__", args.dns_test_name)
+    files = [
+        ("/etc/chrony/chrony.conf", chrony_content, "0644"),
+        ("/etc/chrony.conf", chrony_content, "0644"),
+        (
+            "/etc/systemd/resolved.conf.d/90-ai-agent-site-dns.conf",
+            resolved_content,
+            "0644",
+        ),
+        (
+            "/usr/local/sbin/ai-agent-site-time-dns-apply",
+            apply_script,
+            "0755",
+        ),
+        ("/etc/ai-agent/site-network-time-role", "target-os\\n", "0644"),
+    ]
+    output = ["files:"]
+    for path, content, permissions in files:
+        output.extend([
+            "  - path: " + path,
+            "    owner: root:root",
+            "    permissions: '" + permissions + "'",
+            "    content: " + json.dumps(content),
+        ])
+    output.extend([
+        "preKubeadmCommands:",
+        "  - /usr/local/sbin/ai-agent-site-time-dns-apply",
+    ])
+    return "\n".join(output) + "\n"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", required=True, choices=("eph-live-os", "target-os"))
@@ -151,6 +247,7 @@ def main(argv=None):
     )
     parser.add_argument("--dns-test-name", type=validate_search_domain)
     parser.add_argument("--profile-json")
+    parser.add_argument("--format", choices=("cloud-init", "capi-kubeadm"), default="cloud-init")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     if args.profile_json:
@@ -193,7 +290,14 @@ def main(argv=None):
         )
     destination = Path(args.output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    content = render(args)
+    try:
+        content = (
+            render_capi_kubeadm(args)
+            if args.format == "capi-kubeadm"
+            else render(args)
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     temporary = destination.with_name(destination.name + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(destination)
