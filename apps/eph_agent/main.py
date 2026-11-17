@@ -13,14 +13,15 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from .capi_pivot import execute_capi_pivot
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
-    CommandLeaseGuard,
     AgentTransportError,
+    CommandLeaseGuard,
     ConfigurationError,
 )
+
+from .capi_pivot import execute_capi_pivot
 
 LOG = logging.getLogger("eph-agent")
 CAPABILITIES = [
