@@ -26,6 +26,16 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
 
 
+def _checkpoint_state_digest(evidence: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _certificate_common_name(certificate: dict[str, Any] | None) -> str | None:
     if not certificate:
         return None
@@ -397,7 +407,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             evidence = document.get("evidence")
             if not isinstance(expected_phase, str) or not expected_phase:
                 raise ControlApiError("CHECKPOINT_EXPECTED_PHASE_INVALID")
-            if not isinstance(expected_sequence, int) or expected_sequence < 0:
+            if (
+                not isinstance(expected_sequence, int)
+                or isinstance(expected_sequence, bool)
+                or expected_sequence < 0
+            ):
                 raise ControlApiError("CHECKPOINT_SEQUENCE_INVALID")
             if not isinstance(next_phase, str) or not next_phase:
                 raise ControlApiError("CHECKPOINT_PHASE_INVALID")
@@ -409,7 +423,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 raise ControlApiError("CHECKPOINT_DIGEST_INVALID") from exc
             if not isinstance(evidence, dict) or len(_json_bytes(evidence)) > MAX_BODY_BYTES:
                 raise ControlApiError("CHECKPOINT_EVIDENCE_INVALID")
-            state = {"state_digest": state_digest, "evidence": evidence}
+            if not secrets.compare_digest(
+                _checkpoint_state_digest(evidence),
+                state_digest.lower(),
+            ):
+                raise ControlApiError("CHECKPOINT_EVIDENCE_DIGEST_MISMATCH")
+            state = {"state_digest": state_digest.lower(), "evidence": evidence}
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 with connection.transaction():
                     leased_command = connection.execute(
@@ -462,7 +481,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             current
                             and current["phase"] == next_phase
                             and current["sequence"] == expected_sequence + 1
-                            and current["state"].get("state_digest") == state_digest
+                            and isinstance(current["state"], dict)
+                            and current["state"].get("state_digest") == state_digest.lower()
                         ):
                             self._send(200, {
                                 "persisted": True,
