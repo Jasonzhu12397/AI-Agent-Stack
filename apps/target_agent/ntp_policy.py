@@ -114,10 +114,12 @@ def _validate_ntp_source(value: str) -> str:
     try:
         return str(ipaddress.ip_address(value))
     except ValueError:
-        if not re.fullmatch(
-            r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",
-            value,
-        ):
+        hostname_pattern = (
+            r"(?=.{1,253}$)"
+            r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
+            r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
+        )
+        if not re.fullmatch(hostname_pattern, value):
             raise NtpPolicyError("CONTROL_PLANE_EXTERNAL_NTP_SOURCE_INVALID")
         return value.lower()
 
