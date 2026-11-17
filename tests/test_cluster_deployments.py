@@ -2179,6 +2179,9 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
             "dpdk_requested": True,
             "attachment_count": 1,
         },
+        "ntp_server_ip": config["ironic_internal_ip"],
+        "ntp_server_ready": True,
+        "ntp_server_stratum": 2,
         "network_template_profile_hash": profile_hash,
         "network_template_profile_verified": True,
         "provider_versions": {
