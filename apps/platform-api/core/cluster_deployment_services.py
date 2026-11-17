@@ -378,7 +378,14 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         or not isinstance(target_command.result, dict)
     ):
         dual_agent_state = plan_result.get("dual_agent", {})
-        refresh_count = int(dual_agent_state.get("target_preflight_refresh_count", 0))
+        raw_refresh_count = dual_agent_state.get("target_preflight_refresh_count", 0)
+        refresh_count = (
+            raw_refresh_count
+            if isinstance(raw_refresh_count, int)
+            and not isinstance(raw_refresh_count, bool)
+            and raw_refresh_count >= 0
+            else 0
+        )
         if refresh_count >= 3:
             deployment.status = ClusterDeployment.Status.FAILED
             deployment.error = {"code": "CAPI_PIVOT_TARGET_ACK_REFRESH_LIMIT"}
