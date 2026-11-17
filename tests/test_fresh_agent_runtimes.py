@@ -408,3 +408,165 @@ def test_target_agent_rejects_capi_pivot_when_live_target_source_uid_annotation_
     assert result["status"] == "blocked"
     assert result["error_code"] == "TARGET_CAPI_PIVOT_SOURCE_UID_ANNOTATION_MISMATCH"
     assert result["side_effects"] is False
+
+
+
+def _target_metal3_observation_documents():
+    hosts = [
+        {
+            "metadata": {"namespace": "metal3", "name": f"host-{index}"},
+            "spec": {},
+            "status": {
+                "provisioning": {"ID": f"12345678-1234-1234-1234-123456789ab{index}"},
+            },
+        }
+        for index in range(1, 3)
+    ]
+    return {
+        "cluster": {"metadata": {"name": "target-cluster", "namespace": "metal3", "uid": "cluster-uid"}},
+        "machines": {"items": []},
+        "metal3machines": {"items": []},
+        "bmhs": {"items": hosts},
+    }
+
+
+def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatch):
+    documents = _target_metal3_observation_documents()
+    calls = []
+
+    def fake_kubectl(arguments, **_kwargs):
+        resource = arguments[1]
+        key = (
+            "cluster" if resource == "cluster.cluster.x-k8s.io"
+            else "machines" if resource == "machines.cluster.x-k8s.io"
+            else "metal3machines" if resource == "metal3machines.infrastructure.cluster.x-k8s.io"
+            else "bmhs"
+        )
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(documents[key]),
+            "stderr": "",
+        }
+
+    def fake_ironic(node_uuid):
+        calls.append(node_uuid)
+        return {
+            "uuid": node_uuid,
+            "provision_state": "active",
+            "maintenance": False,
+            "target_provision_state": None,
+            "last_error": None,
+        }
+
+    monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
+    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
+        "target_bmh_identities": [],
+        "target_metal3_ownership_verified": True,
+        "target_metal3_reconciliation_healthy": True,
+        "side_effects": False,
+    })
+    monkeypatch.setattr(target_main, "get_ironic_node", fake_ironic)
+    monkeypatch.setenv("IRONIC_API_URL", "https://ironic.internal.example")
+    monkeypatch.setenv("IRONIC_API_TOKEN", "test-token")
+
+    evidence = target_main._observe_target_metal3_ownership({
+        "namespace": "metal3",
+        "cluster_name": "target-cluster",
+        "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+    })
+
+    assert calls == [
+        "12345678-1234-1234-1234-123456789ab1",
+        "12345678-1234-1234-1234-123456789ab2",
+    ]
+    assert evidence["target_ironic_inventory_verified"] is True
+    assert evidence["ironic_node_count"] == 2
+    assert evidence["side_effects"] is False
+
+
+def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeypatch):
+    documents = _target_metal3_observation_documents()
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(documents[
+                "cluster" if arguments[1] == "cluster.cluster.x-k8s.io"
+                else "machines" if arguments[1] == "machines.cluster.x-k8s.io"
+                else "metal3machines" if arguments[1] == "metal3machines.infrastructure.cluster.x-k8s.io"
+                else "bmhs"
+            ]),
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
+        "target_bmh_identities": [],
+        "target_metal3_ownership_verified": True,
+        "target_metal3_reconciliation_healthy": True,
+        "side_effects": False,
+    })
+    monkeypatch.delenv("IRONIC_API_URL", raising=False)
+    monkeypatch.delenv("IRONIC_API_TOKEN", raising=False)
+
+    result = execute_target({
+        "action": "target.metal3.verify_ownership",
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+        },
+    })
+
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "TARGET_IRONIC_API_CONFIGURATION_REQUIRED"
+    assert result["side_effects"] is False
+
+
+def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch):
+    documents = _target_metal3_observation_documents()
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(documents[
+                "cluster" if arguments[1] == "cluster.cluster.x-k8s.io"
+                else "machines" if arguments[1] == "machines.cluster.x-k8s.io"
+                else "metal3machines" if arguments[1] == "metal3machines.infrastructure.cluster.x-k8s.io"
+                else "bmhs"
+            ]),
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(target_main, "verify_metal3_ownership", lambda *args: {
+        "target_bmh_identities": [],
+        "target_metal3_ownership_verified": True,
+        "target_metal3_reconciliation_healthy": True,
+        "side_effects": False,
+    })
+    monkeypatch.setattr(target_main, "get_ironic_node", lambda node_uuid: {
+        "uuid": node_uuid,
+        "provision_state": "active",
+        "maintenance": True,
+        "target_provision_state": None,
+        "last_error": None,
+    })
+    monkeypatch.setenv("IRONIC_API_URL", "https://ironic.internal.example")
+    monkeypatch.setenv("IRONIC_API_TOKEN", "test-token")
+
+    result = execute_target({
+        "action": "target.metal3.verify_ownership",
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "target-cluster",
+            "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+        },
+    })
+
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "TARGET_IRONIC_NODE_IN_MAINTENANCE:host-1"
+    assert result["side_effects"] is False
