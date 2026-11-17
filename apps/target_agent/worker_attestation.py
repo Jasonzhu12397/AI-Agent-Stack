@@ -119,6 +119,8 @@ def verify_worker_readiness(
             "chronyc tracking",
             "Leap status",
             "systemctl restart",
+            "$2 == server",
+            "selected = 1",
         )
         if not all(marker in script for marker in required_markers):
             raise WorkerAttestationError("WORKER_ATTESTATION_CHRONY_SYNC_GATE_MISSING")
