@@ -1,5 +1,4 @@
 import pytest
-
 from node_agent import chrony
 from node_agent.chrony import (
     ChronyError,
