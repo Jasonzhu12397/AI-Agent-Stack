@@ -1855,7 +1855,7 @@ def test_dual_agent_pivot_requires_fresh_source_and_target_agent_acknowledgement
     ).exists()
     deployment.refresh_from_db()
     assert deployment.plan_result["dual_agent"]["phase"] == (
-        "pivot_agent_acknowledgement_stale"
+        "pivot_source_preflight_missing"
     )
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
