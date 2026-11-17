@@ -1,0 +1,547 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+from threading import Event
+
+
+class CapiPivotError(RuntimeError):
+    pass
+
+
+NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
+STABLE_ID_ANNOTATION = "ai-agent-stack.io/stable-cluster-identity"
+
+
+def _valid_name(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not NAME_PATTERN.fullmatch(value):
+        raise CapiPivotError(f"CAPI_PIVOT_{field}_INVALID")
+    return value
+
+
+def _run(
+    command: list[str],
+    kubeconfig: str,
+    timeout_seconds: int = 30,
+    lease_lost_event: Event | None = None,
+) -> dict[str, Any]:
+    if not Path(kubeconfig).is_file():
+        raise CapiPivotError("CAPI_PIVOT_KUBECONFIG_MISSING")
+    environment = {**os.environ, "KUBECONFIG": kubeconfig}
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+    except OSError as exc:
+        raise CapiPivotError("CAPI_PIVOT_COMMAND_START_FAILED") from exc
+    started = time.monotonic()
+    termination_reason = None
+    for _ in iter(process.poll, None):
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            termination_reason = "COMMAND_LEASE_LOST"
+            process.terminate()
+            break
+        if time.monotonic() - started > timeout_seconds:
+            termination_reason = "COMMAND_TIMEOUT"
+            process.terminate()
+            break
+        time.sleep(0.2)
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
+    if termination_reason:
+        return {
+            "ok": False,
+            "returncode": process.returncode,
+            "stdout": stdout[-8000:],
+            "stderr": stderr[-4000:],
+            "error": termination_reason,
+        }
+    return {
+        "ok": process.returncode == 0,
+        "returncode": process.returncode,
+        "stdout": stdout[-8000:],
+        "stderr": stderr[-4000:],
+    }
+
+
+def _kubectl(kubeconfig: str, arguments: list[str]) -> dict[str, Any]:
+    result = _run(["kubectl", "--kubeconfig", kubeconfig, *arguments], kubeconfig)
+    if not result["ok"]:
+        raise CapiPivotError("CAPI_PIVOT_KUBECTL_READ_FAILED")
+    try:
+        document = json.loads(result["stdout"])
+    except ValueError as exc:
+        raise CapiPivotError("CAPI_PIVOT_KUBECTL_JSON_INVALID") from exc
+    if not isinstance(document, dict):
+        raise CapiPivotError("CAPI_PIVOT_KUBECTL_OBJECT_REQUIRED")
+    return document
+
+
+def _cluster(kubeconfig: str, namespace: str, name: str) -> dict[str, Any] | None:
+    result = _run(
+        [
+            "kubectl", "--kubeconfig", kubeconfig, "get",
+            "cluster.cluster.x-k8s.io", name, "--namespace", namespace, "-o", "json",
+        ],
+        kubeconfig,
+    )
+    if result["ok"]:
+        try:
+            document = json.loads(result["stdout"])
+        except ValueError as exc:
+            raise CapiPivotError("CAPI_PIVOT_CLUSTER_JSON_INVALID") from exc
+        if not isinstance(document, dict):
+            raise CapiPivotError("CAPI_PIVOT_CLUSTER_OBJECT_INVALID")
+        return document
+    if "NotFound" in result["stderr"] or "not found" in result["stderr"].lower():
+        return None
+    raise CapiPivotError("CAPI_PIVOT_CLUSTER_READ_FAILED")
+
+
+def _version(value: Any) -> tuple[int, int, int]:
+    if not isinstance(value, str):
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_VERSION_INVALID")
+    match = VERSION_PATTERN.fullmatch(value)
+    if not match:
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_VERSION_INVALID")
+    return tuple(int(part) for part in match.groups())
+
+
+def _image_version(image: str) -> tuple[int, int, int]:
+    reference = image.split("@", 1)[0]
+    last_component = reference.rsplit("/", 1)[-1]
+    if ":" not in last_component:
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_IMAGE_TAG_MISSING")
+    return _version(last_component.rsplit(":", 1)[-1])
+
+
+def _ready_masters(kubeconfig: str) -> set[str]:
+    document = _kubectl(kubeconfig, ["get", "nodes", "-o", "json"])
+    masters = set()
+    for node in document.get("items", []):
+        labels = node.get("metadata", {}).get("labels", {})
+        is_master = (
+            "node-role.kubernetes.io/control-plane" in labels
+            or "node-role.kubernetes.io/master" in labels
+        )
+        ready = any(
+            item.get("type") == "Ready" and item.get("status") == "True"
+            for item in node.get("status", {}).get("conditions", [])
+        )
+        if is_master and ready:
+            masters.add(node.get("metadata", {}).get("name"))
+    masters.discard(None)
+    if len(masters) < 3:
+        raise CapiPivotError("CAPI_PIVOT_THREE_READY_TARGET_MASTERS_REQUIRED")
+    return masters
+
+
+def _deployment(
+    kubeconfig: str,
+    namespace: str,
+    name: str,
+) -> dict[str, Any]:
+    return _kubectl(
+        kubeconfig,
+        ["get", "deployment", name, "--namespace", namespace, "-o", "json"],
+    )
+
+
+def _target_controllers_ready(
+    kubeconfig: str,
+    master_names: set[str],
+    controllers: Any,
+) -> dict[str, Any]:
+    if not isinstance(controllers, list) or not controllers:
+        raise CapiPivotError("CAPI_PIVOT_TARGET_CONTROLLER_LIST_REQUIRED")
+    evidence = []
+    for item in controllers:
+        if not isinstance(item, dict):
+            raise CapiPivotError("CAPI_PIVOT_TARGET_CONTROLLER_ENTRY_INVALID")
+        namespace = _valid_name(item.get("namespace"), "CONTROLLER_NAMESPACE")
+        name = _valid_name(item.get("name"), "CONTROLLER_NAME")
+        minimum = item.get("minimum_ready_replicas", 1)
+        if not isinstance(minimum, int) or minimum < 1:
+            raise CapiPivotError("CAPI_PIVOT_CONTROLLER_REPLICA_REQUIREMENT_INVALID")
+        deployment = _deployment(kubeconfig, namespace, name)
+        spec = deployment.get("spec", {})
+        status = deployment.get("status", {})
+        generation = deployment.get("metadata", {}).get("generation", 0)
+        observed = status.get("observedGeneration", 0)
+        if (
+            status.get("readyReplicas", 0) < minimum
+            or status.get("availableReplicas", 0) < minimum
+            or observed < generation
+        ):
+            raise CapiPivotError(f"CAPI_PIVOT_TARGET_CONTROLLER_NOT_READY:{name}")
+        tolerations = spec.get("template", {}).get("spec", {}).get("tolerations", [])
+        tolerates_master = any(
+            item.get("key") in (
+                "node-role.kubernetes.io/control-plane",
+                "node-role.kubernetes.io/master",
+            )
+            and (
+                item.get("operator") == "Exists"
+                or item.get("effect") in ("NoSchedule", None)
+            )
+            for item in tolerations
+        )
+        if not tolerates_master:
+            raise CapiPivotError(f"CAPI_PIVOT_CONTROLLER_MISSING_MASTER_TOLERATION:{name}")
+        selector = spec.get("selector", {}).get("matchLabels", {})
+        if not isinstance(selector, dict) or not selector:
+            raise CapiPivotError(f"CAPI_PIVOT_CONTROLLER_SELECTOR_INVALID:{name}")
+        label_selector = ",".join(
+            f"{key}={value}" for key, value in sorted(selector.items())
+        )
+        pods = _kubectl(
+            kubeconfig,
+            ["get", "pods", "--namespace", namespace, "-l", label_selector, "-o", "json"],
+        )
+        ready_pods = []
+        for pod in pods.get("items", []):
+            pod_ready = any(
+                condition.get("type") == "Ready" and condition.get("status") == "True"
+                for condition in pod.get("status", {}).get("conditions", [])
+            )
+            node_name = pod.get("spec", {}).get("nodeName")
+            if pod_ready and node_name in master_names:
+                ready_pods.append(pod.get("metadata", {}).get("name"))
+        if len(ready_pods) < minimum:
+            raise CapiPivotError(f"CAPI_PIVOT_CONTROLLER_NOT_RUNNING_ON_MASTERS:{name}")
+        evidence.append({
+            "namespace": namespace,
+            "name": name,
+            "ready_replicas": len(ready_pods),
+            "scheduled_on_target_masters": True,
+        })
+    return {"ready": True, "controllers": evidence}
+
+
+def _provider_versions(
+    source_kubeconfig: str,
+    target_kubeconfig: str,
+    providers: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(providers, list) or not providers:
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_VERSION_MATRIX_REQUIRED")
+    evidence = []
+    for item in providers:
+        if not isinstance(item, dict):
+            raise CapiPivotError("CAPI_PIVOT_PROVIDER_ENTRY_INVALID")
+        provider = _valid_name(item.get("provider"), "PROVIDER_NAME")
+        source_ref = item.get("source")
+        target_ref = item.get("target")
+        if not isinstance(source_ref, dict) or not isinstance(target_ref, dict):
+            raise CapiPivotError("CAPI_PIVOT_PROVIDER_DEPLOYMENT_REFERENCE_INVALID")
+        source = _deployment(
+            source_kubeconfig,
+            _valid_name(source_ref.get("namespace"), "SOURCE_PROVIDER_NAMESPACE"),
+            _valid_name(source_ref.get("name"), "SOURCE_PROVIDER_DEPLOYMENT"),
+        )
+        target = _deployment(
+            target_kubeconfig,
+            _valid_name(target_ref.get("namespace"), "TARGET_PROVIDER_NAMESPACE"),
+            _valid_name(target_ref.get("name"), "TARGET_PROVIDER_DEPLOYMENT"),
+        )
+        source_images = [
+            container.get("image")
+            for container in source.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        ]
+        target_images = [
+            container.get("image")
+            for container in target.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        ]
+        if not source_images or not target_images:
+            raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_IMAGES_MISSING:{provider}")
+        source_versions = [_image_version(image) for image in source_images]
+        target_versions = [_image_version(image) for image in target_images]
+        if len(source_versions) != len(target_versions):
+            raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_CONTAINER_COUNT_MISMATCH:{provider}")
+        for source_version, target_version in zip(source_versions, target_versions, strict=True):
+            if target_version < source_version:
+                raise CapiPivotError(f"CAPI_PIVOT_TARGET_PROVIDER_OLDER_THAN_SOURCE:{provider}")
+        evidence.append({
+            "provider": provider,
+            "source_images": source_images,
+            "target_images": target_images,
+            "target_version_at_least_source": True,
+        })
+    return evidence
+
+
+def _hardware_identity(host: dict[str, Any]) -> str:
+    spec = host.get("spec", {})
+    hardware = host.get("status", {}).get("hardware", {})
+    system_uuid = hardware.get("systemUUID")
+    serial = hardware.get("systemSerialNumber")
+    boot_mac = spec.get("bootMACAddress")
+    bmc_address = spec.get("bmc", {}).get("address")
+    if isinstance(system_uuid, str) and system_uuid.strip():
+        return "system-uuid:" + system_uuid.strip().lower()
+    if isinstance(serial, str) and serial.strip():
+        return "serial:" + serial.strip().lower()
+    if (
+        isinstance(boot_mac, str) and boot_mac.strip()
+        and isinstance(bmc_address, str) and bmc_address.strip()
+    ):
+        return "bmc-bootmac:" + bmc_address.strip().lower() + "|" + boot_mac.strip().lower()
+    raise CapiPivotError("CAPI_PIVOT_BMH_STABLE_HARDWARE_IDENTITY_MISSING")
+
+
+def _bmh_inventory(kubeconfig: str) -> list[dict[str, str]]:
+    document = _kubectl(
+        kubeconfig,
+        ["get", "baremetalhosts.metal3.io", "--all-namespaces", "-o", "json"],
+    )
+    identities = []
+    for host in document.get("items", []):
+        metadata = host.get("metadata", {})
+        namespace = metadata.get("namespace")
+        name = metadata.get("name")
+        if not isinstance(namespace, str) or not isinstance(name, str):
+            raise CapiPivotError("CAPI_PIVOT_BMH_METADATA_INVALID")
+        identities.append({
+            "namespace": namespace,
+            "name": name,
+            "hardware_identity": _hardware_identity(host),
+        })
+    identities.sort(key=lambda item: (item["namespace"], item["name"], item["hardware_identity"]))
+    return identities
+
+
+def _inventory_digest(identities: list[dict[str, str]]) -> str:
+    encoded = json.dumps(
+        identities,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
+    payload = command.get("payload")
+    if not isinstance(payload, dict):
+        raise CapiPivotError("CAPI_PIVOT_PAYLOAD_REQUIRED")
+    namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
+    cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
+    stable_identity = payload.get("stable_cluster_identity")
+    if not isinstance(stable_identity, str) or not stable_identity.strip():
+        raise CapiPivotError("CAPI_PIVOT_STABLE_CLUSTER_IDENTITY_REQUIRED")
+    source = os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", "")
+    target = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG", "")
+    if not Path(source).is_file() or not Path(target).is_file():
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_OR_TARGET_KUBECONFIG_MISSING")
+    return payload, source, target
+
+
+def _provider_preflight(
+    payload: dict[str, Any],
+    source: str,
+    target: str,
+) -> dict[str, Any]:
+    masters = _ready_masters(target)
+    controllers = _target_controllers_ready(
+        target,
+        masters,
+        payload.get("target_controller_deployments"),
+    )
+    versions = _provider_versions(
+        source,
+        target,
+        payload.get("provider_deployments"),
+    )
+    return {
+        "target_ready_master_names": sorted(masters),
+        "target_controllers": controllers,
+        "provider_versions": versions,
+    }
+
+
+def execute_capi_pivot(
+    command: dict[str, Any],
+    lease_lost_event: Event | None = None,
+) -> dict[str, Any]:
+    action = command.get("action")
+    try:
+        payload, source, target = _validate_pivot_inputs(command)
+        namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
+        cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
+        stable_identity = payload["stable_cluster_identity"].strip()
+        preflight = _provider_preflight(payload, source, target)
+        source_cluster = _cluster(source, namespace, cluster_name)
+        target_cluster = _cluster(target, namespace, cluster_name)
+        if source_cluster is None and target_cluster is not None:
+            annotations = target_cluster.get("metadata", {}).get("annotations", {})
+            if (
+                annotations.get(SOURCE_UID_ANNOTATION)
+                and annotations.get(STABLE_ID_ANNOTATION) == stable_identity
+            ):
+                return {
+                    "status": "succeeded",
+                    "error_code": None,
+                    "output": {
+                        "already_pivoted": True,
+                        "source_cluster_uid": annotations[SOURCE_UID_ANNOTATION],
+                        "target_cluster_uid": target_cluster.get("metadata", {}).get("uid"),
+                        "target_source_cluster_uid_annotation": annotations[SOURCE_UID_ANNOTATION],
+                        "source_stable_cluster_identity": stable_identity,
+                        "target_stable_cluster_identity": annotations[STABLE_ID_ANNOTATION],
+                        "source_cluster_absent": True,
+                        "target_cluster_ownership_verified": True,
+                        "target_controllers_ready": True,
+                        "provider_preflight": preflight,
+                    },
+                    "side_effects": False,
+                }
+        if source_cluster is None or target_cluster is not None:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_TARGET_CLUSTER_STATE_CONFLICT")
+        source_uid = source_cluster.get("metadata", {}).get("uid")
+        annotations = source_cluster.get("metadata", {}).get("annotations", {})
+        if not isinstance(source_uid, str) or not source_uid:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_UID_MISSING")
+        existing_source_uid = annotations.get(SOURCE_UID_ANNOTATION)
+        existing_stable_identity = annotations.get(STABLE_ID_ANNOTATION)
+        if existing_source_uid not in (None, source_uid):
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_UID_ANNOTATION_CONFLICT")
+        if existing_stable_identity not in (None, stable_identity):
+            raise CapiPivotError("CAPI_PIVOT_STABLE_IDENTITY_ANNOTATION_CONFLICT")
+        source_bmhs = _bmh_inventory(source)
+        source_cluster_list = _kubectl(
+            source,
+            ["get", "clusters.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+        )
+        if len(source_cluster_list.get("items", [])) != 1:
+            raise CapiPivotError("CAPI_PIVOT_NAMESPACE_MUST_CONTAIN_EXACTLY_ONE_CLUSTER")
+        move_command = [
+            "clusterctl",
+            "move",
+            f"--to-kubeconfig={target}",
+            f"--namespace={namespace}",
+        ]
+        if action == "eph.capi.pivot.dry_run":
+            dry_run = _run(
+                [*move_command, "--dry-run"],
+                source,
+                timeout_seconds=300,
+                lease_lost_event=lease_lost_event,
+            )
+            if not dry_run["ok"]:
+                raise CapiPivotError("CAPI_PIVOT_DRY_RUN_FAILED")
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": {
+                    "dry_run_passed": True,
+                    "source_cluster_uid": source_uid,
+                    "source_bmh_identities": source_bmhs,
+                    "source_bmh_digest": _inventory_digest(source_bmhs),
+                    "provider_preflight": preflight,
+                    "clusterctl_output": dry_run["stdout"],
+                    "side_effects": False,
+                },
+                "side_effects": False,
+            }
+        if action != "eph.capi.pivot":
+            raise CapiPivotError("CAPI_PIVOT_ACTION_UNSUPPORTED")
+        approval_digest = command.get("approval_digest")
+        plan_digest = payload.get("plan_digest")
+        if (
+            not isinstance(approval_digest, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", approval_digest)
+            or plan_digest != approval_digest
+        ):
+            raise CapiPivotError("CAPI_PIVOT_APPROVAL_PLAN_DIGEST_MISMATCH")
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise CapiPivotError("COMMAND_LEASE_LOST_BEFORE_CAPI_PIVOT")
+        annotate = _run(
+            [
+                "kubectl", "--kubeconfig", source, "annotate",
+                "cluster.cluster.x-k8s.io", cluster_name,
+                f"{SOURCE_UID_ANNOTATION}={source_uid}",
+                f"{STABLE_ID_ANNOTATION}={stable_identity}",
+                "--namespace", namespace, "--overwrite",
+            ],
+            source,
+            timeout_seconds=30,
+            lease_lost_event=lease_lost_event,
+        )
+        if not annotate["ok"]:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_IDENTITY_ANNOTATION_FAILED")
+        moved = _run(
+            move_command,
+            source,
+            timeout_seconds=int(payload.get("move_timeout_seconds", 1800)),
+            lease_lost_event=lease_lost_event,
+        )
+        if not moved["ok"]:
+            raise CapiPivotError(
+                "CAPI_PIVOT_MOVE_FAILED:" + str(moved.get("error") or moved["returncode"])
+            )
+        target_after = _cluster(target, namespace, cluster_name)
+        source_after = _cluster(source, namespace, cluster_name)
+        if target_after is None or source_after is not None:
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_SOURCE_TARGET_STATE_INVALID")
+        target_annotations = target_after.get("metadata", {}).get("annotations", {})
+        if target_annotations.get(SOURCE_UID_ANNOTATION) != source_uid:
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_SOURCE_UID_ANNOTATION_MISMATCH")
+        if target_annotations.get(STABLE_ID_ANNOTATION) != stable_identity:
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_STABLE_IDENTITY_MISMATCH")
+        target_bmhs = _bmh_inventory(target)
+        source_set = {
+            (item["namespace"], item["name"], item["hardware_identity"])
+            for item in source_bmhs
+        }
+        target_set = {
+            (item["namespace"], item["name"], item["hardware_identity"])
+            for item in target_bmhs
+        }
+        if source_set != target_set:
+            raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_BMH_IDENTITY_SET_MISMATCH")
+        target_uid = target_after.get("metadata", {}).get("uid")
+        if not isinstance(target_uid, str) or not target_uid:
+            raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_UID_MISSING")
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": {
+                "capi_pivot_succeeded": True,
+                "source_cluster_uid": source_uid,
+                "target_cluster_uid": target_uid,
+                "target_source_cluster_uid_annotation": target_annotations[SOURCE_UID_ANNOTATION],
+                "source_stable_cluster_identity": stable_identity,
+                "target_stable_cluster_identity": target_annotations[STABLE_ID_ANNOTATION],
+                "source_cluster_absent": True,
+                "target_cluster_ownership_verified": True,
+                "target_controllers_ready": True,
+                "source_bmh_identities": source_bmhs,
+                "target_bmh_identities": target_bmhs,
+                "source_bmh_digest": _inventory_digest(source_bmhs),
+                "target_bmh_digest": _inventory_digest(target_bmhs),
+                "provider_preflight": preflight,
+                "clusterctl_output": moved["stdout"],
+            },
+            "side_effects": True,
+        }
+    except (CapiPivotError, ValueError, TypeError, KeyError) as exc:
+        return {
+            "status": "blocked",
+            "error_code": str(exc) or "CAPI_PIVOT_BLOCKED",
+            "output": {},
+            "side_effects": False,
+        }
