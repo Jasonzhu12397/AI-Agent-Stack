@@ -2500,6 +2500,83 @@ class AgentRuntimePollView(APIView):
                 command.finished_at = now
                 command.save()
                 return Response({"command": None})
+            if command.command_type == "cluster.capi.pivot.execute":
+                deployment = ClusterDeployment.objects.select_for_update().filter(
+                    pk=command.deployment_id,
+                    eph_node=node,
+                ).first()
+                payload = command.payload if isinstance(command.payload, dict) else {}
+                acknowledgement = payload.get("target_agent_ack")
+                target_command = None
+                target_node = deployment.target_node if deployment is not None else None
+                if isinstance(acknowledgement, dict):
+                    target_command = AgentCommand.objects.filter(
+                        pk=acknowledgement.get("command_id"),
+                        deployment=deployment,
+                        command_type="cluster.capi.pivot.target.preflight",
+                        node_id=deployment.target_node_id if deployment is not None else None,
+                        status=AgentCommand.Status.SUCCEEDED,
+                    ).first()
+                acknowledgement_valid = (
+                    deployment is not None
+                    and target_node is not None
+                    and target_node.status == AgentNode.Status.ONLINE
+                    and target_node.last_seen_at is not None
+                    and target_node.last_seen_at >= now - datetime.timedelta(seconds=60)
+                    and target_command is not None
+                    and target_command.finished_at is not None
+                    and target_command.finished_at >= now - datetime.timedelta(minutes=5)
+                    and isinstance(target_command.result, dict)
+                    and acknowledgement.get("node_id") == str(target_node.id)
+                    and acknowledgement.get("acknowledged_at")
+                    == target_command.finished_at.isoformat()
+                    and hmac.compare_digest(
+                        acknowledgement.get("result_sha256", ""),
+                        hashlib.sha256(
+                            json.dumps(
+                                target_command.result,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                    )
+                )
+                if not acknowledgement_valid:
+                    command.status = AgentCommand.Status.FAILED
+                    command.error = {
+                        "code": "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED",
+                        "retryable": False,
+                    }
+                    command.finished_at = now
+                    command.save(
+                        update_fields=[
+                            "status", "error", "finished_at", "updated_at"
+                        ]
+                    )
+                    if deployment is not None:
+                        plan_result = deployment.plan_result or {}
+                        deployment.status = ClusterDeployment.Status.FAILED
+                        deployment.error = {
+                            "code": "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED",
+                            "command_id": str(command.id),
+                            "retryable": False,
+                        }
+                        deployment.plan_result = {
+                            **plan_result,
+                            "dual_agent": {
+                                **plan_result.get("dual_agent", {}),
+                                "phase": "pivot_target_ack_expired",
+                                "target_agent_owns_cluster": False,
+                                "eph_reclaim_allowed": False,
+                            },
+                        }
+                        deployment.save(
+                            update_fields=[
+                                "status", "error", "plan_result", "updated_at"
+                            ]
+                        )
+                    return Response({"command": None})
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
