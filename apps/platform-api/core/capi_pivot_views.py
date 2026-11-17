@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from core.agent_node_views import _authenticate_node
 from core.cluster_deployment_services import _canonical_capi_inventory
 from core.models import (
+    AgentCommand,
     AgentNode,
     ClusterDeployment,
     ClusterDeploymentPivotEvent,
@@ -182,7 +183,6 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     return Response({"detail": "Target acknowledgement lacks verified cluster identity."}, status=400)
                 operation.target_ack = evidence
                 operation.target_identity = identity
-                operation.approval_hash = evidence.get("approval_hash", "")
                 _append_event(
                     operation,
                     node,
@@ -197,9 +197,22 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     return Response({"detail": "Only the source EPH Agent may begin clusterctl move."}, status=403)
                 if operation.state != ClusterDeploymentPivotOperation.State.READY:
                     return Response({"detail": "Target acknowledgement is not complete."}, status=409)
-                approval_hash = evidence.get("approval_hash")
-                if not isinstance(approval_hash, str) or not approval_hash or approval_hash != operation.approval_hash:
-                    return Response({"detail": "Pivot approval hash is missing or mismatched."}, status=409)
+                command = AgentCommand.objects.select_for_update().filter(
+                    deployment=deployment,
+                    node=operation.source_node,
+                    command_type="cluster.capi.pivot.execute",
+                    status=AgentCommand.Status.RUNNING,
+                ).order_by("-created_at").first()
+                if (
+                    command is None
+                    or not command.approved_plan_hash
+                    or command.approved_plan_hash != command.plan_hash
+                    or not isinstance(command.payload, dict)
+                    or command.payload.get("operation_id") != str(operation.operation_id)
+                ):
+                    return Response({"detail": "An approved, leased pivot command bound to this operation is required."}, status=409)
+                approval_hash = command.approved_plan_hash
+                operation.approval_hash = approval_hash
                 operation.started_at = timezone.now()
                 operation.save(update_fields=["started_at", "updated_at"])
                 _append_event(
