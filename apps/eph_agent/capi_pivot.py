@@ -48,21 +48,25 @@ def _run(
         raise CapiPivotError("CAPI_PIVOT_COMMAND_START_FAILED") from exc
     started = time.monotonic()
     termination_reason = None
-    for _ in iter(process.poll, None):
-        if lease_lost_event is not None and lease_lost_event.is_set():
-            termination_reason = "COMMAND_LEASE_LOST"
-            process.terminate()
+    stdout = ""
+    stderr = ""
+    for _ in iter(int, 1):
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
             break
-        if time.monotonic() - started > timeout_seconds:
-            termination_reason = "COMMAND_TIMEOUT"
-            process.terminate()
-            break
-        time.sleep(0.2)
-    try:
-        stdout, stderr = process.communicate(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        stdout, stderr = process.communicate()
+        except subprocess.TimeoutExpired:
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                termination_reason = "COMMAND_LEASE_LOST"
+            elif time.monotonic() - started > timeout_seconds:
+                termination_reason = "COMMAND_TIMEOUT"
+            if termination_reason:
+                process.terminate()
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                break
     if termination_reason:
         return {
             "ok": False,
