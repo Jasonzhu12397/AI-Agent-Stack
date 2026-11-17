@@ -39,6 +39,80 @@ class CloudControlClient:
     def close(self) -> None:
         self._client.close()
 
+    def _request(
+        self,
+        method: str,
+        path: str,
+        document: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            response = self._client.request(method, path, json=document)
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict):
+                raise ValueError("Cloud Control response must be an object")
+            return result
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise CloudControlDispatchError("Cloud Control API request failed") from exc
+
+    def register_agent(
+        self,
+        agent_id: UUID,
+        installation_id: UUID,
+        role: str,
+        cluster_id: UUID | None = None,
+    ) -> None:
+        if role not in {"eph", "target"}:
+            raise ValueError("Agent role is invalid")
+        if (role == "target" and cluster_id is None) or (
+            role == "eph" and cluster_id is not None
+        ):
+            raise ValueError("Agent cluster scope is invalid")
+        self._request(
+            "POST",
+            "/api/v1/control/agents/register",
+            {
+                "agent_id": str(agent_id),
+                "installation_id": str(installation_id),
+                "role": role,
+                "cluster_id": str(cluster_id) if cluster_id else None,
+            },
+        )
+
+    def create_deployment(
+        self,
+        deployment_id: UUID,
+        installation_id: UUID,
+        cluster_id: UUID,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/v1/control/deployments",
+            {
+                "deployment_id": str(deployment_id),
+                "installation_id": str(installation_id),
+                "cluster_id": str(cluster_id),
+            },
+        )
+
+    def get_deployment(self, deployment_id: UUID) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/v1/control/deployments/{deployment_id}",
+        )
+
+    def get_command(self, command_id: UUID) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/v1/control/commands/{command_id}",
+        )
+
+    def get_agent(self, agent_id: UUID) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/v1/control/agents/{agent_id}",
+        )
+
     def enqueue_command(
         self,
         deployment_id: UUID,
