@@ -346,6 +346,10 @@ def test_eph_capi_pivot_command_waits_for_hash_bound_approval_and_is_leased(node
     )
     assert created.status_code == 202
     assert created.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+    AgentCommand.objects.filter(
+        node_id=node_id,
+        command_type="host.preflight",
+    ).update(status=AgentCommand.Status.SUCCEEDED, finished_at=timezone.now())
 
     unauthorized_poll = APIClient().post(
         "/api/v1/agent-runtime/commands/poll/",
@@ -415,6 +419,10 @@ def test_expired_mutating_agent_command_fails_closed_without_redelivery(
         HTTP_IDEMPOTENCY_KEY=f"expired-{node_type}-{command_type}",
     )
     assert created.status_code == 202
+    AgentCommand.objects.filter(
+        node_id=node_id,
+        command_type="host.preflight",
+    ).update(status=AgentCommand.Status.SUCCEEDED, finished_at=timezone.now())
 
     approver = get_user_model().objects.create_user(
         username=f"approver-{node_type}-{command_type}",
@@ -1107,6 +1115,10 @@ def test_capi_pivot_execution_requires_separate_admin_approval(node_workspace):
 
     assert created.status_code == 202
     assert created.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+    AgentCommand.objects.filter(
+        node_id=node_id,
+        command_type="host.preflight",
+    ).update(status=AgentCommand.Status.SUCCEEDED, finished_at=timezone.now())
 
     self_approval = client.post(
         f"/api/v1/agent-commands/{created.data['id']}/approve/",
