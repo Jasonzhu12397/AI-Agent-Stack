@@ -449,6 +449,60 @@ def test_pivot_poll_rejects_expired_target_agent_acknowledgement(
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
 
+@pytest.mark.django_db
+def test_failed_pivot_execution_is_reconciliation_required_not_retryable(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="failed-pivot-outcome-unknown",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    operation_id = str(uuid.uuid4())
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.plan_result = {
+        "dual_agent": {
+            "phase": "pivot_executing",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        }
+    }
+    deployment.save(update_fields=["status", "plan_result", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+        payload={"operation_id": operation_id},
+        status=AgentCommand.Status.FAILED,
+        idempotency_key=f"failed-pivot-outcome-unknown:{deployment.id}",
+        plan_hash="a" * 64,
+    )
+
+    handle_deployment_command_result(
+        command,
+        "failed",
+        {},
+        {"code": "CAPI_PIVOT_CANCELLED_AFTER_MOVE"},
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == (
+        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+    )
+    assert deployment.plan_result["capi_pivot_reconciliation"]["state"] == "outcome_unknown"
+    assert deployment.plan_result["capi_pivot_reconciliation"]["operation_id"] == operation_id
+    assert deployment.plan_result["dual_agent"]["manual_reconciliation_required"] is True
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
+
+
 
 @pytest.mark.django_db
 def test_target_postflight_rejects_dry_run_plan_even_if_prerequisites_are_present(
