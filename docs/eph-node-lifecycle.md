@@ -41,7 +41,7 @@ Require the Target Agent Pod on a Target Control Plane master, successful cloud 
 
 ### CAPI pivot
 
-Move the CAPI management controllers and Cluster API objects, not merely the Agent Pod. Verify target controller availability, object ownership and reconciliation. A dry-run or simulated pivot is not a successful pivot.
+Move the CAPI management controllers and Cluster API objects, not merely the Agent Pod. Before `clusterctl move`, record the source Cluster UID in the `ai-agent-stack.io/source-cluster-uid` annotation. The Target API Server assigns a new Kubernetes UID during migration, so never require the source and Target UIDs to be equal. Verify the migrated object name/namespace and source-UID annotation, record both UIDs, verify source absence, and then verify target controller availability, object ownership and reconciliation. A dry-run or simulated pivot is not a successful pivot.
 
 ### BMH registry migration
 
