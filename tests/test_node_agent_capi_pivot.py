@@ -837,6 +837,7 @@ def _postflight_runner(
     consumer_ref_valid=True,
     consumer_ref_api_version_valid=True,
     consumer_ref_namespace_valid=True,
+    source_identity_annotation=True,
 ):
     calls = []
 
@@ -848,9 +849,13 @@ def _postflight_runner(
                 "metadata": {
                     "name": "target-cluster",
                     "uid": "target-cluster-uid",
-                    "annotations": {
-                        "ai-agent-stack.io/source-cluster-uid": "source-cluster-uid"
-                    },
+                    "annotations": (
+                        {
+                            "ai-agent-stack.io/source-cluster-uid": "source-cluster-uid"
+                        }
+                        if source_identity_annotation
+                        else {}
+                    ),
                 }
             }
         elif resource == "deployment":
@@ -1256,3 +1261,18 @@ def test_pivot_rejects_conflicting_source_identity_annotation(tmp_path):
         command[0].endswith("clusterctl") and "--dry-run" not in command
         for command, _ in calls
     )
+
+
+def test_pivot_postflight_rejects_missing_source_cluster_identity_annotation(tmp_path):
+    _, runner = _postflight_runner(source_identity_annotation=False)
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_POSTFLIGHT_SOURCE_IDENTITY_ANNOTATION_MISSING",
+    ):
+        run_capi_pivot_postflight(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
