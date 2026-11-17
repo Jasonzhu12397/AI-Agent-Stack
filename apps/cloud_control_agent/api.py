@@ -192,10 +192,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                action, idempotency_key, payload, created_at
                         FROM agent_control_commands
                         WHERE target_agent_id = %s AND required_role = %s
-                          AND status = 'queued'
+                          AND (status = 'queued' OR (status = 'leased' AND lease_expires_at <= NOW()))
                         ORDER BY created_at
-                        FOR UPDATE SKIP LOCKED
                         LIMIT 1
+                        FOR UPDATE SKIP LOCKED
                         """,
                         (identity["agent_id"], identity["role"]),
                     ).fetchone()
@@ -264,7 +264,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                       AND status = 'leased' AND lease_expires_at > NOW()
                     """,
                     (
-                        status, Jsonb(document), command_id, identity["agent_id"],
+                        status, Jsonb({key: value for key, value in document.items() if key != "lease_token"}), command_id, identity["agent_id"],
                         lease_id, token_hash,
                     ),
                 ).rowcount
