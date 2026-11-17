@@ -4865,7 +4865,7 @@ class KubernetesLeaseLeaderElector:
             return None
         if parsed.tzinfo is None:
             return None
-        return parsed.astimezone(datetime.timezone.utc)
+        return parsed.astimezone(datetime.UTC)
 
     def _write_lease(self, lease: dict[str, Any], create: bool) -> bool:
         try:
@@ -4881,7 +4881,7 @@ class KubernetesLeaseLeaderElector:
         return True
 
     def acquire_or_renew(self) -> bool:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         now_text = now.isoformat(timespec="seconds").replace("+00:00", "Z")
         try:
             current = kubernetes_api_get(self.lease_path)
@@ -5630,7 +5630,9 @@ def main() -> None:
             pod_name = os.environ.get("POD_NAME", "").strip()
             pod_namespace = os.environ.get("POD_NAMESPACE", "").strip()
             if not pod_name or not pod_namespace:
-                raise SystemExit("Target Agent leader election requires POD_NAME and POD_NAMESPACE.")
+                raise SystemExit(
+                    "Target Agent leader election requires POD_NAME and POD_NAMESPACE."
+                )
             leader_elector = KubernetesLeaseLeaderElector(
                 namespace=pod_namespace,
                 lease_name=os.environ.get(
