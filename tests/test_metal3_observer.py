@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+from apps.target_agent import main as target_main
 from apps.target_agent.metal3_ownership import (
     Metal3OwnershipError,
     verify_metal3_ownership,
@@ -88,7 +89,10 @@ def ownership_documents():
             "status": {
                 "hardware": {"systemUUID": system_uuid},
                 "operationalStatus": "OK",
-                "provisioning": {"state": "provisioned"},
+                "provisioning": {
+                    "state": "provisioned",
+                    "ID": f"00000000-0000-4000-8000-{index:012d}",
+                },
             },
         })
         source_identities.append({
@@ -180,3 +184,111 @@ def test_target_metal3_ownership_rejects_incomplete_control_plane_inventory():
     machines["items"] = machines["items"][:2]
     with pytest.raises(Metal3OwnershipError, match="MACHINES_INCOMPLETE"):
         observe(machines=machines, metal3machines=metal3machines, bmhs=bmhs, source=source)
+
+
+
+def test_target_agent_verifies_every_bmh_against_live_ironic_api(monkeypatch):
+    cluster, machines, metal3machines, bmhs, source = ownership_documents()
+    documents = {
+        "cluster.cluster.x-k8s.io": cluster,
+        "machines.cluster.x-k8s.io": machines,
+        "metal3machines.infrastructure.cluster.x-k8s.io": metal3machines,
+        "baremetalhosts.metal3.io": bmhs,
+    }
+    ironic_calls = []
+
+    def fake_kubectl(arguments, **_kwargs):
+        resource = arguments[1]
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": __import__("json").dumps(documents[resource]),
+            "stderr": "",
+        }
+
+    def fake_ironic_node(node_uuid):
+        ironic_calls.append(node_uuid)
+        return {
+            "uuid": node_uuid,
+            "provision_state": "active",
+            "maintenance": False,
+            "target_provision_state": None,
+            "last_error": None,
+        }
+
+    monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
+    monkeypatch.setattr(target_main, "ironic_api_configured", lambda: True)
+    monkeypatch.setattr(target_main, "get_ironic_node", fake_ironic_node)
+    result = target_main._observe_target_metal3_ownership({
+        "namespace": "metal3-system",
+        "cluster_name": "target-cluster",
+        "source_bmh_identities": source,
+    })
+    assert result["target_ironic_inventory_verified"] is True
+    assert result["ironic_node_count"] == 3
+    assert len(ironic_calls) == 3
+
+
+def test_target_agent_fails_closed_when_ironic_api_is_not_configured(monkeypatch):
+    cluster, machines, metal3machines, bmhs, source = ownership_documents()
+    documents = {
+        "cluster.cluster.x-k8s.io": cluster,
+        "machines.cluster.x-k8s.io": machines,
+        "metal3machines.infrastructure.cluster.x-k8s.io": metal3machines,
+        "baremetalhosts.metal3.io": bmhs,
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": __import__("json").dumps(documents[arguments[1]]),
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(target_main, "ironic_api_configured", lambda: False)
+    with pytest.raises(Metal3OwnershipError, match="IRONIC_API_CONFIGURATION_REQUIRED"):
+        target_main._observe_target_metal3_ownership({
+            "namespace": "metal3-system",
+            "cluster_name": "target-cluster",
+            "source_bmh_identities": source,
+        })
+
+
+def test_target_agent_rejects_ironic_node_in_maintenance(monkeypatch):
+    cluster, machines, metal3machines, bmhs, source = ownership_documents()
+    documents = {
+        "cluster.cluster.x-k8s.io": cluster,
+        "machines.cluster.x-k8s.io": machines,
+        "metal3machines.infrastructure.cluster.x-k8s.io": metal3machines,
+        "baremetalhosts.metal3.io": bmhs,
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda arguments, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": __import__("json").dumps(documents[arguments[1]]),
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(target_main, "ironic_api_configured", lambda: True)
+    monkeypatch.setattr(
+        target_main,
+        "get_ironic_node",
+        lambda node_uuid: {
+            "uuid": node_uuid,
+            "provision_state": "active",
+            "maintenance": True,
+            "target_provision_state": None,
+            "last_error": None,
+        },
+    )
+    with pytest.raises(Metal3OwnershipError, match="IRONIC_NODE_IN_MAINTENANCE"):
+        target_main._observe_target_metal3_ownership({
+            "namespace": "metal3-system",
+            "cluster_name": "target-cluster",
+            "source_bmh_identities": source,
+        })
