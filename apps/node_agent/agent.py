@@ -3870,6 +3870,7 @@ def execute_command(
                 "cluster_name": cluster_name,
                 "namespace": namespace,
                 "expected_worker_replicas": expected_workers,
+                "readiness_attempt": payload.get("readiness_attempt", 0),
                 "machine_deployment_name": machine_deployment_name,
                 "machine_deployment_status": machine_deployment_status,
                 "worker_machine_count": len(worker_machines),
