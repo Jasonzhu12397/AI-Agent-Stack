@@ -45,7 +45,8 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
         )
     """)
     connection.execute(
-        "ALTER TABLE agent_control_deployments ADD COLUMN IF NOT EXISTS trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb"
+        "ALTER TABLE agent_control_deployments "
+        "ADD COLUMN IF NOT EXISTS trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb"
     )
     connection.execute("""
         CREATE TABLE IF NOT EXISTS agent_control_agents (
