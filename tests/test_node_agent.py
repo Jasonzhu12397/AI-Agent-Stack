@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import io
 import json
+import subprocess
 import time
 
 import pytest
@@ -4744,3 +4745,21 @@ def test_checkpoint_guard_does_not_block_read_only_or_eph_commands():
         "eph_node",
         {},
     )
+
+
+
+def test_worker_chrony_pre_kubeadm_command_is_valid_shell():
+    command = agent.render_worker_chrony_pre_kubeadm_command("10.130.60.84")
+    checked = subprocess.run(
+        ["bash", "-n"],
+        input=command.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert checked.returncode == 0, checked.stderr.decode("utf-8", errors="replace")
+    assert "server 10.130.60.84 iburst" in command
+    assert "pool " not in command
+    assert "pool.ntp.org" not in command
+    assert "'^Leap status[[:space:]]*:[[:space:]]*Normal'; then" in command
