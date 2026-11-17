@@ -2439,6 +2439,42 @@ class AgentRuntimePollView(APIView):
                 command.lease_token = None
                 command.lease_expires_at = None
                 command.save()
+                if (
+                    command.command_type == "cluster.capi.pivot.execute"
+                    and lease_expired_while_running
+                    and command.deployment_id is not None
+                ):
+                    deployment = ClusterDeployment.objects.select_for_update().filter(
+                        pk=command.deployment_id,
+                        eph_node=node,
+                    ).first()
+                    if deployment is not None:
+                        plan_result = deployment.plan_result or {}
+                        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+                        deployment.error = {
+                            "code": "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+                            "command_id": str(command.id),
+                            "retryable": False,
+                        }
+                        deployment.plan_result = {
+                            **plan_result,
+                            "dual_agent": {
+                                **plan_result.get("dual_agent", {}),
+                                "phase": "pivot_outcome_unknown",
+                                "pivot_completed": False,
+                                "target_agent_owns_cluster": False,
+                                "eph_reclaim_allowed": False,
+                                "manual_reconciliation_required": True,
+                            },
+                        }
+                        deployment.save(
+                            update_fields=[
+                                "status",
+                                "error",
+                                "plan_result",
+                                "updated_at",
+                            ]
+                        )
                 return Response({"command": None})
             approval_expired = (
                 command.approved_at is None
