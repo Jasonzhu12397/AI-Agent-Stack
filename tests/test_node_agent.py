@@ -4074,6 +4074,16 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         "kind": "KubeadmConfigTemplate",
         "name": "worker-bootstrap-ntp-123e4567",
     }
+    chrony_command = created_manifests[0]["spec"]["template"]["spec"][
+        "preKubeadmCommands"
+    ][0]
+    assert "# AI-AGENT-STACK-WORKER-CHRONY" in chrony_command
+    assert "NTP_SERVER='10.0.0.123'" in chrony_command
+    assert "server $NTP_SERVER iburst" in chrony_command
+    assert "apt-get install -y chrony" in chrony_command
+    assert "zypper --non-interactive install chrony" in chrony_command
+    assert "dnf install -y chrony" in chrony_command
+    assert "pool " not in chrony_command
     assert manifest["spec"]["template"]["spec"]["infrastructureRef"] == {
         "apiVersion": TEST_INFRA_API_VERSION,
         "kind": "Metal3MachineTemplate",
