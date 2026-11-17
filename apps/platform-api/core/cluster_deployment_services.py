@@ -484,6 +484,49 @@ def handle_deployment_command_result(
     if deployment.started_at is None:
         deployment.started_at = timezone.now()
     if outcome == "failed":
+        if command.command_type in {
+            "cluster.capi.pivot.target.verify",
+            "cluster.capi.pivot.postflight",
+        }:
+            postflight = command.command_type == "cluster.capi.pivot.postflight"
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.plan_result = {
+                **(deployment.plan_result or {}),
+                "capi_pivot_reconciliation": {
+                    "state": "target_verification_outcome_unknown",
+                    "command_id": str(command.id),
+                    "error": error or {"code": "AGENT_COMMAND_FAILED"},
+                    "side_effects": "unknown",
+                    "retry_allowed": False,
+                    "eph_reclaim_allowed": False,
+                },
+                "dual_agent": {
+                    **((deployment.plan_result or {}).get("dual_agent", {})),
+                    "phase": (
+                        "pivot_postflight_outcome_unknown"
+                        if postflight
+                        else "target_adoption_outcome_unknown"
+                    ),
+                    "target_agent_owns_cluster": postflight,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.error = {
+                "code": "CAPI_PIVOT_TARGET_VERIFICATION_OUTCOME_UNKNOWN",
+                "command_id": str(command.id),
+                "retry_allowed": False,
+            }
+            deployment.save(
+                update_fields=[
+                    "status",
+                    "plan_result",
+                    "error",
+                    "started_at",
+                    "updated_at",
+                ],
+            )
+            return
         if command.command_type == "cluster.capi.pivot.execute":
             deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.plan_result = {
@@ -1081,7 +1124,7 @@ def handle_deployment_command_result(
             and result.get("side_effects") is False
         )
         if not valid_verification:
-            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"}
             deployment.finished_at = timezone.now()
             deployment.save(
@@ -1168,7 +1211,7 @@ def handle_deployment_command_result(
             and ironic_verified == ironic_applicable
         )
         if not valid_postflight:
-            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
             deployment.error = {"code": "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"}
             deployment.finished_at = timezone.now()
             deployment.plan_result = {
