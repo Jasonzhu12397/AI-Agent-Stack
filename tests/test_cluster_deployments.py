@@ -449,6 +449,98 @@ def test_pivot_poll_rejects_expired_target_agent_acknowledgement(
     assert deployment.error["code"] == "CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED"
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
+@pytest.mark.django_db
+def test_stale_target_preflight_is_refreshed_before_pivot_approval(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="stale-target-preflight-refresh",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_token = "stale-target-preflight-refresh-token"
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="stale-pivot-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name=deployment.cluster_name,
+        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "preflight_validated": True,
+            "source_cluster_identity": {
+                "uid": "source-cluster-uid",
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "spec_sha256": "a" * 64,
+            },
+            "inventory": [{"kind": "Cluster", "uid": "source-cluster-uid"}],
+            "inventory_total_count": 1,
+            "inventory_truncated": False,
+            "inventory_summary_truncated": False,
+        },
+        "capi_pivot_preflight": {"preflight_validated": True},
+        "capi_pivot_provider_compatibility": {"compatible": True},
+    }
+    deployment.save(update_fields=["target_node", "plan_result", "updated_at"])
+    old_finished_at = timezone.now() - datetime.timedelta(minutes=6)
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.source.preflight",
+        payload={},
+        result={"preflight_validated": True},
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=old_finished_at,
+        idempotency_key=f"stale-source-preflight:{deployment.id}",
+    )
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+        payload={},
+        result={"target_management_plane_ready": True},
+        status=AgentCommand.Status.SUCCEEDED,
+        finished_at=old_finished_at,
+        idempotency_key=f"stale-target-preflight:{deployment.id}",
+    )
+
+    _maybe_queue_capi_pivot(deployment)
+
+    deployment.refresh_from_db()
+    refresh_command = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.preflight",
+        status=AgentCommand.Status.QUEUED,
+    )
+    assert deployment.plan_result["dual_agent"]["phase"] == (
+        "target_agent_ack_refresh_pending"
+    )
+    assert deployment.plan_result["dual_agent"]["target_preflight_refresh_count"] == 1
+    assert deployment.plan_result["dual_agent"]["target_preflight_refresh_command_id"] == str(
+        refresh_command.id
+    )
+    assert not AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+    ).exists()
+
+
 
 @pytest.mark.django_db
 def test_failed_pivot_execution_is_reconciliation_required_not_retryable(
