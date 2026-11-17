@@ -20,6 +20,45 @@ LEASE_SECONDS = 90
 class ControlApiError(ValueError):
     pass
 
+CHECKPOINT_PHASES = (
+    "eph_single_node_ready",
+    "target_control_plane_ready",
+    "target_agent_ready",
+    "capi_pivot_verified",
+    "bmh_registry_migrated",
+    "eph_cleanup_verified",
+    "worker_provisioning",
+    "workers_ready",
+    "completed",
+)
+
+
+def _validate_checkpoint_actor_transition(
+    role: str,
+    current_phase: str,
+    next_phase: str,
+) -> None:
+    if current_phase == "not_started":
+        current_index = -1
+    else:
+        try:
+            current_index = CHECKPOINT_PHASES.index(current_phase)
+        except ValueError as exc:
+            raise ControlApiError("CHECKPOINT_CURRENT_PHASE_INVALID") from exc
+    try:
+        next_index = CHECKPOINT_PHASES.index(next_phase)
+    except ValueError as exc:
+        raise ControlApiError("CHECKPOINT_PHASE_INVALID") from exc
+    if role == "eph":
+        if current_index != -1 or next_index != 0:
+            raise ControlApiError("EPH_CHECKPOINT_PHASE_NOT_ALLOWED")
+        return
+    if role != "target":
+        raise ControlApiError("CHECKPOINT_AGENT_ROLE_INVALID")
+    if next_index < 1 or next_index != current_index + 1:
+        raise ControlApiError("TARGET_CHECKPOINT_TRANSITION_INVALID")
+
+
 
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
@@ -551,8 +590,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
 
         def _persist_checkpoint(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
-            if identity["role"] != "target" or identity["cluster_id"] is None:
+            if identity["role"] == "target" and identity["cluster_id"] is None:
                 raise ControlApiError("TARGET_AGENT_IDENTITY_REQUIRED")
+            if identity["role"] == "eph" and identity["cluster_id"] is not None:
+                raise ControlApiError("EPH_AGENT_CLUSTER_SCOPE_INVALID")
             deployment_id = _parse_uuid(document.get("deployment_id"), "DEPLOYMENT_ID")
             command_id = _parse_uuid(document.get("command_id"), "COMMAND_ID")
             lease_id = _parse_uuid(document.get("lease_id"), "LEASE_ID")
@@ -588,9 +629,33 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 state_digest.lower(),
             ):
                 raise ControlApiError("CHECKPOINT_EVIDENCE_DIGEST_MISMATCH")
+            _validate_checkpoint_actor_transition(
+                identity["role"],
+                expected_phase,
+                next_phase,
+            )
             state = {"state_digest": state_digest.lower(), "evidence": evidence}
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 with connection.transaction():
+                    deployment = connection.execute(
+                        """
+                        SELECT installation_id, cluster_id, phase, sequence, state
+                        FROM agent_control_deployments
+                        WHERE deployment_id = %s
+                        FOR UPDATE
+                        """,
+                        (deployment_id,),
+                    ).fetchone()
+                    if (
+                        deployment is None
+                        or deployment["installation_id"] != identity["installation_id"]
+                    ):
+                        raise ControlApiError("CHECKPOINT_DEPLOYMENT_IDENTITY_MISMATCH")
+                    if (
+                        identity["role"] == "target"
+                        and deployment["cluster_id"] != identity["cluster_id"]
+                    ):
+                        raise ControlApiError("CHECKPOINT_TARGET_CLUSTER_MISMATCH")
                     leased_command = connection.execute(
                         """
                         SELECT deployment_id FROM agent_control_commands
@@ -623,7 +688,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             expected_sequence + 1,
                             Jsonb(state),
                             deployment_id,
-                            identity["cluster_id"],
+                            deployment["cluster_id"],
                             expected_phase,
                             expected_sequence,
                         ),
@@ -635,7 +700,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             FROM agent_control_deployments
                             WHERE deployment_id = %s AND cluster_id = %s
                             """,
-                            (deployment_id, identity["cluster_id"]),
+                            (deployment_id, deployment["cluster_id"]),
                         ).fetchone()
                         if (
                             current
