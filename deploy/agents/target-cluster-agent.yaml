@@ -164,6 +164,11 @@ spec:
                   key: ironic-api-token
             - name: IRONIC_API_MICROVERSION
               value: "1.82"
+            - name: IRONIC_INTERNAL_NTP_IP
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-internal-ntp-ip
             - name: AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
