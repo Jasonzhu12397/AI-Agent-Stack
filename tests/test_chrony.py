@@ -1,10 +1,56 @@
 import pytest
+
+from node_agent import chrony
 from node_agent.chrony import (
     ChronyError,
     _render_config,
     _validate_sources,
     configure_chrony,
 )
+
+
+
+def test_verify_ntp_server_checks_private_endpoint_and_valid_response(monkeypatch):
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def settimeout(self, timeout):
+            captured["timeout"] = timeout
+
+        def sendto(self, request, destination):
+            captured["request"] = bytes(request)
+            captured["destination"] = destination
+
+        def recvfrom(self, size):
+            response = bytearray(48)
+            response[0] = 0x24
+            response[1] = 2
+            response[24:32] = captured["request"][40:48]
+            response[40:48] = b"12345678"
+            return bytes(response), ("10.130.60.84", 123)
+
+    monkeypatch.setattr(chrony.socket, "socket", lambda *args: FakeSocket())
+    result = chrony.verify_ntp_server("10.130.60.84")
+
+    assert result["synchronized"] is True
+    assert result["server_ip"] == "10.130.60.84"
+    assert result["stratum"] == 2
+    assert captured["destination"] == ("10.130.60.84", 123)
+    assert captured["timeout"] == 3.0
+
+
+def test_verify_ntp_server_rejects_public_endpoint():
+    with pytest.raises(
+        ChronyError,
+        match="IRONIC_INTERNAL_NTP_ADDRESS_MUST_BE_PRIVATE",
+    ):
+        chrony.verify_ntp_server("8.8.8.8")
 
 
 def test_worker_must_use_exact_ironic_private_ip_only():
