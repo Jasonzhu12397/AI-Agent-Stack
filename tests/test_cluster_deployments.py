@@ -3027,10 +3027,44 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
     deployment.status = ClusterDeployment.Status.PROVISIONING
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
-            "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+            "source_cluster_identity": {
+                "uid": "source-cluster-uid",
+                "api_version": "cluster.x-k8s.io/v1beta1",
+                "spec_sha256": "c" * 64,
+            }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "cluster_api_version": "cluster.x-k8s.io/v1beta1",
+            "cluster_spec_sha256": "c" * 64,
+        },
+        "dual_agent": {
+            "pivot_operation_id": "c5a2b4d3-8f56-4b7f-9c32-2f5a6b7c8901",
+            "target_cluster_uid_after_move": "target-cluster-uid",
+            "target_agent_owns_cluster": True,
+            "eph_reclaim_allowed": False,
+        },
     }
     deployment.save(update_fields=["target_node", "status", "plan_result"])
+    ClusterDeploymentPivotOperation.objects.create(
+        deployment=deployment,
+        operation_id=uuid.UUID("c5a2b4d3-8f56-4b7f-9c32-2f5a6b7c8901"),
+        source_node=eph_node,
+        target_node=target_node,
+        state=ClusterDeploymentPivotOperation.State.VERIFYING,
+        source_identity={
+            "uid": "source-cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "c" * 64,
+        },
+        inventory=[],
+        inventory_sha256="d" * 64,
+        target_identity={
+            "uid": "target-cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "c" * 64,
+        },
+    )
     command = AgentCommand.objects.create(
         tenant=tenant,
         project=project,
