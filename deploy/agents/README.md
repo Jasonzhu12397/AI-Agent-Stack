@@ -168,9 +168,9 @@ The deployment sequence after Pivot is now enforced by the Supervisor:
 
 ## Deploy both Agent roles to separate clusters
 
-The deployment helper applies the EPH resources to the temporary EPH cluster and the Target Agent plus per-node network inventory DaemonSet to the target cluster. It requires two different, already configured kubeconfig contexts and a digest-pinned image built from Dockerfile.node-agent.
+The deployment helper applies the EPH Agent resources to the temporary EPH cluster and the three-replica Target Agent service to the target cluster. It requires two different, already configured kubeconfig contexts and a digest-pinned shared runtime image.
 
-First, build and push the node-agent image using verified Cluster API and Kubernetes release checksums as described above. Use the resulting registry digest, not a mutable tag. Then create the namespaces and the required Secrets. Supply secret values through files managed by your secret manager; do not put tokens or kubeconfig contents in Git or shell command arguments.
+First, build and push the shared EPH/Target Agent runtime image using verified Cluster API and Kubernetes release checksums as described above. Use the resulting registry digest, not a mutable tag. Then create the namespaces and the required Secrets. Supply secret values through files managed by your secret manager; do not put tokens or kubeconfig contents in Git or shell command arguments.
 
 ~~~bash
 kubectl --context "$EPH_CONTEXT" apply -f deploy/agents/namespace.yaml
@@ -203,7 +203,7 @@ Run the deployment helper after setting the two context names and immutable imag
 ~~~bash
 EPH_CONTEXT=<eph-context> \
 TARGET_CONTEXT=<target-context> \
-AGENT_IMAGE=<registry>/ai-agent-node-agent@sha256:<64-hex-digest> \
+AGENT_IMAGE=<registry>/ai-agent-runtime@sha256:<64-hex-digest> \
 bash deploy/agents/deploy.sh
 ~~~
 
@@ -212,8 +212,8 @@ The script verifies both API servers, checks required Secret keys without printi
 
 ## Target Agent placement and HA requirement
 
-The Target Agent is a cluster-level service and must run as three Pods distributed across the three target Kubernetes control-plane/master nodes. It is not a separate Node Agent installed on each physical machine. All three Pods share the Target Agent service role; command polling and side-effect execution must be single-active through Kubernetes Lease leader election, with standby Pods performing no command polling or execution. The current `target-cluster-agent.yaml` still declares one replica and the runtime does not yet implement leader election. Therefore the three-master HA deployment is an explicit implementation gap, not a completed feature. Do not simply change `replicas` to three while all Pods share one enrollment credential; that would permit concurrent polling under one Agent identity.
+The Target Agent is a cluster-level service and must run as three Pods distributed across the three target Kubernetes control-plane/master nodes. It is not a separate Node Agent installed on each physical machine. All three Pods share the Target Agent service role; command polling and side-effect execution must be single-active through Kubernetes Lease leader election, with standby Pods performing no command polling or execution. The current `target-cluster-agent.yaml` declares three replicas with required anti-affinity across the control-plane/master nodes. The runtime uses Kubernetes Lease leader election, so only the elected Pod may poll or execute commands while standby replicas remain idle.
 
 ### Target Agent single-active execution
 
-The three Target Agent Pods share one logical cluster identity. Kubernetes Lease leader election (`target-cluster-agent-leader`) fences command polling and side-effect execution to the elected replica; standby replicas remain available for failover but do not poll or execute. The Target ServiceAccount receives only namespaced Lease `get/create/update` access. A lost leadership signal cancels the active command path and prevents result submission under stale authority. The lease duration and renewal interval are 30 seconds and 5 seconds respectively. Verify the Lease object and all three Pod placements before enabling target-side mutating commands.
+The three Target Agent Pods share one logical cluster identity. Kubernetes Lease leader election (`target-cluster-agent-leader`) fences command polling and side-effect execution to the elected replica; standby replicas remain available for failover but do not poll or execute. The Target ServiceAccount receives namespaced Lease `get/create/update` access. A lost leadership signal cancels the active command path and prevents result submission under stale authority. The lease duration and renewal interval are 30 seconds and 5 seconds respectively. A PodDisruptionBudget keeps at least two replicas available, and required pod anti-affinity prevents two replicas from sharing one master. Verify the Lease object and all three Pod placements before enabling target-side mutating commands.
