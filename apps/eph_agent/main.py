@@ -76,6 +76,7 @@ def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) ->
         "command_id": command["command_id"],
         "agent_id": str(identity),
         "lease_id": command["lease"]["lease_id"],
+        "lease_token": command["lease"]["token"],
         "status": outcome["status"],
         "started_at": now.isoformat(),
         "completed_at": now.isoformat(),
