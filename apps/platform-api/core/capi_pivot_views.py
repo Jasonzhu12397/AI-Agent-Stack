@@ -172,17 +172,15 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     return Response({"detail": "Target acknowledgement operation_id mismatch."}, status=409)
                 if evidence.get("inventory_sha256") != operation.inventory_sha256:
                     return Response({"detail": "Target acknowledgement inventory digest mismatch."}, status=409)
-                identity = evidence.get("target_identity")
                 if (
-                    not isinstance(identity, dict)
-                    or not isinstance(identity.get("cluster_uid"), str)
-                    or not identity["cluster_uid"]
-                    or not isinstance(identity.get("api_version"), str)
-                    or not isinstance(identity.get("spec_sha256"), str)
+                    evidence.get("target_management_plane_ready") is not True
+                    or evidence.get("pivot_execution_allowed") is not True
+                    or evidence.get("missing_resources") != []
+                    or evidence.get("cluster_name_conflicts") != []
+                    or evidence.get("side_effects") is not False
                 ):
-                    return Response({"detail": "Target acknowledgement lacks verified cluster identity."}, status=400)
+                    return Response({"detail": "Target management plane preflight is not safe for pivot."}, status=409)
                 operation.target_ack = evidence
-                operation.target_identity = identity
                 _append_event(
                     operation,
                     node,
@@ -253,8 +251,17 @@ class AgentRuntimeCapiPivotOperationView(APIView):
                     return Response({"detail": "Target object inventory is incomplete."}, status=409)
                 if any(not isinstance(item, dict) or not isinstance(item.get("uid"), str) or not item["uid"] for item in objects):
                     return Response({"detail": "Every adopted target object must have an API-server UID."}, status=409)
+                target_cluster_identity = evidence.get("target_cluster_identity")
+                if (
+                    not isinstance(target_cluster_identity, dict)
+                    or not isinstance(target_cluster_identity.get("cluster_uid"), str)
+                    or not target_cluster_identity["cluster_uid"]
+                    or not isinstance(target_cluster_identity.get("api_version"), str)
+                    or not isinstance(target_cluster_identity.get("spec_sha256"), str)
+                ):
+                    return Response({"detail": "Target cluster identity is not API-server verified."}, status=409)
                 operation.target_identity = {
-                    **(operation.target_identity or {}),
+                    **target_cluster_identity,
                     "verified_objects": objects,
                     "verified_at": timezone.now().isoformat(),
                 }
