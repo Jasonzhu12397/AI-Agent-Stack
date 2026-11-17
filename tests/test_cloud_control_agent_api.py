@@ -10,6 +10,7 @@ from apps.cloud_control_agent.api import (
     _validate_action_role,
     _validate_checkpoint_actor_transition,
     _validate_reported_capabilities,
+    _validated_eph_pivot_attestation,
 )
 
 
@@ -156,3 +157,98 @@ def test_cloud_control_rejects_invalid_or_cross_role_heartbeat_capabilities(
 ):
     with pytest.raises(ControlApiError):
         _validate_reported_capabilities(role, capabilities)
+
+
+
+def test_eph_pivot_attestation_requires_matching_source_and_target_bmh_digests():
+    import hashlib
+    import json
+
+    identities = [
+        {
+            "namespace": "metal3",
+            "name": "host-1",
+            "hardware_identity": "system-uuid:sha256:abc",
+        },
+        {
+            "namespace": "metal3",
+            "name": "host-2",
+            "hardware_identity": "system-uuid:sha256:def",
+        },
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            identities,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    output = {
+        "capi_pivot_succeeded": True,
+        "source_cluster_absent": True,
+        "target_cluster_ownership_verified": True,
+        "source_cluster_uid": "source-cluster-uid",
+        "target_cluster_uid": "target-cluster-uid",
+        "source_bmh_identities": identities,
+        "source_bmh_digest": digest,
+        "target_bmh_digest": digest,
+    }
+    attestation = _validated_eph_pivot_attestation(output)
+    assert attestation is not None
+    assert attestation["source_bmh_digest"] == digest
+    assert attestation["source_bmh_identities"] == identities
+
+
+def test_eph_pivot_attestation_rejects_identity_or_digest_tampering():
+    output = {
+        "capi_pivot_succeeded": True,
+        "source_cluster_absent": True,
+        "target_cluster_ownership_verified": True,
+        "source_cluster_uid": "source-cluster-uid",
+        "target_cluster_uid": "target-cluster-uid",
+        "source_bmh_identities": [
+            {
+                "namespace": "metal3",
+                "name": "host-1",
+                "hardware_identity": "system-uuid:sha256:abc",
+            }
+        ],
+        "source_bmh_digest": "0" * 64,
+        "target_bmh_digest": "0" * 64,
+    }
+    assert _validated_eph_pivot_attestation(output) is None
+
+
+def test_eph_pivot_attestation_rejects_duplicate_hardware_identity():
+    import hashlib
+    import json
+
+    identities = [
+        {
+            "namespace": "metal3",
+            "name": "host-1",
+            "hardware_identity": "system-uuid:sha256:abc",
+        },
+        {
+            "namespace": "metal3",
+            "name": "host-2",
+            "hardware_identity": "system-uuid:sha256:abc",
+        },
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            identities,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert _validated_eph_pivot_attestation({
+        "capi_pivot_succeeded": True,
+        "source_cluster_absent": True,
+        "target_cluster_ownership_verified": True,
+        "source_cluster_uid": "source-cluster-uid",
+        "target_cluster_uid": "target-cluster-uid",
+        "source_bmh_identities": identities,
+        "source_bmh_digest": digest,
+        "target_bmh_digest": digest,
+    }) is None
