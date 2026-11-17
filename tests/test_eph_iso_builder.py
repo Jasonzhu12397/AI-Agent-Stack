@@ -134,7 +134,7 @@ def test_eph_kubeadm_runtime_requires_ram_mounts_before_start():
     assert "Requires=var-lib-containerd.mount" in containerd
     assert "eph-containerd-config.sh" in containerd
     assert (
-        "Requires=containerd.service var-lib-containerd.mount "
+        "Requires=cloud-config.service containerd.service var-lib-containerd.mount "
         "var-lib-kubelet.mount var-lib-etcd.mount"
     ) in kubeadm
     assert "Where=/var/lib/containerd" in containerd_mount
