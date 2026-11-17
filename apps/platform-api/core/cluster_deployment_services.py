@@ -357,19 +357,76 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     now = timezone.now()
     if (
         source_command is None
-        or target_command is None
         or source_command.finished_at is None
-        or target_command.finished_at is None
-        or now - source_command.finished_at > datetime.timedelta(minutes=5)
-        or now - target_command.finished_at > datetime.timedelta(minutes=5)
         or not isinstance(source_command.result, dict)
-        or not isinstance(target_command.result, dict)
     ):
         deployment.plan_result = {
             **plan_result,
             "dual_agent": {
                 **plan_result.get("dual_agent", {}),
-                "phase": "pivot_agent_acknowledgement_stale",
+                "phase": "pivot_source_preflight_missing",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+            },
+        }
+        deployment.save(update_fields=["plan_result", "updated_at"])
+        return
+    if (
+        target_command is None
+        or target_command.finished_at is None
+        or now - target_command.finished_at > datetime.timedelta(minutes=5)
+        or not isinstance(target_command.result, dict)
+    ):
+        dual_agent_state = plan_result.get("dual_agent", {})
+        refresh_count = int(dual_agent_state.get("target_preflight_refresh_count", 0))
+        if refresh_count >= 3:
+            deployment.status = ClusterDeployment.Status.FAILED
+            deployment.error = {"code": "CAPI_PIVOT_TARGET_ACK_REFRESH_LIMIT"}
+            deployment.plan_result = {
+                **plan_result,
+                "dual_agent": {
+                    **dual_agent_state,
+                    "phase": "target_agent_ack_refresh_exhausted",
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                },
+            }
+            deployment.save(
+                update_fields=["status", "error", "plan_result", "updated_at"]
+            )
+            return
+        refresh_payload = {
+            "deployment_id": str(deployment.id),
+            "cluster_name": deployment.cluster_name,
+            "namespace": _deployment_capi_namespace(deployment),
+        }
+        refresh_key = (
+            f"cluster-deployment:{deployment.id}:"
+            f"cluster.capi.pivot.target.preflight:refresh:{refresh_count + 1}"
+        )
+        refresh_command, _ = AgentCommand.objects.get_or_create(
+            tenant=deployment.tenant,
+            idempotency_key=refresh_key,
+            defaults={
+                "project": deployment.project,
+                "node": deployment.target_node,
+                "requested_by": deployment.requested_by,
+                "deployment": deployment,
+                "command_type": "cluster.capi.pivot.target.preflight",
+                "payload": refresh_payload,
+                "status": AgentCommand.Status.QUEUED,
+                "plan_hash": _payload_hash(
+                    "cluster.capi.pivot.target.preflight", refresh_payload
+                ),
+            },
+        )
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **dual_agent_state,
+                "phase": "target_agent_ack_refresh_pending",
+                "target_preflight_refresh_count": refresh_count + 1,
+                "target_preflight_refresh_command_id": str(refresh_command.id),
                 "target_agent_owns_cluster": False,
                 "eph_reclaim_allowed": False,
             },
