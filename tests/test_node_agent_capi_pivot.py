@@ -1693,6 +1693,7 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
                         "namespace": "metal3",
                         "uid": "source-cluster-uid",
                         "spec_sha256": spec_digest,
+                        "consumer_ref": None,
                         "owner_references": [],
                         "owner_references_truncated": False,
                         "cluster_name": "target-cluster",
