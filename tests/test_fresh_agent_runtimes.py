@@ -72,3 +72,17 @@ def test_new_deployment_path_does_not_reference_legacy_node_agent_images():
     assert "ai-agent-node-agent" not in deployment
     assert "Dockerfile.node-agent" not in build
     assert "network-inventory-agent" not in deployment
+
+
+
+def test_target_agent_blocks_handoff_phase_skips():
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "payload": {
+            "current_phase": "eph_single_node_ready",
+            "next_phase": "bmh_registry_migrated",
+            "evidence": {},
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["side_effects"] is False
