@@ -53,6 +53,7 @@ def test_handoff_rejects_bmh_identity_set_mismatch():
                 ],
                 "target_metal3_ownership_verified": True,
                 "target_metal3_reconciliation_healthy": True,
+        "target_ironic_inventory_verified": True,
             },
         )
 
