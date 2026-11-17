@@ -1121,8 +1121,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
     ):
         raise NodeAgentError("TIME_DNS_PROBE_NAME_REQUIRED")
 
-    return {
-        "valid": True,
+    normalized_profile = {
         "version": "v1",
         "chrony_required": True,
         "resolver_backend": "systemd-resolved",
@@ -1131,7 +1130,11 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
         "dns_servers": normalized_dns,
         "search_domains": normalized_domains,
         "dns_probe_name": dns_probe_name.strip(),
-        "profile_hash": canonical_hash(profile),
+    }
+    return {
+        "valid": True,
+        **normalized_profile,
+        "profile_hash": canonical_hash(normalized_profile),
     }
 
 
