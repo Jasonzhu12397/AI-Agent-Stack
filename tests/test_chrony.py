@@ -121,16 +121,16 @@ def test_managed_config_removes_unapproved_fallback_sources(tmp_path):
 
     path = tmp_path / "chrony.conf"
     path.write_text(
-        "pool 0.pool.ntp.org iburst\\n"
-        "server 192.0.2.99 iburst\\n"
-        "driftfile /var/lib/chrony/drift\\n"
-        "sourcedir /run/chrony-dhcp\\n",
+        "pool 0.pool.ntp.org iburst\n"
+        "server 192.0.2.99 iburst\n"
+        "driftfile /var/lib/chrony/drift\n"
+        "sourcedir /run/chrony-dhcp\n",
         encoding="utf-8",
     )
     block = (
-        "# BEGIN AI-AGENT-STACK MANAGED CHRONY\\n"
-        "server 10.130.60.84 iburst\\n"
-        "# END AI-AGENT-STACK MANAGED CHRONY\\n"
+        "# BEGIN AI-AGENT-STACK MANAGED CHRONY\n"
+        "server 10.130.60.84 iburst\n"
+        "# END AI-AGENT-STACK MANAGED CHRONY\n"
     )
     _write_managed_config(path, block)
     result = path.read_text(encoding="utf-8")
