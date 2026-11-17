@@ -80,6 +80,9 @@ MUTATING_COMMANDS = {
     "cluster.capi.worker.provision",
     "cluster.kubernetes.version.upgrade",
 }
+APPROVAL_REQUIRED_COMMANDS = {
+    "cluster.kubernetes.version.upgrade",
+}
 SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.34", "v1.35", "v1.36"})
 
 def _cancel_agent_commands(queryset, now):
@@ -142,7 +145,10 @@ def _command_is_fenced_by_cluster_ownership(command, node):
     if not isinstance(plan_result, dict):
         return False
     dual_agent = plan_result.get("dual_agent", {})
-    return isinstance(dual_agent, dict) and dual_agent.get("target_agent_owns_cluster") is True
+    return isinstance(dual_agent, dict) and (
+        dual_agent.get("target_agent_owns_cluster") is True
+        or dual_agent.get("pivot_executed") is True
+    )
 
 
 def _fail_fenced_command(command, now):
@@ -1986,7 +1992,7 @@ class AgentRuntimePollView(APIView):
                     _payload_hash(command.command_type, command.payload),
                 )
             )
-            if command.command_type in MUTATING_COMMANDS and (
+            if command.command_type in APPROVAL_REQUIRED_COMMANDS and (
                 approval_expired or approval_hash_invalid
             ):
                 command.status = AgentCommand.Status.FAILED
