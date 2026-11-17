@@ -250,7 +250,12 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     return ownership
 
 
-def _observe_ready_master_count() -> int:
+def _observe_ready_master_count(cluster_name: str) -> int:
+    if not isinstance(cluster_name, str) or not re.fullmatch(
+        r"[a-z0-9]([-a-z0-9]*[a-z0-9])?",
+        cluster_name,
+    ):
+        raise HandoffError("TARGET_CONTROL_PLANE_CLUSTER_NAME_INVALID")
     result = _kubectl(["get", "nodes", "-o", "json"])
     if not result["available"]:
         raise HandoffError("TARGET_CONTROL_PLANE_NODE_OBSERVATION_FAILED")
@@ -262,8 +267,11 @@ def _observe_ready_master_count() -> int:
     for node in document.get("items", []):
         labels = node.get("metadata", {}).get("labels", {})
         is_master = (
-            "node-role.kubernetes.io/control-plane" in labels
-            or "node-role.kubernetes.io/master" in labels
+            labels.get("cluster.x-k8s.io/cluster-name") == cluster_name
+            and (
+                "node-role.kubernetes.io/control-plane" in labels
+                or "node-role.kubernetes.io/master" in labels
+            )
         )
         is_ready = any(
             condition.get("type") == "Ready" and condition.get("status") == "True"
@@ -394,6 +402,7 @@ def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, A
         approved_sources,
         approved_sources,
         worker_networks,
+        payload.get("cluster_name"),
     )
 
 
@@ -518,7 +527,8 @@ def execute(
             evidence = payload.get("evidence", {})
             if next_phase == HandoffPhase.TARGET_CONTROL_PLANE_READY.value:
                 ntp_attestation = _observe_control_plane_ntp_bootstrap(payload)
-                ready_master_count = _observe_ready_master_count()
+                cluster_name = payload.get("cluster_name")
+                ready_master_count = _observe_ready_master_count(cluster_name)
                 evidence = {
                     **evidence,
                     **ntp_attestation,
