@@ -1790,134 +1790,126 @@ def inspect_host_network_hardware() -> dict[str, Any]:
 def inspect_cluster_node_hardware_inventory(
     cluster_nodes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    try:
-        configmaps = list_all_kubernetes_items(
-            "/api/v1/namespaces/ai-agent-inventory/configmaps",
-            max_items=5000,
-        )
-    except NodeAgentError as exc:
+    if not isinstance(cluster_nodes, list):
         return {
             "status": "unavailable",
-            "error_code": str(exc),
+            "scope": "kubernetes_node_api",
+            "node_count": 0,
+            "expected_node_count": 0,
+            "inventory_complete": False,
             "nodes": [],
+            "reason": "cluster_node_list_unavailable",
         }
-    expected_node_uids = {
-        item.get("metadata", {}).get("name"): item.get("metadata", {}).get("uid")
-        for item in (cluster_nodes or [])
-        if isinstance(item, dict)
-        and isinstance(item.get("metadata"), dict)
-        and isinstance(item["metadata"].get("name"), str)
-        and item["metadata"].get("name")
-        and isinstance(item["metadata"].get("uid"), str)
-        and item["metadata"].get("uid")
-    }
     reports = []
-    stale_node_names = []
-    for configmap in configmaps:
-        if not isinstance(configmap, dict):
+    missing_node_names = []
+    for node in cluster_nodes[:1000]:
+        if not isinstance(node, dict):
+            missing_node_names.append("unknown")
             continue
-        metadata = configmap.get("metadata", {})
+        metadata = node.get("metadata")
+        status = node.get("status")
+        spec = node.get("spec")
         if not isinstance(metadata, dict):
+            missing_node_names.append("unknown")
             continue
-        labels = metadata.get("labels", {})
-        if (
-            not isinstance(labels, dict)
-            or labels.get("app.kubernetes.io/name") != "network-inventory-agent"
-        ):
+        node_name = metadata.get("name")
+        if not isinstance(node_name, str) or not node_name:
+            missing_node_names.append("unknown")
             continue
-        data = configmap.get("data", {})
-        raw_report = data.get("inventory.json") if isinstance(data, dict) else None
-        try:
-            report = json.loads(raw_report) if isinstance(raw_report, str) else {}
-        except (json.JSONDecodeError, ValueError):
-            report = {}
-        if not isinstance(report, dict):
-            continue
-        node_name = report.get("node_name")
-        node_uid = report.get("node_uid")
-        hardware = report.get("hardware")
-        if (
-            report.get("schema_version") != "v1"
-            or not isinstance(node_name, str)
-            or not re.fullmatch(
-                r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?",
-                node_name,
-            )
-            or not isinstance(node_uid, str)
-            or not node_uid
-            or metadata.get("name") != network_inventory_configmap_name(node_name)
-            or not isinstance(hardware, dict)
-            or hardware.get("status") != "observed"
-        ):
-            continue
-        interface_items = hardware.get("interfaces", [])
-        pci_items = hardware.get("pci_network_devices", [])
-        hugepage_items = hardware.get("hugepages", [])
-        numa_items = hardware.get("numa_nodes", [])
-        if (
-            not isinstance(interface_items, list)
-            or not isinstance(pci_items, list)
-            or not isinstance(hugepage_items, list)
-            or not isinstance(numa_items, list)
-            or any(not isinstance(item, dict) for item in interface_items[:256])
-            or any(not isinstance(item, dict) for item in pci_items[:4096])
-            or any(not isinstance(item, dict) for item in hugepage_items[:16])
-            or any(not isinstance(item, dict) for item in numa_items[:128])
-        ):
-            continue
-        collected_at = report.get("collected_at")
-        try:
-            collected_time = datetime.datetime.fromisoformat(collected_at)
-            if collected_time.tzinfo is None:
-                raise ValueError("timezone_required")
-            report_age = (
-                datetime.datetime.now(datetime.UTC) - collected_time
-            ).total_seconds()
-        except (TypeError, ValueError):
-            stale_node_names.append(node_name)
-            continue
-        if report_age < -60 or report_age > 180:
-            stale_node_names.append(node_name)
-            continue
-        if (
-            cluster_nodes is not None
-            and expected_node_uids.get(node_name) != node_uid
-        ):
-            continue
-        reports.append({
-            "node_name": node_name,
-            "node_uid": node_uid,
-            "collected_at": collected_at,
-            "cpu_online": hardware.get("cpu_online"),
-            "system_identity": (
-                hardware.get("system_identity")
-                if isinstance(hardware.get("system_identity"), dict)
-                else {"attestation": "not_reported"}
+        if not isinstance(status, dict):
+            status = {}
+        if not isinstance(spec, dict):
+            spec = {}
+        node_status = status.get("nodeInfo")
+        if not isinstance(node_status, dict):
+            node_status = {}
+        capacity = status.get("capacity")
+        allocatable = status.get("allocatable")
+        labels = metadata.get("labels")
+        taints = spec.get("taints")
+        conditions = status.get("conditions")
+        if not isinstance(capacity, dict):
+            capacity = {}
+        if not isinstance(allocatable, dict):
+            allocatable = {}
+        if not isinstance(labels, dict):
+            labels = {}
+        if not isinstance(taints, list):
+            taints = []
+        if not isinstance(conditions, list):
+            conditions = []
+        ready_condition = next(
+            (
+                condition
+                for condition in conditions
+                if isinstance(condition, dict) and condition.get("type") == "Ready"
             ),
-            "interfaces": interface_items[:256],
-            "pci_network_devices": pci_items[:4096],
-            "hugepages": hugepage_items[:16],
-            "numa_nodes": numa_items[:128],
-            "inventory_truncated": hardware.get("inventory_truncated") is True,
-        })
+            None,
+        )
+        resource_names = sorted(
+            key
+            for key in allocatable
+            if isinstance(key, str)
+            and ("/" in key or key.startswith("hugepages-"))
+        )
+        reports.append(
+            {
+                "node_name": node_name,
+                "node_uid": metadata.get("uid"),
+                "provider_id": spec.get("providerID"),
+                "ready": (
+                    ready_condition.get("status") == "True"
+                    if isinstance(ready_condition, dict)
+                    else False
+                ),
+                "architecture": node_status.get("architecture"),
+                "operating_system": node_status.get("operatingSystem"),
+                "os_image": node_status.get("osImage"),
+                "kernel_version": node_status.get("kernelVersion"),
+                "kubelet_version": node_status.get("kubeletVersion"),
+                "container_runtime_version": node_status.get("containerRuntimeVersion"),
+                "capacity": {
+                    key: value
+                    for key, value in capacity.items()
+                    if isinstance(key, str) and isinstance(value, (str, int, float))
+                },
+                "allocatable": {
+                    key: value
+                    for key, value in allocatable.items()
+                    if isinstance(key, str) and isinstance(value, (str, int, float))
+                },
+                "extended_resource_names": resource_names[:256],
+                "labels": {
+                    key: value
+                    for key, value in list(labels.items())[:100]
+                    if isinstance(key, str) and isinstance(value, str)
+                },
+                "taints": [
+                    {
+                        "key": item.get("key"),
+                        "value": item.get("value"),
+                        "effect": item.get("effect"),
+                    }
+                    for item in taints[:100]
+                    if isinstance(item, dict)
+                ],
+                "observation_scope": "kubernetes_node_api",
+                "host_only_hardware_details": "not_available_via_kubernetes_node_api",
+            }
+        )
     reports.sort(key=lambda item: item["node_name"])
-    reported_names = {item["node_name"] for item in reports}
-    expected_names = set(expected_node_uids)
+    expected_count = len(cluster_nodes)
     return {
-        "status": "observed",
+        "status": "observed" if reports else "unavailable",
+        "scope": "kubernetes_node_api",
         "node_count": len(reports),
-        "expected_node_count": len(expected_node_uids),
-        "inventory_complete": bool(expected_node_uids) and expected_names.issubset(reported_names),
-        "missing_node_names": sorted(expected_names - reported_names)[:1000],
-        "stale_node_names": sorted(set(stale_node_names))[:1000],
-        "nodes": reports[:1000],
-        "truncated": len(reports) > 1000,
+        "expected_node_count": expected_count,
+        "inventory_complete": bool(cluster_nodes) and len(reports) == expected_count,
+        "missing_node_names": sorted(set(missing_node_names))[:1000],
+        "nodes": reports,
+        "host_only_hardware_details_available": False,
     }
 
-
-def network_inventory_configmap_name(node_name: str) -> str:
-    digest = hashlib.sha256(node_name.encode("utf-8")).hexdigest()[:20]
-    return "network-inventory-" + digest
 
 def inspect_network_environment(
     payload: dict[str, Any] | None = None,
@@ -2285,7 +2277,8 @@ def inspect_network_environment(
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
             (
                 "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA "
-                "and device binding validation."
+                "and device binding validation.",
+            "Target Agent reports Kubernetes-visible node resources only; host-only PCI/VF/NUMA details require an approved infrastructure API.",
             ),
             "Component presence is inferred from Pod names, not dataplane connectivity tests.",
         ],
