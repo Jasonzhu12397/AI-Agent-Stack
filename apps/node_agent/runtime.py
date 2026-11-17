@@ -5015,7 +5015,7 @@ def create_agent(client: ControlPlaneClient, node_type: str):
     raise NodeAgentError("INVALID_AGENT_ROLE")
 
 
-def main(expected_node_type: str | None = None) -> None:
+def main(expected_node_type: str) -> None:
     parser = argparse.ArgumentParser(description="AI Agent Studio remote node agent")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--healthcheck", action="store_true")
@@ -5041,7 +5041,9 @@ def main(expected_node_type: str | None = None) -> None:
         raise SystemExit("AGENT_CONTROL_URL, AGENT_NODE_ID and AGENT_TOKEN are required.")
     if node_type not in {"eph_node", "target_cluster"}:
         raise SystemExit("AGENT_NODE_TYPE must be eph_node or target_cluster.")
-    if expected_node_type is not None and node_type != expected_node_type:
+    if expected_node_type not in {"eph_node", "target_cluster"}:
+        raise SystemExit("EXPECTED_AGENT_ROLE_REQUIRED")
+    if node_type != expected_node_type:
         raise SystemExit("AGENT_ROLE_MISMATCH")
     if args.poll_seconds < 1 or args.poll_seconds > 300:
         raise SystemExit("--poll-seconds must be between 1 and 300.")
@@ -5063,6 +5065,3 @@ def main(expected_node_type: str | None = None) -> None:
                 raise SystemExit(1) from exc
             time.sleep(args.poll_seconds)
 
-
-if __name__ == "__main__":
-    main()
