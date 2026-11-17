@@ -98,7 +98,7 @@ def _object_identity(document: dict[str, Any]) -> tuple[str, str, str]:
         raise WorkerProvisioningError(f"WORKER_{kind.upper()}_METADATA_REQUIRED")
     namespace = _name(metadata.get("namespace"), "NAMESPACE")
     name = _name(metadata.get("name"), "RESOURCE_NAME")
-    return expected_resource, namespace, name
+    return _expected_resource, namespace, name
 
 
 def _selector_labels(machine_deployment: dict[str, Any]) -> dict[str, str]:
@@ -282,7 +282,9 @@ def execute_worker_provisioning(
     try:
         configured_ntp = validate_ironic_internal_ntp_ip(configured_ntp)
     except NtpPolicyError as exc:
-        raise WorkerProvisioningError("WORKER_IRONIC_INTERNAL_NTP_IP_CONFIGURATION_REQUIRED") from exc
+        raise WorkerProvisioningError(
+            "WORKER_IRONIC_INTERNAL_NTP_IP_CONFIGURATION_REQUIRED"
+        ) from exc
     timeout_seconds = payload.get("timeout_seconds", 1800)
     if (
         not isinstance(timeout_seconds, int)
