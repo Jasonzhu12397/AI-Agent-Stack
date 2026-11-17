@@ -418,7 +418,7 @@ def execute(
                 "output": probe,
                 "side_effects": False,
             }
-        except (NtpPolicyError, TypeError, ValueError) as exc:
+        except (NtpPolicyError, TypeError, ValueError, AttributeError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc),
@@ -472,7 +472,7 @@ def execute(
                 },
                 "side_effects": False,
             }
-        except (NtpPolicyError, TypeError, ValueError) as exc:
+        except (NtpPolicyError, TypeError, ValueError, AttributeError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc),
