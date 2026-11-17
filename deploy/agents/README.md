@@ -8,7 +8,7 @@ This directory deploys the new three-Agent architecture. The legacy Node Agent d
 - **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight and reports readiness. Mutating CAPI Pivot remains blocked until its dedicated, approved adapter is implemented and tested.
 - **Target Agent**: three replicas, spread one per Target Control Plane master. Kubernetes Lease leader election ensures only the elected replica polls and executes commands. All replicas expose readiness and report their own pod identity.
 
-The Target Agent currently has read-only Kubernetes/CAPI/Metal3 observation handlers and an explicit Worker NTP policy validator. It does not yet provision Workers or configure chronyd on hosts. The validator rejects external NTP sources and permits only the Ironic internal IP/VIP; this is a policy gate, not proof of host synchronization.
+The Target Agent currently has read-only Kubernetes/CAPI/Metal3 observation handlers, a Worker NTP policy validator and a pre-kubeadm chrony command renderer. The generated command installs chrony, replaces the Worker source list with exactly the Ironic internal IP/VIP, and verifies that chronyd selected that endpoint. The Target Agent does not yet inject or execute this command through a CAPI Worker template, so this is not proof of host synchronization.
 
 ## Required contexts and image references
 
@@ -100,4 +100,4 @@ bash deploy.sh
 
 ## Current implementation boundary
 
-The current fresh runtimes provide mTLS identity, heartbeat, command claim/result transport, Cloud Control durable command storage, Target leader election, read-only CAPI/Metal3 observation and Worker NTP policy validation. CAPI Pivot execution, BMH ownership transfer, autonomous EPH cleanup, Worker provisioning, host-level chronyd installation/synchronization, and end-to-end integration with the existing platform API are not yet enabled. They must be implemented as explicit adapters and verified with the selected CAPI/Metal3/Ironic provider versions before production use.
+The current fresh runtimes provide mTLS identity, heartbeat, command claim/result transport, Cloud Control durable command storage, Target leader election, read-only CAPI/Metal3 observation and Worker NTP policy validation/command rendering. CAPI Pivot execution, BMH ownership transfer, autonomous EPH cleanup, Worker provisioning, host-level chronyd installation/synchronization, and end-to-end integration with the existing platform API are not yet enabled. They must be implemented as explicit adapters and verified with the selected CAPI/Metal3/Ironic provider versions before production use.
