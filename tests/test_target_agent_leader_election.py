@@ -54,7 +54,7 @@ def test_target_agent_leader_election_creates_missing_lease(monkeypatch):
 
 
 def test_target_agent_standby_does_not_steal_active_lease(monkeypatch):
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     renewed = now.isoformat().replace("+00:00", "Z")
     monkeypatch.setattr(
         agent,
@@ -72,7 +72,7 @@ def test_target_agent_standby_does_not_steal_active_lease(monkeypatch):
 
 def test_target_agent_takes_over_expired_lease_with_resource_version(monkeypatch):
     expired = (
-        datetime.datetime.now(datetime.timezone.utc)
+        datetime.datetime.now(datetime.UTC)
         - datetime.timedelta(seconds=90)
     ).isoformat().replace("+00:00", "Z")
     calls = []
