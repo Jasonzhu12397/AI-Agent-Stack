@@ -107,5 +107,6 @@ def test_target_worker_rbac_namespace_is_rendered_and_validated():
     assert 'CAPI_NAMESPACE="${TARGET_CAPI_NAMESPACE:-metal3}"' in script
     assert "TARGET_CAPI_NAMESPACE_INVALID" in script
     assert "REPLACE_WITH_CAPI_NAMESPACE" in script
+    assert script.count('s|REPLACE_WITH_CAPI_NAMESPACE|$CAPI_NAMESPACE|g') == 2
     assert 'TARGET_CAPI_NAMESPACE\n              value: REPLACE_WITH_CAPI_NAMESPACE' in manifest
     assert "kind: Role\nmetadata:\n  name: target-agent-worker-provisioner" in manifest
