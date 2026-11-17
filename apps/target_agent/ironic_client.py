@@ -23,12 +23,14 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def ironic_api_configured(environ: Any = None) -> bool:
+def ironic_api_configured(environ: typing.Any = None) -> bool:
     values = os.environ if environ is None else environ
     return bool(values.get("IRONIC_API_URL") and values.get("IRONIC_API_TOKEN"))
 
 
-def _configuration(environ: collections.abc.Mapping[str, str]) -> tuple[str, str, str, float]:
+def _configuration(
+    environ: collections.abc.Mapping[str, str],
+) -> tuple[str, str, str, float]:
     endpoint = environ.get("IRONIC_API_URL", "").strip()
     token = environ.get("IRONIC_API_TOKEN", "")
     microversion = environ.get("IRONIC_API_MICROVERSION", "1.82").strip()
@@ -59,7 +61,7 @@ def _configuration(environ: collections.abc.Mapping[str, str]) -> tuple[str, str
 
 def get_ironic_node(
     node_uuid: str,
-    environ: Mapping[str, str] | None = None,
+    environ: collections.abc.Mapping[str, str] | None = None,
     opener: typing.Any = None,
 ) -> dict[str, typing.Any]:
     try:
