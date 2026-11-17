@@ -108,6 +108,27 @@ def test_target_agent_rejects_malformed_lease_holder(monkeypatch):
         _elector().acquire_or_renew()
 
 
+def test_target_agent_standby_does_not_poll_control_plane(monkeypatch):
+    class Client:
+        deployment_checkpoints = {}
+
+        def heartbeat(self, node_type):
+            return {"active_deployments": []}
+
+        def poll(self):
+            pytest.fail("standby Target Agent must not poll commands")
+
+    monkeypatch.setattr(
+        agent,
+        "inspect_host_network_hardware",
+        lambda: {"status": "not_configured"},
+    )
+    monkeypatch.setattr(agent, "touch_health_files", lambda **kwargs: None)
+    authority = agent.threading.Event()
+
+    assert agent.run_once(Client(), "target_cluster", authority) is False
+
+
 def test_target_agent_command_is_cancelled_after_leadership_loss(monkeypatch):
     authority = agent.threading.Event()
     authority.set()
