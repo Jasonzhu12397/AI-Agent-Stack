@@ -152,6 +152,18 @@ spec:
                 secretKeyRef:
                   name: target-agent-credentials
                   key: cluster-id
+            - name: IRONIC_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-api-url
+            - name: IRONIC_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-api-token
+            - name: IRONIC_API_MICROVERSION
+              value: "1.82"
             - name: AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
