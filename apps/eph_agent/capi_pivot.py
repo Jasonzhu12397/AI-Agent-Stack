@@ -16,7 +16,7 @@ class CapiPivotError(RuntimeError):
 
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
 STABLE_ID_ANNOTATION = "ai-agent-stack.io/stable-cluster-identity"
 
@@ -123,6 +123,8 @@ def _version(value: Any) -> tuple[int, int, int]:
 
 
 def _image_version(image: str, deployment: dict[str, Any]) -> tuple[int, int, int]:
+    if not isinstance(image, str) or not image:
+        raise CapiPivotError("CAPI_PIVOT_PROVIDER_IMAGE_INVALID")
     reference = image.split("@", 1)[0]
     last_component = reference.rsplit("/", 1)[-1]
     candidate = last_component.rsplit(":", 1)[-1] if ":" in last_component else ""
@@ -276,7 +278,11 @@ def _provider_versions(
             item.get("name"): item.get("image")
             for item in target.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         }
-        if not source_containers or set(source_containers) != set(target_containers):
+        if (
+            not source_containers
+            or None in source_containers
+            or set(source_containers) != set(target_containers)
+        ):
             raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_CONTAINER_SET_MISMATCH:{provider}")
         for container_name, source_image in source_containers.items():
             source_version = _image_version(source_image, source)
@@ -328,8 +334,42 @@ def _bmh_inventory(kubeconfig: str, namespace: str) -> list[dict[str, str]]:
             "name": name,
             "hardware_identity": _hardware_identity(host),
         })
+    hardware_ids = [item["hardware_identity"] for item in identities]
+    if not identities:
+        raise CapiPivotError("CAPI_PIVOT_BMH_INVENTORY_EMPTY")
+    if len(hardware_ids) != len(set(hardware_ids)):
+        raise CapiPivotError("CAPI_PIVOT_BMH_HARDWARE_IDENTITY_DUPLICATE")
     identities.sort(key=lambda item: (item["namespace"], item["name"], item["hardware_identity"]))
     return identities
+
+
+def _wait_for_target_bmh_inventory(
+    kubeconfig: str,
+    namespace: str,
+    expected: list[dict[str, str]],
+    lease_lost_event: Event | None,
+    attempts: int = 60,
+) -> list[dict[str, str]]:
+    expected_set = {
+        (item["namespace"], item["name"], item["hardware_identity"])
+        for item in expected
+    }
+    last_error = "CAPI_PIVOT_TARGET_BMH_INVENTORY_NOT_RECONCILED"
+    for _ in range(attempts):
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise CapiPivotError("COMMAND_LEASE_LOST_DURING_BMH_POSTFLIGHT")
+        try:
+            observed = _bmh_inventory(kubeconfig, namespace)
+            observed_set = {
+                (item["namespace"], item["name"], item["hardware_identity"])
+                for item in observed
+            }
+            if observed_set == expected_set:
+                return observed
+        except CapiPivotError as exc:
+            last_error = str(exc)
+        time.sleep(5)
+    raise CapiPivotError(last_error)
 
 
 def _inventory_digest(identities: list[dict[str, str]]) -> str:
@@ -385,6 +425,7 @@ def execute_capi_pivot(
     lease_lost_event: Event | None = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    side_effects = False
     try:
         payload, source, target = _validate_pivot_inputs(command)
         namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
@@ -490,6 +531,7 @@ def execute_capi_pivot(
         )
         if not annotate["ok"]:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_IDENTITY_ANNOTATION_FAILED")
+        side_effects = True
         move_timeout = payload.get("move_timeout_seconds", 1800)
         if not isinstance(move_timeout, int) or not 60 <= move_timeout <= 3600:
             raise CapiPivotError("CAPI_PIVOT_MOVE_TIMEOUT_INVALID")
@@ -512,7 +554,17 @@ def execute_capi_pivot(
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_SOURCE_UID_ANNOTATION_MISMATCH")
         if target_annotations.get(STABLE_ID_ANNOTATION) != stable_identity:
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_STABLE_IDENTITY_MISMATCH")
-        target_bmhs = _bmh_inventory(target, namespace)
+        target_after_preflight = _target_controllers_ready(
+            target,
+            preflight["target_ready_master_names"],
+            payload.get("target_controller_deployments"),
+        )
+        target_bmhs = _wait_for_target_bmh_inventory(
+            target,
+            namespace,
+            source_bmhs,
+            lease_lost_event,
+        )
         source_set = {
             (item["namespace"], item["name"], item["hardware_identity"])
             for item in source_bmhs
@@ -538,7 +590,7 @@ def execute_capi_pivot(
                 "target_stable_cluster_identity": target_annotations[STABLE_ID_ANNOTATION],
                 "source_cluster_absent": True,
                 "target_cluster_ownership_verified": True,
-                "target_controllers_ready": True,
+                "target_controllers_ready": target_after_preflight["ready"],
                 "source_bmh_identities": source_bmhs,
                 "target_bmh_identities": target_bmhs,
                 "source_bmh_digest": _inventory_digest(source_bmhs),
@@ -553,5 +605,5 @@ def execute_capi_pivot(
             "status": "blocked",
             "error_code": str(exc) or "CAPI_PIVOT_BLOCKED",
             "output": {},
-            "side_effects": False,
+            "side_effects": side_effects,
         }
