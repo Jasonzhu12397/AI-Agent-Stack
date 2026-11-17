@@ -1045,6 +1045,7 @@ def validate_time_dns_profile(profile: Any) -> dict[str, Any]:
     roles = profile.get("apply_to")
     if (
         not isinstance(roles, list)
+        or len(roles) != 2
         or any(not isinstance(role, str) for role in roles)
         or set(roles) != {"eph_live_os", "target_os"}
     ):
