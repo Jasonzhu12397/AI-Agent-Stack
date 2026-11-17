@@ -1,4 +1,4 @@
-# Dual-Agent Infrastructure Control Architecture
+# Three-Agent Infrastructure Control Architecture
 
 ## Purpose
 
@@ -6,14 +6,14 @@ This document defines the three-Agent collaboration model for remotely managed K
 
 ## Components and trust boundaries
 
-1. **Remote Control Plane Agent** runs in the central AI Agent Studio runtime. It receives the operator's request, creates a typed plan, checks tenant/project scope, resolves the target EPH node and target cluster, obtains required approvals, dispatches commands and aggregates progress. It is not a privileged shell on either node.
+1. **Cloud Control Agent** runs in Alibaba Cloud or Tencent Cloud in the central AI Agent Studio runtime. It receives operator requests, creates typed plans, checks tenant/project scope, resolves the EPH host and target cluster, obtains approvals, dispatches commands, stores durable workflow state and coordinates recovery. It is not a privileged shell on either site.
 2. **EPH Agent** runs as a Pod inside a temporary single-node Kubernetes cluster on the EPH bare-metal node. The node boots a RAM-resident OS and is borrowed from the future target compute pool only for the bootstrap window. The local OS, Kubernetes etcd and Pod filesystem are disposable; the central platform is the durable source of truth. The EPH Agent establishes an outbound authenticated connection, performs preflight and temporary-cluster API inspection, and coordinates the approved bootstrap/handoff workflow. The physical node is later rebooted into its target worker image and reclaimed as a worker in the final cluster.
 3. **Target Agent** is one logical cluster-scoped service deployed as three Kubernetes Pods, one on each of the three target control-plane/master nodes, only after the target API is reachable. The replicas share one enrolled identity and use Kubernetes Lease leader election; only the Leader polls and executes side effects. It verifies Target adoption, CAPI/Metal3/Ironic state, controllers, cluster health and the reclaimed EPH worker using a dedicated ServiceAccount.
 4. **CAPI / Metal3 / Ironic / IPA / BMC** remain the infrastructure control chain. Any CAPI/Metal3 management components hosted on the EPH single-node Kubernetes cluster are temporary and must complete their required provisioning work before EPH reclamation. State required after EPH reboot must live in the central platform or a durable external management service; an ephemeral EPH management cluster cannot be treated as a persistent day-2 control plane.
 
 ## Bootstrap and reclamation lifecycle
 
-The EPH-node is a temporary bare-metal bootstrap host booted into RAM. It starts a single-node Kubernetes bootstrap cluster in memory and runs the EPH Agent Pod. The target Control Plane is provisioned first. Once its API, etcd and core networking are healthy, the Target Agent is recreated as a Pod on a target control-plane node, resumes the durable deployment context from the central Supervisor, and proves it can execute commands. The CAPI management components and Cluster API objects are then pivoted from the EPH bootstrap cluster into the target cluster (using `clusterctl move` or a version-tested equivalent). The pivot must be verified before worker provisioning; moving only the Agent Pod does not transfer CAPI controllers or reconciliation state.
+The EPH node is a temporary bare-metal bootstrap host booted into RAM. It starts a single-node Kubernetes bootstrap cluster in memory and runs the EPH Agent Pod. The target Control Plane is provisioned first. Once all three target masters, the API server, etcd and core networking are healthy, the one logical Target Agent is deployed as three Pods, one per master. The replicas share one cluster-scoped enrollment identity; Kubernetes Lease leader election permits only one active command poller/executor. The elected replica resumes durable deployment context from the Cloud Control Agent. The CAPI management components and Cluster API objects are then pivoted from the EPH bootstrap cluster into the target cluster (using `clusterctl move` or a version-tested equivalent). The pivot must be verified before worker provisioning; moving only the Agent Pod does not transfer CAPI controllers or reconciliation state.
 
 ```text
 Physical capacity pool
