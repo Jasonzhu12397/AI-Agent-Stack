@@ -94,6 +94,7 @@ def verify_control_plane_ntp_bootstrap(
         if re.search(r"(?m)^\s*pool\s+", script):
             raise NtpAttestationError(f"TARGET_NTP_EXTERNAL_FALLBACK_FOUND:{machine_name}")
         required_markers = (
+            "install -y chrony",
             "chronyc -n sources",
             "chronyc tracking",
             "ss -lun",
