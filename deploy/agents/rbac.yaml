@@ -5,6 +5,7 @@ metadata:
   namespace: ai-agent-system
 automountServiceAccountToken: true
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -40,6 +41,7 @@ rules:
   - nonResourceURLs: ["/version", "/api", "/apis", "/apis/*"]
     verbs: ["get"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -53,6 +55,7 @@ roleRef:
   kind: ClusterRole
   name: eph-node-agent-readonly
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -63,6 +66,7 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -77,6 +81,7 @@ roleRef:
   kind: Role
   name: eph-node-agent-network-inspection
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -87,6 +92,7 @@ rules:
     resources: ["pods", "events", "services"]
     verbs: ["get", "list", "watch"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -101,6 +107,7 @@ roleRef:
   kind: Role
   name: eph-node-agent-workload-readonly
 ---
+
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -108,6 +115,7 @@ metadata:
   namespace: ai-agent-system
 automountServiceAccountToken: true
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -125,6 +133,7 @@ rules:
   - nonResourceURLs: ["/version", "/api", "/apis", "/apis/*"]
     verbs: ["get"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -146,6 +155,7 @@ rules:
     resources: ["secrets"]
     verbs: ["get"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -160,6 +170,7 @@ roleRef:
   kind: ClusterRole
   name: target-cluster-agent-capi-provisioner
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -174,6 +185,7 @@ roleRef:
   kind: ClusterRole
   name: target-cluster-agent-capi-provisioner
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -186,6 +198,7 @@ rules:
     resources: ["hardwaredata"]
     verbs: ["get"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -200,6 +213,7 @@ roleRef:
   kind: ClusterRole
   name: target-cluster-agent-metal3-host-inventory
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -214,6 +228,7 @@ roleRef:
   kind: ClusterRole
   name: target-cluster-agent-metal3-host-inventory
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -227,6 +242,7 @@ roleRef:
   kind: ClusterRole
   name: target-cluster-agent-readonly
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -237,6 +253,7 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -251,6 +268,7 @@ roleRef:
   kind: Role
   name: target-cluster-agent-network-inspection
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -261,6 +279,7 @@ rules:
     resources: ["pods", "events", "services"]
     verbs: ["get", "list", "watch"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -276,83 +295,7 @@ roleRef:
   name: target-cluster-agent-workload-readonly
 
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: target-cluster-agent-network-inventory-readonly
-  namespace: ai-agent-inventory
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: target-cluster-agent-network-inventory-readonly
-  namespace: ai-agent-inventory
-subjects:
-  - kind: ServiceAccount
-    name: target-cluster-agent
-    namespace: ai-agent-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: target-cluster-agent-network-inventory-readonly
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: network-inventory-agent
-  namespace: ai-agent-system
-automountServiceAccountToken: true
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: network-inventory-agent-node-readonly
-rules:
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: network-inventory-agent-node-readonly
-subjects:
-  - kind: ServiceAccount
-    name: network-inventory-agent
-    namespace: ai-agent-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: network-inventory-agent-node-readonly
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: network-inventory-agent-configmap-writer
-  namespace: ai-agent-inventory
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "create", "update"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: network-inventory-agent-configmap-writer
-  namespace: ai-agent-inventory
-subjects:
-  - kind: ServiceAccount
-    name: network-inventory-agent
-    namespace: ai-agent-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: network-inventory-agent-configmap-writer
----
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -367,6 +310,7 @@ rules:
     resources: ["leases"]
     verbs: ["create"]
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
