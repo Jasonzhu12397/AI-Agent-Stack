@@ -39,10 +39,14 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             phase TEXT NOT NULL,
             sequence BIGINT NOT NULL DEFAULT 0,
             state JSONB NOT NULL DEFAULT '{}'::jsonb,
+            trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    connection.execute(
+        "ALTER TABLE agent_control_deployments ADD COLUMN IF NOT EXISTS trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb"
+    )
     connection.execute("""
         CREATE TABLE IF NOT EXISTS agent_control_agents (
             agent_id UUID PRIMARY KEY,
