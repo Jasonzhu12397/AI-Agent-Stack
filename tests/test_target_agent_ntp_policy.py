@@ -46,7 +46,8 @@ def test_worker_rejects_non_routable_ntp_endpoint(address):
 def test_worker_pre_kubeadm_command_installs_chrony_and_verifies_exact_internal_source():
     command = render_worker_chrony_pre_kubeadm_command("10.130.60.84")
     assert "NTP_SERVER='10.130.60.84'" in command
-    assert "server $NTP_SERVER iburst prefer" in command
+    assert "server 10.130.60.84 iburst prefer" in command
+    assert "server $NTP_SERVER" not in command
     assert "apt-get install -y chrony" in command
     assert "zypper --non-interactive install chrony" in command
     assert "dnf install -y chrony" in command
