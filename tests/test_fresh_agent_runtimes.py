@@ -604,3 +604,26 @@ def test_target_agent_rejects_worker_ntp_ip_not_pinned_in_target_secret(monkeypa
     assert result["status"] == "blocked"
     assert result["error_code"] == "IRONIC_INTERNAL_NTP_IP_CONFIGURATION_MISMATCH"
     assert result["side_effects"] is False
+
+
+def test_target_agent_rejects_unpinned_ntp_ip_during_worker_handoff(monkeypatch):
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
+    result = execute_target({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "eph_cleanup_verified",
+            "sequence": 6,
+            "state": {},
+        },
+        "payload": {
+            "next_phase": "worker_provisioning",
+            "evidence": {
+                "ironic_internal_ntp_ip": "10.130.60.85",
+                "ironic_internal_ntp_service_reachable": True,
+                "target_agent_leader_elected": True,
+            },
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "IRONIC_INTERNAL_NTP_IP_CONFIGURATION_MISMATCH"
+    assert result["side_effects"] is False
