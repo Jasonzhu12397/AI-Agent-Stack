@@ -3878,6 +3878,7 @@ def execute_command(
                 "not_ready_worker_machine_names": not_ready_workers,
                 "worker_node_names": ready_worker_node_names,
                 "capi_worker_inventory_complete": inventory_complete,
+                "ready": result["ready"] and inventory_complete,
                 "side_effects": False,
             }
         )
