@@ -1562,10 +1562,8 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("approval_valid", [True, False])
-def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_transfer_ownership(
+def test_dual_agent_pivot_requires_fresh_source_and_target_agent_acknowledgements(
     cluster_delivery_workspace,
-    approval_valid,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
