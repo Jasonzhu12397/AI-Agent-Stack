@@ -1896,9 +1896,9 @@ def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
     )
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
-    assert deployment.plan_result.get("dual_agent", {}).get("target_agent_owns_cluster") is not True
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    assert deployment.error["code"] == "CAPI_PIVOT_EXECUTION_RESULT_REJECTED"
+    assert deployment.plan_result.get("dual_agent", {}).get("target_agent_owns_cluster") is False
 
 @pytest.mark.django_db
 def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory(
