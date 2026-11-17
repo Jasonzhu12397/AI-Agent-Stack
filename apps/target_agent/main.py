@@ -102,6 +102,7 @@ def _kubectl(
     arguments: list[str],
     timeout: int = 30,
     max_output_bytes: int = 512 * 1024,
+    kubeconfig: str | None = None,
 ) -> dict[str, Any]:
     allowed_environment = (
         "PATH",
@@ -119,7 +120,7 @@ def _kubectl(
         for key in allowed_environment
         if key in os.environ
     }
-    environment["KUBECONFIG"] = os.environ.get("KUBECONFIG", "")
+    environment["KUBECONFIG"] = kubeconfig or os.environ.get("KUBECONFIG", "")
     try:
         completed = subprocess.run(
             ["kubectl", *arguments],
@@ -323,7 +324,89 @@ def _observe_target_capi_pivot(payload: dict[str, Any]) -> dict[str, Any]:
         raise HandoffError("TARGET_CAPI_PIVOT_STABLE_IDENTITY_MISMATCH")
     if not ready or status.get("observedGeneration", 0) < generation:
         raise HandoffError("TARGET_CAPI_PIVOT_CLUSTER_NOT_READY")
+
+    source_kubeconfig = os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", "")
+    if not source_kubeconfig or not os.path.isfile(source_kubeconfig):
+        raise HandoffError("TARGET_CAPI_PIVOT_SOURCE_OBSERVER_KUBECONFIG_REQUIRED")
+    source_result = _kubectl(
+        [
+            "get",
+            "cluster.cluster.x-k8s.io",
+            cluster_name,
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+        timeout=30,
+        kubeconfig=source_kubeconfig,
+    )
+    source_error = source_result.get("stderr", "").lower()
+    source_absent = (
+        not source_result["available"]
+        and (
+            "notfound" in source_error
+            or "not found" in source_error
+        )
+    )
+    if not source_absent:
+        if source_result["available"]:
+            raise HandoffError("TARGET_CAPI_PIVOT_SOURCE_CLUSTER_STILL_PRESENT")
+        raise HandoffError("TARGET_CAPI_PIVOT_SOURCE_ABSENCE_NOT_VERIFIED")
+
+    required_controllers = [
+        item.strip()
+        for item in os.environ.get("TARGET_REQUIRED_CONTROLLER_DEPLOYMENTS", "").split(",")
+        if item.strip()
+    ]
+    if not required_controllers:
+        raise HandoffError("TARGET_CAPI_PIVOT_REQUIRED_CONTROLLER_POLICY_MISSING")
+    deployment_result = _kubectl(
+        ["get", "deployments", "-A", "-o", "json"],
+        timeout=60,
+        max_output_bytes=16 * 1024 * 1024,
+    )
+    if not deployment_result["available"]:
+        raise HandoffError("TARGET_CAPI_PIVOT_CONTROLLER_OBSERVATION_FAILED")
+    try:
+        deployment_items = json.loads(deployment_result["stdout"]).get("items", [])
+    except ValueError as exc:
+        raise HandoffError("TARGET_CAPI_PIVOT_CONTROLLER_JSON_INVALID") from exc
+    deployment_by_ref = {
+        (
+            item.get("metadata", {}).get("namespace"),
+            item.get("metadata", {}).get("name"),
+        ): item
+        for item in deployment_items
+    }
+    for reference in required_controllers:
+        if reference.count("/") != 1:
+            raise HandoffError("TARGET_CAPI_PIVOT_CONTROLLER_POLICY_INVALID")
+        controller_namespace, controller_name = reference.split("/", 1)
+        deployment = deployment_by_ref.get((controller_namespace, controller_name))
+        if deployment is None:
+            raise HandoffError(
+                f"TARGET_CAPI_PIVOT_CONTROLLER_MISSING:{reference}"
+            )
+        deployment_metadata = deployment.get("metadata", {})
+        deployment_spec = deployment.get("spec", {})
+        deployment_status = deployment.get("status", {})
+        desired = deployment_spec.get("replicas", 1)
+        if (
+            not isinstance(desired, int)
+            or desired < 1
+            or deployment_metadata.get("generation", 0)
+            > deployment_status.get("observedGeneration", 0)
+            or deployment_status.get("availableReplicas", 0) < desired
+            or deployment_status.get("updatedReplicas", 0) < desired
+        ):
+            raise HandoffError(
+                f"TARGET_CAPI_PIVOT_CONTROLLER_NOT_READY:{reference}"
+            )
     return {
+        "source_cluster_absent": True,
+        "source_cluster_absence_observed": True,
+        "target_controllers_ready": True,
         "target_cluster_uid": target_uid,
         "target_source_cluster_uid_annotation": annotations[
             "ai-agent-stack.io/source-cluster-uid"
