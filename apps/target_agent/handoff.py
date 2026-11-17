@@ -108,6 +108,7 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
             raise HandoffError("HANDOFF_BMH_IDENTITY_SETS_DIFFER")
         _require(evidence, "target_metal3_ownership_verified")
         _require(evidence, "target_metal3_reconciliation_healthy")
+        _require(evidence, "target_ironic_inventory_verified")
     elif phase is HandoffPhase.EPH_CLEANUP_VERIFIED:
         _require(evidence, "target_agent_owns_handoff")
         _require(evidence, "eph_credentials_revoked")
