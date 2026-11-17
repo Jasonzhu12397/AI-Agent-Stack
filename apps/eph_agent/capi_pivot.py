@@ -457,8 +457,8 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     payload = command.get("payload")
     if not isinstance(payload, dict):
         raise CapiPivotError("CAPI_PIVOT_PAYLOAD_REQUIRED")
-    namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
-    cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
+    _valid_name(payload.get("namespace"), "NAMESPACE")
+    _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
     stable_identity = payload.get("stable_cluster_identity")
     expected_source_uid = payload.get("expected_source_cluster_uid")
     expected_bmh = payload.get("expected_source_bmh_identities")

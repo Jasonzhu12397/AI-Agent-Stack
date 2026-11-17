@@ -13,7 +13,6 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-
 MAX_BODY_BYTES = 1024 * 1024
 LEASE_SECONDS = 90
 

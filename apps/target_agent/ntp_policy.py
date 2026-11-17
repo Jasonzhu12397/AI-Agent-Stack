@@ -122,7 +122,7 @@ def _validate_ntp_source(value: str) -> str:
             r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
         )
         if not re.fullmatch(hostname_pattern, value):
-            raise NtpPolicyError("CONTROL_PLANE_EXTERNAL_NTP_SOURCE_INVALID")
+            raise NtpPolicyError("CONTROL_PLANE_EXTERNAL_NTP_SOURCE_INVALID") from None
         return value.lower()
 
 

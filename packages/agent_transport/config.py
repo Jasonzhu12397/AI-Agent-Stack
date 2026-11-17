@@ -42,7 +42,7 @@ class AgentSettings:
     request_timeout_seconds: float = 15.0
 
     @classmethod
-    def from_environment(cls, expected_role: str) -> "AgentSettings":
+    def from_environment(cls, expected_role: str) -> AgentSettings:
         raw_url = _required("AGENT_CONTROL_URL")
         parsed = urlparse(raw_url)
         if parsed.scheme != "https" or not parsed.netloc:

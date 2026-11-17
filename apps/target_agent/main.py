@@ -37,11 +37,11 @@ from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
 from .ntp_policy import (
     NtpPolicyError,
+    probe_ironic_internal_ntp_endpoint,
     render_control_plane_chrony_config,
     render_control_plane_chrony_pre_kubeadm_command,
     render_worker_chrony_config,
     render_worker_chrony_pre_kubeadm_command,
-    probe_ironic_internal_ntp_endpoint,
     validate_control_plane_ntp_profile,
     validate_worker_ntp_sources,
 )
