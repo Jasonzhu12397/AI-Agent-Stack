@@ -4102,6 +4102,7 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
     assert result["machine_deployment_uid"] == "machine-deployment-uid"
     assert result["chrony_bootstrap_template_name"] == "worker-bootstrap-ntp-123e4567"
     assert result["chrony_bootstrap_template_uid"] == "chrony-bootstrap-template-uid"
+    assert result["chrony_bootstrap_template_created"] is True
     assert result["chrony_ntp_server_ip"] == "10.0.0.123"
     assert len(result["machine_deployment_manifest_hash"]) == 64
     assert result["side_effects"] is True
