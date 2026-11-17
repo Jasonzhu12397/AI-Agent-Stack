@@ -92,11 +92,25 @@ def _validate_sources(role: str, sources: list[str], ironic_internal_ip: str | N
     return normalized
 
 
-def _render_config(role: str, sources: list[str], allowed_clients: list[str]) -> str:
+def _render_config(
+    role: str,
+    sources: list[str],
+    allowed_clients: list[str],
+    ironic_internal_ip: str | None = None,
+) -> str:
     lines = [MANAGED_BEGIN]
     if role == "target_control_plane":
+        if not isinstance(ironic_internal_ip, str):
+            raise ChronyError("CONTROL_PLANE_IRONIC_INTERNAL_IP_REQUIRED")
+        try:
+            internal_ip = ipaddress.ip_address(ironic_internal_ip)
+        except ValueError as exc:
+            raise ChronyError("IRONIC_INTERNAL_IP_INVALID") from exc
+        if not internal_ip.is_private:
+            raise ChronyError("IRONIC_INTERNAL_IP_MUST_BE_PRIVATE")
         for source in sources:
             lines.append("server " + source + " iburst")
+        lines.append("bindaddress " + str(internal_ip))
         if not isinstance(allowed_clients, list) or not allowed_clients:
             raise ChronyError("CONTROL_PLANE_NTP_ALLOWED_CLIENTS_REQUIRED")
         networks = []
@@ -137,6 +151,15 @@ def _atomic_write(path: Path, content: str):
 
 def _write_managed_config(path: Path, block: str):
     original = path.read_text(encoding="utf-8") if path.exists() else ""
+    original = "\n".join(
+        line
+        for line in original.splitlines()
+        if not re.match(
+            r"^\s*(?:server|pool|peer|sourcedir|confdir|include)\s+",
+            line,
+            re.IGNORECASE,
+        )
+    )
     if MANAGED_BEGIN in original:
         start = original.index(MANAGED_BEGIN)
         end = original.find(MANAGED_END, start)
@@ -248,7 +271,12 @@ def configure_chrony(
     if not lookup(package_manager):
         raise ChronyError("CHRONY_PACKAGE_MANAGER_NOT_FOUND")
     _run(runner, package_command, timeout=600)
-    block = _render_config(node_role, normalized, allowed_clients or [])
+    block = _render_config(
+        node_role,
+        normalized,
+        allowed_clients or [],
+        ironic_internal_ip=ironic_internal_ip,
+    )
     _write_managed_config(config_path, block)
     service = _service_name(os_id)
     systemctl = lookup("systemctl")
@@ -261,6 +289,18 @@ def configure_chrony(
         raise ChronyError("CHRONY_SERVICE_NOT_ACTIVE")
     expected = ironic_internal_ip if node_role == "target_worker" else None
     verification = _verify_sync(runner, chronyc, expected, float(max_offset_seconds))
+    listener_verified = False
+    if node_role == "target_control_plane":
+        ss = lookup("ss")
+        if not ss:
+            raise ChronyError("CHRONY_LISTENER_CHECK_BINARY_MISSING")
+        listener_output = _run(runner, [ss, "-H", "-lun"], timeout=20)
+        endpoint = str(ipaddress.ip_address(ironic_internal_ip)) + ":123"
+        listener_verified = any(
+            endpoint in line for line in listener_output.splitlines()
+        )
+        if not listener_verified:
+            raise ChronyError("CONTROL_PLANE_INTERNAL_NTP_LISTENER_NOT_READY")
     return {
         "configured": True,
         "node_role": node_role,
@@ -270,6 +310,7 @@ def configure_chrony(
         "sources": normalized,
         "external_ntp_allowed": node_role != "target_worker",
         "internal_ntp_server_enabled": node_role == "target_control_plane",
+        "internal_ntp_listener_verified": listener_verified,
         **verification,
     }
 
