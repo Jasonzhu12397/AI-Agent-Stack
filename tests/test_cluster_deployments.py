@@ -11,7 +11,6 @@ from core.models import (
     AuditEvent,
     ClusterDeployment,
     ClusterDeploymentCheckpoint,
-    ClusterDeploymentPivotEvent,
     ClusterDeploymentPivotOperation,
     Project,
     ProjectMembership,
