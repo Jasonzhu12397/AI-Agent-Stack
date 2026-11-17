@@ -57,7 +57,10 @@ def test_eph_agent_boots_without_target_kubeconfig_secret():
     pod_spec = deployment["spec"]["template"]["spec"]
     assert deployment["spec"]["replicas"] == 1
     assert "source-kubeconfig" in str(pod_spec["volumes"])
-    target_volume = next(item for item in pod_spec["volumes"] if item["name"] == "target-kubeconfig")
+    target_volume = next(
+        item for item in pod_spec["volumes"]
+        if item["name"] == "target-kubeconfig"
+    )
     assert target_volume["secret"]["optional"] is True
 
 
