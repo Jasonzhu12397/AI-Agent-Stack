@@ -1,0 +1,133 @@
+import subprocess
+
+import pytest
+
+from node_agent.chrony import (
+    ChronyError,
+    _render_config,
+    _validate_sources,
+    configure_chrony,
+)
+
+
+def test_worker_must_use_exact_ironic_private_ip_only():
+    assert _validate_sources("target_worker", ["10.130.60.84"], "10.130.60.84") == [
+        "10.130.60.84"
+    ]
+
+
+@pytest.mark.parametrize(
+    "sources,endpoint",
+    [
+        (["pool.ntp.org"], "10.130.60.84"),
+        (["192.0.2.10"], "10.130.60.84"),
+        (["10.130.60.84", "pool.ntp.org"], "10.130.60.84"),
+        (["10.130.60.85"], "10.130.60.84"),
+    ],
+)
+def test_worker_rejects_external_or_wrong_ntp_sources(sources, endpoint):
+    with pytest.raises(ChronyError):
+        _validate_sources("target_worker", sources, endpoint)
+
+
+def test_control_plane_uses_external_sources_and_serves_internal_clients():
+    config = _render_config(
+        "target_control_plane",
+        ["time.example.net", "192.0.2.20"],
+        ["10.130.60.80/28"],
+    )
+    assert "server time.example.net iburst" in config
+    assert "allow 10.130.60.80/28" in config
+    assert "port 123" in config
+    assert "cmdport 0" in config
+
+
+def test_control_plane_rejects_public_client_network():
+    with pytest.raises(ChronyError, match="CONTROL_PLANE_NTP_ALLOWED_CLIENT_MUST_BE_PRIVATE"):
+        _render_config("target_control_plane", ["time.example.net"], ["0.0.0.0/0"])
+
+
+def test_eph_uses_bootstrap_sources_without_ntp_server_mode():
+    config = _render_config("eph", ["10.20.0.10"], [])
+    assert "server 10.20.0.10 iburst" in config
+    assert "allow " not in config
+    assert "port 123" not in config
+
+
+def test_worker_config_never_contains_external_sources():
+    config = _render_config("target_worker", ["10.130.60.84"], [])
+    assert "server 10.130.60.84 iburst" in config
+    assert "pool " not in config
+    assert "pool.ntp.org" not in config
+
+
+def test_configure_requires_root(monkeypatch, tmp_path):
+    monkeypatch.setattr("node_agent.chrony.os.geteuid", lambda: 10001)
+    with pytest.raises(ChronyError, match="CHRONY_ROOT_REQUIRED"):
+        configure_chrony(
+            "eph", ["10.20.0.10"], root=str(tmp_path), require_root=True
+        )
+
+
+def test_configure_rejects_unsupported_os(tmp_path, monkeypatch):
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc/os-release").write_text('ID="alpine"\n', encoding="utf-8")
+    monkeypatch.setattr("node_agent.chrony.os.geteuid", lambda: 0)
+    with pytest.raises(ChronyError, match="CHRONY_OS_UNSUPPORTED"):
+        configure_chrony(
+            "eph",
+            ["10.20.0.10"],
+            root=str(tmp_path),
+            require_root=False,
+            executable_lookup=lambda name: "/usr/bin/" + name,
+        )
+
+
+def test_configure_rejects_offline_root_instead_of_running_host_mutations(tmp_path, monkeypatch):
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc/os-release").write_text('ID="ubuntu"\n', encoding="utf-8")
+    monkeypatch.setattr("node_agent.chrony.os.geteuid", lambda: 0)
+    with pytest.raises(ChronyError, match="CHRONY_OFFLINE_ROOT_EXECUTION_UNSUPPORTED"):
+        configure_chrony(
+            "eph",
+            ["10.20.0.10"],
+            root=str(tmp_path),
+            require_root=False,
+            executable_lookup=lambda name: "/usr/bin/" + name,
+        )
+
+
+def test_configure_installs_enables_and_verifies_on_ubuntu(tmp_path, monkeypatch):
+    (tmp_path / "etc/chrony").mkdir(parents=True)
+    (tmp_path / "etc/os-release").write_text('ID="ubuntu"\n', encoding="utf-8")
+    monkeypatch.setattr("node_agent.chrony.os.geteuid", lambda: 0)
+    calls = []
+
+    class Result:
+        def __init__(self, stdout=""):
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[-2:] == ["is-active", "chrony"]:
+            return Result("active\n")
+        if command[1:3] == ["-n", "sources"]:
+            return Result("^* 10.20.0.10 2 6 377 25 -12us[ -1us] +/- 10ms\n")
+        if command[1:] == ["tracking"]:
+            return Result("System time     : 0.000012 seconds fast of NTP time\nLeap status     : Normal\n")
+        return Result()
+
+    result = configure_chrony(
+        "eph",
+        ["10.20.0.10"],
+        root="/",
+        runner=runner,
+        executable_lookup=lambda name: "/usr/bin/" + name,
+    )
+    assert result["configured"] is True
+    assert result["synchronized"] is True
+    assert ["apt-get", "install", "-y", "chrony"] in calls
+    assert ["/usr/bin/systemctl", "enable", "--now", "chrony"] in calls
+    assert (tmp_path / "etc/chrony/chrony.conf").exists() is False
