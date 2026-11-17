@@ -2470,6 +2470,8 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
                 "expected_cluster_uid": "source-uid",
                 "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
                 "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+                "expected_target_cluster_uid": "target-uid",
+                "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
             },
         },
         "target_cluster",
@@ -2479,6 +2481,7 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
     assert result["cluster_identity_preserved"] is True
     assert result["cluster_uid"] == "target-uid"
     assert result["source_cluster_uid"] == "source-uid"
+    assert result["operation_id"] == "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234"
     assert result["cluster_api_version"] == "cluster.x-k8s.io/v1beta1"
     assert result["cluster_spec_sha256"] == TARGET_CAPI_CLUSTER_SPEC_SHA256
     assert result["machine_count"] == 1
@@ -2550,6 +2553,8 @@ def test_target_agent_rejects_malformed_machine_inventory(
                     "expected_cluster_uid": "source-uid",
                     "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+                "expected_target_cluster_uid": "target-uid",
+                "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 },
             },
             "target_cluster",
@@ -2644,6 +2649,8 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                     "expected_cluster_uid": "source-uid",
                     "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+                "expected_target_cluster_uid": "target-uid",
+                "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 },
             },
             "target_cluster",
@@ -2720,6 +2727,8 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 "expected_cluster_uid": "source-uid",
                 "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
                 "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+                "expected_target_cluster_uid": "target-uid",
+                "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
             },
         },
         "target_cluster",
@@ -2743,6 +2752,8 @@ def test_eph_agent_cannot_run_target_adoption_verification():
                     "expected_cluster_uid": "source-uid",
                     "expected_cluster_api_version": "cluster.x-k8s.io/v1beta1",
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+                "expected_target_cluster_uid": "target-uid",
+                "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 },
             },
             "eph_node",
