@@ -67,7 +67,7 @@ def test_handoff_rejects_worker_external_ntp_fallback():
                 "ironic_internal_ntp_ip": "10.130.60.84",
                 "desired_worker_count": 1,
                 "ready_worker_count": 1,
-                "worker_ntp_sources": {"worker-1": ["1.1.1.1"]},
+                "worker_ntp_bootstrap_sources": {"worker-1": ["1.1.1.1"]},
             },
         )
 
@@ -80,7 +80,7 @@ def test_handoff_accepts_complete_ordered_worker_evidence():
             "ironic_internal_ntp_ip": "10.130.60.84",
             "desired_worker_count": 2,
             "ready_worker_count": 2,
-            "worker_ntp_sources": {
+            "worker_ntp_bootstrap_sources": {
                 "worker-1": ["10.130.60.84"],
                 "worker-2": ["10.130.60.84"],
             },
@@ -157,7 +157,7 @@ def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
             "ready_master_count": 3,
             "ironic_internal_ntp_ip": "10.130.60.84",
             "target_control_plane_ntp_profile_verified": True,
-            "target_control_plane_ntp_external_sync_verified": True,
+            "target_control_plane_ntp_bootstrap_sync_gate_verified": True,
             "ironic_internal_ntp_service_reachable": True,
         },
     )
