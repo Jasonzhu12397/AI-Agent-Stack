@@ -11,7 +11,7 @@ This contract supersedes the older EPH-as-a-future-worker/reclamation flow.
 - Target Agent, not Cloud Control Agent, owns the handoff sequence. Cloud Control schedules work, stores durable state, relays events and observes progress; it does not approve Target adoption or EPH cleanup.
 - EPH cleanup removes the temporary EPH Agent/bootstrap workload and revokes EPH-only credentials only after CAPI pivot, Target Agent readiness and BMH migration are verified.
 - Target Agent then provisions all Target Worker nodes through CAPI/Metal3/Ironic.
-- Chronyd installation/configuration/verification applies to Target Worker hosts only. It is not an EPH-node bootstrap task.
+- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. EPH and Target Control Plane chronyd must be installed, configured, enabled and synchronization-verified before kubeadm init/join; Worker chronyd must pass verification before the worker joins the Target cluster.
 
 ## Required ordered phases
 
