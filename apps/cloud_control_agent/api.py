@@ -183,6 +183,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             except ValueError as exc:
                 raise ControlApiError("APPROVAL_DIGEST_INVALID") from exc
             command_id = uuid4()
+            command_status = "queued"
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 agent = connection.execute(
                     "SELECT role, enabled, cluster_id "
@@ -218,7 +219,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     existing = connection.execute(
                         """
                         SELECT command_id, deployment_id, target_agent_id, required_role,
-                               action, payload, approval_digest
+                               action, payload, approval_digest, status
                         FROM agent_control_commands WHERE idempotency_key = %s
                         """,
                         (idempotency_key,),
@@ -234,7 +235,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ):
                         raise ControlApiError("IDEMPOTENCY_KEY_CONFLICT")
                     command_id = existing["command_id"]
-            self._send(201, {"command_id": str(command_id), "status": "queued"})
+                    command_status = existing["status"]
+            self._send(201, {"command_id": str(command_id), "status": command_status})
 
         def _heartbeat(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
