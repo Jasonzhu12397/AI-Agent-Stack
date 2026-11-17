@@ -2877,3 +2877,96 @@ def test_terminal_deployment_ignores_late_command_callbacks(
     assert deployment.finished_at == finished_at
     assert (deployment.plan_result or {}).get("postflight") is None
 
+
+
+@pytest.mark.django_db
+def test_control_plane_accepts_pivot_with_distinct_source_and_target_uids(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="pivot-distinct-source-target-uids",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="pivot-distinct-uids-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"pivot-distinct-uids-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        },
+        "capi_pivot_execution": {
+            "source_cluster_uid": "source-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
+        "dual_agent": {
+            "phase": "target_agent_verification_pending",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["target_node", "status", "spec", "plan_result"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"pivot-distinct-uids:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+            "pivot_adoption_verified": True,
+            "machine_inventory_ready": True,
+            "controllers_ready": True,
+            "machine_count": 1,
+            "ready_machine_count": 1,
+            "not_ready_machine_names": [],
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.error is None
+    assert deployment.plan_result["capi_pivot_target_verification"]["cluster_uid"] == (
+        "target-cluster-uid"
+    )
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
+    assert deployment.plan_result["dual_agent"]["target_agent_cluster_uid"] == (
+        "target-cluster-uid"
+    )
+    assert AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.postflight",
+        status=AgentCommand.Status.QUEUED,
+        node=target_node,
+    ).exists()
