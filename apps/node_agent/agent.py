@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from .chrony import ChronyError, verify_ntp_server
 from .capabilities import ROLE_CAPABILITIES
 from .capi_pivot import (
     CapiPivotError,
@@ -4222,6 +4223,68 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
         if exc.code >= 500:
             # A server-side error can be returned after the create was committed.
             # Treat it as ambiguous and let the caller reconcile by resource identity.
+            raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+        raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+    if len(payload) > 1024 * 1024:
+        raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_JSON") from exc
+    if not isinstance(result, dict):
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_SHAPE")
+    return result
+
+
+def kubernetes_api_create_kubeadm_config_template(
+    version: str,
+    namespace: str,
+    manifest: dict[str, Any],
+    dry_run: bool,
+) -> dict[str, Any]:
+    if (
+        not isinstance(dry_run, bool)
+        or not isinstance(version, str)
+        or not re.fullmatch(r"v[0-9]+(?:alpha|beta)?[0-9]*", version)
+        or not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+        or not isinstance(manifest, dict)
+        or manifest.get("kind") != "KubeadmConfigTemplate"
+        or manifest.get("apiVersion")
+        != "bootstrap.cluster.x-k8s.io/" + version
+        or manifest.get("metadata", {}).get("namespace") != namespace
+        or not isinstance(manifest.get("metadata", {}).get("name"), str)
+        or not re.fullmatch(
+            r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?",
+            manifest.get("metadata", {}).get("name", ""),
+        )
+    ):
+        raise NodeAgentError("KUBEADM_CONFIG_TEMPLATE_CREATE_REQUEST_INVALID")
+    host, port, token, context = _kubernetes_api_identity()
+    path = (
+        f"/apis/bootstrap.cluster.x-k8s.io/{version}/namespaces/"
+        f"{namespace}/kubeadmconfigtemplates"
+    )
+    query = "?dryRun=All&fieldValidation=Strict" if dry_run else "?fieldValidation=Strict"
+    request = urllib.request.Request(
+        f"https://{host}:{port}{path}{query}",
+        data=json.dumps(manifest).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _open_kubernetes_api_request(request, context, timeout=30) as response:
+            payload = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise NodeAgentError("KUBERNETES_API_REDIRECT_REJECTED") from exc
+        if exc.code >= 500:
             raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
         raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
