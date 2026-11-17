@@ -53,7 +53,6 @@ def render_worker_chrony_config(ironic_internal_ip: str) -> str:
     ))
 
 
-
 def render_worker_chrony_pre_kubeadm_command(ironic_internal_ip: str) -> str:
     endpoint = validate_ironic_internal_ntp_ip(ironic_internal_ip)
     return f"""#!/usr/bin/env bash
@@ -109,7 +108,6 @@ exit 1
 """
 
 
-
 def _validate_ntp_source(value: str) -> str:
     if not isinstance(value, str) or not value or any(char.isspace() for char in value):
         raise NtpPolicyError("CONTROL_PLANE_EXTERNAL_NTP_SOURCE_INVALID")
@@ -117,7 +115,7 @@ def _validate_ntp_source(value: str) -> str:
         return str(ipaddress.ip_address(value))
     except ValueError:
         if not re.fullmatch(
-            r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",
+            r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",
             value,
         ):
             raise NtpPolicyError("CONTROL_PLANE_EXTERNAL_NTP_SOURCE_INVALID")
@@ -141,7 +139,7 @@ def validate_control_plane_ntp_profile(
     for value in worker_networks:
         try:
             network = ipaddress.ip_network(value, strict=False)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise NtpPolicyError("CONTROL_PLANE_WORKER_NETWORK_INVALID") from exc
         if (
             network.is_loopback
@@ -174,7 +172,7 @@ def render_control_plane_chrony_config(
         "cmdport 0",
     ))
     lines.extend(f"allow {network}" for network in networks)
-    return "\\n".join(lines) + "\\n"
+    return "\n".join(lines) + "\n"
 
 
 def render_control_plane_chrony_pre_kubeadm_command(
