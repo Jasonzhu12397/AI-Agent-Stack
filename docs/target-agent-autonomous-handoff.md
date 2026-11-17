@@ -115,4 +115,6 @@ postflight observation, command-lease cancellation, and idempotent recovery befo
 can be enabled.
 
 EPH cleanup remains similarly blocked until its credential-revocation and workload-removal
-adapter exists. Blocking is a correctness guarantee, not a completed implementation.
+adapter exists. The `completed` phase is also blocked until Target postflight and Worker
+network postflight have a live observation adapter; command-supplied success booleans are not
+accepted. Blocking is a correctness guarantee, not a completed implementation.
