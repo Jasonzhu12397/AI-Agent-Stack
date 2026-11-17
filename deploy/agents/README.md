@@ -55,6 +55,21 @@ The EPH Pod ServiceAccount remains read-only. A real `clusterctl move` uses the 
 
 The cloud Supervisor creates a durable Pivot Operation record and requires a separate approval. The EPH Agent re-reads the source CAPI/Metal3 inventory immediately before mutation, verifies the fresh Target Agent acknowledgement, executes `clusterctl move`, and verifies source inventory removal plus target Cluster UID/Spec identity. The Target Agent must independently verify the exact new target Cluster UID, Machines and controllers. Any interrupted or ambiguous move enters manual reconciliation; no automatic replay or EPH reclaim is allowed.
 
+## EPH Live OS lifecycle boundary
+
+The EPH Live OS is a disposable, temporary boot environment used only to bootstrap the host, run the EPH Agent and hand management over to the final target system. It is not the operating system installed for production use and is not the Target OS.
+
+Do not apply the Target OS production security baseline, compliance profile, long-term patch lifecycle or workload-hardening requirements to the EPH Live OS. The Live OS is expected to be replaced when the host is handed off to its final role. Its operating-system image is not a production deliverable.
+
+Keep the lifecycle responsibilities separate:
+
+- EPH Live OS: temporary boot, hardware discovery, deployment bootstrap, CAPI/Metal3 handoff and reporting completion to the cloud control plane.
+- Target OS: the actual installed operating system; it owns production hardening, compliance, long-term credentials, Kubernetes node configuration and workload runtime.
+- EPH Agent: the temporary orchestration component. Its completion must be persisted centrally before the temporary environment is shut down or rebooted.
+- Target Agent: independently verifies the target cluster and host adoption after the Target OS has booted.
+
+Do not infer successful Target OS installation from EPH shutdown, a successful Live OS command, a successful ISO boot, or a completed CAPI dry-run. The handoff is complete only after the Target Agent reports the expected target cluster/host identity and the applicable CAPI, Metal3 and Ironic postflight checks pass. The EPH Live OS can then be discarded; it is not upgraded into the Target OS.
+
 ## EPH Node Agent (temporary RAM-boot EPH cluster)
 
 1. In the Studio, enroll a node with type `eph_node` in the intended tenant and project.
