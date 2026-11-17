@@ -16,7 +16,7 @@ def test_dual_agent_deploy_script_requires_two_contexts_and_digest_image():
     assert 'printf "%s\\n"' in script
     assert "rollout status deployment/eph-node-agent" in script
     assert "rollout status deployment/target-cluster-agent" in script
-    assert "rollout status daemonset/network-inventory-agent" in script
+    assert "network-inventory-agent.yaml" not in script
 
 
 def test_dual_agent_deploy_script_keeps_capi_pivot_optional_but_validates_present_secret():
@@ -55,7 +55,7 @@ def test_both_agent_deployments_require_mtls_and_mount_node_credentials():
         assert "mountPath: /var/run/secrets/ai-agent/control-plane-tls" in manifest
 
 
-def test_node_agents_are_kubernetes_workloads_and_not_compose_services():
+def test_eph_and_target_agents_are_kubernetes_workloads_and_not_compose_services():
     compose = (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
     eph = (ROOT / "deploy/agents/eph-node-agent.yaml").read_text(encoding="utf-8")
     target = (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(encoding="utf-8")
@@ -68,9 +68,16 @@ def test_node_agents_are_kubernetes_workloads_and_not_compose_services():
     assert "kind: Deployment" in eph
     assert "replicas: 1" in eph
     assert "kind: Deployment" in target
+    assert "replicas: 3" in target
+    assert "AGENT_LEADER_ELECTION_ENABLED" in target
+    assert "target-cluster-agent-leader" in target
+    assert "requiredDuringSchedulingIgnoredDuringExecution" in target
+    assert "kind: PodDisruptionBudget" in target
+    assert "serviceAccountName: target-cluster-agent" in target
     assert "serviceAccountName: eph-node-agent" in eph
     assert "AGENT_NODE_TYPE" in eph and "eph_node" in eph
     assert "EPH Agent runs inside a temporary single-node Kubernetes cluster" in docs
+    assert "There is no per-node Node Agent DaemonSet" in docs
     assert (
         "always a Kubernetes Pod inside the temporary single-node Kubernetes cluster"
         in root_readme
