@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from packages.agent_transport import AgentControlClient, AgentSettings, AgentTransportError, ConfigurationError
+from .leader_election import KubernetesLeaseElector, LeaseElectionError
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = ["target.cluster.observe", "target.capi.observe", "target.metal3.observe"]
@@ -89,6 +90,12 @@ def main() -> int:
             print(json.dumps({"service": "target-agent", "status": "ready"}))
             return 0
         client = AgentControlClient(settings)
+        elector = KubernetesLeaseElector(
+            identity=settings.instance_id,
+            namespace=os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system"),
+            lease_name=os.environ.get("AGENT_LEASE_NAME", "target-agent-leader"),
+            duration_seconds=int(os.environ.get("AGENT_LEASE_DURATION_SECONDS", "30")),
+        )
     except (ConfigurationError, AgentTransportError) as exc:
         LOG.error("%s", exc)
         return 1
@@ -105,12 +112,15 @@ def main() -> int:
             if stopped:
                 break
             try:
-                client.heartbeat(sequence, "ready", CAPABILITIES)
-                command = client.claim()
-                if command is not None:
-                    outcome = execute(command)
-                    client.report_result(_result(command, settings.agent_id, outcome))
-            except (AgentTransportError, KeyError, TypeError, ValueError) as exc:
+                if elector.try_acquire_or_renew():
+                    client.heartbeat(sequence, "ready", CAPABILITIES)
+                    command = client.claim()
+                    if command is not None:
+                        outcome = execute(command)
+                        client.report_result(_result(command, settings.agent_id, outcome))
+                else:
+                    LOG.debug("This Target Agent replica is not the elected leader")
+            except (AgentTransportError, LeaseElectionError, KeyError, TypeError, ValueError) as exc:
                 LOG.error("Target control cycle failed: %s", type(exc).__name__)
             for _ in range(max(1, int(settings.poll_seconds * 10))):
                 if stopped:
