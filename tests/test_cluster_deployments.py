@@ -4119,3 +4119,56 @@ def test_original_requester_cannot_approve_recovery_review(
         event_type="cluster_deployment.recovery_review_approved",
         resource_id=str(deployment.id),
     ).exists()
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "invalid_state",
+    ["reconciliation_required", "corrupt_plan_result", "corrupt_dual_agent"],
+)
+def test_eph_mutating_command_is_fenced_when_deployment_state_is_uncertain(
+    cluster_delivery_workspace,
+    invalid_state,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="eph-uncertain-mutation-fence-" + invalid_state,
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.execute",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="eph-uncertain-mutation-" + str(deployment.id),
+    )
+    if invalid_state == "reconciliation_required":
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+    elif invalid_state == "corrupt_plan_result":
+        deployment.plan_result = []
+    else:
+        deployment.plan_result = {"dual_agent": []}
+    deployment.save(update_fields=["status", "plan_result"])
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"command": None}
+    command.refresh_from_db()
+    assert command.status == AgentCommand.Status.FAILED
+    assert command.error["code"] == "AGENT_CONTROL_OWNERSHIP_FENCED"
+    assert command.lease_token is None
+    assert command.lease_expires_at is None
+
