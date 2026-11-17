@@ -12,7 +12,11 @@ class AgentTransportError(RuntimeError):
 
 
 class AgentControlClient:
-    def __init__(self, settings: AgentSettings) -> None:
+    def __init__(
+        self,
+        settings: AgentSettings,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.settings = settings
         self._client = httpx.Client(
             base_url=settings.control_url,
@@ -21,6 +25,7 @@ class AgentControlClient:
             timeout=settings.request_timeout_seconds,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             follow_redirects=False,
+            transport=transport,
         )
 
     def close(self) -> None:
