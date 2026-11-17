@@ -15,9 +15,10 @@ from uuid import UUID
 
 from packages.agent_transport import AgentControlClient, AgentSettings, AgentTransportError, ConfigurationError
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
+from .ntp_policy import NtpPolicyError, validate_worker_ntp_sources, render_worker_chrony_config
 
 LOG = logging.getLogger("target-agent")
-CAPABILITIES = ["target.cluster.observe", "target.capi.observe", "target.metal3.observe"]
+CAPABILITIES = ["target.cluster.observe", "target.capi.observe", "target.metal3.observe", "target.worker.ntp.validate"]
 
 
 def _configure_in_cluster_kubeconfig() -> None:
@@ -82,6 +83,24 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     if action == "target.metal3.observe":
         result = _kubectl(["get", "baremetalhosts,metal3machines,metal3clusters", "-A", "-o", "json"])
         return {"status": "succeeded" if result["available"] else "failed", "error_code": None if result["available"] else "TARGET_METAL3_OBSERVE_FAILED", "output": result, "side_effects": False}
+    if action == "target.worker.ntp.validate":
+        try:
+            sources = validate_worker_ntp_sources(
+                str(command.get("payload", {}).get("ironic_internal_ip", "")),
+                command.get("payload", {}).get("ntp_sources", []),
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": {
+                    "validated_ntp_sources": list(sources),
+                    "chrony_config": render_worker_chrony_config(sources[0]),
+                    "external_ntp_fallback_allowed": False,
+                },
+                "side_effects": False,
+            }
+        except (NtpPolicyError, TypeError) as exc:
+            return {"status": "blocked", "error_code": str(exc) or "WORKER_NTP_POLICY_REJECTED", "output": {}, "side_effects": False}
     return {"status": "blocked", "error_code": "ACTION_NOT_IMPLEMENTED", "output": {"action": action, "reason": "No approved mutation adapter is registered"}, "side_effects": False}
 
 
