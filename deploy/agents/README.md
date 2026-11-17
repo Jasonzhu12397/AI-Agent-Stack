@@ -8,7 +8,7 @@ This directory deploys the new three-Agent architecture. The legacy Node Agent d
 - **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight and reports readiness. Mutating CAPI Pivot remains blocked until its dedicated, approved adapter is implemented and tested.
 - **Target Agent**: three replicas, spread one per Target Control Plane master. Kubernetes Lease leader election ensures only the elected replica polls and executes commands. All replicas expose readiness and report their own pod identity.
 
-The Target Agent currently has read-only Kubernetes/CAPI/Metal3 observation handlers, a Worker NTP policy validator and a pre-kubeadm chrony command renderer. The generated command installs chrony, replaces the Worker source list with exactly the Ironic internal IP/VIP, and verifies that chronyd selected that endpoint. The Target Agent does not yet inject or execute this command through a CAPI Worker template, so this is not proof of host synchronization.
+The Target Agent currently has read-only Kubernetes/CAPI/Metal3 observation handlers, a Worker NTP policy validator and a pre-kubeadm chrony command renderer. The EPH CAPI Pivot payload and approval requirements are specified in [CAPI Pivot contract](../../docs/capi-pivot-contract.md). The generated command installs chrony, replaces the Worker source list with exactly the Ironic internal IP/VIP, and verifies that chronyd selected that endpoint. The Target Agent does not yet inject or execute this command through a CAPI Worker template, so this is not proof of host synchronization.
 
 ## Required contexts and image references
 
