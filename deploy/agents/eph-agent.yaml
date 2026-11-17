@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eph-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eph-agent
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: eph-agent
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eph-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eph-agent
+        app.kubernetes.io/part-of: ai-agent-studio
+    spec:
+      serviceAccountName: eph-agent
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eph-agent
+          image: REPLACE_WITH_REGISTRY/ai-agent-eph-agent:VERSION
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.eph_agent.main"]
+          env:
+            - name: APP_ENV
+              value: production
+            - name: AGENT_ROLE
+              value: eph
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: control-url
+            - name: AGENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: agent-id
+            - name: AGENT_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: installation-id
+            - name: AGENT_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_HEARTBEAT_SECONDS
+              value: "10"
+            - name: AGENT_POLL_SECONDS
+              value: "5"
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
+            - name: CAPI_PIVOT_SOURCE_KUBECONFIG
+              value: /var/run/secrets/ai-agent/capi-pivot/source.kubeconfig
+            - name: CAPI_PIVOT_TARGET_KUBECONFIG
+              value: /var/run/secrets/ai-agent/capi-pivot/target.kubeconfig
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: control-plane-tls
+              mountPath: /var/run/secrets/ai-agent/control-plane-tls
+              readOnly: true
+            - name: capi-pivot-kubeconfigs
+              mountPath: /var/run/secrets/ai-agent/capi-pivot
+              readOnly: true
+            - name: eph-tmp
+              mountPath: /tmp
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "apps.eph_agent.main", "--readiness-check"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "apps.eph_agent.main", "--healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: control-plane-tls
+          secret:
+            secretName: agent-control-plane-mtls
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+            defaultMode: 0440
+        - name: capi-pivot-kubeconfigs
+          secret:
+            secretName: capi-pivot-kubeconfigs
+            items:
+              - key: source.kubeconfig
+                path: source.kubeconfig
+              - key: target.kubeconfig
+                path: target.kubeconfig
+            defaultMode: 0440
+        - name: eph-tmp
+          emptyDir:
+            sizeLimit: 64Mi
