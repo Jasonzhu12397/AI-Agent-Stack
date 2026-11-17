@@ -53,7 +53,7 @@ After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker pro
 
 ## Recovery and idempotency
 
-- Persist deployment ID, Target Cluster UID, source/target BMH UID inventory, phase, generation, command idempotency keys and operation results in durable cloud storage.
+- Persist deployment ID, Target Cluster UID, source/target BMH hardware identity inventory, phase, generation, command idempotency keys and operation results in durable cloud storage.
 - On restart, Target Agent resumes from the last committed checkpoint and reconciles external state before retrying.
 - A timeout after an external mutation is ambiguous; inspect live Kubernetes/CAPI/Metal3 state before retry.
 - Never delete BMH source objects, remove EPH components, or advance worker provisioning based only on a timeout or missing heartbeat.
@@ -64,3 +64,6 @@ After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker pro
 The new `apps/node_agent/delivery_lifecycle.py` module implements topology validation, Target Worker-only chronyd role validation, exact BMH identity-set comparison, and fail-closed lifecycle transition evidence checks. The `cluster.delivery.lifecycle.evaluate` command exposes those policy checks to Target Agent only.
 
 These policy primitives do not themselves execute clusterctl move, transfer Kubernetes objects, delete EPH Pods, revoke credentials, create MachineDeployments, or install chronyd. Those side effects require version-aware CAPI/Metal3/Kubernetes/host adapters and end-to-end integration tests. The implementation must not report a real handoff as complete until those adapters return verified postconditions.
+
+
+**Identity note:** Kubernetes object UIDs are scoped to an API server and may change when an object is recreated or migrated to another cluster. They must not be the cross-cluster hardware identity key. Reconciliation compares namespace/name and stable hardware identity fields (boot MAC, BMC address, serial number and/or system UUID); Kubernetes UIDs are retained only as per-cluster diagnostics.
