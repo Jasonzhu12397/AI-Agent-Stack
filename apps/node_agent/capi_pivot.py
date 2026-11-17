@@ -203,6 +203,19 @@ def _snapshot_source_inventory(
                         ensure_ascii=False,
                     ).encode("utf-8")
                 ).hexdigest()
+            consumer_ref = None
+            if resource_key == "metal3.io/baremetalhosts":
+                host_spec = item.get("spec")
+                if isinstance(host_spec, dict):
+                    raw_consumer_ref = host_spec.get("consumerRef")
+                    if isinstance(raw_consumer_ref, dict):
+                        consumer_ref = {
+                            "api_version": raw_consumer_ref.get("apiVersion"),
+                            "kind": raw_consumer_ref.get("kind"),
+                            "name": raw_consumer_ref.get("name"),
+                            "namespace": raw_consumer_ref.get("namespace"),
+                            "uid": raw_consumer_ref.get("uid"),
+                        }
             inventory.append(
                 {
                     "api_version": item.get("apiVersion"),
@@ -212,6 +225,7 @@ def _snapshot_source_inventory(
                     "namespace": metadata.get("namespace"),
                     "uid": metadata.get("uid"),
                     "spec_sha256": spec_sha256,
+                    "consumer_ref": consumer_ref,
                     "owner_references": [
                         {
                             "api_version": owner.get("apiVersion"),
