@@ -157,6 +157,7 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
         "target_bmh_identities": source_identities,
         "target_metal3_ownership_verified": True,
         "target_metal3_reconciliation_healthy": True,
+        "target_ironic_inventory_verified": True,
     }
     monkeypatch.setattr(
         target_main,
