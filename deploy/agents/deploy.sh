@@ -70,7 +70,7 @@ require_secret_keys "$CLOUD_CONTEXT" cloud-control-agent-database database-url
 require_secret_keys "$CLOUD_CONTEXT" cloud-control-agent-mtls tls.crt tls.key client-ca.crt
 require_secret_keys "$EPH_CONTEXT" eph-agent-credentials control-url agent-id installation-id
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
-require_secret_keys "$EPH_CONTEXT" capi-pivot-kubeconfigs source.kubeconfig target.kubeconfig
+require_secret_keys "$EPH_CONTEXT" capi-pivot-source-kubeconfig kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 
