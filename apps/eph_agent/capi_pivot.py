@@ -392,8 +392,14 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
     cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
     stable_identity = payload.get("stable_cluster_identity")
+    expected_source_uid = payload.get("expected_source_cluster_uid")
+    expected_bmh = payload.get("expected_source_bmh_identities")
     if not isinstance(stable_identity, str) or not stable_identity.strip():
         raise CapiPivotError("CAPI_PIVOT_STABLE_CLUSTER_IDENTITY_REQUIRED")
+    if not isinstance(expected_source_uid, str) or not expected_source_uid:
+        raise CapiPivotError("CAPI_PIVOT_EXPECTED_SOURCE_CLUSTER_UID_REQUIRED")
+    if not isinstance(expected_bmh, list) or not expected_bmh:
+        raise CapiPivotError("CAPI_PIVOT_EXPECTED_BMH_INVENTORY_REQUIRED")
     source = os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", "")
     target = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG", "")
     if not Path(source).is_file() or not Path(target).is_file():
@@ -441,9 +447,20 @@ def execute_capi_pivot(
         if source_cluster is None and target_cluster is not None:
             annotations = target_cluster.get("metadata", {}).get("annotations", {})
             if (
-                annotations.get(SOURCE_UID_ANNOTATION)
+                annotations.get(SOURCE_UID_ANNOTATION) == payload["expected_source_cluster_uid"]
                 and annotations.get(STABLE_ID_ANNOTATION) == stable_identity
             ):
+                target_bmhs = _bmh_inventory(target, namespace)
+                expected_set = {
+                    (item["namespace"], item["name"], item["hardware_identity"])
+                    for item in payload["expected_source_bmh_identities"]
+                }
+                target_set = {
+                    (item["namespace"], item["name"], item["hardware_identity"])
+                    for item in target_bmhs
+                }
+                if expected_set != target_set:
+                    raise CapiPivotError("CAPI_PIVOT_REPLAY_BMH_IDENTITY_SET_MISMATCH")
                 return {
                     "status": "succeeded",
                     "error_code": None,
@@ -456,7 +473,9 @@ def execute_capi_pivot(
                         "target_stable_cluster_identity": annotations[STABLE_ID_ANNOTATION],
                         "source_cluster_absent": True,
                         "target_cluster_ownership_verified": True,
-                        "target_controllers_ready": True,
+                        "source_bmh_identities": payload["expected_source_bmh_identities"],
+                        "target_bmh_identities": target_bmhs,
+                        "target_controllers_ready": preflight["target_controllers"]["ready"],
                         "provider_preflight": preflight,
                     },
                     "side_effects": False,
@@ -467,6 +486,8 @@ def execute_capi_pivot(
         annotations = source_cluster.get("metadata", {}).get("annotations", {})
         if not isinstance(source_uid, str) or not source_uid:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_UID_MISSING")
+        if source_uid != payload["expected_source_cluster_uid"]:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_CLUSTER_UID_CHANGED_SINCE_PLAN")
         existing_source_uid = annotations.get(SOURCE_UID_ANNOTATION)
         existing_stable_identity = annotations.get(STABLE_ID_ANNOTATION)
         if existing_source_uid not in (None, source_uid):
@@ -474,6 +495,17 @@ def execute_capi_pivot(
         if existing_stable_identity not in (None, stable_identity):
             raise CapiPivotError("CAPI_PIVOT_STABLE_IDENTITY_ANNOTATION_CONFLICT")
         source_bmhs = _bmh_inventory(source, namespace)
+        expected_bmh_set = {
+            (item.get("namespace"), item.get("name"), item.get("hardware_identity"))
+            for item in payload["expected_source_bmh_identities"]
+            if isinstance(item, dict)
+        }
+        source_bmh_set = {
+            (item["namespace"], item["name"], item["hardware_identity"])
+            for item in source_bmhs
+        }
+        if source_bmh_set != expected_bmh_set:
+            raise CapiPivotError("CAPI_PIVOT_SOURCE_BMH_INVENTORY_CHANGED_SINCE_PLAN")
         source_cluster_list = _kubectl(
             source,
             ["get", "clusters.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
