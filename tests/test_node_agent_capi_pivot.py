@@ -78,6 +78,7 @@ def _pivot_runner_for(
 ):
     calls = []
     moved = {"value": False}
+    source_annotations = {"value": {}}
     groups = [
         "cluster.x-k8s.io",
         "bootstrap.cluster.x-k8s.io",
@@ -122,6 +123,9 @@ def _pivot_runner_for(
                 kubeconfig = ""
             if kubeconfig.endswith("source.kubeconfig"):
                 if "annotate" in command:
+                    source_annotations["value"]["ai-agent-stack.io/source-cluster-uid"] = (
+                        "uid-target-cluster"
+                    )
                     return subprocess.CompletedProcess(
                         command, 0, "cluster annotated", ""
                     )
@@ -138,7 +142,7 @@ def _pivot_runner_for(
                                 "name": "target-cluster",
                                 "namespace": "metal3",
                                 "uid": "uid-target-cluster",
-                                "annotations": {},
+                                "annotations": source_annotations["value"],
                             }
                         }),
                         "",
