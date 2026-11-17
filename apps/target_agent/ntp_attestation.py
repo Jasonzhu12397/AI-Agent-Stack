@@ -95,8 +95,14 @@ def verify_control_plane_ntp_bootstrap(
         script = "\n".join(commands)
         configured_sources = tuple(re.findall(r"(?m)^\s*server\s+(\S+)", script))
         configured_networks = tuple(re.findall(r"(?m)^\s*allow\s+(\S+)", script))
-        if set(configured_sources) != set(approved) or len(configured_sources) != len(approved):
-            raise NtpAttestationError(f"TARGET_NTP_EXTERNAL_SOURCE_PROFILE_MISMATCH:{machine_name}")
+        try:
+            validate_control_plane_ntp_profile(
+                configured_sources,
+                approved,
+                configured_networks,
+            )
+        except (NtpPolicyError, TypeError, ValueError) as exc:
+            raise NtpAttestationError(f"{exc}:{machine_name}") from exc
         if set(configured_networks) != set(networks) or len(configured_networks) != len(networks):
             raise NtpAttestationError(f"TARGET_NTP_WORKER_NETWORK_PROFILE_MISMATCH:{machine_name}")
         if re.search(r"(?m)^\s*pool\s+", script):
