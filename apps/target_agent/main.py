@@ -330,6 +330,23 @@ def _observe_target_capi_pivot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def _ntp_policy_from_environment() -> tuple[list[str], list[str]]:
+    approved_sources = [
+        item.strip()
+        for item in os.environ.get("APPROVED_EXTERNAL_NTP_SOURCES", "").split(",")
+        if item.strip()
+    ]
+    worker_networks = [
+        item.strip()
+        for item in os.environ.get("WORKER_NETWORK_CIDRS", "").split(",")
+        if item.strip()
+    ]
+    if not approved_sources or not worker_networks:
+        raise NtpAttestationError("TARGET_NTP_TRUSTED_POLICY_CONFIGURATION_REQUIRED")
+    return approved_sources, worker_networks
+
+
 def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     if (
@@ -370,11 +387,13 @@ def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, A
             documents[name] = json.loads(result["stdout"])
         except ValueError as exc:
             raise NtpAttestationError(f"TARGET_NTP_BOOTSTRAP_JSON_INVALID:{name}") from exc
+    approved_sources, worker_networks = _ntp_policy_from_environment()
     return verify_control_plane_ntp_bootstrap(
         documents["machines"],
         documents["kubeadmconfigs"],
-        payload.get("approved_external_sources"),
-        payload.get("worker_networks"),
+        approved_sources,
+        approved_sources,
+        worker_networks,
     )
 
 
@@ -642,11 +661,9 @@ def execute(
     if action == "target.ntp.control_plane.render":
         payload = command.get("payload", {})
         try:
-            configured = payload.get("configured_external_sources", [])
-            approved = payload.get("approved_external_sources", [])
-            worker_networks = payload.get("worker_networks", [])
+            approved, worker_networks = _ntp_policy_from_environment()
             sources, networks = validate_control_plane_ntp_profile(
-                configured,
+                approved,
                 approved,
                 worker_networks,
             )
