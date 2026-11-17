@@ -460,6 +460,17 @@ def execute(
                     "ironic_internal_ntp_service_reachable": True,
                     "ironic_internal_ntp_probe": ntp_probe,
                 }
+            if next_phase in {
+                HandoffPhase.WORKER_PROVISIONING.value,
+                HandoffPhase.WORKERS_READY.value,
+            }:
+                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                    evidence.get("ironic_internal_ntp_ip")
+                )
+                evidence = {
+                    **evidence,
+                    "ironic_internal_ntp_ip": configured_ntp_ip,
+                }
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
                 observed_pivot = _observe_target_capi_pivot({
                     **payload,
