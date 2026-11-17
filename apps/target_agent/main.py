@@ -13,12 +13,22 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from packages.agent_transport import AgentControlClient, AgentSettings, AgentTransportError, ConfigurationError
+from packages.agent_transport import (
+    AgentControlClient,
+    AgentSettings,
+    AgentTransportError,
+    ConfigurationError,
+)
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
 from .ntp_policy import NtpPolicyError, validate_worker_ntp_sources, render_worker_chrony_config
 
 LOG = logging.getLogger("target-agent")
-CAPABILITIES = ["target.cluster.observe", "target.capi.observe", "target.metal3.observe", "target.worker.ntp.validate"]
+CAPABILITIES = [
+    "target.cluster.observe",
+    "target.capi.observe",
+    "target.metal3.observe",
+    "target.worker.ntp.validate",
+]
 
 
 def _configure_in_cluster_kubeconfig() -> None:
@@ -76,13 +86,40 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     action = command.get("action")
     if action == "target.cluster.observe":
         result = _kubectl(["get", "nodes", "-o", "json"])
-        return {"status": "succeeded" if result["available"] else "failed", "error_code": None if result["available"] else "TARGET_CLUSTER_OBSERVE_FAILED", "output": result, "side_effects": False}
+        return {
+            "status": "succeeded" if result["available"] else "failed",
+            "error_code": None if result["available"] else "TARGET_CLUSTER_OBSERVE_FAILED",
+            "output": result,
+            "side_effects": False,
+        }
     if action == "target.capi.observe":
-        result = _kubectl(["get", "clusters,machines,machinedeployments,kubeadmcontrolplanes", "-A", "-o", "json"])
-        return {"status": "succeeded" if result["available"] else "failed", "error_code": None if result["available"] else "TARGET_CAPI_OBSERVE_FAILED", "output": result, "side_effects": False}
+        result = _kubectl([
+            "get",
+            "clusters,machines,machinedeployments,kubeadmcontrolplanes",
+            "-A",
+            "-o",
+            "json",
+        ])
+        return {
+            "status": "succeeded" if result["available"] else "failed",
+            "error_code": None if result["available"] else "TARGET_CAPI_OBSERVE_FAILED",
+            "output": result,
+            "side_effects": False,
+        }
     if action == "target.metal3.observe":
-        result = _kubectl(["get", "baremetalhosts,metal3machines,metal3clusters", "-A", "-o", "json"])
-        return {"status": "succeeded" if result["available"] else "failed", "error_code": None if result["available"] else "TARGET_METAL3_OBSERVE_FAILED", "output": result, "side_effects": False}
+        result = _kubectl([
+            "get",
+            "baremetalhosts,metal3machines,metal3clusters",
+            "-A",
+            "-o",
+            "json",
+        ])
+        return {
+            "status": "succeeded" if result["available"] else "failed",
+            "error_code": None if result["available"] else "TARGET_METAL3_OBSERVE_FAILED",
+            "output": result,
+            "side_effects": False,
+        }
     if action == "target.worker.ntp.validate":
         try:
             sources = validate_worker_ntp_sources(
@@ -100,11 +137,29 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
                 "side_effects": False,
             }
         except (NtpPolicyError, TypeError) as exc:
-            return {"status": "blocked", "error_code": str(exc) or "WORKER_NTP_POLICY_REJECTED", "output": {}, "side_effects": False}
-    return {"status": "blocked", "error_code": "ACTION_NOT_IMPLEMENTED", "output": {"action": action, "reason": "No approved mutation adapter is registered"}, "side_effects": False}
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "WORKER_NTP_POLICY_REJECTED",
+                "output": {},
+                "side_effects": False,
+            }
+    return {
+        "status": "blocked",
+        "error_code": "ACTION_NOT_IMPLEMENTED",
+        "output": {
+            "action": action,
+            "reason": "No approved mutation adapter is registered",
+        },
+        "side_effects": False,
+    }
 
 
-def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any], started_at: datetime) -> dict[str, Any]:
+def _result(
+    command: dict[str, Any],
+    identity: UUID,
+    outcome: dict[str, Any],
+    started_at: datetime,
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
@@ -146,7 +201,10 @@ def main() -> int:
             )
             ready = check["available"] and client.check_ready()
             client.close()
-            print(json.dumps({"service": "target-agent", "status": "ready" if ready else "not_ready"}))
+            print(json.dumps({
+                "service": "target-agent",
+                "status": "ready" if ready else "not_ready",
+            }))
             return 0 if ready else 1
         elector = KubernetesLeaseElector(
             identity=settings.instance_id,
@@ -176,10 +234,18 @@ def main() -> int:
                     if command is not None:
                         started_at = datetime.now(timezone.utc)
                         outcome = execute(command)
-                        client.report_result(_result(command, settings.agent_id, outcome, started_at))
+                        client.report_result(
+                            _result(command, settings.agent_id, outcome, started_at)
+                        )
                 else:
                     LOG.debug("This Target Agent replica is not the elected leader")
-            except (AgentTransportError, LeaseElectionError, KeyError, TypeError, ValueError) as exc:
+            except (
+                AgentTransportError,
+                LeaseElectionError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
                 LOG.error("Target control cycle failed: %s", type(exc).__name__)
             for _ in range(max(1, int(settings.poll_seconds * 10))):
                 if stopped:
