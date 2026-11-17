@@ -219,6 +219,38 @@ def test_eph_pivot_attestation_rejects_identity_or_digest_tampering():
     assert _validated_eph_pivot_attestation(output) is None
 
 
+def test_cloud_control_accepts_complete_attestation_from_verified_pivot_replay():
+    import hashlib
+    import json
+
+    identities = [{
+        "namespace": "metal3",
+        "name": "host-1",
+        "hardware_identity": "system-uuid:sha256:abc",
+    }]
+    digest = hashlib.sha256(
+        json.dumps(
+            identities,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    output = {
+        "already_pivoted": True,
+        "capi_pivot_succeeded": True,
+        "source_cluster_absent": True,
+        "target_cluster_ownership_verified": True,
+        "target_controllers_ready": True,
+        "source_cluster_uid": "source-cluster-uid",
+        "target_cluster_uid": "target-cluster-uid",
+        "target_source_cluster_uid_annotation": "source-cluster-uid",
+        "source_bmh_identities": identities,
+        "source_bmh_digest": digest,
+        "target_bmh_digest": digest,
+    }
+    assert _validated_eph_pivot_attestation(output) is not None
+
+
 def test_eph_pivot_attestation_rejects_duplicate_hardware_identity():
     import hashlib
     import json
