@@ -2859,6 +2859,199 @@ def execute_command(
         ).hexdigest()
         if actual_spec_sha256 != expected_spec_sha256:
             raise NodeAgentError("TARGET_CLUSTER_SPEC_MISMATCH")
+        expected_inventory = payload.get("expected_inventory")
+        expected_inventory_sha256 = payload.get("expected_inventory_sha256")
+        if (
+            not isinstance(expected_inventory, list)
+            or not expected_inventory
+            or len(expected_inventory) > 500
+            or not isinstance(expected_inventory_sha256, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", expected_inventory_sha256)
+        ):
+            raise NodeAgentError("EXPECTED_TARGET_CAPI_INVENTORY_REQUIRED")
+        canonical_inventory = []
+        for inventory_item in expected_inventory:
+            if not isinstance(inventory_item, dict):
+                raise NodeAgentError("INVALID_EXPECTED_TARGET_CAPI_INVENTORY")
+            owner_references = inventory_item.get("owner_references")
+            if (
+                not isinstance(owner_references, list)
+                or inventory_item.get("owner_references_truncated") is not False
+            ):
+                raise NodeAgentError("INCOMPLETE_EXPECTED_TARGET_CAPI_OWNER_GRAPH")
+            normalized_item = dict(inventory_item)
+            normalized_item["owner_references"] = sorted(
+                owner_references,
+                key=lambda owner: (
+                    str(owner.get("api_version", "")),
+                    str(owner.get("kind", "")),
+                    str(owner.get("name", "")),
+                    str(owner.get("uid", "")),
+                    bool(owner.get("controller", False)),
+                )
+                if isinstance(owner, dict)
+                else ("", "", "", "", False),
+            )
+            canonical_inventory.append(normalized_item)
+        canonical_inventory.sort(
+            key=lambda item: (
+                str(item.get("resource", "")),
+                str(item.get("namespace") or ""),
+                str(item.get("name", "")),
+                str(item.get("uid", "")),
+            )
+        )
+        actual_inventory_sha256 = hashlib.sha256(
+            json.dumps(
+                canonical_inventory,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if actual_inventory_sha256 != expected_inventory_sha256:
+            raise NodeAgentError("EXPECTED_TARGET_CAPI_INVENTORY_DIGEST_MISMATCH")
+        actual_objects = {}
+        actual_uids = {}
+        queried_resources = set()
+        for inventory_item in canonical_inventory:
+            resource = inventory_item.get("resource")
+            api_version = inventory_item.get("api_version")
+            if (
+                not isinstance(resource, str)
+                or "/" not in resource
+                or not isinstance(api_version, str)
+                or "/" not in api_version
+                or inventory_item.get("namespace") != namespace
+            ):
+                raise NodeAgentError("INVALID_EXPECTED_TARGET_CAPI_RESOURCE_IDENTITY")
+            group, plural = resource.split("/", 1)
+            api_group, api_version_name = api_version.split("/", 1)
+            if api_group != group or not plural or not api_version_name:
+                raise NodeAgentError("INVALID_EXPECTED_TARGET_CAPI_RESOURCE_VERSION")
+            resource_key = (group, api_version_name, plural)
+            if resource_key not in queried_resources:
+                resource_document = kubernetes_api_get(
+                    f"/apis/{group}/{api_version_name}"
+                    f"/namespaces/{namespace}/{plural}"
+                )
+                if not isinstance(resource_document, dict):
+                    raise NodeAgentError("INVALID_TARGET_CAPI_RESOURCE_LIST")
+                resource_items = resource_document.get("items")
+                if not isinstance(resource_items, list) or any(
+                    not isinstance(resource_item, dict) for resource_item in resource_items
+                ):
+                    raise NodeAgentError("INVALID_TARGET_CAPI_RESOURCE_LIST")
+                for resource_item in resource_items:
+                    resource_metadata = resource_item.get("metadata")
+                    if not isinstance(resource_metadata, dict):
+                        raise NodeAgentError("INVALID_TARGET_CAPI_RESOURCE_METADATA")
+                    resource_name = resource_metadata.get("name")
+                    resource_namespace = resource_metadata.get("namespace")
+                    if not isinstance(resource_name, str) or not resource_name:
+                        raise NodeAgentError("INVALID_TARGET_CAPI_RESOURCE_NAME")
+                    if resource_namespace != namespace:
+                        raise NodeAgentError("TARGET_CAPI_RESOURCE_NAMESPACE_MISMATCH")
+                    actual_objects[(group, plural, resource_name)] = resource_item
+                queried_resources.add(resource_key)
+            expected_name = inventory_item.get("name")
+            actual_object = actual_objects.get((group, plural, expected_name))
+            if not isinstance(actual_object, dict):
+                raise NodeAgentError("TARGET_CAPI_ADOPTED_OBJECT_MISSING")
+            actual_metadata = actual_object.get("metadata")
+            if not isinstance(actual_metadata, dict):
+                raise NodeAgentError("TARGET_CAPI_ADOPTED_OBJECT_METADATA_INVALID")
+            actual_object_uid = actual_metadata.get("uid")
+            if (
+                actual_object.get("apiVersion") != api_version
+                or actual_object.get("kind") != inventory_item.get("kind")
+                or actual_metadata.get("name") != expected_name
+                or actual_metadata.get("namespace") != namespace
+                or not isinstance(actual_object_uid, str)
+                or not actual_object_uid
+                or actual_object_uid == inventory_item.get("uid")
+            ):
+                raise NodeAgentError("TARGET_CAPI_ADOPTED_OBJECT_IDENTITY_MISMATCH")
+            expected_spec_hash = inventory_item.get("spec_sha256")
+            if expected_spec_hash is not None:
+                actual_object_spec = actual_object.get("spec")
+                if not isinstance(actual_object_spec, dict):
+                    raise NodeAgentError("TARGET_CAPI_ADOPTED_OBJECT_SPEC_INVALID")
+                actual_object_spec_hash = hashlib.sha256(
+                    json.dumps(
+                        actual_object_spec,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                if actual_object_spec_hash != expected_spec_hash:
+                    raise NodeAgentError("TARGET_CAPI_ADOPTED_OBJECT_SPEC_MISMATCH")
+            actual_uids[(group, plural, expected_name)] = actual_object_uid
+        for inventory_item in canonical_inventory:
+            resource_group, resource_plural = inventory_item["resource"].split("/", 1)
+            actual_object = actual_objects[
+                (resource_group, resource_plural, inventory_item["name"])
+            ]
+            actual_metadata = actual_object["metadata"]
+            actual_owner_references = actual_metadata.get("ownerReferences", [])
+            if not isinstance(actual_owner_references, list) or any(
+                not isinstance(owner, dict) for owner in actual_owner_references
+            ):
+                raise NodeAgentError("TARGET_CAPI_ADOPTED_OWNER_REFERENCES_INVALID")
+            for expected_owner in inventory_item["owner_references"]:
+                owner_identity = (
+                    expected_owner.get("api_version"),
+                    expected_owner.get("kind"),
+                    namespace,
+                    expected_owner.get("name"),
+                )
+                owner_candidates = [
+                    owner
+                    for owner in canonical_inventory
+                    if (
+                        owner.get("api_version"),
+                        owner.get("kind"),
+                        owner.get("namespace"),
+                        owner.get("name"),
+                    ) == owner_identity
+                ]
+                if len(owner_candidates) != 1:
+                    raise NodeAgentError("TARGET_CAPI_EXPECTED_OWNER_NOT_IN_INVENTORY")
+                owner_resource_group, owner_plural = owner_candidates[0]["resource"].split(
+                    "/", 1
+                )
+                expected_target_owner_uid = actual_uids.get(
+                    (owner_resource_group, owner_plural, expected_owner.get("name"))
+                )
+                if not expected_target_owner_uid or not any(
+                    actual_owner.get("apiVersion") == expected_owner.get("api_version")
+                    and actual_owner.get("kind") == expected_owner.get("kind")
+                    and actual_owner.get("name") == expected_owner.get("name")
+                    and actual_owner.get("uid") == expected_target_owner_uid
+                    for actual_owner in actual_owner_references
+                ):
+                    raise NodeAgentError("TARGET_CAPI_ADOPTED_OWNER_REFERENCE_MISMATCH")
+            expected_consumer_ref = inventory_item.get("consumer_ref")
+            if inventory_item.get("resource") == "metal3.io/baremetalhosts":
+                actual_spec = actual_object.get("spec")
+                actual_consumer_ref = (
+                    actual_spec.get("consumerRef")
+                    if isinstance(actual_spec, dict)
+                    else None
+                )
+                if expected_consumer_ref is None:
+                    if actual_consumer_ref is not None:
+                        raise NodeAgentError("TARGET_BMH_CONSUMER_REFERENCE_MISMATCH")
+                elif not isinstance(actual_consumer_ref, dict) or any(
+                    actual_consumer_ref.get(source_key) != expected_consumer_ref.get(target_key)
+                    for source_key, target_key in (
+                        ("apiVersion", "api_version"),
+                        ("kind", "kind"),
+                        ("name", "name"),
+                    )
+                ):
+                    raise NodeAgentError("TARGET_BMH_CONSUMER_REFERENCE_MISMATCH")
         machines = kubernetes_api_get(
             f"/apis/cluster.x-k8s.io/{version}"
             f"/namespaces/{namespace}/machines"
