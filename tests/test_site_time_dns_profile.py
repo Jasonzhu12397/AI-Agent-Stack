@@ -1,8 +1,9 @@
 import copy
+import importlib
 
 import pytest
 
-from apps.node_agent.agent import NodeAgentError, validate_time_dns_profile
+agent = importlib.import_module("apps.node_agent.agent")
 
 
 VALID_PROFILE = {
@@ -18,7 +19,7 @@ VALID_PROFILE = {
 
 
 def test_time_dns_profile_requires_chrony_and_both_os_lifecycles():
-    result = validate_time_dns_profile(VALID_PROFILE)
+    result = agent.validate_time_dns_profile(VALID_PROFILE)
     assert result["valid"] is True
     assert result["chrony_required"] is True
     assert set(result["apply_to"]) == {"eph_live_os", "target_os"}
@@ -32,7 +33,7 @@ def test_time_dns_profile_requires_chrony_and_both_os_lifecycles():
     [
         ({"chrony_required": False}, "CHRONY_REQUIRED_FOR_SITE_NODES"),
         ({"apply_to": ["target_os"]}, "TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS"),
-        ({"apply_to": ["eph_live_os", "target_os", "target_os"]}, "TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS"),
+        (\n            {"apply_to": ["eph_live_os", "target_os", "target_os"]},\n            "TIME_DNS_PROFILE_MUST_COVER_EPH_AND_TARGET_OS",\n        ),
         ({"ntp_servers": []}, "TIME_DNS_NTP_SERVERS_REQUIRED"),
         ({"ntp_servers": ["time.example;touch /tmp/pwned"]}, "INVALID_TIME_DNS_NTP_SERVER"),
         ({"dns_servers": ["dns.example.net"]}, "INVALID_TIME_DNS_RESOLVER"),
@@ -43,7 +44,7 @@ def test_time_dns_profile_requires_chrony_and_both_os_lifecycles():
 def test_time_dns_profile_rejects_incomplete_or_unsafe_values(change, expected):
     profile = copy.deepcopy(VALID_PROFILE)
     profile.update(change)
-    with pytest.raises(NodeAgentError, match=expected):
+    with pytest.raises(agent.NodeAgentError, match=expected):
         validate_time_dns_profile(profile)
 
 
