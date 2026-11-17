@@ -148,7 +148,7 @@ def render_capi_kubeadm(args):
         "rtcsync",
         "leapsectz right/UTC",
     ]
-    chrony_lines.extend("server {} iburst".format(server) for server in args.ntp_server)
+    chrony_lines.extend(f"server {server} iburst" for server in args.ntp_server)
     chrony_content = "\n".join(chrony_lines) + "\n"
     domains = ["~.", *args.search_domain]
     resolved_content = "\n".join([
