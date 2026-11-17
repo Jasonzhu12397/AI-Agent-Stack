@@ -70,6 +70,7 @@ TARGET_COMMANDS = {
     "cluster.capi.pivot.postflight",
     "cluster.capi.worker.preflight",
     "cluster.capi.worker.provision",
+    "cluster.delivery.lifecycle.evaluate",
     "cluster.kubernetes.version.upgrade",
     "cluster.metal3.observe",
     "k8s.resource.read",
