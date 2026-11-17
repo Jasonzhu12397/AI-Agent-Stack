@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -16,9 +17,11 @@ def _hardware_identity(host: dict[str, Any]) -> str:
     boot_mac = spec.get("bootMACAddress")
     bmc_address = spec.get("bmc", {}).get("address")
     if isinstance(system_uuid, str) and system_uuid.strip():
-        return "system-uuid:" + system_uuid.strip().lower()
+        digest = hashlib.sha256(system_uuid.strip().lower().encode()).hexdigest()
+        return "system-uuid:sha256:" + digest
     if isinstance(serial, str) and serial.strip():
-        return "serial:" + serial.strip().lower()
+        digest = hashlib.sha256(serial.strip().lower().encode()).hexdigest()
+        return "serial:sha256:" + digest
     if (
         isinstance(boot_mac, str)
         and boot_mac.strip()
@@ -26,7 +29,9 @@ def _hardware_identity(host: dict[str, Any]) -> str:
         and bmc_address.strip()
     ):
         safe_bmc = re.sub(r"(?<=://)[^/@]+@", "", bmc_address.strip(), count=1)
-        return "bmc-bootmac:" + safe_bmc.lower() + "|" + boot_mac.strip().lower()
+        material = safe_bmc.lower() + "|" + boot_mac.strip().lower()
+        digest = hashlib.sha256(material.encode()).hexdigest()
+        return "bmc-bootmac:sha256:" + digest
     raise Metal3OwnershipError("TARGET_BMH_STABLE_HARDWARE_IDENTITY_MISSING")
 
 
