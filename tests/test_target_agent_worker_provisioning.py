@@ -4,6 +4,7 @@ from threading import Event
 
 import pytest
 
+
 def _worker_provisioning():
     from apps.target_agent import worker_provisioning
 
@@ -11,7 +12,7 @@ def _worker_provisioning():
 
 
 def _execute_worker(payload, **kwargs):
-    return _execute_worker(payload, **kwargs)
+    return _worker_provisioning().execute_worker_provisioning(payload, **kwargs)
 
 
 def _worker_error():
