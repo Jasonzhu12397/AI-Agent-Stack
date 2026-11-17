@@ -104,7 +104,7 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     return {"status": "blocked", "error_code": "ACTION_NOT_IMPLEMENTED", "output": {"action": action, "reason": "No approved mutation adapter is registered"}, "side_effects": False}
 
 
-def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) -> dict[str, Any]:
+def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any], started_at: datetime) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
@@ -114,7 +114,7 @@ def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) ->
         "lease_id": command["lease"]["lease_id"],
         "lease_token": command["lease"]["token"],
         "status": outcome["status"],
-        "started_at": now.isoformat(),
+        "started_at": started_at.isoformat(),
         "completed_at": now.isoformat(),
         "output": outcome["output"],
         "error_code": outcome["error_code"],
@@ -154,7 +154,7 @@ def main() -> int:
             lease_name=os.environ.get("AGENT_LEASE_NAME", "target-agent-leader"),
             duration_seconds=int(os.environ.get("AGENT_LEASE_DURATION_SECONDS", "30")),
         )
-    except (ConfigurationError, AgentTransportError) as exc:
+    except (ConfigurationError, AgentTransportError, LeaseElectionError, RuntimeError) as exc:
         LOG.error("%s", exc)
         return 1
     stopped = False
