@@ -60,9 +60,7 @@ def _append_event(operation, actor, event_type, next_state, evidence):
         "last_event_sequence": sequence,
         "last_event_at": timezone.now().isoformat(),
     }
-    operation.save(
-        update_fields=["state", "version", "journal", "updated_at"],
-    )
+    operation.save()
 
 
 class AgentRuntimeCapiPivotOperationView(APIView):
