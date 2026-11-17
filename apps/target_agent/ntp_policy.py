@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
+import time
 from collections.abc import Iterable
 
 
@@ -230,3 +232,46 @@ done
 echo 'Target Control Plane chronyd is not synchronized or not listening on UDP/123' >&2
 exit 1
 """
+
+
+
+def probe_ironic_internal_ntp_endpoint(
+    ironic_internal_ip: str,
+    timeout_seconds: float = 3.0,
+) -> dict[str, object]:
+    endpoint = validate_ironic_internal_ntp_ip(ironic_internal_ip)
+    if not 0.1 <= timeout_seconds <= 10:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_PROBE_TIMEOUT_INVALID")
+    address = ipaddress.ip_address(endpoint)
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    destination = (endpoint, 123, 0, 0) if address.version == 6 else (endpoint, 123)
+    request = bytearray(48)
+    request[0] = (0 << 6) | (4 << 3) | 3
+    started = time.monotonic()
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as client:
+            client.settimeout(timeout_seconds)
+            client.sendto(request, destination)
+            response, _peer = client.recvfrom(512)
+    except OSError as exc:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_UNREACHABLE") from exc
+    elapsed_ms = (time.monotonic() - started) * 1000
+    if len(response) < 48:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_RESPONSE_INVALID")
+    leap = (response[0] >> 6) & 0b11
+    version = (response[0] >> 3) & 0b111
+    mode = response[0] & 0b111
+    stratum = response[1]
+    if mode != 4 or version not in (3, 4):
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_RESPONSE_MODE_INVALID")
+    if leap == 3 or not 1 <= stratum <= 15:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_SERVER_UNSYNCHRONIZED")
+    return {
+        "reachable": True,
+        "endpoint": endpoint,
+        "port": 123,
+        "version": version,
+        "stratum": stratum,
+        "leap_indicator": leap,
+        "round_trip_ms": round(elapsed_ms, 3),
+    }
