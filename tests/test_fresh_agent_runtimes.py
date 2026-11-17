@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from apps.eph_agent import main as eph_main
 from apps.eph_agent.main import execute as execute_eph
 from apps.target_agent import main as target_main
 from apps.target_agent.main import execute as execute_target
