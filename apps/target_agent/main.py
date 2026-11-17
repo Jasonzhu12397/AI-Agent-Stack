@@ -19,7 +19,12 @@ from packages.agent_transport import (
     AgentTransportError,
     ConfigurationError,
 )
-from .handoff import HandoffError, evaluate_transition
+from .handoff import (
+    HandoffError,
+    HandoffPhase,
+    evaluate_transition,
+    validate_phase_evidence,
+)
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
 from .ntp_policy import (
     NtpPolicyError,
@@ -129,19 +134,53 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
         }
     if action == "target.handoff.evaluate":
         payload = command.get("payload", {})
+        checkpoint = command.get("deployment_checkpoint")
         try:
+            if not isinstance(checkpoint, dict):
+                raise HandoffError("HANDOFF_CHECKPOINT_MISSING")
+            next_phase = str(payload.get("next_phase", ""))
+            evidence = payload.get("evidence", {})
+            current_phase = checkpoint.get("phase")
+            if current_phase == next_phase:
+                validated = validate_phase_evidence(HandoffPhase(next_phase), evidence)
+                state_digest = hashlib.sha256(
+                    json.dumps(
+                        validated,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                stored_state = checkpoint.get("state") or {}
+                if stored_state.get("state_digest") != state_digest:
+                    raise HandoffError(
+                        "HANDOFF_PHASE_ALREADY_RECORDED_WITH_DIFFERENT_EVIDENCE"
+                    )
+                return {
+                    "status": "succeeded",
+                    "error_code": None,
+                    "output": {
+                        "accepted": True,
+                        "from_phase": current_phase,
+                        "to_phase": next_phase,
+                        "evidence": validated,
+                        "already_applied": True,
+                    },
+                    "side_effects": False,
+                }
             transition = evaluate_transition(
-                payload.get("current_phase"),
-                str(payload.get("next_phase", "")),
-                payload.get("evidence", {}),
+                None if current_phase == "not_started" else current_phase,
+                next_phase,
+                evidence,
             )
+            transition["already_applied"] = False
             return {
                 "status": "succeeded",
                 "error_code": None,
                 "output": transition,
                 "side_effects": False,
             }
-        except (HandoffError, AttributeError, TypeError) as exc:
+        except (HandoffError, AttributeError, TypeError, ValueError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
@@ -265,6 +304,26 @@ def main() -> int:
                     if command is not None:
                         started_at = datetime.now(timezone.utc)
                         outcome = execute(command)
+                        if (
+                            command.get("action") == "target.handoff.evaluate"
+                            and outcome["status"] == "succeeded"
+                            and not outcome["output"].get("already_applied")
+                        ):
+                            try:
+                                checkpoint_result = client.persist_checkpoint(
+                                    command,
+                                    outcome["output"]["to_phase"],
+                                    outcome["output"]["evidence"],
+                                )
+                                outcome["output"]["checkpoint"] = checkpoint_result
+                                outcome["side_effects"] = True
+                            except AgentTransportError:
+                                outcome = {
+                                    "status": "failed",
+                                    "error_code": "HANDOFF_CHECKPOINT_PERSIST_FAILED",
+                                    "output": {"phase": outcome["output"]["to_phase"]},
+                                    "side_effects": False,
+                                }
                         client.report_result(
                             _result(command, settings.agent_id, outcome, started_at)
                         )
