@@ -284,7 +284,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         SELECT c.command_id, c.deployment_id, c.target_agent_id,
                                c.required_role, c.action, c.idempotency_key,
-                               c.payload, c.approval_digest, c.created_at,
+                               c.payload, c.approval_digest, c.created_at, c.deadline,
                                d.phase AS deployment_phase,
                                d.sequence AS checkpoint_sequence,
                                d.state AS checkpoint_state
