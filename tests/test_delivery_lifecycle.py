@@ -1,5 +1,3 @@
-import pytest
-
 from node_agent.delivery_lifecycle import (
     DeliveryLifecycleError,
     evaluate_transition,
@@ -8,6 +6,8 @@ from node_agent.delivery_lifecycle import (
     validate_ntp_topology,
     validate_topology,
 )
+
+import pytest
 
 
 def topology():
