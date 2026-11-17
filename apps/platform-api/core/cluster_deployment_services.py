@@ -19,6 +19,39 @@ def _payload_hash(command_type: str, payload: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _canonical_capi_inventory(items: list[dict]) -> list[dict]:
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        owner_references = item.get("owner_references")
+        if not isinstance(owner_references, list):
+            raise ValueError("CAPI_PIVOT_SOURCE_INVENTORY_INVALID")
+        normalized_item = dict(item)
+        normalized_item["owner_references"] = sorted(
+            owner_references,
+            key=lambda owner: (
+                str(owner.get("api_version", "")),
+                str(owner.get("kind", "")),
+                str(owner.get("name", "")),
+                str(owner.get("uid", "")),
+                bool(owner.get("controller", False)),
+            )
+            if isinstance(owner, dict)
+            else ("", "", "", "", False),
+        )
+        normalized.append(normalized_item)
+    return sorted(
+        normalized,
+        key=lambda item: (
+            str(item.get("resource", "")),
+            str(item.get("namespace") or ""),
+            str(item.get("name", "")),
+            str(item.get("uid", "")),
+        ),
+    )
+
+
 def _spec_hash(spec: dict) -> str:
     encoded = json.dumps(
         spec,
@@ -265,7 +298,7 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         "source_cluster_spec_sha256": source_identity["spec_sha256"],
         "source_inventory_sha256": hashlib.sha256(
             json.dumps(
-                source_inventory,
+                _canonical_capi_inventory(source_inventory),
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
