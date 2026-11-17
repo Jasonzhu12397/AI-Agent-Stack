@@ -5331,7 +5331,8 @@ def execute_command_with_lease(
 
     def renew_until_stopped() -> None:
         next_renewal = time.monotonic() + renew_interval
-        while not stop_event.wait(1):
+        wait_interval = min(float(renew_interval), 1.0)
+        while not stop_event.wait(wait_interval):
             if authority_event is not None and not authority_event.is_set():
                 renewal_errors.append(NodeAgentError("AGENT_LEADERSHIP_LOST"))
                 stop_event.set()
