@@ -450,6 +450,56 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     )
     persisted_payload = command.payload if isinstance(command.payload, dict) else {}
     persisted_ack = persisted_payload.get("target_agent_ack")
+    operation, operation_created = ClusterDeploymentPivotOperation.objects.get_or_create(
+        deployment=deployment,
+        defaults={
+            "operation_id": uuid.UUID(persisted_payload["operation_id"]),
+            "source_node": deployment.eph_node,
+            "target_node": deployment.target_node,
+            "state": ClusterDeploymentPivotOperation.State.PREPARED,
+            "source_identity": source_identity,
+            "inventory": source_inventory,
+            "inventory_sha256": persisted_payload["source_inventory_sha256"],
+            "approval_hash": command.plan_hash,
+            "target_ack": persisted_ack,
+            "journal": {"created_from_command_id": str(command.id)},
+        },
+    )
+    if operation.operation_id != uuid.UUID(persisted_payload["operation_id"]):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_OPERATION_ID_CONFLICT"}
+        deployment.plan_result = {
+            **plan_result,
+            "dual_agent": {
+                **plan_result.get("dual_agent", {}),
+                "phase": "pivot_operation_identity_conflict",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            },
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
+    if operation_created:
+        _record_capi_pivot_event(
+            deployment,
+            ClusterDeploymentPivotOperation.State.READY,
+            "target_agent_acknowledged",
+            {
+                "source_inventory_sha256": persisted_payload["source_inventory_sha256"],
+                "target_ack": persisted_ack,
+                "command_id": str(command.id),
+                "approval_required": True,
+            },
+            actor_node=deployment.target_node,
+            source_identity=source_identity,
+            inventory=source_inventory,
+            inventory_sha256=persisted_payload["source_inventory_sha256"],
+            approval_hash=command.plan_hash,
+            target_ack=persisted_ack,
+        )
     deployment.plan_result = {
         **plan_result,
         "dual_agent": {
