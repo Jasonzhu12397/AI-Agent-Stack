@@ -74,6 +74,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             lease_id UUID,
             lease_token_hash TEXT,
             lease_expires_at TIMESTAMPTZ,
+            approval_digest TEXT,
             issued_at TIMESTAMPTZ,
             deadline TIMESTAMPTZ,
             result JSONB,
