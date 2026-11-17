@@ -48,7 +48,7 @@ def _validated_time_dns_profile(profile: object) -> dict | None:
     normalized_ntp = []
     hostname_pattern = (
         r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-        r"(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+        r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
     )
     for server in ntp_servers:
         value = server.strip()
@@ -1120,19 +1120,22 @@ def queue_deployment_command(
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+        time_dns_profile = _validated_time_dns_profile(
+            deployment.spec.get("time_dns_profile")
+            if isinstance(deployment.spec, dict)
+            else None
+        )
         plan_result = deployment.plan_result
-        time_dns_profile = (
+        planned_time_dns_profile = (
             plan_result.get("time_dns_profile")
             if isinstance(plan_result, dict)
             else None
         )
-        time_dns_profile_hash = (
-            time_dns_profile.get("profile_hash")
-            if isinstance(time_dns_profile, dict)
-            else None
-        )
-        if not isinstance(time_dns_profile_hash, str) or not re.fullmatch(
-            r"[a-f0-9]{64}", time_dns_profile_hash
+        time_dns_profile_hash = time_dns_profile.get("profile_hash") if time_dns_profile else None
+        if (
+            not isinstance(time_dns_profile_hash, str)
+            or not isinstance(planned_time_dns_profile, dict)
+            or planned_time_dns_profile.get("profile_hash") != time_dns_profile_hash
         ):
             raise ValueError("CAPI_PIVOT_TIME_DNS_PROFILE_HASH_REQUIRED")
         payload["cluster_name"] = deployment.cluster_name
@@ -2608,6 +2611,23 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.plan":
         plan_hash = result.get("plan_hash")
         missing_requirements = result.get("missing_requirements")
+        expected_time_dns_profile = _validated_time_dns_profile(
+            deployment.spec.get("time_dns_profile")
+            if isinstance(deployment.spec, dict)
+            else None
+        )
+        actual_time_dns_profile = result.get("time_dns_profile")
+        time_dns_profile_valid = (
+            expected_time_dns_profile is None
+            and actual_time_dns_profile is None
+            and isinstance(missing_requirements, list)
+            and "time_dns_profile" in missing_requirements
+        ) or (
+            isinstance(expected_time_dns_profile, dict)
+            and isinstance(actual_time_dns_profile, dict)
+            and actual_time_dns_profile.get("profile_hash")
+            == expected_time_dns_profile.get("profile_hash")
+        )
         plan_valid = (
             command.node.node_type == "eph_node"
             and result.get("plan_status") == "validated_dry_run"
@@ -2624,6 +2644,7 @@ def handle_deployment_command_result(
             and isinstance(result.get("provisioning_ready"), bool)
             and isinstance(result.get("adapter_enabled"), bool)
             and isinstance(result.get("side_effects"), bool)
+            and time_dns_profile_valid
         )
         if not plan_valid or (
             result.get("provisioning_ready") is True
