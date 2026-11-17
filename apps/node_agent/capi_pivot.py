@@ -1181,8 +1181,8 @@ def run_capi_pivot(
     if acknowledged_at.tzinfo is None:
         raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_TIMESTAMP_INVALID")
     acknowledgement_age = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - acknowledged_at.astimezone(datetime.timezone.utc)
+        datetime.datetime.now(datetime.UTC)
+        - acknowledged_at.astimezone(datetime.UTC)
     ).total_seconds()
     if acknowledgement_age < -30 or acknowledgement_age > 300:
         raise CapiPivotError("CAPI_PIVOT_TARGET_AGENT_ACK_EXPIRED")
