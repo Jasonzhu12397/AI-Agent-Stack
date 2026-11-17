@@ -754,6 +754,9 @@ def handle_deployment_command_result(
             and bool(expected_uid)
             and result.get("source_cluster_uid") == expected_uid
             and result.get("cluster_identity_preserved") is True
+            and result.get("source_cluster_identity_annotation")
+            == "ai-agent-stack.io/source-cluster-uid"
+            and isinstance(result.get("source_cluster_identity_annotation_written"), bool)
             and isinstance(result.get("target_cluster_uid"), str)
             and bool(result.get("target_cluster_uid"))
             and result.get("source_cluster_absent") is True
