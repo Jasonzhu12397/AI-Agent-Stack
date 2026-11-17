@@ -2189,6 +2189,29 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    expected_inventory = [
+        {
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "kind": "Cluster",
+            "resource": "cluster.x-k8s.io/clusters",
+            "name": "edge-lab",
+            "namespace": "metal3",
+            "uid": "source-cluster-uid",
+            "spec_sha256": "d" * 64,
+            "consumer_ref": None,
+            "owner_references": [],
+            "owner_references_truncated": False,
+            "cluster_name": "edge-lab",
+        }
+    ]
+    expected_inventory_sha256 = hashlib.sha256(
+        json.dumps(
+            expected_inventory,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     ClusterDeploymentPivotOperation.objects.create(
         deployment=deployment,
         operation_id=uuid.UUID("a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234"),
@@ -2200,8 +2223,8 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
             "api_version": "cluster.x-k8s.io/v1beta1",
             "spec_sha256": "d" * 64,
         },
-        inventory=[],
-        inventory_sha256="a" * 64,
+        inventory=expected_inventory,
+        inventory_sha256=expected_inventory_sha256,
         target_identity={
             "uid": "target-generated-uid",
             "api_version": "cluster.x-k8s.io/v1beta1",
@@ -2231,6 +2254,9 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
             "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
             "cluster_api_version": "cluster.x-k8s.io/v1beta1",
             "cluster_spec_sha256": "d" * 64,
+            "inventory_verified": True,
+            "inventory_sha256": expected_inventory_sha256,
+            "inventory_object_count": 1,
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
             "machine_inventory_ready": True,
@@ -2308,6 +2334,29 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    expected_inventory = [
+        {
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "kind": "Cluster",
+            "resource": "cluster.x-k8s.io/clusters",
+            "name": "edge-lab",
+            "namespace": "metal3",
+            "uid": "source-cluster-uid",
+            "spec_sha256": "c" * 64,
+            "consumer_ref": None,
+            "owner_references": [],
+            "owner_references_truncated": False,
+            "cluster_name": "edge-lab",
+        }
+    ]
+    expected_inventory_sha256 = hashlib.sha256(
+        json.dumps(
+            expected_inventory,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     ClusterDeploymentPivotOperation.objects.create(
         deployment=deployment,
         operation_id=uuid.UUID("b4f1a3c2-7e45-4a6e-8b21-1e4f5a6d7890"),
@@ -2319,8 +2368,8 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
             "api_version": "cluster.x-k8s.io/v1beta1",
             "spec_sha256": "c" * 64,
         },
-        inventory=[],
-        inventory_sha256="b" * 64,
+        inventory=expected_inventory,
+        inventory_sha256=expected_inventory_sha256,
         target_identity={
             "uid": "target-cluster-uid",
             "api_version": "cluster.x-k8s.io/v1beta1",
@@ -2350,6 +2399,9 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
             "operation_id": "b4f1a3c2-7e45-4a6e-8b21-1e4f5a6d7890",
             "cluster_api_version": "cluster.x-k8s.io/v1beta1",
             "cluster_spec_sha256": "c" * 64,
+            "inventory_verified": True,
+            "inventory_sha256": expected_inventory_sha256,
+            "inventory_object_count": 1,
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
             "machine_inventory_ready": True,
