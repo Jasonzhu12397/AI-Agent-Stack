@@ -70,8 +70,10 @@ def test_three_agent_roles_have_distinct_entrypoints_and_target_runs_on_control_
     assert 'expected_node_type="eph_node"' in eph_entrypoint
     assert 'expected_node_type="target_cluster"' in target_entrypoint
     assert not (ROOT / "apps/node_agent/agent.py").exists()
-    assert "apps.eph_agent.main" in str(eph_manifest["spec"]["template"]["spec"]["containers"][0]["command"])
-    assert "apps.target_agent.main" in str(target_manifest["spec"]["template"]["spec"]["containers"][0]["command"])
+    eph_command = eph_manifest["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert "apps.eph_agent.main" in str(eph_command)
+    target_command = target_manifest["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert "apps.target_agent.main" in str(target_command)
     assert target_manifest["spec"]["template"]["spec"]["nodeSelector"] == {
         "node-role.kubernetes.io/control-plane": ""
     }
