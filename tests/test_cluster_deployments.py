@@ -1320,6 +1320,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     source_uid = deployment.plan_result["capi_pivot_source_preflight"][
         "source_cluster_identity"
     ]["uid"]
+    target_uid = "target-cluster-uid"
     pivot_result = {
         "pivot_executed": True,
         "pivot_simulated": False,
@@ -1329,7 +1330,9 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "target_management_plane_verified": True,
         "cluster_name": "edge-lab",
         "namespace": "capi-system",
-        "target_cluster_uid": source_uid,
+        "target_cluster_uid": target_uid,
+        "source_cluster_uid": source_uid,
+        "cluster_identity_preserved": True,
         "source_cluster_absent": True,
         "ownership_transferred": True,
         "automatic_retry_allowed": False,
