@@ -2459,6 +2459,19 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
                 }
             ]
         },
+        "/api/v1/nodes": {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "target-master-0",
+                        "labels": {
+                            "ai-agent-stack.io/chrony-synced": "true",
+                            "ai-agent-stack.io/time-dns-profile-hash": "a" * 64,
+                        },
+                    }
+                }
+            ]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2617,6 +2630,7 @@ def test_target_agent_rejects_malformed_machine_inventory(
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
                 "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
+                "expected_time_dns_profile_hash": "a" * 64,
                 },
             },
             "target_cluster",
@@ -2665,8 +2679,22 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                     "metadata": {"name": "edge-lab-control-plane-0"},
                     "spec": {"clusterName": "edge-lab"},
                     "status": {
+                        "nodeRef": {"name": "target-master-0"},
                         "conditions": [{"type": "Ready", "status": "True"}]
                     },
+                }
+            ]
+        },
+        "/api/v1/nodes": {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "target-master-0",
+                        "labels": {
+                            "ai-agent-stack.io/chrony-synced": "true",
+                            "ai-agent-stack.io/time-dns-profile-hash": "a" * 64,
+                        },
+                    }
                 }
             ]
         },
@@ -2718,6 +2746,7 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
                 "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
+                "expected_time_dns_profile_hash": "a" * 64,
                 },
             },
             "target_cluster",
@@ -2745,7 +2774,10 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 {
                     "metadata": {"name": "edge-lab-control-plane-0"},
                     "spec": {"clusterName": "edge-lab"},
-                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    "status": {
+                        "nodeRef": {"name": "target-master-0"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
                 },
                 {
                     "metadata": {"name": "edge-lab-worker-0"},
@@ -2801,6 +2833,7 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
                 "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
+                "expected_time_dns_profile_hash": "a" * 64,
             },
         },
         "target_cluster",
@@ -2810,6 +2843,9 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
     assert result["ready_machine_count"] == 1
     assert result["not_ready_machine_names"] == ["edge-lab-worker-0"]
     assert result["machine_inventory_ready"] is False
+    assert result["time_dns_verified"] is False
+    assert result["time_dns_node_count"] == 1
+    assert result["time_dns_unverified_machine_names"] == ["edge-lab-worker-0"]
     assert result["pivot_adoption_verified"] is False
 
 
@@ -2828,6 +2864,7 @@ def test_eph_agent_cannot_run_target_adoption_verification():
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
                 "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
+                "expected_time_dns_profile_hash": "a" * 64,
                 },
             },
             "eph_node",
