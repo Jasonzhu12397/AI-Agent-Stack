@@ -2530,6 +2530,7 @@ class AgentRuntimePollView(APIView):
                     and acknowledgement.get("node_id") == str(target_node.id)
                     and acknowledgement.get("acknowledged_at")
                     == target_command.finished_at.isoformat()
+                    and isinstance(acknowledgement.get("result_sha256"), str)
                     and hmac.compare_digest(
                         acknowledgement.get("result_sha256", ""),
                         hashlib.sha256(
