@@ -113,6 +113,74 @@ def _checkpoint_state_digest(evidence: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
+    if not isinstance(output, dict):
+        return None
+    identities = output.get("source_bmh_identities")
+    if (
+        output.get("capi_pivot_succeeded") is not True
+        or output.get("source_cluster_absent") is not True
+        or output.get("target_cluster_ownership_verified") is not True
+        or not isinstance(output.get("source_cluster_uid"), str)
+        or not output.get("source_cluster_uid")
+        or not isinstance(output.get("target_cluster_uid"), str)
+        or not output.get("target_cluster_uid")
+        or not isinstance(identities, list)
+        or not 1 <= len(identities) <= 2500
+    ):
+        return None
+    normalized = []
+    identity_keys = set()
+    hardware_ids = set()
+    for item in identities:
+        if not isinstance(item, dict):
+            return None
+        namespace = item.get("namespace")
+        name = item.get("name")
+        hardware_identity = item.get("hardware_identity")
+        if not all(
+            isinstance(value, str) and value
+            for value in (namespace, name, hardware_identity)
+        ):
+            return None
+        identity_key = (namespace, name, hardware_identity)
+        if identity_key in identity_keys or hardware_identity in hardware_ids:
+            return None
+        identity_keys.add(identity_key)
+        hardware_ids.add(hardware_identity)
+        normalized.append({
+            "namespace": namespace,
+            "name": name,
+            "hardware_identity": hardware_identity,
+        })
+    normalized.sort(
+        key=lambda item: (
+            item["namespace"],
+            item["name"],
+            item["hardware_identity"],
+        )
+    )
+    digest = hashlib.sha256(
+        json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        output.get("source_bmh_digest") != digest
+        or output.get("target_bmh_digest") != digest
+    ):
+        return None
+    return {
+        "source_cluster_uid": output["source_cluster_uid"],
+        "target_cluster_uid": output["target_cluster_uid"],
+        "source_bmh_identities": normalized,
+        "source_bmh_digest": digest,
+        "target_bmh_digest": digest,
+    }
+
+
 def _certificate_common_name(certificate: dict[str, Any] | None) -> str | None:
     if not certificate:
         return None
@@ -542,7 +610,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                c.payload, c.approval_digest, c.created_at, c.deadline,
                                d.phase AS deployment_phase,
                                d.sequence AS checkpoint_sequence,
-                               d.state AS checkpoint_state
+                               d.state AS checkpoint_state,
+                               d.trusted_context AS trusted_context
                         FROM agent_control_commands AS c
                         JOIN agent_control_deployments AS d
                           ON d.deployment_id = c.deployment_id
@@ -589,6 +658,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         "sequence": row["checkpoint_sequence"],
                         "state": row["checkpoint_state"],
                     },
+                    "deployment_context": (
+                        row["trusted_context"] or {}
+                        if identity["role"] == "target"
+                        else {}
+                    ),
                     "issued_at": now.isoformat(),
                     "deadline": deadline.isoformat(),
                     "lease": {
@@ -789,29 +863,71 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if status not in ("succeeded", "failed", "blocked", "cancelled"):
                 raise ControlApiError("RESULT_STATUS_INVALID")
             token_hash = hashlib.sha256(lease_token.encode()).hexdigest()
-            with psycopg.connect(database_url) as connection:
-                updated = connection.execute(
-                    """
-                    UPDATE agent_control_commands
-                    SET status = %s, result = %s, updated_at = NOW()
-                    WHERE command_id = %s AND target_agent_id = %s
-                      AND lease_id = %s AND lease_token_hash = %s
-                      AND status = 'leased' AND lease_expires_at > NOW()
-                    """,
-                    (
-                        status,
-                        Jsonb({
-                            key: value
-                            for key, value in document.items()
-                            if key != "lease_token"
-                        }),
-                        command_id,
-                        identity["agent_id"],
-                        lease_id, token_hash,
-                    ),
-                ).rowcount
-                if updated != 1:
-                    raise ControlApiError("COMMAND_LEASE_NOT_VALID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    updated = connection.execute(
+                        """
+                        UPDATE agent_control_commands
+                        SET status = %s, result = %s, updated_at = NOW()
+                        WHERE command_id = %s AND target_agent_id = %s
+                          AND lease_id = %s AND lease_token_hash = %s
+                          AND status = 'leased' AND lease_expires_at > NOW()
+                        RETURNING deployment_id, action, required_role
+                        """,
+                        (
+                            status,
+                            Jsonb({
+                                key: value
+                                for key, value in document.items()
+                                if key != "lease_token"
+                            }),
+                            command_id,
+                            identity["agent_id"],
+                            lease_id,
+                            token_hash,
+                        ),
+                    ).fetchone()
+                    if updated is None:
+                        raise ControlApiError("COMMAND_LEASE_NOT_VALID")
+                    if (
+                        status == "succeeded"
+                        and identity["role"] == "eph"
+                        and updated["required_role"] == "eph"
+                        and updated["action"] == "eph.capi.pivot"
+                    ):
+                        attestation = _validated_eph_pivot_attestation(
+                            document.get("output")
+                        )
+                        if attestation is not None:
+                            deployment = connection.execute(
+                                """
+                                SELECT trusted_context
+                                FROM agent_control_deployments
+                                WHERE deployment_id = %s
+                                FOR UPDATE
+                                """,
+                                (updated["deployment_id"],),
+                            ).fetchone()
+                            if deployment is None:
+                                raise ControlApiError("PIVOT_DEPLOYMENT_NOT_FOUND")
+                            trusted_context = deployment["trusted_context"] or {}
+                            trusted_context = {
+                                **trusted_context,
+                                "eph_pivot_attestation": {
+                                    **attestation,
+                                    "source_agent_id": str(identity["agent_id"]),
+                                    "command_id": str(command_id),
+                                    "attested_at": datetime.now(UTC).isoformat(),
+                                },
+                            }
+                            connection.execute(
+                                """
+                                UPDATE agent_control_deployments
+                                SET trusted_context = %s, updated_at = NOW()
+                                WHERE deployment_id = %s
+                                """,
+                                (Jsonb(trusted_context), updated["deployment_id"]),
+                            )
             self._send(200, {"accepted": True})
 
     return Handler
