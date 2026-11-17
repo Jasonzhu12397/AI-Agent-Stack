@@ -3955,11 +3955,18 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
     def fake_create(version, namespace, manifest, dry_run):
         create_modes.append(dry_run)
         created_manifests.append(manifest)
-        metadata = {"name": "edge-workers", "namespace": namespace}
+        metadata = {
+            "name": "edge-workers",
+            "namespace": namespace,
+            "uid": "machine-deployment-uid",
+            "labels": manifest["metadata"]["labels"],
+            "annotations": manifest["metadata"]["annotations"],
+        }
         return {
             "apiVersion": manifest["apiVersion"],
             "kind": "MachineDeployment",
             "metadata": metadata,
+            "spec": manifest["spec"],
         }
 
     monkeypatch.setattr(agent, "kubernetes_api_get", fake_get)
@@ -4006,7 +4013,7 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         "target_cluster",
     )
 
-    assert create_modes == [True]
+    assert create_modes == [True, False]
     manifest = created_manifests[-1]
     assert manifest["kind"] == "MachineDeployment"
     assert manifest["spec"]["replicas"] == 2
@@ -4020,30 +4027,26 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         "kind": "Metal3MachineTemplate",
         "name": "worker-template",
     }
-    assert result["created"] is False
+    assert result["created"] is True
+    assert result["idempotent_reconciliation"] is False
     assert result["dry_run_passed"] is True
-    assert result["execution_mode"] == "server_side_dry_run_simulation"
-    assert result["simulation_status"] == "ready_for_manual_execution"
-    assert result["execution_allowed"] is False
-    assert result["worker_creation_performed"] is False
+    assert result["execution_mode"] == "real_create_or_idempotent_reconcile"
+    assert result["execution_allowed"] is True
+    assert result["worker_creation_performed"] is True
     assert result["worker_readiness_verified"] is False
     assert result["worker_machine_count"] == 0
     assert result["ready_worker_machine_count"] == 0
     assert result["worker_node_names"] == []
-    assert result["machine_deployment_uid"] is None
+    assert result["machine_deployment_uid"] == "machine-deployment-uid"
     assert len(result["machine_deployment_manifest_hash"]) == 64
-    assert result["side_effects"] is False
+    assert result["side_effects"] is True
 
 
 
-def test_machine_deployment_create_rejects_real_writes(monkeypatch):
-    def unexpected_request(*args, **kwargs):
-        raise AssertionError("Kubernetes API must not be called")
-
-    monkeypatch.setattr(agent.urllib.request, "urlopen", unexpected_request)
+def test_machine_deployment_create_requires_boolean_dry_run(monkeypatch):
     with pytest.raises(
         agent.NodeAgentError,
-        match="MACHINE_DEPLOYMENT_REAL_WRITES_DISABLED",
+        match="MACHINE_DEPLOYMENT_DRY_RUN_FLAG_INVALID",
     ):
         agent.kubernetes_api_create_machine_deployment(
             "v1beta1",
@@ -4053,7 +4056,7 @@ def test_machine_deployment_create_rejects_real_writes(monkeypatch):
                 "kind": "MachineDeployment",
                 "metadata": {"namespace": "default"},
             },
-            dry_run=False,
+            dry_run="false",
         )
 
 def test_worker_provisioning_preflight_requires_sriov_dpdk(monkeypatch):
@@ -4091,7 +4094,7 @@ def test_worker_provisioning_preflight_requires_sriov_dpdk(monkeypatch):
 
 @pytest.mark.parametrize(
     ("dry_run", "expected_query"),
-    [(True, "?dryRun=All&fieldValidation=Strict")],
+    [(True, "?dryRun=All&fieldValidation=Strict"), (False, "?fieldValidation=Strict")],
 )
 def test_machine_deployment_create_uses_strict_api_validation(
     monkeypatch,
