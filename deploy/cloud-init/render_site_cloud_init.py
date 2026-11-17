@@ -8,8 +8,11 @@ import re
 import sys
 from pathlib import Path
 
-HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$")
-DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$")
+HOST_LABEL_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+HOST_RE = re.compile(
+    r"^(?=.{1,253}$)" + HOST_LABEL_PATTERN + r"(?:\." + HOST_LABEL_PATTERN + r")*$"
+)
+DOMAIN_RE = HOST_RE
 
 
 def validate_ntp_server(value):
@@ -119,9 +122,29 @@ resolvectl status
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", required=True, choices=("eph-live-os", "target-os"))
-    parser.add_argument("--ntp-server", action="append", type=validate_ntp_server, required=True)
-    parser.add_argument("--dns-server", action="append", type=validate_dns_server, required=True)
-    parser.add_argument("--search-domain", action="append", type=validate_search_domain, default=[])\n    parser.add_argument("--dns-test-name", type=validate_search_domain, required=True)
+    parser.add_argument(
+        "--ntp-server",
+        action="append",
+        type=validate_ntp_server,
+        required=True,
+    )
+    parser.add_argument(
+        "--dns-server",
+        action="append",
+        type=validate_dns_server,
+        required=True,
+    )
+    parser.add_argument(
+        "--search-domain",
+        action="append",
+        type=validate_search_domain,
+        default=[],
+    )
+    parser.add_argument(
+        "--dns-test-name",
+        type=validate_search_domain,
+        required=True,
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     destination = Path(args.output)
