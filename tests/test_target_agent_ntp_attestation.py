@@ -31,6 +31,10 @@ def _machine_and_config(index, approved_source, worker_network):
                 "configRef": {"kind": "KubeadmConfig", "name": config_name}
             }
         },
+        "status": {
+            "bootstrapReady": True,
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
     }
     config = {
         "metadata": {
@@ -43,6 +47,7 @@ def _machine_and_config(index, approved_source, worker_network):
             }],
         },
         "spec": {"preKubeadmCommands": [script]},
+        "status": {"ready": True},
     }
     return machine, config
 
