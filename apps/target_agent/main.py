@@ -201,6 +201,30 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _observe_ready_master_count() -> int:
+    result = _kubectl(["get", "nodes", "-o", "json"])
+    if not result["available"]:
+        raise HandoffError("TARGET_CONTROL_PLANE_NODE_OBSERVATION_FAILED")
+    try:
+        document = json.loads(result["stdout"])
+    except ValueError as exc:
+        raise HandoffError("TARGET_CONTROL_PLANE_NODE_JSON_INVALID") from exc
+    ready_masters = 0
+    for node in document.get("items", []):
+        labels = node.get("metadata", {}).get("labels", {})
+        is_master = (
+            "node-role.kubernetes.io/control-plane" in labels
+            or "node-role.kubernetes.io/master" in labels
+        )
+        is_ready = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in node.get("status", {}).get("conditions", [])
+        )
+        if is_master and is_ready:
+            ready_masters += 1
+    return ready_masters
+
+
 def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     if (
@@ -316,7 +340,13 @@ def execute(
             evidence = payload.get("evidence", {})
             if next_phase == HandoffPhase.TARGET_CONTROL_PLANE_READY.value:
                 ntp_attestation = _observe_control_plane_ntp_bootstrap(payload)
-                evidence = {**evidence, **ntp_attestation}
+                ready_master_count = _observe_ready_master_count()
+                evidence = {
+                    **evidence,
+                    **ntp_attestation,
+                    "ready_master_count": ready_master_count,
+                    "target_control_plane_ready": ready_master_count >= 3,
+                }
                 ntp_probe = probe_ironic_internal_ntp_endpoint(
                     evidence.get("ironic_internal_ntp_ip", "")
                 )
