@@ -79,6 +79,9 @@ def execute(
                 node_count = None
         evidence = {
             "role": "eph",
+            "eph_ready": False,
+            "eph_node_count": node_count,
+            "eph_source_preflight_passed": False,
             "single_node_cluster_expected": True,
             "source_kubeconfig_present": source_kubeconfig.is_file(),
             "node_count": node_count,
@@ -96,6 +99,8 @@ def execute(
             and evidence["clusterctl"]["available"]
             and evidence["kubectl"]["available"]
         )
+        evidence["eph_ready"] = ready
+        evidence["eph_source_preflight_passed"] = ready
         return {
             "status": "succeeded" if ready else "blocked",
             "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
@@ -193,6 +198,26 @@ def main() -> int:
                                 "output": outcome.get("output", {}),
                                 "side_effects": outcome.get("side_effects", False),
                             }
+                        if (
+                            command.get("action") == "eph.preflight"
+                            and outcome["status"] == "succeeded"
+                            and not guard.lost.is_set()
+                        ):
+                            try:
+                                checkpoint = client.persist_checkpoint(
+                                    command,
+                                    "eph_single_node_ready",
+                                    outcome["output"],
+                                )
+                                outcome["output"]["checkpoint"] = checkpoint
+                                outcome["side_effects"] = True
+                            except AgentTransportError:
+                                outcome = {
+                                    "status": "failed",
+                                    "error_code": "EPH_CHECKPOINT_PERSIST_FAILED",
+                                    "output": {"phase": "eph_single_node_ready"},
+                                    "side_effects": False,
+                                }
                         client.report_result(
                             _result(command, settings.agent_id, outcome, started_at)
                         )
