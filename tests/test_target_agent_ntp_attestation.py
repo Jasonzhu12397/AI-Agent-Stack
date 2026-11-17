@@ -24,7 +24,10 @@ def _machine_and_config(index, approved_source, worker_network):
         "metadata": {
             "name": machine_name,
             "uid": machine_uid,
-            "labels": {"cluster.x-k8s.io/control-plane": ""},
+            "labels": {
+                "cluster.x-k8s.io/control-plane": "",
+                "cluster.x-k8s.io/cluster-name": "target-cluster",
+            },
         },
         "spec": {
             "bootstrap": {
@@ -95,6 +98,7 @@ def test_control_plane_ntp_attestation_rejects_external_fallback_pool():
             ["192.0.2.10"],
             ["192.0.2.10"],
             ["10.130.60.80/28"],
+            "target-cluster",
         )
 
 
