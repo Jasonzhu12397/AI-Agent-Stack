@@ -4,7 +4,7 @@ The system has three separately enrolled Agent roles: Cloud Control Agent, EPH A
 
 ## Runtime boundary
 
-- Cloud AI Agent: runs in the cloud deployment from `Dockerfile.cloud-agent`, starts `worker_app.main`, and owns model execution, tool routing, RAG, workflow orchestration, approvals and durable task state.
+- Cloud Control Agent: runs in the cloud deployment from `Dockerfile.cloud-agent`, starts `worker_app.main`, and owns model execution, tool routing, RAG, workflow orchestration, approvals and durable task state.
 - EPH Agent: runs from `Dockerfile.node-agent` with `apps.eph_agent.main`; it is only the temporary EPH Single-Node role.
 - Target Agent: runs from `Dockerfile.node-agent` with `apps.target_agent.main`; it is installed on a Target Control Plane master after the target API and etcd are healthy.
 - Shared node-side adapters live under `apps/node_agent/runtime.py` and supporting modules. The EPH and Target entrypoints reject the wrong `AGENT_NODE_TYPE` at startup.
