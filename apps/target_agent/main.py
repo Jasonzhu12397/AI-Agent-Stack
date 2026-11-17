@@ -116,13 +116,19 @@ def main() -> int:
     try:
         settings = AgentSettings.from_environment("target")
         _configure_in_cluster_kubeconfig()
+        client = AgentControlClient(settings)
         if args.readiness_check:
             check = _kubectl(["get", "nodes", "-o", "json"])
-            if not check["available"]:
-                return 1
-            print(json.dumps({"service": "target-agent", "status": "ready"}))
-            return 0
-        client = AgentControlClient(settings)
+            KubernetesLeaseElector(
+                identity=settings.instance_id,
+                namespace=os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system"),
+                lease_name=os.environ.get("AGENT_LEASE_NAME", "target-agent-leader"),
+                duration_seconds=int(os.environ.get("AGENT_LEASE_DURATION_SECONDS", "30")),
+            )
+            ready = check["available"] and client.check_ready()
+            client.close()
+            print(json.dumps({"service": "target-agent", "status": "ready" if ready else "not_ready"}))
+            return 0 if ready else 1
         elector = KubernetesLeaseElector(
             identity=settings.instance_id,
             namespace=os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system"),
