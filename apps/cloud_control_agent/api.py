@@ -116,7 +116,8 @@ def _checkpoint_state_digest(evidence: dict[str, Any]) -> str:
 def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
     if not isinstance(output, dict):
         return None
-    identities = output.get("source_bmh_identities")
+    source_identities = output.get("source_bmh_identities")
+    target_identities = output.get("target_bmh_identities")
     if (
         output.get("capi_pivot_succeeded") is not True
         or output.get("source_cluster_absent") is not True
@@ -128,59 +129,78 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
         or not output.get("source_cluster_uid")
         or not isinstance(output.get("target_cluster_uid"), str)
         or not output.get("target_cluster_uid")
-        or not isinstance(identities, list)
-        or not 1 <= len(identities) <= 2500
     ):
         return None
-    normalized = []
-    identity_keys = set()
-    hardware_ids = set()
-    for item in identities:
-        if not isinstance(item, dict):
+
+    def normalize_inventory(identities: Any) -> list[dict[str, str]] | None:
+        if not isinstance(identities, list) or not 1 <= len(identities) <= 2500:
             return None
-        namespace = item.get("namespace")
-        name = item.get("name")
-        hardware_identity = item.get("hardware_identity")
-        if not all(
-            isinstance(value, str) and value
-            for value in (namespace, name, hardware_identity)
-        ):
-            return None
-        identity_key = (namespace, name, hardware_identity)
-        if identity_key in identity_keys or hardware_identity in hardware_ids:
-            return None
-        identity_keys.add(identity_key)
-        hardware_ids.add(hardware_identity)
-        normalized.append({
-            "namespace": namespace,
-            "name": name,
-            "hardware_identity": hardware_identity,
-        })
-    normalized.sort(
-        key=lambda item: (
-            item["namespace"],
-            item["name"],
-            item["hardware_identity"],
+        normalized = []
+        identity_keys = set()
+        hardware_ids = set()
+        for item in identities:
+            if not isinstance(item, dict):
+                return None
+            namespace = item.get("namespace")
+            name = item.get("name")
+            hardware_identity = item.get("hardware_identity")
+            if not all(
+                isinstance(value, str) and value
+                for value in (namespace, name, hardware_identity)
+            ):
+                return None
+            identity_key = (namespace, name, hardware_identity)
+            if identity_key in identity_keys or hardware_identity in hardware_ids:
+                return None
+            identity_keys.add(identity_key)
+            hardware_ids.add(hardware_identity)
+            normalized.append({
+                "namespace": namespace,
+                "name": name,
+                "hardware_identity": hardware_identity,
+            })
+        normalized.sort(
+            key=lambda item: (
+                item["namespace"],
+                item["name"],
+                item["hardware_identity"],
+            )
         )
-    )
-    digest = hashlib.sha256(
+        return normalized
+
+    source_normalized = normalize_inventory(source_identities)
+    target_normalized = normalize_inventory(target_identities)
+    if (
+        source_normalized is None
+        or target_normalized is None
+        or source_normalized != target_normalized
+    ):
+        return None
+    source_digest = hashlib.sha256(
         json.dumps(
-            normalized,
+            source_normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    target_digest = hashlib.sha256(
+        json.dumps(
+            target_normalized,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
     if (
-        output.get("source_bmh_digest") != digest
-        or output.get("target_bmh_digest") != digest
+        output.get("source_bmh_digest") != source_digest
+        or output.get("target_bmh_digest") != target_digest
     ):
         return None
     return {
         "source_cluster_uid": output["source_cluster_uid"],
         "target_cluster_uid": output["target_cluster_uid"],
-        "source_bmh_identities": normalized,
-        "source_bmh_digest": digest,
-        "target_bmh_digest": digest,
+        "source_bmh_identities": source_normalized,
+        "source_bmh_digest": source_digest,
+        "target_bmh_digest": target_digest,
     }
 
 
