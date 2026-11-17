@@ -215,9 +215,17 @@ def queue_deployment_command(
     deployment: ClusterDeployment,
     command_type: str,
     node=None,
+    attempt: int = 0,
 ) -> AgentCommand:
     payload = {"deployment_id": str(deployment.id)}
     if command_type == "cluster.postflight":
+        if (
+            not isinstance(attempt, int)
+            or isinstance(attempt, bool)
+            or not 0 <= attempt <= 180
+        ):
+            raise ValueError("DEPLOYMENT_POSTFLIGHT_ATTEMPT_INVALID")
+        payload["readiness_attempt"] = attempt
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = _deployment_capi_namespace(deployment)
         payload["expected_worker_replicas"] = deployment.spec.get("worker_replicas")
@@ -297,6 +305,8 @@ def queue_deployment_command(
     else:
         payload["cluster_spec"] = deployment.spec
     idempotency_key = f"cluster-deployment:{deployment.id}:{command_type}"
+    if command_type == "cluster.postflight":
+        idempotency_key += f":attempt:{attempt}"
     command, _ = AgentCommand.objects.get_or_create(
         tenant=deployment.tenant,
         idempotency_key=idempotency_key,
@@ -1183,6 +1193,7 @@ def handle_deployment_command_result(
             deployment,
             "cluster.postflight",
             node=deployment.target_node,
+            attempt=0,
         )
         deployment.plan_result = {
             **(deployment.plan_result or {}),
