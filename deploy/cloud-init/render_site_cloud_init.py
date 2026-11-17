@@ -116,7 +116,7 @@ def main(argv=None):
     parser.add_argument("--role", required=True, choices=("eph-live-os", "target-os"))
     parser.add_argument("--ntp-server", action="append", type=validate_ntp_server, required=True)
     parser.add_argument("--dns-server", action="append", type=validate_dns_server, required=True)
-    parser.add_argument("--search-domain", action="append", type=validate_search_domain, default=[])
+    parser.add_argument("--search-domain", action="append", type=validate_search_domain, default=[])\n    parser.add_argument("--dns-test-name", type=validate_search_domain, required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     destination = Path(args.output)
