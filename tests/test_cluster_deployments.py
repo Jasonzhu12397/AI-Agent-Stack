@@ -2189,6 +2189,25 @@ def test_control_plane_accepts_target_cluster_with_new_uid_and_matching_spec(
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    ClusterDeploymentPivotOperation.objects.create(
+        deployment=deployment,
+        operation_id=uuid.UUID("a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234"),
+        source_node=eph_node,
+        target_node=target_node,
+        state=ClusterDeploymentPivotOperation.State.VERIFYING,
+        source_identity={
+            "uid": "source-cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "d" * 64,
+        },
+        inventory=[],
+        inventory_sha256="a" * 64,
+        target_identity={
+            "uid": "target-generated-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "d" * 64,
+        },
+    )
     command = AgentCommand.objects.create(
         tenant=tenant,
         project=project,
@@ -2289,6 +2308,25 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         },
     }
     deployment.save(update_fields=["target_node", "spec", "plan_result", "updated_at"])
+    ClusterDeploymentPivotOperation.objects.create(
+        deployment=deployment,
+        operation_id=uuid.UUID("b4f1a3c2-7e45-4a6e-8b21-1e4f5a6d7890"),
+        source_node=eph_node,
+        target_node=target_node,
+        state=ClusterDeploymentPivotOperation.State.VERIFYING,
+        source_identity={
+            "uid": "source-cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "c" * 64,
+        },
+        inventory=[],
+        inventory_sha256="b" * 64,
+        target_identity={
+            "uid": "target-cluster-uid",
+            "api_version": "cluster.x-k8s.io/v1beta1",
+            "spec_sha256": "c" * 64,
+        },
+    )
     command = AgentCommand.objects.create(
         tenant=tenant,
         project=project,
