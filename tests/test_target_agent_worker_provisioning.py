@@ -253,14 +253,15 @@ def test_target_agent_rbac_precreates_lease_and_grants_only_required_worker_writ
         and item["metadata"]["name"] == "target-agent-leader-election"
     )
     assert role["rules"][0]["verbs"] == ["get", "update"]
-    cluster_role = next(
+    worker_role = next(
         item for item in documents
-        if item.get("kind") == "ClusterRole"
-        and item["metadata"]["name"] == "target-agent-observer"
+        if item.get("kind") == "Role"
+        and item["metadata"]["name"] == "target-agent-worker-provisioner"
     )
+    assert worker_role["metadata"]["namespace"] == "REPLACE_WITH_CAPI_NAMESPACE"
     permissions = {
         (rule.get("apiGroups", [""])[0], resource): set(rule["verbs"])
-        for rule in cluster_role["rules"]
+        for rule in worker_role["rules"]
         for resource in rule["resources"]
     }
     assert {"get", "list", "watch", "create", "patch"} <= permissions[
@@ -272,6 +273,12 @@ def test_target_agent_rbac_precreates_lease_and_grants_only_required_worker_writ
     assert {"get", "create"} <= permissions[
         ("infrastructure.cluster.x-k8s.io", "metal3machinetemplates")
     ]
+    worker_binding = next(
+        item for item in documents
+        if item.get("kind") == "RoleBinding"
+        and item["metadata"]["name"] == "target-agent-worker-provisioner"
+    )
+    assert worker_binding["subjects"][0]["namespace"] == "ai-agent-system"
 
 
 
