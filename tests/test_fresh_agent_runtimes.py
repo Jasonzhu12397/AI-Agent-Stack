@@ -423,7 +423,13 @@ def _target_metal3_observation_documents():
         for index in range(1, 3)
     ]
     return {
-        "cluster": {"metadata": {"name": "target-cluster", "namespace": "metal3", "uid": "cluster-uid"}},
+        "cluster": {
+            "metadata": {
+                "name": "target-cluster",
+                "namespace": "metal3",
+                "uid": "cluster-uid",
+            },
+        },
         "machines": {"items": []},
         "metal3machines": {"items": []},
         "bmhs": {"items": hosts},
@@ -473,7 +479,13 @@ def test_target_metal3_ownership_checks_every_bmh_against_live_ironic(monkeypatc
     evidence = target_main._observe_target_metal3_ownership({
         "namespace": "metal3",
         "cluster_name": "target-cluster",
-        "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+        "source_bmh_identities": [
+            {
+                "namespace": "metal3",
+                "name": "host-1",
+                "hardware_identity": "id-1",
+            },
+        ],
     })
 
     assert calls == [
@@ -494,10 +506,11 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
             "available": True,
             "returncode": 0,
             "stdout": json.dumps(documents[
-                "cluster" if arguments[1] == "cluster.cluster.x-k8s.io"
-                else "machines" if arguments[1] == "machines.cluster.x-k8s.io"
-                else "metal3machines" if arguments[1] == "metal3machines.infrastructure.cluster.x-k8s.io"
-                else "bmhs"
+                {
+                    "cluster.cluster.x-k8s.io": "cluster",
+                    "machines.cluster.x-k8s.io": "machines",
+                    "metal3machines.infrastructure.cluster.x-k8s.io": "metal3machines",
+                }.get(arguments[1], "bmhs")
             ]),
             "stderr": "",
         },
@@ -516,7 +529,13 @@ def test_target_metal3_ownership_fails_closed_without_ironic_credentials(monkeyp
         "payload": {
             "namespace": "metal3",
             "cluster_name": "target-cluster",
-            "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+            "source_bmh_identities": [
+            {
+                "namespace": "metal3",
+                "name": "host-1",
+                "hardware_identity": "id-1",
+            },
+        ],
         },
     })
 
@@ -534,10 +553,11 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
             "available": True,
             "returncode": 0,
             "stdout": json.dumps(documents[
-                "cluster" if arguments[1] == "cluster.cluster.x-k8s.io"
-                else "machines" if arguments[1] == "machines.cluster.x-k8s.io"
-                else "metal3machines" if arguments[1] == "metal3machines.infrastructure.cluster.x-k8s.io"
-                else "bmhs"
+                {
+                    "cluster.cluster.x-k8s.io": "cluster",
+                    "machines.cluster.x-k8s.io": "machines",
+                    "metal3machines.infrastructure.cluster.x-k8s.io": "metal3machines",
+                }.get(arguments[1], "bmhs")
             ]),
             "stderr": "",
         },
@@ -563,7 +583,13 @@ def test_target_metal3_ownership_rejects_ironic_node_in_maintenance(monkeypatch)
         "payload": {
             "namespace": "metal3",
             "cluster_name": "target-cluster",
-            "source_bmh_identities": [{"namespace": "metal3", "name": "host-1", "hardware_identity": "id-1"}],
+            "source_bmh_identities": [
+            {
+                "namespace": "metal3",
+                "name": "host-1",
+                "hardware_identity": "id-1",
+            },
+        ],
         },
     })
 
