@@ -550,7 +550,13 @@ def execute(
                 "output": transition,
                 "side_effects": False,
             }
-        except (HandoffError, WorkerProvisioningError, AttributeError, TypeError, ValueError) as exc:
+        except (
+            HandoffError,
+            WorkerProvisioningError,
+            AttributeError,
+            TypeError,
+            ValueError,
+        ) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
