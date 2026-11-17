@@ -2218,6 +2218,7 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
     )
 
     deployment.refresh_from_db()
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     assert deployment.error["code"] == "TARGET_AGENT_CAPI_ADOPTION_VERIFICATION_FAILED"
@@ -2924,7 +2925,7 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
     )
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.status == ClusterDeployment.Status.RECONCILIATION_REQUIRED
     assert deployment.error["code"] == "CAPI_PIVOT_METAL3_IRONIC_POSTFLIGHT_FAILED"
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     assert not AgentCommand.objects.filter(
