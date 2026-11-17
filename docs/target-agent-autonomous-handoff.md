@@ -17,7 +17,7 @@ This contract supersedes the older EPH-as-a-future-worker/reclamation flow.
 
 `eph_single_node_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
 
-Each transition requires positive evidence from the preceding operation. Missing evidence, stale identity, duplicate BMH UID, or a mismatch between source and target BMH identity sets blocks the transition. The Target Agent must persist a checkpoint before and after every external side effect and resume idempotently after restart.
+Each transition requires positive evidence from the preceding operation. Missing evidence, stale identity, duplicate stable BMH hardware identity, or a mismatch between source and target BMH identity sets blocks the transition. The Target Agent must persist a checkpoint before and after every external side effect and resume idempotently after restart.
 
 ## BMH migration invariant
 
