@@ -343,3 +343,61 @@ def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
     })
     assert result["status"] == "blocked"
     assert result["side_effects"] is True
+
+
+
+def test_target_provider_controllers_must_be_ready_on_control_plane_masters(monkeypatch):
+    deployment = {
+        "metadata": {"generation": 2},
+        "spec": {
+            "selector": {"matchLabels": {"app": "capm3"}},
+            "template": {
+                "spec": {
+                    "tolerations": [{
+                        "key": "node-role.kubernetes.io/control-plane",
+                        "operator": "Exists",
+                        "effect": "NoSchedule",
+                    }]
+                }
+            },
+        },
+        "status": {
+            "observedGeneration": 2,
+            "readyReplicas": 1,
+            "availableReplicas": 1,
+        },
+    }
+    pods = {
+        "items": [{
+            "metadata": {"name": "capm3-controller"},
+            "spec": {"nodeName": "master-1"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+    monkeypatch.setattr(capi_pivot, "_deployment", lambda *_args: deployment)
+    monkeypatch.setattr(capi_pivot, "_kubectl", lambda *_args: pods)
+    result = capi_pivot._target_controllers_ready(
+        "target.kubeconfig",
+        {"master-1", "master-2", "master-3"},
+        [{"namespace": "metal3-system", "name": "capm3-controller", "minimum_ready_replicas": 1}],
+    )
+    assert result["ready"] is True
+    assert result["controllers"][0]["scheduled_on_target_masters"] is True
+
+
+def test_target_provider_controllers_without_master_toleration_are_blocked(monkeypatch):
+    deployment = {
+        "metadata": {"generation": 1},
+        "spec": {
+            "selector": {"matchLabels": {"app": "capm3"}},
+            "template": {"spec": {"tolerations": []}},
+        },
+        "status": {"observedGeneration": 1, "readyReplicas": 1, "availableReplicas": 1},
+    }
+    monkeypatch.setattr(capi_pivot, "_deployment", lambda *_args: deployment)
+    with pytest.raises(capi_pivot.CapiPivotError, match="MISSING_MASTER_TOLERATION"):
+        capi_pivot._target_controllers_ready(
+            "target.kubeconfig",
+            {"master-1", "master-2", "master-3"},
+            [{"namespace": "metal3-system", "name": "capm3-controller"}],
+        )
