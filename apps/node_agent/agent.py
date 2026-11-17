@@ -3561,13 +3561,12 @@ def execute_command(
             chrony_bootstrap_template_uid,
             chrony_bootstrap_template_created,
         ) = ensure_worker_chrony_bootstrap_template(
-                namespace=namespace,
-                bootstrap_api_version=expected_bootstrap_api_version,
-                base_template=bootstrap_template,
-                deployment_id=deployment_id,
-                plan_hash=plan_hash,
-                ntp_server_ip=ntp_server_ip,
-            )
+            namespace=namespace,
+            bootstrap_api_version=expected_bootstrap_api_version,
+            base_template=bootstrap_template,
+            deployment_id=deployment_id,
+            plan_hash=plan_hash,
+            ntp_server_ip=ntp_server_ip,
         )
         manifest = {
             "apiVersion": "cluster.x-k8s.io/" + md_version,
