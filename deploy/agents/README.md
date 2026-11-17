@@ -79,25 +79,19 @@ Do not infer successful Target OS installation from EPH shutdown, a successful L
 
 The EPH ServiceAccount is read-only for core node/namespace data, CAPI resources and Metal3 resources. It can discover API groups and run preflight/plan checks. It cannot create or modify Cluster, Machine, BareMetalHost or BMC resources. Do not treat this single-node Kubernetes cluster as a persistent management plane. Complete the bootstrap work, persist all required state centrally, revoke the EPH runtime identity, then hand off/reboot the physical host into the final target worker OS.
 
-## Per-node physical network inventory (target cluster)
+## Target-side physical and network inventory
 
-The Target Agent Deployment is pinned to a control-plane node so it can start before workers exist. Its own host sysfs mount therefore describes only that one physical server. To inventory every physical target node (especially Data Plane workers with SR-IOV VFs/DPDK), also apply `network-inventory-agent.yaml` as a DaemonSet:
+There is no per-node Node Agent DaemonSet. The Target Agent runs only as a three-Pod service across the three target control-plane/master nodes. It obtains cluster-wide Node allocatable resources, labels, conditions, CAPI Machine relationships, Metal3Machine/BareMetalHost/HardwareData and network attachment configuration through the target Kubernetes and approved Metal3 APIs. It correlates observations using Kubernetes Node UID and provider object identity so stale objects cannot be mistaken for current hardware.
 
-1. Apply `namespace.yaml` and `rbac.yaml`.
-2. Replace the DaemonSet image with the same immutable node-agent image used by the Target Agent.
-3. Apply `network-inventory-agent.yaml` to schedule one small, non-root publisher on every node, including tainted control-plane nodes.
-4. Each publisher reads host `/sys` read-only and writes a bounded hardware report to a node-specific ConfigMap in `ai-agent-inventory`. It has only `get` access to Nodes and `get/create/update` access to ConfigMaps in `ai-agent-inventory`. The publisher's Kubernetes API client validates the service host and HTTPS port, restricts requests to the exact Node-read and inventory-ConfigMap endpoints, validates the ServiceAccount token, and disables redirects so the bearer token cannot be forwarded to another origin. A redirect is treated as an error; configure the in-cluster API endpoint directly rather than relying on HTTP redirects.
-5. The Target Agent reads those ConfigMaps, verifies that each ConfigMap name matches the deterministic node-name-derived identity, validates the report schema and hardware collection types, correlates each report with the live Node UID, ignores stale reports from replaced nodes, and returns the per-node NIC/PCI/VF/IOMMU/NUMA/hugepage inventory in `cluster.network.inspect`. A malformed or misbound report is excluded and leaves that node in `missing_node_names`; it cannot satisfy the inventory-complete gate.
-
-The DaemonSet does not use host networking, host PID, privileged mode, or writable host mounts. Its Pods reach the Kubernetes API over their normal Pod network, which must be routed on the Data Plane as required by the site policy. A read-only hostPath admission exception for `/sys` is required; if prohibited, do not weaken the Agent security context—use a separately approved host inventory integration. Reports contain hardware inventory (including MAC addresses), not BMC credentials or Pod secrets.
+Host-only details that are not exposed by Kubernetes or Metal3 APIs (for example, live PCI/VF binding or host VFIO state on an arbitrary worker) are reported as unavailable. Do not add a separate resident Agent or DaemonSet to fill those gaps; implement an approved out-of-band inventory adapter or expose the data through the existing infrastructure APIs.
 
 ## Target Cluster Agent (target cluster)
 
-The target agent must not be required to create the first target Control Plane. As soon as the first Control Plane API, etcd and core networking are Ready, install the Target Agent before provisioning Data Plane workers. The supplied Deployment selects a control-plane node and tolerates the standard control-plane NoSchedule taint, so it can schedule when no workers exist.
+The Target Agent must not be required to create the first target Control Plane. As soon as the three target Control Plane nodes and API/etcd/core networking are Ready, deploy the Target Agent as three Pods, one per control-plane/master node, before provisioning Data Plane workers. The Deployment selects control-plane nodes, tolerates the standard control-plane/master NoSchedule taints and requires pod anti-affinity so each replica lands on a different master.
 
-1. Enroll a second node with type `target_cluster` and issue a separate target-cluster credential.
+1. Enroll one logical target-cluster Agent identity with type `target_cluster`; all three replicas use that cluster-scoped identity.
 2. Create `target-cluster-agent-credentials` in `ai-agent-system` with keys `control-url`, `node-id` and `token`.
-3. Apply `namespace.yaml`, `rbac.yaml` and `target-cluster-agent.yaml` to the target cluster.
+3. Apply `namespace.yaml`, `rbac.yaml` and `target-cluster-agent.yaml` to the target cluster. The manifest requests three replicas and a PodDisruptionBudget with two available replicas.
 4. Verify the Pod is Ready and its Supervisor heartbeat/command lease works.
 5. When the Supervisor assigns a deployment through the handoff API, the Target Agent discovers it in its heartbeat response and automatically retrieves its durable checkpoint before polling commands. Confirm the structured `deployment_checkpoint_restored` log event and the expected phase/sequence.
 6. If CAPI controllers and Cluster API objects were hosted in EPH, pivot them into the target cluster with `clusterctl move` (or a provider/version-tested equivalent) and verify reconciliation before stopping EPH or provisioning workers.
@@ -219,3 +213,7 @@ The script verifies both API servers, checks required Secret keys without printi
 ## Target Agent placement and HA requirement
 
 The Target Agent is a cluster-level service and must run as three Pods distributed across the three target Kubernetes control-plane/master nodes. It is not a separate Node Agent installed on each physical machine. All three Pods share the Target Agent service role; command polling and side-effect execution must be single-active through Kubernetes Lease leader election, with standby Pods performing no command polling or execution. The current `target-cluster-agent.yaml` still declares one replica and the runtime does not yet implement leader election. Therefore the three-master HA deployment is an explicit implementation gap, not a completed feature. Do not simply change `replicas` to three while all Pods share one enrollment credential; that would permit concurrent polling under one Agent identity.
+
+### Target Agent single-active execution
+
+The three Target Agent Pods share one logical cluster identity. Kubernetes Lease leader election (`target-cluster-agent-leader`) fences command polling and side-effect execution to the elected replica; standby replicas remain available for failover but do not poll or execute. The Target ServiceAccount receives only namespaced Lease `get/create/update` access. A lost leadership signal cancels the active command path and prevents result submission under stale authority. The lease duration and renewal interval are 30 seconds and 5 seconds respectively. Verify the Lease object and all three Pod placements before enabling target-side mutating commands.
