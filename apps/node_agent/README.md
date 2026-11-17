@@ -1,6 +1,6 @@
 # Deprecated: legacy Node Agent package
 
-<badge>DEPRECATED — DO NOT USE FOR NEW DEVELOPMENT</badge>
+**DEPRECATED — DO NOT USE FOR NEW DEVELOPMENT**
 
 The old Node Agent runtime and its shared EPH/Target implementation are superseded by the clean three-Agent architecture in [ADR 0005](../../docs/adr/0005-three-agent-fresh-runtime.md).
 
