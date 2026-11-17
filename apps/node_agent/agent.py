@@ -2281,10 +2281,8 @@ def inspect_network_environment(
             "A NetworkAttachmentDefinition does not prove a VF is allocated or a Pod is attached.",
             "DPDK readiness requires host IOMMU/VFIO, hugepage, CPU/NUMA "
             "and device binding validation.",
-            (
-                "Target Agent reports Kubernetes-visible node resources only; host-only PCI/VF/NUMA "
-                "details require an approved infrastructure API."
-            ),
+            "Target Agent reports Kubernetes-visible node resources only; "
+            "host-only PCI/VF/NUMA details require an approved infrastructure API.",
             "Component presence is inferred from Pod names, not dataplane connectivity tests.",
         ],
         "side_effects": False,
