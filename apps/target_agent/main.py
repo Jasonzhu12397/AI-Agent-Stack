@@ -76,7 +76,28 @@ def _configure_in_cluster_kubeconfig() -> None:
     os.environ["KUBECONFIG"] = path
 
 
-def _kubectl(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
+def _kubectl(
+    arguments: list[str],
+    timeout: int = 30,
+    max_output_bytes: int = 8 * 1024 * 1024,
+) -> dict[str, Any]:
+    allowed_environment = (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "XDG_CACHE_HOME",
+    )
+    environment = {
+        key: os.environ[key]
+        for key in allowed_environment
+        if key in os.environ
+    }
+    environment["KUBECONFIG"] = os.environ.get("KUBECONFIG", "")
     try:
         completed = subprocess.run(
             ["kubectl", *arguments],
@@ -84,14 +105,21 @@ def _kubectl(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "")},
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "error": type(exc).__name__}
+    output_size = len(completed.stdout.encode("utf-8"))
+    if output_size > max_output_bytes:
+        return {
+            "available": False,
+            "error": "KUBECTL_OUTPUT_LIMIT_EXCEEDED",
+            "output_bytes": output_size,
+        }
     return {
         "available": completed.returncode == 0,
         "returncode": completed.returncode,
-        "stdout": completed.stdout[-8000:],
+        "stdout": completed.stdout,
         "stderr": completed.stderr[-2000:],
     }
 
