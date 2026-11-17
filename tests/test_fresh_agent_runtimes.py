@@ -233,3 +233,41 @@ def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monk
     assert result["output"]["evidence"]["ready_master_count"] == 3
     assert result["output"]["evidence"]["ironic_internal_ntp_service_reachable"] is True
     assert result["output"]["evidence"]["target_control_plane_ntp_external_sync_verified"] is True
+
+
+
+def test_target_agent_reads_worker_inventory_from_target_kubernetes_api(monkeypatch):
+    observed = {
+        "apiVersion": "v1",
+        "kind": "NodeList",
+        "items": [
+            {
+                "metadata": {
+                    "name": "worker-01",
+                    "uid": "node-uid-01",
+                    "labels": {"node-role.kubernetes.io/worker": ""},
+                },
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            }
+        ],
+    }
+    calls = []
+
+    def fake_kubectl(arguments, **_kwargs):
+        calls.append(arguments)
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(observed),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
+    result = execute_target({"action": "target.cluster.observe"})
+
+    assert result["status"] == "succeeded"
+    assert json.loads(result["output"]["stdout"]) == observed
+    assert calls == [["get", "nodes", "-o", "json"]]
+    assert result["side_effects"] is False
