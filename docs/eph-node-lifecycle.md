@@ -45,7 +45,7 @@ Move the CAPI management controllers and Cluster API objects, not merely the Age
 
 ### BMH registry migration
 
-Require complete source and target inventories. Compare the exact set of (BareMetalHost name, UID), not just counts. Verify the target Metal3/CAPM3 controller is healthy and owns/reconciles the migrated inventory. Do not remove source records before target ownership is confirmed.
+Require complete source and target inventories. Compare the exact set of (BareMetalHost name, UID), not just counts; Kubernetes UIDs are cluster-local diagnostics, not cross-cluster hardware identity. Verify the target Metal3/CAPM3 controller is healthy and owns/reconciles the migrated inventory. Do not remove source records before target ownership is confirmed.
 
 ### EPH cleanup
 
