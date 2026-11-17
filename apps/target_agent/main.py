@@ -20,7 +20,12 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 from .leader_election import KubernetesLeaseElector, LeaseElectionError
-from .ntp_policy import NtpPolicyError, validate_worker_ntp_sources, render_worker_chrony_config
+from .ntp_policy import (
+    NtpPolicyError,
+    render_worker_chrony_config,
+    render_worker_chrony_pre_kubeadm_command,
+    validate_worker_ntp_sources,
+)
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
@@ -132,6 +137,9 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
                 "output": {
                     "validated_ntp_sources": list(sources),
                     "chrony_config": render_worker_chrony_config(sources[0]),
+                    "pre_kubeadm_command": render_worker_chrony_pre_kubeadm_command(
+                        sources[0]
+                    ),
                     "external_ntp_fallback_allowed": False,
                 },
                 "side_effects": False,
