@@ -359,6 +359,10 @@ def execute(
                 observed_ownership = _observe_target_metal3_ownership(payload)
                 evidence = {**evidence, **observed_ownership}
             current_phase = checkpoint.get("phase")
+            if current_phase == "not_started":
+                raise HandoffError("HANDOFF_EPH_CHECKPOINT_REQUIRED")
+            if next_phase == "eph_single_node_ready":
+                raise HandoffError("HANDOFF_EPH_PHASE_OWNED_BY_EPH_AGENT")
             if current_phase == next_phase:
                 validated = validate_phase_evidence(HandoffPhase(next_phase), evidence)
                 state_digest = hashlib.sha256(
