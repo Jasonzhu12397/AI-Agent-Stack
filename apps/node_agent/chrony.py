@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import ipaddress
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -269,3 +272,44 @@ def configure_chrony(
         "internal_ntp_server_enabled": node_role == "target_control_plane",
         **verification,
     }
+
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args(argv)
+    config_path = Path(args.config)
+    try:
+        if config_path.is_symlink() or not config_path.is_file():
+            raise ChronyError("CHRONY_CONFIG_FILE_INVALID")
+        stat = config_path.stat()
+        if stat.st_uid != 0 or stat.st_mode & 0o022 or stat.st_size > 65536:
+            raise ChronyError("CHRONY_CONFIG_FILE_PERMISSIONS_INVALID")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        allowed = {
+            "node_role",
+            "sources",
+            "ironic_internal_ip",
+            "allowed_clients",
+            "max_offset_seconds",
+        }
+        if not isinstance(config, dict) or set(config) - allowed:
+            raise ChronyError("CHRONY_CONFIG_SCHEMA_INVALID")
+        result = configure_chrony(
+            config.get("node_role"),
+            config.get("sources"),
+            ironic_internal_ip=config.get("ironic_internal_ip"),
+            allowed_clients=config.get("allowed_clients"),
+            max_offset_seconds=config.get("max_offset_seconds", 0.5),
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except (OSError, UnicodeError, json.JSONDecodeError, ChronyError) as exc:
+        error = str(exc) if isinstance(exc, ChronyError) else "CHRONY_CONFIG_READ_FAILED"
+        print(json.dumps({"configured": False, "error": error}, sort_keys=True))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
