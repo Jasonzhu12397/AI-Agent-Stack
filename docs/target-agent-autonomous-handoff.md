@@ -82,3 +82,23 @@ the pivot phase. A command payload cannot choose or weaken this controller polic
 The source observer credential is temporary and read-only. It remains available only until
 the Target Agent has independently verified pivot and BMH ownership; the EPH cleanup executor
 must revoke it as part of the credential retirement phase.
+
+
+## Handoff evidence semantics
+
+A Target Agent handoff phase is accepted only from live observations or a fail-closed bootstrap
+execution gate. In particular:
+
+- `source_cluster_absent` is produced only after the source API returns NotFound for the
+  exact Cluster object; transport and authentication errors are not absence.
+- `target_controllers_ready` is produced only after every deployment in the deployment-level
+  required-controller allowlist reports observed generation and all desired replicas updated
+  and available.
+- `worker_ntp_bootstrap_sources` records the exact NTP source in the Worker KubeadmConfig
+  pre-kubeadm script whose synchronization gate had to exit successfully before kubeadm join.
+  It is not a claim of continuous chronyd telemetry after boot.
+- Approved external NTP sources and Worker network CIDRs come from the Target Agent's
+  deployment Secret, never from command payload fields.
+
+These distinctions are intentional: a positive configuration assertion must not be reported
+as a live runtime observation.
