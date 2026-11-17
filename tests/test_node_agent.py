@@ -3735,7 +3735,7 @@ def test_verify_baremetal_host_network_macs_rejects_unowned_hardware_data(monkey
         )
 
 
-def test_approved_worker_provisioning_only_runs_server_side_dry_run(
+def test_approved_worker_provisioning_creates_machine_deployment_and_chrony_template(
     monkeypatch,
 ):
     profile = valid_dual_network_profile()
