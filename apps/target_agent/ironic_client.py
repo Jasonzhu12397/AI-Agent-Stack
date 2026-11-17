@@ -25,7 +25,14 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def ironic_api_configured(environ: typing.Any = None) -> bool:
     values = os.environ if environ is None else environ
-    return bool(values.get("IRONIC_API_URL") and values.get("IRONIC_API_TOKEN"))
+    has_endpoint = bool(values.get("IRONIC_API_URL"))
+    has_token = bool(values.get("IRONIC_API_TOKEN"))
+    if not has_endpoint and not has_token:
+        return False
+    if not has_endpoint or not has_token:
+        raise IronicObservationError("IRONIC_API_CONFIGURATION_INCOMPLETE")
+    _configuration(values)
+    return True
 
 
 def _configuration(
