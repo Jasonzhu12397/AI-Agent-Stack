@@ -291,3 +291,28 @@ def test_control_plane_rejects_worker_internal_ntp_scope():
             ["10.130.60.84"],
             source_scope="ironic_internal",
         )
+
+
+def test_target_control_plane_ready_requires_internal_ntp_server_evidence():
+    evidence = {
+        "target_api_ready": True,
+        "target_etcd_healthy": True,
+        "target_core_network_ready": True,
+        "target_control_plane_chronyd_verified": True,
+    }
+    with pytest.raises(
+        DeliveryLifecycleError,
+        match="DELIVERY_EVIDENCE_INCOMPLETE:target_internal_ntp_service_ready",
+    ):
+        evaluate_transition(
+            "eph_single_node_ready",
+            "target_control_plane_ready",
+            evidence,
+        )
+    evidence["target_internal_ntp_service_ready"] = True
+    result = evaluate_transition(
+        "eph_single_node_ready",
+        "target_control_plane_ready",
+        evidence,
+    )
+    assert result["accepted"] is True
