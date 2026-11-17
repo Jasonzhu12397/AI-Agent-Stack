@@ -1642,6 +1642,14 @@ def test_authorized_pivot_runs_clusterctl_move_and_verifies_both_api_servers(tmp
                 return subprocess.CompletedProcess(command, 0, json.dumps(source_cluster), "")
             if named_get and kubeconfig.endswith("target.kubeconfig"):
                 return subprocess.CompletedProcess(command, 0, json.dumps(target_cluster), "")
+            if (
+                moved["value"]
+                and kubeconfig.endswith("source.kubeconfig")
+                and "get" in command
+            ):
+                return subprocess.CompletedProcess(
+                    command, 0, json.dumps({"items": []}), ""
+                )
         return base_runner(command, **kwargs)
 
     payload = {
