@@ -903,6 +903,7 @@ def handle_deployment_command_result(
             and result.get("target_agent_acknowledged") is True
             and result.get("target_agent_ack") == target_ack == expected_ack
             and result.get("source_cluster_absent") is True
+            and result.get("source_inventory_empty") is True
             and result.get("target_cluster_present") is True
             and isinstance(result.get("target_cluster_uid"), str)
             and bool(result.get("target_cluster_uid"))
