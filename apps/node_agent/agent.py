@@ -4762,17 +4762,13 @@ def kubernetes_api_lease_request(
     path: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    expected_prefix = "/apis/coordination.k8s.io/v1/namespaces/"
     if (
-        method not in {"POST", "PUT"}
+        method != "PUT"
         or not isinstance(path, str)
-        or not path.startswith(expected_prefix)
-        or ".." in path
-        or (method == "POST" and not path.endswith("/leases"))
-        or (method == "PUT" and not re.fullmatch(
+        or not re.fullmatch(
             r"/apis/coordination[.]k8s[.]io/v1/namespaces/[a-z0-9-]+/leases/[a-z0-9-]+",
             path,
-        ))
+        )
     ):
         raise NodeAgentError("KUBERNETES_LEASE_REQUEST_NOT_ALLOWLISTED")
     host, port, token, context = _kubernetes_api_identity()
