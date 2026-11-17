@@ -75,10 +75,17 @@ def _pivot_runner_for(
     source_ironic_ready_replicas=0,
     source_ironic_updated_replicas=0,
     source_ironic_terminating_replicas=0,
+    source_cluster_annotation=None,
 ):
     calls = []
     moved = {"value": False}
-    source_annotations = {"value": {}}
+    source_annotations = {
+        "value": (
+            {"ai-agent-stack.io/source-cluster-uid": source_cluster_annotation}
+            if source_cluster_annotation is not None
+            else {}
+        )
+    }
     groups = [
         "cluster.x-k8s.io",
         "bootstrap.cluster.x-k8s.io",
@@ -123,6 +130,10 @@ def _pivot_runner_for(
                 kubeconfig = ""
             if kubeconfig.endswith("source.kubeconfig"):
                 if "annotate" in command:
+                    if "ai-agent-stack.io/source-cluster-uid" in source_annotations["value"]:
+                        return subprocess.CompletedProcess(
+                            command, 1, "", "annotation already exists"
+                        )
                     source_annotations["value"]["ai-agent-stack.io/source-cluster-uid"] = (
                         "uid-target-cluster"
                     )
@@ -1202,3 +1213,42 @@ def test_pivot_execution_runs_clusterctl_move_after_dry_run(tmp_path):
     assert "--dry-run" not in clusterctl_calls[1][0]
     assert result["pivot_executed"] is True
     assert result["side_effects"] is True
+
+
+def test_pivot_reuses_matching_source_identity_annotation_without_rewriting(tmp_path):
+    calls, runner = _pivot_runner_for(
+        source_cluster_annotation="uid-target-cluster"
+    )
+
+    result = run_capi_pivot(
+        {"cluster_name": "target-cluster", "namespace": "metal3"},
+        environ=_environment(tmp_path),
+        executable_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=runner,
+    )
+
+    assert result["cluster_identity_preserved"] is True
+    assert result["source_cluster_identity_annotation_written"] is False
+    assert not any("annotate" in command for command, _ in calls)
+
+
+def test_pivot_rejects_conflicting_source_identity_annotation(tmp_path):
+    calls, runner = _pivot_runner_for(
+        source_cluster_annotation="different-source-uid"
+    )
+
+    with pytest.raises(
+        CapiPivotError,
+        match="CAPI_PIVOT_SOURCE_CLUSTER_IDENTITY_ANNOTATION_CONFLICT",
+    ):
+        run_capi_pivot(
+            {"cluster_name": "target-cluster", "namespace": "metal3"},
+            environ=_environment(tmp_path),
+            executable_lookup=lambda name: f"/usr/bin/{name}",
+            process_runner=runner,
+        )
+
+    assert not any(
+        command[0].endswith("clusterctl") and "--dry-run" not in command
+        for command, _ in calls
+    )
