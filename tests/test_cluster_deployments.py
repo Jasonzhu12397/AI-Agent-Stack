@@ -1970,6 +1970,7 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
             "cluster_name": "edge-lab",
             "namespace": "metal3",
             "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
@@ -2127,6 +2128,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
         },
         "capi_pivot_target_verification": {
             "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
         },
@@ -2582,6 +2584,7 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
         },
         "capi_pivot_target_verification": {
             "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
         },
@@ -2607,6 +2610,7 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
             "cluster_name": "edge-lab",
             "namespace": "default",
             "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
             "side_effects": False,
