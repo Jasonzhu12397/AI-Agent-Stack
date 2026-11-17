@@ -2680,7 +2680,10 @@ class AgentRuntimePollView(APIView):
                     deployment is not None
                     and pivot_operation is not None
                     and pivot_operation.state
-                    == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
+                    in {
+                        ClusterDeploymentPivotOperation.State.WAITING_APPROVAL,
+                        ClusterDeploymentPivotOperation.State.READY,
+                    }
                     and str(pivot_operation.operation_id) == payload.get("operation_id")
                     and pivot_operation.source_node_id == node.id
                     and pivot_operation.target_node_id == deployment.target_node_id
@@ -2767,19 +2770,23 @@ class AgentRuntimePollView(APIView):
                     pk=command.deployment_id,
                     eph_node=node,
                 )
-                _record_capi_pivot_event(
-                    deployment,
-                    ClusterDeploymentPivotOperation.State.READY,
-                    "pivot_approval_and_target_ack_revalidated",
-                    {
-                        "command_id": str(command.id),
-                        "approved_by_id": str(command.approved_by_id),
-                        "approved_at": command.approved_at.isoformat(),
-                        "approval_hash": command.approved_plan_hash,
-                    },
-                    actor_node=node,
-                    approval_hash=command.approved_plan_hash,
-                )
+                if (
+                    pivot_operation.state
+                    == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
+                ):
+                    _record_capi_pivot_event(
+                        deployment,
+                        ClusterDeploymentPivotOperation.State.READY,
+                        "pivot_approval_and_target_ack_revalidated",
+                        {
+                            "command_id": str(command.id),
+                            "approved_by_id": str(command.approved_by_id),
+                            "approved_at": command.approved_at.isoformat(),
+                            "approval_hash": command.approved_plan_hash,
+                        },
+                        actor_node=node,
+                        approval_hash=command.approved_plan_hash,
+                    )
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
