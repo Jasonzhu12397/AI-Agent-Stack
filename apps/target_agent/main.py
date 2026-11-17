@@ -158,7 +158,10 @@ def _require_configured_ironic_internal_ntp_ip(requested: Any) -> str:
     return expected
 
 
-def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
+def _observe_target_metal3_ownership(
+    payload: dict[str, Any],
+    deployment_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     namespace = payload.get("namespace")
     cluster_name = payload.get("cluster_name")
     if (
@@ -210,14 +213,53 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
             documents[name] = json.loads(result["stdout"])
         except ValueError as exc:
             raise Metal3OwnershipError(f"TARGET_METAL3_JSON_INVALID:{name}") from exc
+    trusted_context = deployment_context if isinstance(deployment_context, dict) else {}
+    attestation = trusted_context.get("eph_pivot_attestation")
+    if not isinstance(attestation, dict):
+        raise Metal3OwnershipError("SOURCE_BMH_PIVOT_ATTESTATION_REQUIRED")
+    source_identities = attestation.get("source_bmh_identities")
+    source_digest = attestation.get("source_bmh_digest")
+    source_cluster_uid = attestation.get("source_cluster_uid")
+    target_cluster_uid = attestation.get("target_cluster_uid")
+    if (
+        not isinstance(source_identities, list)
+        or not source_identities
+        or not isinstance(source_digest, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", source_digest)
+        or not isinstance(source_cluster_uid, str)
+        or not source_cluster_uid
+        or not isinstance(target_cluster_uid, str)
+        or not target_cluster_uid
+        or not isinstance(attestation.get("source_agent_id"), str)
+        or not attestation.get("source_agent_id")
+        or not isinstance(attestation.get("command_id"), str)
+        or not attestation.get("command_id")
+        or not isinstance(attestation.get("attested_at"), str)
+        or not attestation.get("attested_at")
+    ):
+        raise Metal3OwnershipError("SOURCE_BMH_PIVOT_ATTESTATION_INVALID")
+    calculated_digest = hashlib.sha256(
+        json.dumps(
+            source_identities,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        calculated_digest != source_digest
+        or attestation.get("target_bmh_digest") != source_digest
+        or payload.get("source_cluster_uid") != source_cluster_uid
+    ):
+        raise Metal3OwnershipError("SOURCE_BMH_PIVOT_ATTESTATION_DIGEST_MISMATCH")
     ownership = verify_metal3_ownership(
         documents["cluster"],
         documents["machines"],
         documents["metal3machines"],
         documents["bmhs"],
-        payload.get("source_bmh_identities")
-        or payload.get("evidence", {}).get("source_bmh_identities"),
+        source_identities,
     )
+    if ownership.get("target_cluster_uid") != target_cluster_uid:
+        raise Metal3OwnershipError("TARGET_CLUSTER_UID_DIFFERS_FROM_EPH_PIVOT_ATTESTATION")
     if not ironic_api_configured():
         raise Metal3OwnershipError("TARGET_IRONIC_API_CONFIGURATION_REQUIRED")
     ironic_nodes = []
@@ -649,7 +691,10 @@ def execute(
         }
     if action == "target.metal3.verify_ownership":
         try:
-            evidence = _observe_target_metal3_ownership(command.get("payload", {}))
+            evidence = _observe_target_metal3_ownership(
+                command.get("payload", {}),
+                command.get("deployment_context"),
+            )
             return {
                 "status": "succeeded",
                 "error_code": None,
@@ -737,7 +782,10 @@ def execute(
                 })
                 evidence = {**evidence, **observed_pivot}
             if next_phase == HandoffPhase.BMH_REGISTRY_MIGRATED.value:
-                observed_ownership = _observe_target_metal3_ownership(payload)
+                observed_ownership = _observe_target_metal3_ownership(
+                    payload,
+                    command.get("deployment_context"),
+                )
                 evidence = {**evidence, **observed_ownership}
             current_phase = checkpoint.get("phase")
             if current_phase == "not_started":
