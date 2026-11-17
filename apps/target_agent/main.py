@@ -174,8 +174,9 @@ def main() -> int:
                     client.heartbeat(sequence, "ready", CAPABILITIES)
                     command = client.claim()
                     if command is not None:
+                        started_at = datetime.now(timezone.utc)
                         outcome = execute(command)
-                        client.report_result(_result(command, settings.agent_id, outcome))
+                        client.report_result(_result(command, settings.agent_id, outcome, started_at))
                 else:
                     LOG.debug("This Target Agent replica is not the elected leader")
             except (AgentTransportError, LeaseElectionError, KeyError, TypeError, ValueError) as exc:
