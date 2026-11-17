@@ -71,7 +71,7 @@ require_secret_keys "$CLOUD_CONTEXT" cloud-control-agent-mtls tls.crt tls.key cl
 require_secret_keys "$EPH_CONTEXT" eph-agent-credentials control-url agent-id installation-id
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$EPH_CONTEXT" capi-pivot-source-kubeconfig kubeconfig
-require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id ironic-api-url ironic-api-token
+require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id ironic-api-url ironic-api-token ironic-internal-ntp-ip
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" dry-run
