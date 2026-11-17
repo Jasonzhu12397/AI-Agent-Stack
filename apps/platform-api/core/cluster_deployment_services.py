@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 
+from django.db import transaction
 from django.utils import timezone
 
 from core.models import (
@@ -315,8 +316,25 @@ def _deployment_capi_namespace(deployment: ClusterDeployment) -> str:
     configured = deployment.spec.get("capi_namespace", "default")
     return configured if isinstance(configured, str) and configured else "default"
 
+@transaction.atomic
 def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
+    deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
     plan_result = deployment.plan_result or {}
+    if not isinstance(plan_result, dict):
+        deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+        deployment.error = {"code": "CAPI_PIVOT_PLAN_STATE_INVALID"}
+        deployment.plan_result = {
+            "dual_agent": {
+                "phase": "pivot_plan_state_invalid",
+                "target_agent_owns_cluster": False,
+                "eph_reclaim_allowed": False,
+                "manual_reconciliation_required": True,
+            }
+        }
+        deployment.save(
+            update_fields=["status", "error", "plan_result", "updated_at"]
+        )
+        return
     source = plan_result.get("capi_pivot_source_preflight", {})
     target = plan_result.get("capi_pivot_preflight", {})
     compatibility = plan_result.get("capi_pivot_provider_compatibility", {})
@@ -378,14 +396,48 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
         or not isinstance(target_command.result, dict)
     ):
         dual_agent_state = plan_result.get("dual_agent", {})
+        if not isinstance(dual_agent_state, dict):
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.error = {"code": "CAPI_PIVOT_DUAL_AGENT_STATE_INVALID"}
+            deployment.plan_result = {
+                **plan_result,
+                "dual_agent": {
+                    "phase": "target_preflight_state_invalid",
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.save(
+                update_fields=["status", "error", "plan_result", "updated_at"]
+            )
+            return
+
         raw_refresh_count = dual_agent_state.get("target_preflight_refresh_count", 0)
-        refresh_count = (
-            raw_refresh_count
-            if isinstance(raw_refresh_count, int)
-            and not isinstance(raw_refresh_count, bool)
-            and raw_refresh_count >= 0
-            else 0
-        )
+        if (
+            not isinstance(raw_refresh_count, int)
+            or isinstance(raw_refresh_count, bool)
+            or raw_refresh_count < 0
+        ):
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.error = {
+                "code": "CAPI_PIVOT_TARGET_PREFLIGHT_REFRESH_COUNTER_INVALID"
+            }
+            deployment.plan_result = {
+                **plan_result,
+                "dual_agent": {
+                    **dual_agent_state,
+                    "phase": "target_preflight_refresh_counter_invalid",
+                    "target_agent_owns_cluster": False,
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.save(
+                update_fields=["status", "error", "plan_result", "updated_at"]
+            )
+            return
+        refresh_count = raw_refresh_count
         if refresh_count >= 3:
             deployment.status = ClusterDeployment.Status.FAILED
             deployment.error = {"code": "CAPI_PIVOT_TARGET_ACK_REFRESH_LIMIT"}
