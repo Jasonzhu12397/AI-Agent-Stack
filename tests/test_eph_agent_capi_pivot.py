@@ -191,3 +191,155 @@ def test_provider_version_check_accepts_target_same_as_source(monkeypatch):
         }],
     )
     assert result[0]["target_version_at_least_source"] is True
+
+
+
+def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "source.kubeconfig"
+    target = tmp_path / "target.kubeconfig"
+    source.write_text("source", encoding="utf-8")
+    target.write_text("target", encoding="utf-8")
+    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
+    monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubernetes_cluster_uid",
+        lambda path: "source-api" if path == str(source) else "target-api",
+    )
+    preflight = {
+        "target_ready_master_names": ["master-1", "master-2", "master-3"],
+        "target_controllers": {"ready": True},
+        "provider_versions": [{"provider": "capm3", "target_version_at_least_source": True}],
+    }
+    monkeypatch.setattr(capi_pivot, "_provider_preflight", lambda *_args: preflight)
+    source_cluster = {"metadata": {"uid": "source-cluster-uid", "annotations": {}}}
+    target_cluster = {
+        "metadata": {
+            "uid": "target-cluster-uid",
+            "annotations": {
+                capi_pivot.SOURCE_UID_ANNOTATION: "source-cluster-uid",
+                capi_pivot.STABLE_ID_ANNOTATION: "logical-cluster-1",
+            },
+        }
+    }
+    cluster_reads = []
+    def read_cluster(kubeconfig, _namespace, _name):
+        cluster_reads.append(kubeconfig)
+        if len(cluster_reads) == 1:
+            return source_cluster
+        if len(cluster_reads) == 2:
+            return None
+        if len(cluster_reads) == 3:
+            return target_cluster
+        return None
+    monkeypatch.setattr(capi_pivot, "_cluster", read_cluster)
+    bmhs = [
+        {
+            "namespace": "metal3",
+            "name": "host-1",
+            "hardware_identity": "system-uuid:abc",
+        }
+    ]
+    monkeypatch.setattr(
+        capi_pivot,
+        "_bmh_inventory",
+        lambda *_args: bmhs,
+    )
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubectl",
+        lambda *_args: {"items": [{"metadata": {"name": "cluster-1"}}]},
+    )
+    monkeypatch.setattr(
+        capi_pivot,
+        "_target_controllers_ready",
+        lambda *_args: {"ready": True, "controllers": []},
+    )
+    commands = []
+    def run(command, *_args, **_kwargs):
+        commands.append(command)
+        return {"ok": True, "stdout": "completed", "returncode": 0}
+    monkeypatch.setattr(capi_pivot, "_run", run)
+    result = capi_pivot.execute_capi_pivot({
+        "action": "eph.capi.pivot",
+        "approval_digest": "a" * 64,
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "cluster-1",
+            "stable_cluster_identity": "logical-cluster-1",
+            "expected_source_cluster_uid": "source-cluster-uid",
+            "expected_source_bmh_identities": bmhs,
+            "provider_deployments": [{"provider": "capm3"}],
+            "target_controller_deployments": [{"namespace": "system", "name": "capm3"}],
+            "plan_digest": "a" * 64,
+            "move_timeout_seconds": 60,
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["side_effects"] is True
+    assert result["output"]["source_cluster_uid"] == "source-cluster-uid"
+    assert result["output"]["target_cluster_uid"] == "target-cluster-uid"
+    assert result["output"]["source_bmh_identities"] == result["output"]["target_bmh_identities"]
+    assert commands[0][0] == "kubectl"
+    assert commands[1][0] == "clusterctl"
+
+
+def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
+    source = tmp_path / "source.kubeconfig"
+    target = tmp_path / "target.kubeconfig"
+    source.write_text("source", encoding="utf-8")
+    target.write_text("target", encoding="utf-8")
+    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
+    monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
+    monkeypatch.setattr(
+        capi_pivot,
+        "_kubernetes_cluster_uid",
+        lambda path: "source-api" if path == str(source) else "target-api",
+    )
+    monkeypatch.setattr(capi_pivot, "_provider_preflight", lambda *_args: {
+        "target_ready_master_names": ["master-1", "master-2", "master-3"],
+        "target_controllers": {"ready": True},
+        "provider_versions": [],
+    })
+    source_cluster = {"metadata": {"uid": "source-cluster-uid", "annotations": {}}}
+    monkeypatch.setattr(
+        capi_pivot,
+        "_cluster",
+        lambda kubeconfig, *_args: source_cluster if kubeconfig == str(source) else None,
+    )
+    bmhs = [{
+        "namespace": "metal3",
+        "name": "host-1",
+        "hardware_identity": "system-uuid:abc",
+    }]
+    monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: bmhs)
+    monkeypatch.setattr(capi_pivot, "_kubectl", lambda *_args: {
+        "items": [{"metadata": {"name": "cluster-1"}}]
+    })
+    calls = []
+    def run(_command, *_args, **_kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            return {"ok": True, "stdout": "annotated", "returncode": 0}
+        return {"ok": False, "stdout": "", "stderr": "move failed", "returncode": 1}
+    monkeypatch.setattr(capi_pivot, "_run", run)
+    result = capi_pivot.execute_capi_pivot({
+        "action": "eph.capi.pivot",
+        "approval_digest": "a" * 64,
+        "payload": {
+            "namespace": "metal3",
+            "cluster_name": "cluster-1",
+            "stable_cluster_identity": "logical-cluster-1",
+            "expected_source_cluster_uid": "source-cluster-uid",
+            "expected_source_bmh_identities": bmhs,
+            "provider_deployments": [{"provider": "capm3"}],
+            "target_controller_deployments": [{"namespace": "system", "name": "capm3"}],
+            "plan_digest": "a" * 64,
+            "move_timeout_seconds": 60,
+        },
+    })
+    assert result["status"] == "blocked"
+    assert result["side_effects"] is True
