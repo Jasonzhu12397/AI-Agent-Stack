@@ -379,7 +379,11 @@ def verify_ntp_server(server_ip: str, timeout: float = 3.0) -> dict[str, Any]:
     try:
         with socket.socket(family, socket.SOCK_DGRAM) as client:
             client.settimeout(float(timeout))
-            destination = (str(address), 123, 0, 0) if family == socket.AF_INET6 else (str(address), 123)
+            destination = (
+                (str(address), 123, 0, 0)
+                if family == socket.AF_INET6
+                else (str(address), 123)
+            )
             client.sendto(request, destination)
             response, peer = client.recvfrom(512)
     except (OSError, TimeoutError) as exc:
