@@ -3621,8 +3621,16 @@ def execute_command(
                 or metadata.get("namespace") != namespace
                 or not isinstance(metadata.get("uid"), str)
                 or not metadata.get("uid")
-                or metadata.get("annotations") != expected_annotations
-                or metadata.get("labels") != labels
+                or not isinstance(metadata.get("annotations"), dict)
+                or any(
+                    metadata["annotations"].get(key) != value
+                    for key, value in expected_annotations.items()
+                )
+                or not isinstance(metadata.get("labels"), dict)
+                or any(
+                    metadata["labels"].get(key) != value
+                    for key, value in labels.items()
+                )
                 or item.get("spec", {}).get("clusterName")
                 != manifest["spec"]["clusterName"]
                 or item.get("spec", {}).get("replicas")
