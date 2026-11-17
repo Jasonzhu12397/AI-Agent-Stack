@@ -5,6 +5,7 @@ from node_agent.delivery_lifecycle import (
     evaluate_transition,
     validate_bmh_migration,
     validate_chronyd_scope,
+    validate_ntp_topology,
     validate_topology,
 )
 
@@ -237,4 +238,55 @@ def test_bmh_migration_rejects_duplicate_hardware_identity(hosts):
     ):
         validate_bmh_migration(
             hosts, hosts, target_controller_owns_inventory=True
+        )
+
+
+def test_control_plane_uses_external_ntp_sources():
+    result = validate_ntp_topology(
+        "target_control_plane",
+        ["time.example.net", "192.0.2.10"],
+        source_scope="external",
+    )
+    assert result["serves_internal_worker_ntp"] is True
+
+
+def test_worker_uses_only_ironic_internal_ntp_ip():
+    result = validate_ntp_topology(
+        "target_worker",
+        ["10.130.60.84"],
+        source_scope="ironic_internal",
+        ironic_internal_ip="10.130.60.84",
+    )
+    assert result["external_ntp_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    "sources,scope,ironic_ip",
+    [
+        (["pool.ntp.org"], "external", "10.130.60.84"),
+        (["192.0.2.10"], "external", "10.130.60.84"),
+        (["10.130.60.84", "pool.ntp.org"], "ironic_internal", "10.130.60.84"),
+        (["10.130.60.85"], "ironic_internal", "10.130.60.84"),
+        (["10.130.60.84"], "external", "10.130.60.84"),
+    ],
+)
+def test_worker_rejects_non_ironic_or_external_ntp(sources, scope, ironic_ip):
+    with pytest.raises(DeliveryLifecycleError):
+        validate_ntp_topology(
+            "target_worker",
+            sources,
+            source_scope=scope,
+            ironic_internal_ip=ironic_ip,
+        )
+
+
+def test_control_plane_rejects_worker_internal_ntp_scope():
+    with pytest.raises(
+        DeliveryLifecycleError,
+        match="CONTROL_PLANE_NTP_MUST_USE_EXTERNAL_SOURCES",
+    ):
+        validate_ntp_topology(
+            "target_control_plane",
+            ["10.130.60.84"],
+            source_scope="ironic_internal",
         )
