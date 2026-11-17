@@ -2582,6 +2582,19 @@ class AgentRuntimePollView(APIView):
                     and pivot_operation.state
                     == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
                     and str(pivot_operation.operation_id) == payload.get("operation_id")
+                    and pivot_operation.source_node_id == node.id
+                    and pivot_operation.target_node_id == deployment.target_node_id
+                    and pivot_operation.inventory_sha256
+                    == payload.get("source_inventory_sha256")
+                    and pivot_operation.approval_hash == command.plan_hash
+                    and pivot_operation.target_ack == acknowledgement
+                    and isinstance(pivot_operation.source_identity, dict)
+                    and pivot_operation.source_identity.get("uid")
+                    == payload.get("source_cluster_uid")
+                    and pivot_operation.source_identity.get("api_version")
+                    == payload.get("source_cluster_api_version")
+                    and pivot_operation.source_identity.get("spec_sha256")
+                    == payload.get("source_cluster_spec_sha256")
                     and target_node is not None
                     and target_node.status == AgentNode.Status.ONLINE
                     and target_node.last_seen_at is not None
