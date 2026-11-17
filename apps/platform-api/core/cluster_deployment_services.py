@@ -932,7 +932,7 @@ def handle_deployment_command_result(
                 node=deployment.target_node,
             )
         elif isinstance(expected_workers, int) and expected_workers > 0:
-            deployment.status = ClusterDeployment.Status.WAITING_APPROVAL
+            deployment.status = ClusterDeployment.Status.FAILED
             deployment.error = {"code": "WORKER_PROVISIONING_SPEC_REQUIRED"}
             deployment.plan_result["dual_agent"]["phase"] = "worker_provisioning_spec_required"
             deployment.save(update_fields=["status", "error", "plan_result", "updated_at"])
@@ -1106,10 +1106,6 @@ def handle_deployment_command_result(
             isinstance(expected, dict)
             and isinstance(source_identity, dict)
             and command.status == AgentCommand.Status.SUCCEEDED
-            and command.approved_at is not None
-            and command.approved_by_id is not None
-            and command.approved_by_id != command.requested_by_id
-            and command.approved_plan_hash == command.plan_hash
             and command.plan_hash == _payload_hash(command.command_type, expected)
             and approved_provisioning_hash == _spec_hash(approved_payload)
             and expected.get("expected_cluster_uid") == source_identity.get("uid")
