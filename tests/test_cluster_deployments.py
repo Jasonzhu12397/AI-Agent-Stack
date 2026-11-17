@@ -408,13 +408,7 @@ def test_expired_running_pivot_lease_moves_deployment_to_reconciliation_required
         ]
     )
     deployment.status = ClusterDeployment.Status.PROVISIONING
-    deployment.plan_result = {
-        "dual_agent": {
-            "phase": "pivot_executing",
-            "target_agent_owns_cluster": False,
-            "eph_reclaim_allowed": False,
-        }
-    }
+    deployment.plan_result = ["corrupt-persisted-plan"]
     deployment.save(update_fields=["status", "plan_result", "updated_at"])
 
     response = APIClient().post(
