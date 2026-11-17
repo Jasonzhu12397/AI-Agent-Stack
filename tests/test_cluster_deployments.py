@@ -74,6 +74,16 @@ def cluster_spec():
         "kubernetes_version": "v1.32.2",
         "control_plane_replicas": 3,
         "worker_replicas": 4,
+        "time_dns_profile": {
+            "version": "v1",
+            "chrony_required": True,
+            "resolver_backend": "systemd-resolved",
+            "apply_to": ["eph_live_os", "target_os"],
+            "ntp_servers": ["time.cloudflare.com", "time.google.com"],
+            "dns_servers": ["1.1.1.1", "8.8.8.8"],
+            "search_domains": ["lab.example"],
+            "dns_probe_name": "time.cloudflare.com",
+        },
     }
 
 
@@ -300,6 +310,25 @@ def test_cluster_delivery_runs_preflight_then_plan_and_persists_plan_result(
                 "kubernetes_version": "v1.32.2",
                 "control_plane_replicas": 3,
                 "worker_replicas": 4,
+                "time_dns_profile": {
+                    "valid": True,
+                    "version": "v1",
+                    "chrony_required": True,
+                    "resolver_backend": "systemd-resolved",
+                    "apply_to": ["eph_live_os", "target_os"],
+                    "ntp_servers": ["time.cloudflare.com", "time.google.com"],
+                    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+                    "search_domains": ["lab.example"],
+                    "dns_probe_name": "time.cloudflare.com",
+                    "profile_hash": hashlib.sha256(
+                        json.dumps(
+                            cluster_spec()["time_dns_profile"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                },
                 "plan_hash": cluster_plan_hash(),
                 "provisioning_ready": False,
                 "missing_requirements": ["provider_versions.cluster_api"],
@@ -1069,7 +1098,19 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
     deployment.status = ClusterDeployment.Status.CONTROL_PLANE_READY
-    deployment.save(update_fields=["status"])
+    deployment.plan_result = {
+        "time_dns_profile": {
+            "profile_hash": hashlib.sha256(
+                json.dumps(
+                    deployment.spec["time_dns_profile"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+        }
+    }
+    deployment.save(update_fields=["status", "plan_result"])
     handoff = client.post(
         f"/api/v1/cluster-deployments/{deployment.id}/target-agent/handoff/",
         {"target_node_id": str(target_node.id)},
