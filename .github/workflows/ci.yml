@@ -473,28 +473,6 @@ jobs:
           sed -i "s#__CONTROL_CA_B64__#$(base64 -w0 "$CERT_DIR/control-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
           sed -i "s#__AGENT_CA_B64__#$(base64 -w0 "$CERT_DIR/agent-ca.crt")#" "$RUNNER_TEMP/eph-seed/user-data"
           cp eph-iso/examples/cloud-init/network-config "$RUNNER_TEMP/eph-seed/network-config"
-          cat > "$RUNNER_TEMP/eph-seed/time-dns-profile.json" <<'EOF'
-          {
-            "version": "v1",
-            "chrony_required": true,
-            "resolver_backend": "systemd-resolved",
-            "apply_to": ["eph_live_os", "target_os"],
-            "ntp_servers": ["time.cloudflare.com", "time.google.com"],
-            "dns_servers": ["1.1.1.1", "8.8.8.8"],
-            "search_domains": ["ci.example"],
-            "dns_probe_name": "time.cloudflare.com"
-          }
-          EOF
-          python3 deploy/cloud-init/render_site_cloud_init.py \
-            --role eph-live-os \
-            --profile-json "$RUNNER_TEMP/eph-seed/time-dns-profile.json" \
-            --output "$RUNNER_TEMP/eph-seed/time-dns-user-data"
-          python3 eph-iso/merge-cloud-init-user-data.py \
-            --base "$RUNNER_TEMP/eph-seed/user-data" \
-            --additional "$RUNNER_TEMP/eph-seed/time-dns-user-data" \
-            --output "$RUNNER_TEMP/eph-seed/merged-user-data"
-          mv "$RUNNER_TEMP/eph-seed/merged-user-data" "$RUNNER_TEMP/eph-seed/user-data"
-          rm -f "$RUNNER_TEMP/eph-seed/time-dns-profile.json" "$RUNNER_TEMP/eph-seed/time-dns-user-data"
           touch "$RUNNER_TEMP/cloud-init-ready"
           python3 -m http.server 18080 --bind 0.0.0.0 --directory "$RUNNER_TEMP" > "$RUNNER_TEMP/cloud-init-http.log" 2>&1 &
           HTTP_PID=$!
