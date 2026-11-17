@@ -372,7 +372,10 @@ def _bmh_inventory(kubeconfig: str, namespace: str) -> list[dict[str, str]]:
         ["get", "baremetalhosts.metal3.io", "--namespace", namespace, "-o", "json"],
     )
     identities = []
-    for host in document.get("items", []):
+    hosts = document.get("items", [])
+    if len(hosts) > 2500:
+        raise CapiPivotError("CAPI_PIVOT_BMH_INVENTORY_LIMIT_EXCEEDED")
+    for host in hosts:
         metadata = host.get("metadata", {})
         namespace = metadata.get("namespace")
         name = metadata.get("name")
