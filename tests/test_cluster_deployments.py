@@ -2339,6 +2339,12 @@ def test_worker_provisioning_persists_real_create_and_queues_readiness(
         ],
         "machine_deployment_manifest_hash": "a" * 64,
         "execution_mode": "real_create_or_idempotent_reconcile",
+        "chrony_ntp_server_ip": deployment.spec["worker_provisioning"]["ironic_internal_ip"],
+        "chrony_bootstrap_template_name": (
+            "edge-worker-bootstrap-ntp-" + str(deployment.id).replace("-", "")[:8]
+        ),
+        "chrony_bootstrap_template_uid": "chrony-bootstrap-template-uid",
+        "chrony_bootstrap_template_created": False,
         "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
         "created": True,
         "idempotent_reconciliation": False,
