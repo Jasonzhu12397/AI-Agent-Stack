@@ -931,20 +931,6 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
             update_fields=["status", "error", "plan_result", "updated_at"]
         )
         return
-    deployment.plan_result = {
-            **plan_result,
-            "dual_agent": {
-                **dual_agent_state,
-                "phase": "pivot_operation_state_conflict",
-                "target_agent_owns_cluster": False,
-                "eph_reclaim_allowed": False,
-                "manual_reconciliation_required": True,
-            },
-        }
-        deployment.save(
-            update_fields=["status", "error", "plan_result", "updated_at"]
-        )
-        return
     if operation_created:
         _record_capi_pivot_event(
             deployment,
