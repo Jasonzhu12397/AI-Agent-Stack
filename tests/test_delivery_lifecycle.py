@@ -99,3 +99,49 @@ def test_cleanup_cannot_precede_bmh_migration():
 def test_worker_provisioning_requires_cleanup_phase():
     with pytest.raises(DeliveryLifecycleError, match="DELIVERY_PHASE_TRANSITION_INVALID"):
         evaluate_transition("bmh_registry_migrated", "worker_provisioning", {})
+
+
+def test_target_agent_command_exposes_lifecycle_policy():
+    from node_agent.agent import NodeAgentError, execute_command
+
+    result = execute_command(
+        {
+            "command_type": "cluster.delivery.lifecycle.evaluate",
+            "payload": {
+                "action": "transition.evaluate",
+                "current_phase": "bmh_registry_migrated",
+                "requested_phase": "eph_cleanup_verified",
+                "evidence": {
+                    "eph_agent_stopped": True,
+                    "eph_bootstrap_components_removed": True,
+                    "eph_credentials_revoked": True,
+                },
+            },
+        },
+        "target_cluster",
+    )
+    assert result["accepted"] is True
+    assert result["eph_cleanup_allowed"] is True
+    assert result["cloud_approval_required"] is False
+
+
+def test_eph_agent_cannot_run_target_lifecycle_handoff_command():
+    from node_agent.agent import NodeAgentError, execute_command
+
+    with pytest.raises(NodeAgentError, match="CAPABILITY_NOT_CONFIGURED"):
+        execute_command(
+            {
+                "command_type": "cluster.delivery.lifecycle.evaluate",
+                "payload": {
+                    "action": "transition.evaluate",
+                    "current_phase": "bmh_registry_migrated",
+                    "requested_phase": "eph_cleanup_verified",
+                    "evidence": {
+                        "eph_agent_stopped": True,
+                        "eph_bootstrap_components_removed": True,
+                        "eph_credentials_revoked": True,
+                    },
+                },
+            },
+            "eph_node",
+        )
