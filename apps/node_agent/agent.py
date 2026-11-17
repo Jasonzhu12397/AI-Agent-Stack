@@ -4309,6 +4309,7 @@ def render_worker_chrony_pre_kubeadm_command(ntp_server_ip: str) -> str:
         raise NodeAgentError("WORKER_IRONIC_INTERNAL_NTP_IP_MUST_BE_PRIVATE")
     server = str(address)
     return (
+        "# AI-AGENT-STACK-WORKER-CHRONY\n"
         "set -eu\n"
         f"NTP_SERVER='{server}'\n"
         "if command -v apt-get >/dev/null 2>&1; then\n"
