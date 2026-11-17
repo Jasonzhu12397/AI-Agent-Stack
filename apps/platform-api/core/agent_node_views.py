@@ -2596,20 +2596,32 @@ class AgentRuntimePollView(APIView):
                 command.approved_at is None
                 or command.approved_at < now - datetime.timedelta(minutes=15)
             )
+            approval_identity_invalid = (
+                command.approved_by_id is None
+                or command.approved_by_id == command.requested_by_id
+            )
             approval_hash_invalid = (
                 not command.approved_plan_hash
                 or not hmac.compare_digest(
                     command.approved_plan_hash,
+                    command.plan_hash,
+                )
+                or not hmac.compare_digest(
+                    command.plan_hash,
                     _payload_hash(command.command_type, command.payload),
                 )
             )
             if command.command_type in MUTATING_COMMANDS and (
-                approval_expired or approval_hash_invalid
+                approval_expired
+                or approval_identity_invalid
+                or approval_hash_invalid
             ):
                 command.status = AgentCommand.Status.FAILED
                 error_code = (
                     "APPROVAL_EXPIRED"
                     if approval_expired
+                    else "APPROVAL_IDENTITY_INVALID"
+                    if approval_identity_invalid
                     else "APPROVAL_HASH_MISMATCH"
                 )
                 command.error = {"code": error_code, "retryable": False}
