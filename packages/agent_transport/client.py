@@ -76,6 +76,22 @@ class AgentControlClient:
             raise AgentTransportError("Control API command must be an object or null")
         return command
 
+    def renew_lease(self, command: dict[str, Any]) -> dict[str, Any]:
+        response = self._post("/api/v1/agent-control/commands/lease/renew", {
+            "schema_version": "v1",
+            "agent_id": str(self.settings.agent_id),
+            "role": self.settings.role,
+            "installation_id": str(self.settings.installation_id),
+            "cluster_id": str(self.settings.cluster_id) if self.settings.cluster_id else None,
+            "instance_id": self.settings.instance_id,
+            "command_id": command["command_id"],
+            "lease_id": command["lease"]["lease_id"],
+            "lease_token": command["lease"]["token"],
+        })
+        if response.get("renewed") is not True:
+            raise AgentTransportError("Command lease renewal was not confirmed")
+        return response
+
     def report_result(self, result: dict[str, Any]) -> None:
         payload = {
             **result,
