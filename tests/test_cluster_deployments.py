@@ -352,6 +352,10 @@ def test_pivot_poll_rejects_expired_target_agent_acknowledgement(
         key="expired-target-pivot-ack",
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    AgentCommand.objects.filter(
+        node=deployment.eph_node,
+        command_type="host.preflight",
+    ).update(status=AgentCommand.Status.SUCCEEDED, finished_at=timezone.now())
     target_token = "expired-target-pivot-ack-token"
     target_node = AgentNode.objects.create(
         tenant=tenant,
