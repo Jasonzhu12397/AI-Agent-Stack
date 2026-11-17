@@ -16,7 +16,7 @@ class CapiPivotError(RuntimeError):
 
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
 STABLE_ID_ANNOTATION = "ai-agent-stack.io/stable-cluster-identity"
 
@@ -122,12 +122,21 @@ def _version(value: Any) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
-def _image_version(image: str) -> tuple[int, int, int]:
+def _image_version(image: str, deployment: dict[str, Any]) -> tuple[int, int, int]:
     reference = image.split("@", 1)[0]
     last_component = reference.rsplit("/", 1)[-1]
-    if ":" not in last_component:
-        raise CapiPivotError("CAPI_PIVOT_PROVIDER_IMAGE_TAG_MISSING")
-    return _version(last_component.rsplit(":", 1)[-1])
+    candidate = last_component.rsplit(":", 1)[-1] if ":" in last_component else ""
+    if not VERSION_PATTERN.fullmatch(candidate):
+        metadata = deployment.get("metadata", {})
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        candidate = (
+            labels.get("app.kubernetes.io/version")
+            or annotations.get("app.kubernetes.io/version")
+            or annotations.get("ai-agent-stack.io/provider-version")
+            or ""
+        )
+    return _version(candidate)
 
 
 def _ready_masters(kubeconfig: str) -> set[str]:
@@ -259,21 +268,19 @@ def _provider_versions(
             _valid_name(target_ref.get("namespace"), "TARGET_PROVIDER_NAMESPACE"),
             _valid_name(target_ref.get("name"), "TARGET_PROVIDER_DEPLOYMENT"),
         )
-        source_images = [
-            container.get("image")
-            for container in source.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
-        ]
-        target_images = [
-            container.get("image")
-            for container in target.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
-        ]
-        if not source_images or not target_images:
-            raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_IMAGES_MISSING:{provider}")
-        source_versions = [_image_version(image) for image in source_images]
-        target_versions = [_image_version(image) for image in target_images]
-        if len(source_versions) != len(target_versions):
-            raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_CONTAINER_COUNT_MISMATCH:{provider}")
-        for source_version, target_version in zip(source_versions, target_versions, strict=True):
+        source_containers = {
+            item.get("name"): item.get("image")
+            for item in source.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        }
+        target_containers = {
+            item.get("name"): item.get("image")
+            for item in target.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        }
+        if not source_containers or set(source_containers) != set(target_containers):
+            raise CapiPivotError(f"CAPI_PIVOT_PROVIDER_CONTAINER_SET_MISMATCH:{provider}")
+        for container_name, source_image in source_containers.items():
+            source_version = _image_version(source_image, source)
+            target_version = _image_version(target_containers[container_name], target)
             if target_version < source_version:
                 raise CapiPivotError(f"CAPI_PIVOT_TARGET_PROVIDER_OLDER_THAN_SOURCE:{provider}")
         evidence.append({
@@ -304,10 +311,10 @@ def _hardware_identity(host: dict[str, Any]) -> str:
     raise CapiPivotError("CAPI_PIVOT_BMH_STABLE_HARDWARE_IDENTITY_MISSING")
 
 
-def _bmh_inventory(kubeconfig: str) -> list[dict[str, str]]:
+def _bmh_inventory(kubeconfig: str, namespace: str) -> list[dict[str, str]]:
     document = _kubectl(
         kubeconfig,
-        ["get", "baremetalhosts.metal3.io", "--all-namespaces", "-o", "json"],
+        ["get", "baremetalhosts.metal3.io", "--namespace", namespace, "-o", "json"],
     )
     identities = []
     for host in document.get("items", []):
@@ -421,7 +428,7 @@ def execute_capi_pivot(
             raise CapiPivotError("CAPI_PIVOT_SOURCE_UID_ANNOTATION_CONFLICT")
         if existing_stable_identity not in (None, stable_identity):
             raise CapiPivotError("CAPI_PIVOT_STABLE_IDENTITY_ANNOTATION_CONFLICT")
-        source_bmhs = _bmh_inventory(source)
+        source_bmhs = _bmh_inventory(source, namespace)
         source_cluster_list = _kubectl(
             source,
             ["get", "clusters.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
@@ -483,10 +490,13 @@ def execute_capi_pivot(
         )
         if not annotate["ok"]:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_IDENTITY_ANNOTATION_FAILED")
+        move_timeout = payload.get("move_timeout_seconds", 1800)
+        if not isinstance(move_timeout, int) or not 60 <= move_timeout <= 3600:
+            raise CapiPivotError("CAPI_PIVOT_MOVE_TIMEOUT_INVALID")
         moved = _run(
             move_command,
             source,
-            timeout_seconds=int(payload.get("move_timeout_seconds", 1800)),
+            timeout_seconds=move_timeout,
             lease_lost_event=lease_lost_event,
         )
         if not moved["ok"]:
@@ -502,7 +512,7 @@ def execute_capi_pivot(
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_SOURCE_UID_ANNOTATION_MISMATCH")
         if target_annotations.get(STABLE_ID_ANNOTATION) != stable_identity:
             raise CapiPivotError("CAPI_PIVOT_POSTFLIGHT_STABLE_IDENTITY_MISMATCH")
-        target_bmhs = _bmh_inventory(target)
+        target_bmhs = _bmh_inventory(target, namespace)
         source_set = {
             (item["namespace"], item["name"], item["hardware_identity"])
             for item in source_bmhs
