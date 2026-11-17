@@ -4822,7 +4822,7 @@ class KubernetesLeaseLeaderElector:
             not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
             or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", lease_name)
             or not isinstance(identity, str)
-            or not identity
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", identity)
             or len(identity) > 128
             or lease_duration_seconds < 15
             or renew_interval_seconds < 1
@@ -4910,12 +4910,21 @@ class KubernetesLeaseLeaderElector:
             or duration < 1
         ):
             raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
-        if holder != self.identity:
+        if holder not in {None, "", self.identity}:
             if renew_time is None:
                 raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_TIME_INVALID")
             if (now - renew_time).total_seconds() < duration:
                 return False
+        elif holder not in {None, "", self.identity} and renew_time is None:
+            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_TIME_INVALID")
 
+        transitions = spec.get("leaseTransitions", 0)
+        if (
+            not isinstance(transitions, int)
+            or isinstance(transitions, bool)
+            or transitions < 0
+        ):
+            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
         taking_over = holder != self.identity
         updated_spec = dict(spec)
         updated_spec.update(
@@ -4923,11 +4932,7 @@ class KubernetesLeaseLeaderElector:
                 "holderIdentity": self.identity,
                 "leaseDurationSeconds": self.lease_duration_seconds,
                 "renewTime": now_text,
-                "leaseTransitions": (
-                    spec.get("leaseTransitions", 0) + 1
-                    if taking_over
-                    else spec.get("leaseTransitions", 0)
-                ),
+                "leaseTransitions": transitions + 1 if taking_over else transitions,
             }
         )
         if taking_over:
