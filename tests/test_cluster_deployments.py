@@ -1732,6 +1732,15 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     )
     assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
     assert pivot_command.node_id == eph_node.id
+    pivot_operation = ClusterDeploymentPivotOperation.objects.get(deployment=deployment)
+    assert pivot_operation.operation_id == uuid.UUID(
+        pivot_command.payload["operation_id"]
+    )
+    assert pivot_operation.state == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
+    assert pivot_operation.events.count() == 1
+    initial_event = pivot_operation.events.get(sequence=1)
+    assert initial_event.from_state == ClusterDeploymentPivotOperation.State.PREPARED
+    assert initial_event.to_state == ClusterDeploymentPivotOperation.State.WAITING_APPROVAL
     assert deployment.error is None
 
     approver = get_user_model().objects.create_user(
