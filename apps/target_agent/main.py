@@ -144,6 +144,17 @@ def _kubectl(
     }
 
 
+def _require_configured_ironic_internal_ntp_ip(requested: Any) -> str:
+    configured = os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
+    if not configured:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_IP_CONFIGURATION_REQUIRED")
+    expected = validate_ironic_internal_ntp_ip(configured)
+    supplied = validate_ironic_internal_ntp_ip(str(requested or ""))
+    if supplied != expected:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_IP_CONFIGURATION_MISMATCH")
+    return expected
+
+
 def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     cluster_name = payload.get("cluster_name")
@@ -439,9 +450,10 @@ def execute(
                     "ready_master_count": ready_master_count,
                     "target_control_plane_ready": ready_master_count >= 3,
                 }
-                ntp_probe = probe_ironic_internal_ntp_endpoint(
-                    evidence.get("ironic_internal_ntp_ip", "")
+                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                    evidence.get("ironic_internal_ntp_ip")
                 )
+                ntp_probe = probe_ironic_internal_ntp_endpoint(configured_ntp_ip)
                 evidence = {
                     **evidence,
                     "ironic_internal_ntp_service_reachable": True,
@@ -510,8 +522,11 @@ def execute(
     if action == "target.ntp.internal.probe":
         payload = command.get("payload", {})
         try:
+            ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                payload.get("ironic_internal_ntp_ip")
+            )
             probe = probe_ironic_internal_ntp_endpoint(
-                payload.get("ironic_internal_ntp_ip", ""),
+                ntp_ip,
                 float(payload.get("timeout_seconds", 3.0)),
             )
             return {
@@ -583,8 +598,11 @@ def execute(
             }
     if action == "target.worker.ntp.validate":
         try:
+            ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                command.get("payload", {}).get("ironic_internal_ip")
+            )
             sources = validate_worker_ntp_sources(
-                str(command.get("payload", {}).get("ironic_internal_ip", "")),
+                ntp_ip,
                 command.get("payload", {}).get("ntp_sources", []),
             )
             return {
