@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from apps.target_agent.ntp_policy import render_worker_chrony_pre_kubeadm_command
 from apps.target_agent.worker_attestation import (
     WorkerAttestationError,
     verify_worker_readiness,
@@ -99,3 +100,10 @@ def test_worker_readiness_rejects_missing_chrony_sync_gate():
     configs["items"][0]["spec"]["preKubeadmCommands"] = ["server 10.0.0.10 iburst"]
     with pytest.raises(WorkerAttestationError, match="SYNC_GATE_MISSING"):
         verify_worker_readiness(deployment, machines, configs, nodes, "10.0.0.10")
+
+
+
+def test_worker_chrony_renderer_emits_literal_internal_ntp_endpoint():
+    script = render_worker_chrony_pre_kubeadm_command("10.0.0.10")
+    assert "server 10.0.0.10 iburst prefer" in script
+    assert "server $NTP_SERVER" not in script
