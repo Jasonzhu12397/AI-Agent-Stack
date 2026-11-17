@@ -1351,7 +1351,17 @@ def handle_deployment_command_result(
         expected_ack = (deployment.plan_result or {}).get("dual_agent", {}).get(
             "target_agent_ack"
         )
+        pivot_operation = ClusterDeploymentPivotOperation.objects.select_for_update().filter(
+            deployment=deployment
+        ).first()
         valid_execution = (
+            pivot_operation is not None
+            and str(pivot_operation.operation_id) == expected_payload.get("operation_id")
+            and pivot_operation.state == ClusterDeploymentPivotOperation.State.EXECUTING
+            and pivot_operation.inventory_sha256
+            == expected_payload.get("source_inventory_sha256")
+            and pivot_operation.approval_hash == command.approved_plan_hash
+            and pivot_operation.target_ack == target_ack == expected_ack
             command.status == AgentCommand.Status.SUCCEEDED
             and command.approved_at is not None
             and command.approved_by_id is not None
@@ -1462,8 +1472,16 @@ def handle_deployment_command_result(
         dual_agent = (deployment.plan_result or {}).get("dual_agent", {})
         expected_target_uid = dual_agent.get("target_cluster_uid_after_move")
         operation_id = dual_agent.get("pivot_operation_id")
+        pivot_operation = ClusterDeploymentPivotOperation.objects.select_for_update().filter(
+            deployment=deployment
+        ).first()
         target_cluster_uid = result.get("cluster_uid")
         valid_verification = (
+            pivot_operation is not None
+            and str(pivot_operation.operation_id) == operation_id
+            and pivot_operation.state == ClusterDeploymentPivotOperation.State.VERIFYING
+            and isinstance(pivot_operation.target_identity, dict)
+            and pivot_operation.target_identity.get("uid") == expected_target_uid
             isinstance(expected_uid, str)
             and bool(expected_uid)
             and isinstance(expected_spec_sha256, str)
