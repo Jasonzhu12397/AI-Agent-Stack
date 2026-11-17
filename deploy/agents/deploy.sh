@@ -58,10 +58,10 @@ rendered_apply() {
     local file="$2"
     local mode="$3"
     if [ "$mode" = "dry-run" ]; then
-        sed "s|REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION|$AGENT_IMAGE|g" "$file" |
+        sed "s|REPLACE_WITH_REGISTRY/ai-agent-runtime:VERSION|$AGENT_IMAGE|g" "$file" |
             kubectl --context "$context" apply --dry-run=server -f -
     else
-        sed "s|REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION|$AGENT_IMAGE|g" "$file" |
+        sed "s|REPLACE_WITH_REGISTRY/ai-agent-runtime:VERSION|$AGENT_IMAGE|g" "$file" |
             kubectl --context "$context" apply -f -
     fi
 }
