@@ -53,6 +53,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -95,9 +96,9 @@ spec:
             - name: AGENT_TLS_KEY_FILE
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
             - name: CAPI_PIVOT_SOURCE_KUBECONFIG
-              value: /var/run/secrets/ai-agent/capi-pivot/source.kubeconfig
+              value: /var/run/secrets/ai-agent/capi-pivot/source/kubeconfig
             - name: CAPI_PIVOT_TARGET_KUBECONFIG
-              value: /var/run/secrets/ai-agent/capi-pivot/target.kubeconfig
+              value: /var/run/secrets/ai-agent/capi-pivot/target/kubeconfig
           resources:
             requests:
               cpu: 100m
@@ -114,8 +115,11 @@ spec:
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
               readOnly: true
-            - name: capi-pivot-kubeconfigs
-              mountPath: /var/run/secrets/ai-agent/capi-pivot
+            - name: source-kubeconfig
+              mountPath: /var/run/secrets/ai-agent/capi-pivot/source
+              readOnly: true
+            - name: target-kubeconfig
+              mountPath: /var/run/secrets/ai-agent/capi-pivot/target
               readOnly: true
             - name: eph-tmp
               mountPath: /tmp
@@ -143,14 +147,20 @@ spec:
               - key: tls.key
                 path: tls.key
             defaultMode: 0440
-        - name: capi-pivot-kubeconfigs
+        - name: source-kubeconfig
           secret:
-            secretName: capi-pivot-kubeconfigs
+            secretName: capi-pivot-source-kubeconfig
             items:
-              - key: source.kubeconfig
-                path: source.kubeconfig
-              - key: target.kubeconfig
-                path: target.kubeconfig
+              - key: kubeconfig
+                path: kubeconfig
+            defaultMode: 0440
+        - name: target-kubeconfig
+          secret:
+            secretName: capi-pivot-target-kubeconfig
+            optional: true
+            items:
+              - key: kubeconfig
+                path: kubeconfig
             defaultMode: 0440
         - name: eph-tmp
           emptyDir:
