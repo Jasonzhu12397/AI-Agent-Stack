@@ -1667,7 +1667,7 @@ class AgentNodeCommandListCreateView(APIView):
         plan_hash = _payload_hash(command_type, payload)
         initial_status = (
             AgentCommand.Status.WAITING_APPROVAL
-            if command_type in MUTATING_COMMANDS
+            if command_type in APPROVAL_REQUIRED_COMMANDS
             else AgentCommand.Status.QUEUED
         )
         try:
