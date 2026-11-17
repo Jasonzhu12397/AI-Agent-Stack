@@ -87,7 +87,7 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     return {"status": "blocked", "error_code": "ACTION_NOT_IMPLEMENTED", "output": {"action": action}, "side_effects": False}
 
 
-def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) -> dict[str, Any]:
+def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any], started_at: datetime) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
@@ -97,7 +97,7 @@ def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any]) ->
         "lease_id": command["lease"]["lease_id"],
         "lease_token": command["lease"]["token"],
         "status": outcome["status"],
-        "started_at": now.isoformat(),
+        "started_at": started_at.isoformat(),
         "completed_at": now.isoformat(),
         "output": outcome["output"],
         "error_code": outcome["error_code"],
@@ -143,8 +143,9 @@ def main() -> int:
                 client.heartbeat(sequence, "ready", CAPABILITIES)
                 command = client.claim()
                 if command is not None:
+                    started_at = datetime.now(timezone.utc)
                     outcome = execute(command)
-                    client.report_result(_result(command, settings.agent_id, outcome))
+                    client.report_result(_result(command, settings.agent_id, outcome, started_at))
             except (AgentTransportError, KeyError, TypeError, ValueError) as exc:
                 LOG.error("EPH control cycle failed: %s", type(exc).__name__)
             for _ in range(max(1, int(settings.poll_seconds * 10))):
