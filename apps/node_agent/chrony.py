@@ -284,7 +284,8 @@ def configure_chrony(
     chronyc = lookup("chronyc")
     if not systemctl or not chronyc:
         raise ChronyError("CHRONY_RUNTIME_BINARIES_MISSING")
-    _run(runner, [systemctl, "enable", "--now", service], timeout=60)
+    _run(runner, [systemctl, "enable", service], timeout=60)
+    _run(runner, [systemctl, "restart", service], timeout=60)
     active = _run(runner, [systemctl, "is-active", service], timeout=20).strip()
     if active != "active":
         raise ChronyError("CHRONY_SERVICE_NOT_ACTIVE")
