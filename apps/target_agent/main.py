@@ -725,6 +725,8 @@ def execute(
                 }
             if next_phase == HandoffPhase.EPH_CLEANUP_VERIFIED.value:
                 raise HandoffError("EPH_CLEANUP_EXECUTOR_NOT_REGISTERED")
+            if next_phase == HandoffPhase.COMPLETED.value:
+                raise HandoffError("TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED")
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
                 observed_pivot = _observe_target_capi_pivot({
                     **payload,
