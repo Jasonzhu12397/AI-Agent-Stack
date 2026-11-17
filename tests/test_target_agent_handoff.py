@@ -162,3 +162,27 @@ def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
         },
     )
     assert result["accepted"] is True
+
+
+
+def test_handoff_completion_is_blocked_without_live_postflight_executor():
+    from apps.target_agent.main import execute
+
+    outcome = execute({
+        "action": "target.handoff.evaluate",
+        "payload": {
+            "next_phase": "completed",
+            "evidence": {
+                "target_postflight_passed": True,
+                "worker_network_postflight_passed": True,
+                "deployment_checkpoint_durable": True,
+            },
+        },
+        "deployment_checkpoint": {
+            "phase": "workers_ready",
+            "sequence": 8,
+            "state": {},
+        },
+    })
+    assert outcome["status"] == "blocked"
+    assert outcome["error_code"] == "TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED"
