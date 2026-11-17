@@ -322,7 +322,9 @@ def _maybe_queue_capi_pivot(deployment: ClusterDeployment) -> None:
     raw_plan_result = deployment.plan_result
     if raw_plan_result is None:
         plan_result = {}
-    elif not isinstance(raw_plan_result, dict):
+    elif isinstance(raw_plan_result, dict):
+        plan_result = raw_plan_result
+    else:
         deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
         deployment.error = {"code": "CAPI_PIVOT_PLAN_STATE_INVALID"}
         deployment.plan_result = {
