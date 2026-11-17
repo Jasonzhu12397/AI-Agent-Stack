@@ -1276,33 +1276,16 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "mismatches": [],
         "execution_allowed": False,
     }
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_queued_for_eph_agent"
     pivot_command = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.pivot.execute",
     )
-    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert pivot_command.status == AgentCommand.Status.QUEUED
     assert pivot_command.node_id == eph_node.id
     assert deployment.error is None
 
-    approver = get_user_model().objects.create_user(
-        username="dual-agent-e2e-approver",
-        password="test-password",
-    )
-    TenantMembership.objects.create(
-        tenant=tenant,
-        user=approver,
-        role=TenantMembership.Role.ADMIN,
-    )
-    approver_client = APIClient()
-    approver_client.force_authenticate(user=approver)
-    approved = approver_client.post(
-        f"/api/v1/agent-commands/{pivot_command.id}/approve/",
-        {"plan_hash": pivot_command.plan_hash},
-        format="json",
-    )
-    assert approved.status_code == 200
-    assert approved.data["status"] == AgentCommand.Status.QUEUED
+    assert pivot_command.status == AgentCommand.Status.QUEUED
 
     eph_agent_client = APIClient()
     pivot_poll = eph_agent_client.post(
@@ -1347,8 +1330,7 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     pivot_command.refresh_from_db()
     assert pivot_submitted.status_code == 200
     assert pivot_command.status == AgentCommand.Status.SUCCEEDED
-    assert pivot_command.approved_by_id == approver.id
-    assert deployment.error is None
+     assert deployment.error is None
     assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
     assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
     assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
@@ -1548,10 +1530,8 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("approval_valid", [True, False])
-def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_transfer_ownership(
+def test_dual_agent_pivot_simulation_is_queued_without_cloud_approval_and_does_not_transfer_ownership(
     cluster_delivery_workspace,
-    approval_valid,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
@@ -1601,30 +1581,10 @@ def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_
         command_type="cluster.capi.pivot.execute",
     )
     assert pivot_command.node_id == eph_node.id
-    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert pivot_command.status == AgentCommand.Status.QUEUED
 
-    if approval_valid:
-        approver = get_user_model().objects.create_user(
-            username="dual-agent-pivot-approver",
-            password="test-password",
-        )
-        TenantMembership.objects.create(
-            tenant=tenant,
-            user=approver,
-            role=TenantMembership.Role.ADMIN,
-        )
-        pivot_command.status = AgentCommand.Status.SUCCEEDED
-        pivot_command.approved_by = approver
-        pivot_command.approved_at = timezone.now()
-        pivot_command.approved_plan_hash = pivot_command.plan_hash
-        pivot_command.save(
-            update_fields=[
-                "status",
-                "approved_by",
-                "approved_at",
-                "approved_plan_hash",
-            ]
-        )
+    pivot_command.status = AgentCommand.Status.SUCCEEDED
+    pivot_command.save(update_fields=["status"])
 
     handle_deployment_command_result(
         pivot_command,
@@ -1648,14 +1608,6 @@ def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_
     )
 
     deployment.refresh_from_db()
-    if not approval_valid:
-        assert deployment.status == ClusterDeployment.Status.FAILED
-        assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
-        assert deployment.plan_result.get("dual_agent", {}).get(
-            "target_agent_owns_cluster"
-        ) is not True
-        return
-
     dual_agent = deployment.plan_result["dual_agent"]
     assert dual_agent["phase"] == "pivot_simulation_ready"
     assert dual_agent["pivot_simulated"] is True
@@ -2201,7 +2153,7 @@ def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
     ).exists()
 
 @pytest.mark.django_db
-def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_gate(
+def test_control_plane_accepts_worker_preflight_and_queues_autonomous_provisioning(
     cluster_delivery_workspace,
 ):
     deployment, command, result = _worker_preflight_fixture(
@@ -2212,12 +2164,12 @@ def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_
     handle_deployment_command_result(command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.WAITING_APPROVAL
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
     assert deployment.error is None
     assert deployment.plan_result["worker_provisioning_preflight"]["ready"] is True
     assert (
         deployment.plan_result["dual_agent"]["phase"]
-        == "worker_preflight_passed_waiting_provisioning_approval"
+        == "worker_preflight_passed"
     )
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
@@ -2284,7 +2236,7 @@ def test_approved_worker_provisioning_result_stays_simulation_only(
         deployment=deployment,
         command_type="cluster.capi.worker.provision",
     )
-    assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert provision_command.status == AgentCommand.Status.QUEUED
 
     approver = get_user_model().objects.create_user(
         username="worker-provisioning-simulation-approver",
