@@ -7,8 +7,12 @@ from time import sleep
 
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
+    AgentCommand,
     AgentRun,
     AuditEvent,
+    ClusterDeployment,
+    ClusterDeploymentPivotEvent,
+    ClusterDeploymentPivotOperation,
     KnowledgeBase,
     KnowledgeDocument,
     ModelConfig,
@@ -805,8 +809,116 @@ def process_task(task, worker_id):
         )
 
 
+def reconcile_stale_capi_pivot_operations(
+    *,
+    stale_after=timedelta(minutes=10),
+    limit=100,
+):
+    now = timezone.now()
+    cutoff = now - stale_after
+    reconciled = 0
+    with transaction.atomic():
+        operations = list(
+            ClusterDeploymentPivotOperation.objects.select_for_update(skip_locked=True)
+            .filter(
+                state__in=[
+                    ClusterDeploymentPivotOperation.State.EXECUTING,
+                    ClusterDeploymentPivotOperation.State.VERIFYING,
+                    ClusterDeploymentPivotOperation.State.UNCERTAIN,
+                ],
+                updated_at__lt=cutoff,
+            )
+            .select_related("deployment")
+            .order_by("updated_at")[:limit]
+        )
+        for operation in operations:
+            commands = AgentCommand.objects.filter(
+                deployment=operation.deployment,
+                command_type__in=[
+                    "cluster.capi.pivot.execute",
+                    "cluster.capi.pivot.target.verify",
+                    "cluster.capi.pivot.postflight",
+                ],
+            ).order_by("-created_at")
+            latest = commands.first()
+            if latest is not None:
+                if (
+                    latest.status == AgentCommand.Status.RUNNING
+                    and latest.lease_expires_at is not None
+                    and latest.lease_expires_at > now
+                ):
+                    continue
+                if (
+                    latest.status == AgentCommand.Status.QUEUED
+                    and latest.created_at > cutoff
+                ):
+                    continue
+            previous_state = operation.state
+            operation.state = ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY
+            operation.version += 1
+            operation.last_error = {
+                "code": "CAPI_PIVOT_WATCHDOG_STALE_OPERATION",
+                "last_command_id": str(latest.id) if latest else None,
+                "last_command_status": latest.status if latest else None,
+            }
+            operation.journal = {
+                **(operation.journal or {}),
+                "last_event": "watchdog_manual_recovery",
+                "last_transition_at": now.isoformat(),
+            }
+            operation.save(
+                update_fields=[
+                    "state",
+                    "version",
+                    "last_error",
+                    "journal",
+                    "updated_at",
+                ]
+            )
+            last_sequence = (
+                operation.events.order_by("-sequence")
+                .values_list("sequence", flat=True)
+                .first()
+                or 0
+            )
+            ClusterDeploymentPivotEvent.objects.create(
+                operation=operation,
+                sequence=last_sequence + 1,
+                event_type="watchdog_manual_recovery",
+                from_state=previous_state,
+                to_state=ClusterDeploymentPivotOperation.State.MANUAL_RECOVERY,
+                evidence=operation.last_error,
+            )
+            deployment = operation.deployment
+            plan_result = deployment.plan_result or {}
+            deployment.status = ClusterDeployment.Status.RECONCILIATION_REQUIRED
+            deployment.error = {
+                "code": "CAPI_PIVOT_WATCHDOG_STALE_OPERATION",
+                "operation_id": str(operation.operation_id),
+                "retry_allowed": False,
+            }
+            deployment.plan_result = {
+                **plan_result,
+                "dual_agent": {
+                    **plan_result.get("dual_agent", {}),
+                    "phase": "pivot_watchdog_manual_recovery",
+                    "target_agent_owns_cluster": (
+                        previous_state == ClusterDeploymentPivotOperation.State.VERIFYING
+                    ),
+                    "eph_reclaim_allowed": False,
+                    "manual_reconciliation_required": True,
+                },
+            }
+            deployment.save(
+                update_fields=["status", "error", "plan_result", "updated_at"]
+            )
+            reconciled += 1
+    return reconciled
+
+
 def process_once(worker_id, lease_seconds=150):
     expire_pending_tool_approvals(limit=100)
+    reconcile_stale_capi_pivot_operations()
     task = claim_next_task(worker_id, lease_seconds=lease_seconds)
     if task is None:
         return False
