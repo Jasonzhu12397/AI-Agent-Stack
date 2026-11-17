@@ -22,6 +22,13 @@ from typing import Any
 import yaml
 
 from .capabilities import ROLE_CAPABILITIES
+from .delivery_lifecycle import (
+    DeliveryLifecycleError,
+    evaluate_transition,
+    validate_bmh_migration,
+    validate_chronyd_scope,
+    validate_topology,
+)
 from .capi_pivot import (
     CapiPivotError,
     run_capi_pivot,
@@ -2075,6 +2082,32 @@ def execute_command(
         raise NodeAgentError("FORBIDDEN_PAYLOAD_FIELD")
     if command_type not in ROLE_CAPABILITIES.get(node_type, frozenset()):
         raise NodeAgentError("CAPABILITY_NOT_CONFIGURED")
+    if command_type == "cluster.delivery.lifecycle.evaluate":
+        action = payload.get("action")
+        try:
+            if action == "topology.validate" and set(payload) == {"action", "topology"}:
+                return validate_topology(payload["topology"])
+            if action == "chronyd.validate" and set(payload) == {"action", "node_role", "chronyd_action"}:
+                return validate_chronyd_scope(payload["node_role"], payload["chronyd_action"])
+            if action == "bmh.migration.validate" and set(payload) == {
+                "action", "source_hosts", "target_hosts", "target_controller_owns_inventory"
+            }:
+                return validate_bmh_migration(
+                    payload["source_hosts"],
+                    payload["target_hosts"],
+                    target_controller_owns_inventory=payload["target_controller_owns_inventory"],
+                )
+            if action == "transition.evaluate" and set(payload) == {
+                "action", "current_phase", "requested_phase", "evidence"
+            }:
+                return evaluate_transition(
+                    payload["current_phase"],
+                    payload["requested_phase"],
+                    payload["evidence"],
+                )
+            raise NodeAgentError("DELIVERY_LIFECYCLE_REQUEST_INVALID")
+        except DeliveryLifecycleError as exc:
+            raise NodeAgentError(str(exc)) from exc
     if command_type == "cluster.kubernetes.version.upgrade":
         supported_versions = {"v1.33", "v1.34", "v1.35", "v1.36"}
         if (
