@@ -2,13 +2,13 @@ import json
 from pathlib import Path
 from threading import Event
 
-import pytest
-import yaml
-
 from apps.target_agent.worker_provisioning import (
     WorkerProvisioningError,
     execute_worker_provisioning,
 )
+
+import pytest
+import yaml
 
 
 NTP_IP = "10.130.60.84"
@@ -349,10 +349,8 @@ def _ready_observation_runner(ntp_command):
 
 
 def test_worker_readiness_observes_machine_bootstrap_node_and_internal_ntp(monkeypatch):
-    from apps.target_agent.worker_provisioning import (
-        observe_worker_readiness,
-    )
     from apps.target_agent.ntp_policy import render_worker_chrony_pre_kubeadm_command
+    from apps.target_agent.worker_provisioning import observe_worker_readiness
 
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
     result = observe_worker_readiness(
@@ -369,8 +367,8 @@ def test_worker_readiness_observes_machine_bootstrap_node_and_internal_ntp(monke
 
 def test_worker_readiness_rejects_missing_chrony_bootstrap(monkeypatch):
     from apps.target_agent.worker_provisioning import (
-        observe_worker_readiness,
         WorkerProvisioningError,
+        observe_worker_readiness,
     )
 
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
