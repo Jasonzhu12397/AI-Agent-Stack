@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -144,3 +145,47 @@ class KubernetesLeaseElector:
         }
         updated, _ = self._request("PUT", self.lease_url, body)
         return updated == 200
+
+
+
+class LeaderLeaseGuard:
+    def __init__(
+        self,
+        elector: KubernetesLeaseElector,
+        renew_interval_seconds: float = 5.0,
+    ) -> None:
+        if renew_interval_seconds <= 0:
+            raise ValueError("Leader Lease renewal interval must be positive")
+        self.elector = elector
+        self.renew_interval_seconds = renew_interval_seconds
+        self._stop = threading.Event()
+        self.lost = threading.Event()
+        self._thread = threading.Thread(
+            target=self._renew_loop,
+            name="target-agent-leader-lease-renewer",
+            daemon=True,
+        )
+
+    def renew_once(self) -> bool:
+        try:
+            renewed = self.elector.try_acquire_or_renew()
+        except Exception:
+            self.lost.set()
+            return False
+        if not renewed:
+            self.lost.set()
+            return False
+        return True
+
+    def _renew_loop(self) -> None:
+        while not self._stop.wait(self.renew_interval_seconds):
+            if not self.renew_once():
+                return
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=self.renew_interval_seconds + 1.0)
