@@ -45,7 +45,7 @@ The `cluster.capi.pivot.execute` command has a real mutating path: it invokes `c
 
 ## Dual-network inspection
 
-The `cluster.network.inspect` command reads Kubernetes node allocatable extended resources, Multus NetworkAttachmentDefinitions and selected CNI component Pods. If the Deployment mounts host `/sys` read-only at `/host/sys`, it also reports physical NIC/PCI/VF/NUMA/hugepage inventory. The mount is read-only; the Agent remains non-root, non-privileged and without host networking or host PID access.
+The `cluster.network.inspect` command reads Kubernetes node allocatable extended resources, Multus NetworkAttachmentDefinitions and selected CNI component Pods. If the EPH Agent Deployment mounts its own bootstrap host `/sys` read-only at `/host/sys`, it also reports that EPH host's physical NIC/PCI/VF/NUMA/hugepage inventory. The Target Agent never mounts worker host filesystems or runs a DaemonSet. The mount is read-only; the Agent remains non-root, non-privileged and without host networking or host PID access.
 
 Network interface names, VLANs, CIDRs, gateways, MTUs, SR-IOV resource names and DPDK settings are deployment inputs. The Agent validates declared profiles but does not invent values, install CNI components, change routes or bind devices. A NetworkAttachmentDefinition is configuration evidence, not proof of dataplane connectivity.
 
