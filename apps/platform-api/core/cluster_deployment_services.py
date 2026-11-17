@@ -726,30 +726,31 @@ def handle_deployment_command_result(
     elif command.command_type == "cluster.capi.pivot.execute":
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
         source_identity = source.get("source_cluster_identity", {})
-        valid_simulation = (
+        expected_uid = source_identity.get("uid")
+        valid_execution = (
             command.status == AgentCommand.Status.SUCCEEDED
-             and command.plan_hash == _payload_hash(command.command_type, command.payload)
+            and command.plan_hash == _payload_hash(command.command_type, command.payload)
             and command.node.node_type == "eph_node"
             and command.node_id == deployment.eph_node_id
-            and result.get("pivot_simulated") is True
-            and result.get("pivot_executed") is False
-            and result.get("execution_mode") == "preflight_verified_simulation"
-            and result.get("simulation_status") == "ready_for_target_agent_acknowledgement"
+            and result.get("pivot_executed") is True
+            and result.get("pivot_simulated") is False
+            and result.get("execution_mode") == "clusterctl_move"
             and result.get("dry_run_passed") is True
             and result.get("source_namespace_scope_verified") is True
             and result.get("target_management_plane_verified") is True
             and result.get("cluster_name") == deployment.cluster_name
             and result.get("namespace") == _deployment_capi_namespace(deployment)
-            and isinstance(source_identity.get("uid"), str)
-            and bool(source_identity.get("uid"))
-            and result.get("ownership_transferred") is False
-            and result.get("side_effects") is False
-            and result.get("target_agent_acknowledgement_required") is True
-            and result.get("postflight_required") is True
+            and isinstance(expected_uid, str)
+            and bool(expected_uid)
+            and result.get("target_cluster_uid") == expected_uid
+            and result.get("source_cluster_absent") is True
+            and result.get("ownership_transferred") is True
+            and result.get("side_effects") is True
+            and result.get("automatic_retry_allowed") is False
         )
-        if not valid_simulation:
+        if not valid_execution:
             deployment.status = ClusterDeployment.Status.FAILED
-            deployment.error = {"code": "INVALID_CAPI_PIVOT_SIMULATION_RESULT"}
+            deployment.error = {"code": "INVALID_CAPI_PIVOT_EXECUTION_RESULT"}
             deployment.finished_at = timezone.now()
             deployment.save(
                 update_fields=["status", "error", "finished_at", "started_at", "updated_at"],
@@ -760,8 +761,8 @@ def handle_deployment_command_result(
             "capi_pivot_execution": result,
             "dual_agent": {
                 **((deployment.plan_result or {}).get("dual_agent", {})),
-                "phase": "pivot_simulation_ready",
-                "pivot_simulated": True,
+                "phase": "pivot_executed_waiting_target_verification",
+                "pivot_executed": True,
                 "pivot_completed": False,
                 "target_agent_owns_cluster": False,
                 "eph_reclaim_allowed": False,
@@ -770,6 +771,11 @@ def handle_deployment_command_result(
         deployment.error = None
         deployment.save(
             update_fields=["plan_result", "error", "started_at", "updated_at"],
+        )
+        queue_deployment_command(
+            deployment,
+            "cluster.capi.pivot.target.verify",
+            node=deployment.target_node,
         )
     elif command.command_type == "cluster.capi.pivot.target.verify":
         source = (deployment.plan_result or {}).get("capi_pivot_source_preflight", {})
