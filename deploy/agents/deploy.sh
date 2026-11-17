@@ -87,14 +87,11 @@ apply_common_resources "$TARGET_CONTEXT"
 
 rendered_apply "$EPH_CONTEXT" "$SCRIPT_DIR/eph-node-agent.yaml" dry-run
 rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" dry-run
-rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/network-inventory-agent.yaml" dry-run
 
 rendered_apply "$EPH_CONTEXT" "$SCRIPT_DIR/eph-node-agent.yaml" apply
 rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" apply
-rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/network-inventory-agent.yaml" apply
 
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system rollout status deployment/eph-node-agent --timeout="$ROLLOUT_TIMEOUT"
 kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system rollout status deployment/target-cluster-agent --timeout="$ROLLOUT_TIMEOUT"
-kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system rollout status daemonset/network-inventory-agent --timeout="$ROLLOUT_TIMEOUT"
 
 printf '%s\n' "DUAL_AGENT_DEPLOYMENT_READY"
