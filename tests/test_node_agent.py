@@ -2446,12 +2446,26 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters": {
             "items": [TARGET_CAPI_CLUSTER_OBJECT]
         },
+        "/api/v1/nodes": {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "target-master-0",
+                        "labels": {
+                            "ai-agent-stack.io/chrony-synced": "true",
+                            "ai-agent-stack.io/time-dns-profile-hash": "a" * 64,
+                        },
+                    }
+                }
+            ]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
                     "metadata": {"name": "edge-lab-control-plane-0"},
                     "spec": {"clusterName": "edge-lab"},
                     "status": {
+                        "nodeRef": {"name": "target-master-0"},
                         "conditions": [{"type": "Ready", "status": "True"}]
                     },
                 },
@@ -2510,6 +2524,7 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
                 "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
                 "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
+                "expected_time_dns_profile_hash": "a" * 64,
             },
         },
         "target_cluster",
@@ -2527,6 +2542,10 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
     assert result["not_ready_machine_names"] == []
     assert result["machine_inventory_ready"] is True
     assert result["controllers_ready"] is True
+    assert result["time_dns_verified"] is True
+    assert result["time_dns_profile_hash"] == "a" * 64
+    assert result["time_dns_node_count"] == 1
+    assert result["time_dns_unverified_machine_names"] == []
     assert len(result["controllers"]) == 4
     assert result["side_effects"] is False
 
