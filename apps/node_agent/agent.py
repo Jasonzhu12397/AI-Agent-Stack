@@ -5332,6 +5332,8 @@ def execute_command_with_lease(
 ) -> dict[str, Any]:
     if not isinstance(renew_interval, (int, float)) or renew_interval <= 0:
         raise NodeAgentError("INVALID_LEASE_RENEW_INTERVAL")
+    if authority_event is not None and not authority_event.is_set():
+        raise NodeAgentError("AGENT_LEADERSHIP_LOST")
     command_id = command.get("id", "")
     lease_token = command.get("lease_token", "")
     if not command_id or not lease_token:
@@ -5436,6 +5438,9 @@ def run_once(
     node_type: str,
     authority_event: threading.Event | None = None,
 ) -> bool:
+    if authority_event is not None and not authority_event.is_set():
+        touch_health_files(readiness=True)
+        return False
     if node_type == "eph_node":
         try:
             client.certificate_rotation.maintain()
@@ -5610,7 +5615,7 @@ def main() -> None:
     if args.poll_seconds < 1 or args.poll_seconds > 300:
         raise SystemExit("--poll-seconds must be between 1 and 300.")
     if not base_url.startswith("https://") and os.environ.get("APP_ENV") == "production":
-        raise SystemExit("Production node agents require HTTPS.")
+        raise SystemExit("Production EPH/Target Agents require HTTPS.")
     client = ControlPlaneClient(base_url, node_id, token)
     runtime = create_agent(client, node_type)
     leader_stop_event = threading.Event()
