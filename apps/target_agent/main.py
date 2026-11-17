@@ -225,6 +225,61 @@ def _observe_ready_master_count() -> int:
     return ready_masters
 
 
+def _observe_target_capi_pivot(payload: dict[str, Any]) -> dict[str, Any]:
+    namespace = payload.get("namespace")
+    cluster_name = payload.get("cluster_name")
+    source_uid = payload.get("source_cluster_uid")
+    stable_identity = payload.get("stable_cluster_identity")
+    if not all(isinstance(value, str) and value for value in (
+        namespace, cluster_name, source_uid, stable_identity
+    )):
+        raise HandoffError("TARGET_CAPI_PIVOT_IDENTITY_INPUT_INVALID")
+    result = _kubectl([
+        "get",
+        "cluster.cluster.x-k8s.io",
+        cluster_name,
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ])
+    if not result["available"]:
+        raise HandoffError("TARGET_CAPI_PIVOT_CLUSTER_NOT_FOUND")
+    try:
+        cluster = json.loads(result["stdout"])
+    except ValueError as exc:
+        raise HandoffError("TARGET_CAPI_PIVOT_CLUSTER_JSON_INVALID") from exc
+    metadata = cluster.get("metadata", {})
+    annotations = metadata.get("annotations", {})
+    target_uid = metadata.get("uid")
+    generation = metadata.get("generation", 0)
+    status = cluster.get("status", {})
+    ready = any(
+        condition.get("type") == "Ready" and condition.get("status") == "True"
+        for condition in status.get("conditions", [])
+    )
+    if not isinstance(target_uid, str) or not target_uid or target_uid == source_uid:
+        raise HandoffError("TARGET_CAPI_PIVOT_TARGET_UID_INVALID")
+    if annotations.get("ai-agent-stack.io/source-cluster-uid") != source_uid:
+        raise HandoffError("TARGET_CAPI_PIVOT_SOURCE_UID_ANNOTATION_MISMATCH")
+    if annotations.get("ai-agent-stack.io/stable-cluster-identity") != stable_identity:
+        raise HandoffError("TARGET_CAPI_PIVOT_STABLE_IDENTITY_MISMATCH")
+    if not ready or status.get("observedGeneration", 0) < generation:
+        raise HandoffError("TARGET_CAPI_PIVOT_CLUSTER_NOT_READY")
+    return {
+        "target_cluster_uid": target_uid,
+        "target_source_cluster_uid_annotation": annotations[
+            "ai-agent-stack.io/source-cluster-uid"
+        ],
+        "source_stable_cluster_identity": stable_identity,
+        "target_stable_cluster_identity": annotations[
+            "ai-agent-stack.io/stable-cluster-identity"
+        ],
+        "target_cluster_ownership_verified": True,
+        "target_capi_cluster_ready": True,
+    }
+
+
 def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     if (
@@ -355,6 +410,12 @@ def execute(
                     "ironic_internal_ntp_service_reachable": True,
                     "ironic_internal_ntp_probe": ntp_probe,
                 }
+            if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
+                observed_pivot = _observe_target_capi_pivot({
+                    **payload,
+                    "source_cluster_uid": evidence.get("source_cluster_uid"),
+                })
+                evidence = {**evidence, **observed_pivot}
             if next_phase == HandoffPhase.BMH_REGISTRY_MIGRATED.value:
                 observed_ownership = _observe_target_metal3_ownership(payload)
                 evidence = {**evidence, **observed_ownership}
