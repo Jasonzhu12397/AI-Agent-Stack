@@ -297,7 +297,12 @@ def configure_chrony(
         if not ss:
             raise ChronyError("CHRONY_LISTENER_CHECK_BINARY_MISSING")
         listener_output = _run(runner, [ss, "-H", "-lun"], timeout=20)
-        endpoint = str(ipaddress.ip_address(ironic_internal_ip)) + ":123"
+        internal_address = ipaddress.ip_address(ironic_internal_ip)
+        endpoint = (
+            "[" + str(internal_address) + "]:123"
+            if internal_address.version == 6
+            else str(internal_address) + ":123"
+        )
         listener_verified = any(
             endpoint in line for line in listener_output.splitlines()
         )
