@@ -99,22 +99,38 @@ def validate_bmh_migration(
     if not isinstance(source_hosts, list) or not isinstance(target_hosts, list):
         raise DeliveryLifecycleError("BMH_INVENTORY_INVALID")
 
-    def identities(hosts: list[dict[str, Any]]) -> set[tuple[str, str]]:
-        values: set[tuple[str, str]] = set()
-        names: set[str] = set()
-        uids: set[str] = set()
+    def identities(hosts: list[dict[str, Any]]) -> set[tuple[str, ...]]:
+        values: set[tuple[str, ...]] = set()
+        names: set[tuple[str, str]] = set()
+        hardware_ids: set[tuple[str, str]] = set()
         for host in hosts:
             if not isinstance(host, dict):
                 raise DeliveryLifecycleError("BMH_INVENTORY_INVALID")
-            name, uid = host.get("name"), host.get("uid")
-            if not isinstance(name, str) or not name or not isinstance(uid, str) or not uid:
+            name = host.get("name")
+            namespace = host.get("namespace", "default")
+            if not isinstance(name, str) or not name or not isinstance(namespace, str) or not namespace:
                 raise DeliveryLifecycleError("BMH_IDENTITY_INCOMPLETE")
-            identity = (name, uid)
-            if identity in values or name in names or uid in uids:
+            boot_mac = host.get("boot_mac")
+            bmc_address = host.get("bmc_address")
+            serial_number = host.get("serial_number")
+            system_uuid = host.get("system_uuid")
+            hardware_values = [
+                value for value in (boot_mac, bmc_address, serial_number, system_uuid)
+                if isinstance(value, str) and value.strip()
+            ]
+            if not hardware_values:
+                raise DeliveryLifecycleError("BMH_HARDWARE_IDENTITY_MISSING")
+            normalized = tuple(
+                value.strip().lower() if isinstance(value, str) else ""
+                for value in (boot_mac, bmc_address, serial_number, system_uuid)
+            )
+            name_key = (namespace, name)
+            hardware_key = (namespace, "|".join(normalized))
+            if name_key in names or hardware_key in hardware_ids:
                 raise DeliveryLifecycleError("BMH_IDENTITY_DUPLICATED")
-            values.add(identity)
-            names.add(name)
-            uids.add(uid)
+            names.add(name_key)
+            hardware_ids.add(hardware_key)
+            values.add((namespace, name, *normalized))
         return values
 
     source = identities(source_hosts)
@@ -122,14 +138,15 @@ def validate_bmh_migration(
     if not source:
         raise DeliveryLifecycleError("BMH_SOURCE_INVENTORY_EMPTY")
     if source != target:
-        raise DeliveryLifecycleError("BMH_REGISTRY_IDENTITY_MISMATCH")
+        raise DeliveryLifecycleError("BMH_REGISTRY_HARDWARE_IDENTITY_MISMATCH")
     if target_controller_owns_inventory is not True:
         raise DeliveryLifecycleError("TARGET_BMH_CONTROLLER_OWNERSHIP_UNVERIFIED")
     return {
         "migration_verified": True,
         "source_count": len(source),
         "target_count": len(target),
-        "identity_sets_match": True,
+        "hardware_identity_sets_match": True,
+        "kubernetes_uids_used_as_identity": False,
         "target_controller_owns_inventory": True,
         "source_mutation_performed": False,
         "target_mutation_performed": False,
