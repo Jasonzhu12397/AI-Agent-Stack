@@ -98,3 +98,14 @@ def test_target_agent_receives_ironic_credentials_only_from_kubernetes_secret():
     assert environment["IRONIC_API_URL"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-url"
     assert environment["IRONIC_API_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-token"
     assert environment["IRONIC_API_MICROVERSION"]["value"] == "1.82"
+
+
+
+def test_target_worker_rbac_namespace_is_rendered_and_validated():
+    script = (ROOT / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
+    manifest = (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(encoding="utf-8")
+    assert 'CAPI_NAMESPACE="${TARGET_CAPI_NAMESPACE:-metal3}"' in script
+    assert "TARGET_CAPI_NAMESPACE_INVALID" in script
+    assert "REPLACE_WITH_CAPI_NAMESPACE" in script
+    assert 'TARGET_CAPI_NAMESPACE\n              value: REPLACE_WITH_CAPI_NAMESPACE' in manifest
+    assert "kind: Role\nmetadata:\n  name: target-agent-worker-provisioner" in manifest
