@@ -1610,8 +1610,16 @@ def handle_deployment_command_result(
         ironic_verified = (
             ironic.get("verified_node_count") if isinstance(ironic, dict) else None
         )
+        pivot_operation = ClusterDeploymentPivotOperation.objects.select_for_update().filter(
+            deployment=deployment
+        ).first()
         valid_postflight = (
-            command.node.node_type == "target_cluster"
+            pivot_operation is not None
+            and pivot_operation.state == ClusterDeploymentPivotOperation.State.VERIFYING
+            and isinstance(pivot_operation.target_identity, dict)
+            and pivot_operation.target_identity.get("uid")
+            == target_verification.get("cluster_uid")
+            and command.node.node_type == "target_cluster"
             and command.node_id == deployment.target_node_id
             and result.get("postflight_passed") is True
             and result.get("cluster_name") == deployment.cluster_name
