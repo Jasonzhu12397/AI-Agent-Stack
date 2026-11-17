@@ -120,6 +120,8 @@ def test_eph_containerd_etcd_and_kubelet_state_are_ram_backed():
     assert "size=10%" in (root / "var-lib-kubelet.mount").read_text(encoding="utf-8")
     kubeadm = (root / "eph-kubeadm-init.service").read_text(encoding="utf-8")
     assert "eph-kubeadm-init.sh" in kubeadm
+    assert "ExecStartPre=/usr/local/sbin/ai-agent-site-time-dns-apply" in kubeadm
+    assert "Requires=cloud-config.service" in kubeadm
     assert "WantedBy=multi-user.target" in kubeadm
 
 
