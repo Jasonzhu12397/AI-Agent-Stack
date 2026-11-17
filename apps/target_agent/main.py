@@ -10,7 +10,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -347,9 +347,7 @@ def _observe_target_agent_readiness() -> dict[str, Any]:
         or not isinstance(duration, int)
         or isinstance(duration, bool)
         or duration < 10
-        or datetime.now(UTC) >= renew_time + __import__("datetime").timedelta(
-            seconds=duration
-        )
+        or datetime.now(UTC) >= renew_time + timedelta(seconds=duration)
     ):
         raise HandoffError("TARGET_AGENT_LEADER_LEASE_NOT_HELD_OR_EXPIRED")
     return {
@@ -713,17 +711,6 @@ def execute(
                 }
             if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
                 raise HandoffError("WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED")
-            if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
-                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
-                    evidence.get("ironic_internal_ntp_ip")
-                )
-                ntp_probe = probe_ironic_internal_ntp_endpoint(configured_ntp_ip)
-                evidence = {
-                    **evidence,
-                    "ironic_internal_ntp_ip": configured_ntp_ip,
-                    "ironic_internal_ntp_service_reachable": True,
-                    "ironic_internal_ntp_probe": ntp_probe,
-                }
             if next_phase == HandoffPhase.WORKERS_READY.value:
                 configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
                     evidence.get("ironic_internal_ntp_ip")
