@@ -34,6 +34,7 @@ from .leader_election import (
     LeaseElectionError,
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
+from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
 from .ntp_policy import (
     NtpPolicyError,
     render_control_plane_chrony_config,
@@ -53,6 +54,7 @@ CAPABILITIES = [
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
     "target.ntp.control_plane.render",
+    "target.ntp.control_plane.verify_bootstrap",
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
 ]
@@ -199,6 +201,54 @@ def _observe_target_metal3_ownership(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, Any]:
+    namespace = payload.get("namespace")
+    if (
+        not isinstance(namespace, str)
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace)
+    ):
+        raise NtpAttestationError("TARGET_NTP_NAMESPACE_INVALID")
+    resources = (
+        (
+            "machines",
+            [
+                "get",
+                "machines.cluster.x-k8s.io",
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+        ),
+        (
+            "kubeadmconfigs",
+            [
+                "get",
+                "kubeadmconfigs.bootstrap.cluster.x-k8s.io",
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+        ),
+    )
+    documents = {}
+    for name, arguments in resources:
+        result = _kubectl(arguments, timeout=60, max_output_bytes=4 * 1024 * 1024)
+        if not result["available"]:
+            raise NtpAttestationError(f"TARGET_NTP_BOOTSTRAP_OBSERVATION_FAILED:{name}")
+        try:
+            documents[name] = json.loads(result["stdout"])
+        except ValueError as exc:
+            raise NtpAttestationError(f"TARGET_NTP_BOOTSTRAP_JSON_INVALID:{name}") from exc
+    return verify_control_plane_ntp_bootstrap(
+        documents["machines"],
+        documents["kubeadmconfigs"],
+        payload.get("approved_external_sources"),
+        payload.get("worker_networks"),
+    )
+
+
 def execute(
     command: dict[str, Any],
     lease_lost_event: Any = None,
@@ -265,6 +315,8 @@ def execute(
             next_phase = str(payload.get("next_phase", ""))
             evidence = payload.get("evidence", {})
             if next_phase == HandoffPhase.TARGET_CONTROL_PLANE_READY.value:
+                ntp_attestation = _observe_control_plane_ntp_bootstrap(payload)
+                evidence = {**evidence, **ntp_attestation}
                 ntp_probe = probe_ironic_internal_ntp_endpoint(
                     evidence.get("ironic_internal_ntp_ip", "")
                 )
@@ -337,6 +389,22 @@ def execute(
                 "side_effects": False,
             }
         except (NtpPolicyError, TypeError, ValueError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc),
+                "output": {},
+                "side_effects": False,
+            }
+    if action == "target.ntp.control_plane.verify_bootstrap":
+        try:
+            evidence = _observe_control_plane_ntp_bootstrap(command.get("payload", {}))
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": evidence,
+                "side_effects": False,
+            }
+        except (NtpAttestationError, TypeError, AttributeError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc),
