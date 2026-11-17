@@ -1,5 +1,7 @@
+import json
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from packages.agent_transport.config import AgentSettings, ConfigurationError
@@ -71,9 +73,6 @@ def test_settings_rejects_target_without_cluster_id(monkeypatch, tmp_path):
 
 
 def test_agent_client_renews_lease_with_current_identity_and_token(tmp_path, monkeypatch):
-    import httpx
-    from uuid import uuid4
-
     from packages.agent_transport.client import AgentControlClient
 
     ca, cert, key = _write_cert_files(tmp_path)
@@ -96,7 +95,7 @@ def test_agent_client_renews_lease_with_current_identity_and_token(tmp_path, mon
     settings = AgentSettings.from_environment("target")
     def handler(request):
         assert request.url.path == "/api/v1/agent-control/commands/lease/renew"
-        payload = __import__("json").loads(request.content)
+        payload = json.loads(request.content)
         assert payload["agent_id"] == str(agent_id)
         assert payload["lease_token"] == "x" * 40
         return httpx.Response(200, json={"renewed": True, "expires_at": "2026-11-17T12:00:00Z"})
