@@ -62,8 +62,15 @@ def _validate_sources(role: str, sources: list[str], ironic_internal_ip: str | N
     normalized = [source.strip() for source in sources]
     if len(set(normalized)) != len(normalized):
         raise ChronyError("CHRONY_SOURCE_DUPLICATED")
-    if any(any(char.isspace() for char in source) for source in normalized):
-        raise ChronyError("CHRONY_SOURCE_INVALID")
+    hostname_pattern = re.compile(
+        r"(?i)^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$"
+    )
+    for source in normalized:
+        try:
+            ipaddress.ip_address(source)
+        except ValueError:
+            if not hostname_pattern.fullmatch(source):
+                raise ChronyError("CHRONY_SOURCE_INVALID")
     if role == "target_worker":
         if not isinstance(ironic_internal_ip, str):
             raise ChronyError("WORKER_NTP_MUST_USE_IRONIC_INTERNAL_IP")
