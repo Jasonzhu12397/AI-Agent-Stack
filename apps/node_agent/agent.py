@@ -4761,6 +4761,213 @@ def kubernetes_api_get(path: str) -> dict[str, Any]:
     return result
 
 
+def kubernetes_api_lease_request(
+    method: str,
+    path: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    expected_prefix = "/apis/coordination.k8s.io/v1/namespaces/"
+    if (
+        method not in {"POST", "PUT"}
+        or not path.startswith(expected_prefix)
+        or "/leases" not in path
+        or ".." in path
+    ):
+        raise NodeAgentError("KUBERNETES_LEASE_REQUEST_NOT_ALLOWLISTED")
+    host, port, token, context = _kubernetes_api_identity()
+    request = urllib.request.Request(
+        f"https://{host}:{port}{path}",
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+    try:
+        with _open_kubernetes_api_request(request, context, timeout=10) as response:
+            body = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise NodeAgentError("KUBERNETES_API_REDIRECT_REJECTED") from exc
+        if exc.code in {409, 404}:
+            raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
+        if exc.code >= 500:
+            raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+        raise NodeAgentError(f"KUBERNETES_API_HTTP_{exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise NodeAgentError("KUBERNETES_API_UNAVAILABLE") from exc
+    if len(body) > 1024 * 1024:
+        raise NodeAgentError("KUBERNETES_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_JSON") from exc
+    if not isinstance(result, dict):
+        raise NodeAgentError("KUBERNETES_RESPONSE_INVALID_SHAPE")
+    return result
+
+
+class KubernetesLeaseLeaderElector:
+    def __init__(
+        self,
+        namespace: str,
+        lease_name: str,
+        identity: str,
+        lease_duration_seconds: int = 30,
+        renew_interval_seconds: int = 5,
+    ):
+        if (
+            not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", lease_name)
+            or not isinstance(identity, str)
+            or not identity
+            or len(identity) > 128
+            or lease_duration_seconds < 15
+            or renew_interval_seconds < 1
+            or renew_interval_seconds >= lease_duration_seconds
+        ):
+            raise NodeAgentError("TARGET_AGENT_LEADER_ELECTION_CONFIG_INVALID")
+        self.namespace = namespace
+        self.lease_name = lease_name
+        self.identity = identity
+        self.lease_duration_seconds = lease_duration_seconds
+        self.renew_interval_seconds = renew_interval_seconds
+        self.leadership_event = threading.Event()
+        self.lease_path = (
+            f"{'/apis/coordination.k8s.io/v1/namespaces/'}"
+            f"{namespace}/leases/{lease_name}"
+        )
+        self.collection_path = (
+            f"{'/apis/coordination.k8s.io/v1/namespaces/'}"
+            f"{namespace}/leases"
+        )
+
+    @staticmethod
+    def _parse_time(value: Any) -> datetime.datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(datetime.timezone.utc)
+
+    def _write_lease(self, lease: dict[str, Any], create: bool) -> bool:
+        try:
+            kubernetes_api_lease_request(
+                "POST" if create else "PUT",
+                self.collection_path if create else self.lease_path,
+                lease,
+            )
+        except NodeAgentError as exc:
+            if str(exc) == "KUBERNETES_API_HTTP_409":
+                return False
+            raise
+        return True
+
+    def acquire_or_renew(self) -> bool:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        now_text = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+        try:
+            current = kubernetes_api_get(self.lease_path)
+        except NodeAgentError as exc:
+            if str(exc) != "KUBERNETES_API_HTTP_404":
+                raise
+            lease = {
+                "apiVersion": "coordination.k8s.io/v1",
+                "kind": "Lease",
+                "metadata": {
+                    "name": self.lease_name,
+                    "namespace": self.namespace,
+                },
+                "spec": {
+                    "holderIdentity": self.identity,
+                    "leaseDurationSeconds": self.lease_duration_seconds,
+                    "acquireTime": now_text,
+                    "renewTime": now_text,
+                    "leaseTransitions": 0,
+                },
+            }
+            return self._write_lease(lease, create=True)
+
+        metadata = current.get("metadata")
+        spec = current.get("spec")
+        if not isinstance(metadata, dict) or not isinstance(spec, dict):
+            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
+        resource_version = metadata.get("resourceVersion")
+        holder = spec.get("holderIdentity")
+        renew_time = self._parse_time(spec.get("renewTime"))
+        duration = spec.get("leaseDurationSeconds")
+        if (
+            not isinstance(resource_version, str)
+            or not resource_version
+            or not isinstance(duration, int)
+            or isinstance(duration, bool)
+            or duration < 1
+        ):
+            raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_MALFORMED")
+        if holder != self.identity:
+            if renew_time is None:
+                raise NodeAgentError("TARGET_AGENT_LEADER_LEASE_TIME_INVALID")
+            if (now - renew_time).total_seconds() < duration:
+                return False
+
+        taking_over = holder != self.identity
+        updated_spec = dict(spec)
+        updated_spec.update(
+            {
+                "holderIdentity": self.identity,
+                "leaseDurationSeconds": self.lease_duration_seconds,
+                "renewTime": now_text,
+                "leaseTransitions": (
+                    spec.get("leaseTransitions", 0) + 1
+                    if taking_over
+                    else spec.get("leaseTransitions", 0)
+                ),
+            }
+        )
+        if taking_over:
+            updated_spec["acquireTime"] = now_text
+        updated = {
+            "apiVersion": "coordination.k8s.io/v1",
+            "kind": "Lease",
+            "metadata": {
+                "name": self.lease_name,
+                "namespace": self.namespace,
+                "resourceVersion": resource_version,
+            },
+            "spec": updated_spec,
+        }
+        return self._write_lease(updated, create=False)
+
+    def maintain(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                is_leader = self.acquire_or_renew()
+                if is_leader:
+                    self.leadership_event.set()
+                else:
+                    self.leadership_event.clear()
+            except NodeAgentError as exc:
+                self.leadership_event.clear()
+                print(
+                    json.dumps(
+                        {
+                            "event": "target_agent_leader_election_error",
+                            "code": str(exc),
+                        }
+                    ),
+                    flush=True,
+                )
+            if stop_event.wait(self.renew_interval_seconds):
+                break
+        self.leadership_event.clear()
+
+
 def kubernetes_api_create_machine_deployment(
     version: str,
     namespace: str,
@@ -5104,6 +5311,7 @@ def execute_command_with_lease(
     command: dict[str, Any],
     node_type: str,
     renew_interval: int = 30,
+    authority_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     if not isinstance(renew_interval, (int, float)) or renew_interval <= 0:
         raise NodeAgentError("INVALID_LEASE_RENEW_INTERVAL")
@@ -5116,10 +5324,18 @@ def execute_command_with_lease(
     renewal_errors: list[NodeAgentError] = []
 
     def renew_until_stopped() -> None:
-        while not stop_event.wait(renew_interval):
+        next_renewal = time.monotonic() + renew_interval
+        while not stop_event.wait(1):
+            if authority_event is not None and not authority_event.is_set():
+                renewal_errors.append(NodeAgentError("AGENT_LEADERSHIP_LOST"))
+                stop_event.set()
+                break
+            if time.monotonic() < next_renewal:
+                continue
             try:
                 client.renew_lease(command_id, lease_token)
                 touch_health_files()
+                next_renewal = time.monotonic() + renew_interval
             except NodeAgentError as exc:
                 renewal_errors.append(exc)
                 stop_event.set()
@@ -5197,7 +5413,11 @@ def validate_deployment_checkpoint_for_command(
         raise NodeAgentError("DEPLOYMENT_CHECKPOINT_PENDING_STEP_MISMATCH")
 
 
-def run_once(client: ControlPlaneClient, node_type: str) -> bool:
+def run_once(
+    client: ControlPlaneClient,
+    node_type: str,
+    authority_event: threading.Event | None = None,
+) -> bool:
     if node_type == "eph_node":
         try:
             client.certificate_rotation.maintain()
@@ -5274,14 +5494,17 @@ def run_once(client: ControlPlaneClient, node_type: str) -> bool:
             node_type,
             client.deployment_checkpoints,
         )
-        result = execute_command_with_lease(client, command, node_type)
+        result = execute_command_with_lease(
+            client, command, node_type, authority_event=authority_event
+        )
         client.submit_result(command_id, lease_token, "succeeded", result)
     except NodeAgentError as exc:
-        if str(exc) == "COMMAND_LEASE_LOST":
+        if str(exc) in {"COMMAND_LEASE_LOST", "AGENT_LEADERSHIP_LOST"}:
             print(
                 json.dumps(
                     {
-                        "event": "command_lease_lost",
+                        "event": "command_execution_fenced",
+                        "reason": str(exc),
                         "command_id": command_id,
                         "result_submitted": False,
                     }
@@ -5310,8 +5533,8 @@ class EPHNodeAgent:
     def execute(self, command: dict[str, Any]) -> dict[str, Any]:
         return execute_command(command, self.node_type)
 
-    def run_once(self) -> bool:
-        return run_once(self.client, self.node_type)
+    def run_once(self, authority_event: threading.Event | None = None) -> bool:
+        return run_once(self.client, self.node_type, authority_event)
 
 
 class TargetClusterAgent:
@@ -5323,8 +5546,8 @@ class TargetClusterAgent:
     def execute(self, command: dict[str, Any]) -> dict[str, Any]:
         return execute_command(command, self.node_type)
 
-    def run_once(self) -> bool:
-        return run_once(self.client, self.node_type)
+    def run_once(self, authority_event: threading.Event | None = None) -> bool:
+        return run_once(self.client, self.node_type, authority_event)
 
 
 def create_agent(client: ControlPlaneClient, node_type: str):
@@ -5367,6 +5590,35 @@ def main() -> None:
         raise SystemExit("Production node agents require HTTPS.")
     client = ControlPlaneClient(base_url, node_id, token)
     runtime = create_agent(client, node_type)
+    leader_stop_event = threading.Event()
+    leader_thread = None
+    leader_elector = None
+    authority_event = None
+    if node_type == "target_cluster":
+        if os.environ.get("AGENT_LEADER_ELECTION_ENABLED", "").lower() != "true":
+            if os.environ.get("APP_ENV") == "production":
+                raise SystemExit("Target Agent production deployment requires leader election.")
+        else:
+            pod_name = os.environ.get("POD_NAME", "").strip()
+            pod_namespace = os.environ.get("POD_NAMESPACE", "").strip()
+            if not pod_name or not pod_namespace:
+                raise SystemExit("Target Agent leader election requires POD_NAME and POD_NAMESPACE.")
+            leader_elector = KubernetesLeaseLeaderElector(
+                namespace=pod_namespace,
+                lease_name=os.environ.get(
+                    "AGENT_LEADER_ELECTION_LEASE_NAME",
+                    "target-cluster-agent-leader",
+                ),
+                identity=pod_name,
+            )
+            authority_event = leader_elector.leadership_event
+            leader_thread = threading.Thread(
+                target=leader_elector.maintain,
+                args=(leader_stop_event,),
+                name="target-agent-leader-election",
+                daemon=True,
+            )
+            leader_thread.start()
     touch_health_files()
     liveness_stop_event = threading.Event()
     liveness_thread = threading.Thread(
@@ -5379,7 +5631,13 @@ def main() -> None:
     try:
         for _iteration in count():
             try:
-                processed = runtime.run_once()
+                if authority_event is not None and not authority_event.is_set():
+                    touch_health_files(readiness=True)
+                    if args.once:
+                        raise SystemExit("Target Agent replica is not the elected leader.")
+                    time.sleep(args.poll_seconds)
+                    continue
+                processed = runtime.run_once(authority_event)
                 if args.once:
                     break
                 if not processed:
@@ -5391,7 +5649,10 @@ def main() -> None:
                     raise SystemExit(1) from exc
                 time.sleep(args.poll_seconds)
     finally:
+        leader_stop_event.set()
         liveness_stop_event.set()
+        if leader_thread is not None:
+            leader_thread.join(timeout=2)
         liveness_thread.join(timeout=1)
 
 
