@@ -16,6 +16,9 @@ def ownership_documents():
             "name": "target-cluster",
             "namespace": "metal3-system",
             "uid": "target-cluster-uid",
+            "annotations": {
+                "ai-agent-stack.io/source-cluster-uid": "source-cluster-uid",
+            },
         }
     }
     machines = []
@@ -108,6 +111,36 @@ def ownership_documents():
         {"items": bmhs},
         source_identities,
     )
+
+
+def trusted_deployment_context(source):
+    normalized = sorted(
+        source,
+        key=lambda item: (
+            item["namespace"],
+            item["name"],
+            item["hardware_identity"],
+        ),
+    )
+    digest = hashlib.sha256(
+        json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "eph_pivot_attestation": {
+            "source_cluster_uid": "source-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_bmh_identities": normalized,
+            "source_bmh_digest": digest,
+            "target_bmh_digest": digest,
+            "source_agent_id": "eph-agent-test",
+            "command_id": "eph-pivot-command-test",
+            "attested_at": "2026-11-17T00:00:00Z",
+        },
+    }
 
 
 def observe(cluster=None, machines=None, metal3machines=None, bmhs=None, source=None):
@@ -220,11 +253,13 @@ def test_target_agent_verifies_every_bmh_against_live_ironic_api(monkeypatch):
     monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
     monkeypatch.setattr(target_main, "ironic_api_configured", lambda: True)
     monkeypatch.setattr(target_main, "get_ironic_node", fake_ironic_node)
-    result = target_main._observe_target_metal3_ownership({
-        "namespace": "metal3-system",
-        "cluster_name": "target-cluster",
-        "source_bmh_identities": source,
-    })
+    result = target_main._observe_target_metal3_ownership(
+        {
+            "namespace": "metal3-system",
+            "cluster_name": "target-cluster",
+        },
+        deployment_context=trusted_deployment_context(source),
+    )
     assert result["target_ironic_inventory_verified"] is True
     assert result["ironic_node_count"] == 3
     assert len(ironic_calls) == 3
@@ -250,11 +285,13 @@ def test_target_agent_fails_closed_when_ironic_api_is_not_configured(monkeypatch
     )
     monkeypatch.setattr(target_main, "ironic_api_configured", lambda: False)
     with pytest.raises(Metal3OwnershipError, match="IRONIC_API_CONFIGURATION_REQUIRED"):
-        target_main._observe_target_metal3_ownership({
-            "namespace": "metal3-system",
-            "cluster_name": "target-cluster",
-            "source_bmh_identities": source,
-        })
+        target_main._observe_target_metal3_ownership(
+            {
+                "namespace": "metal3-system",
+                "cluster_name": "target-cluster",
+            },
+            deployment_context=trusted_deployment_context(source),
+        )
 
 
 def test_target_agent_rejects_ironic_node_in_maintenance(monkeypatch):
@@ -288,8 +325,10 @@ def test_target_agent_rejects_ironic_node_in_maintenance(monkeypatch):
         },
     )
     with pytest.raises(Metal3OwnershipError, match="IRONIC_NODE_IN_MAINTENANCE"):
-        target_main._observe_target_metal3_ownership({
-            "namespace": "metal3-system",
-            "cluster_name": "target-cluster",
-            "source_bmh_identities": source,
-        })
+        target_main._observe_target_metal3_ownership(
+            {
+                "namespace": "metal3-system",
+                "cluster_name": "target-cluster",
+            },
+            deployment_context=trusted_deployment_context(source),
+        )
