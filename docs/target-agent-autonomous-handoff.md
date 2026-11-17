@@ -102,3 +102,17 @@ execution gate. In particular:
 
 These distinctions are intentional: a positive configuration assertion must not be reported
 as a live runtime observation.
+
+
+## Explicitly blocked execution phases
+
+The current Target Agent does not yet contain a production Worker MachineDeployment mutation
+adapter. Therefore `worker_provisioning` is intentionally blocked with
+`WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED`; it must not persist a successful checkpoint
+based only on NTP reachability or caller-supplied readiness evidence. The next implementation
+must add a versioned CAPI/Metal3 resource adapter, narrowly scoped write RBAC, preflight and
+postflight observation, command-lease cancellation, and idempotent recovery before this phase
+can be enabled.
+
+EPH cleanup remains similarly blocked until its credential-revocation and workload-removal
+adapter exists. Blocking is a correctness guarantee, not a completed implementation.
