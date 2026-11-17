@@ -272,3 +272,144 @@ def test_target_agent_rbac_precreates_lease_and_grants_only_required_worker_writ
     assert {"get", "create"} <= permissions[
         ("infrastructure.cluster.x-k8s.io", "metal3machinetemplates")
     ]
+
+
+
+def _ready_observation_runner(ntp_command):
+    from apps.target_agent.worker_provisioning import RESOURCE_TYPES
+
+    deployment = {
+        "metadata": {"generation": 3},
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"cluster.x-k8s.io/deployment-name": "workers"}},
+            "template": {
+                "metadata": {"labels": {"cluster.x-k8s.io/deployment-name": "workers"}},
+                "spec": {
+                    "bootstrap": {
+                        "configRef": {
+                            "apiVersion": RESOURCE_TYPES["KubeadmConfigTemplate"][1],
+                            "kind": "KubeadmConfigTemplate",
+                            "name": "worker-bootstrap-v2",
+                        }
+                    }
+                },
+            },
+        },
+        "status": {
+            "observedGeneration": 3,
+            "updatedReplicas": 1,
+            "readyReplicas": 1,
+            "availableReplicas": 1,
+        },
+    }
+    bootstrap = {
+        "spec": {"template": {"spec": {"preKubeadmCommands": [ntp_command]}}},
+    }
+
+    def runner(arguments, input_text=None, timeout=30):
+        if arguments[0] == "get":
+            resource = arguments[1]
+            if resource == "machinedeployments.cluster.x-k8s.io":
+                return {"ok": True, "stdout": json.dumps(deployment), "stderr": ""}
+            if resource == RESOURCE_TYPES["KubeadmConfigTemplate"][0]:
+                return {"ok": True, "stdout": json.dumps(bootstrap), "stderr": ""}
+            if resource == "machines.cluster.x-k8s.io":
+                return {
+                    "ok": True,
+                    "stdout": json.dumps({"items": [{
+                        "status": {
+                            "bootstrapReady": True,
+                            "nodeRef": {"name": "worker-1"},
+                        },
+                    }]}),
+                    "stderr": "",
+                }
+            if resource == "nodes":
+                return {
+                    "ok": True,
+                    "stdout": json.dumps({"items": [{
+                        "metadata": {"name": "worker-1"},
+                        "status": {
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                        },
+                    }]}),
+                    "stderr": "",
+                }
+        return {"ok": False, "stderr": "NotFound"}
+
+    return runner
+
+
+def test_worker_readiness_observes_machine_bootstrap_node_and_internal_ntp(monkeypatch):
+    from apps.target_agent.worker_provisioning import (
+        observe_worker_readiness,
+    )
+    from apps.target_agent.ntp_policy import render_worker_chrony_pre_kubeadm_command
+
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
+    result = observe_worker_readiness(
+        "metal3",
+        "workers",
+        NTP_IP,
+        runner=_ready_observation_runner(render_worker_chrony_pre_kubeadm_command(NTP_IP)),
+    )
+    assert result["workers_ready"] is True
+    assert result["ready_worker_count"] == 1
+    assert result["worker_ntp_sources"] == {"worker-1": [NTP_IP]}
+    assert result["worker_ntp_bootstrap_verified"] is True
+
+
+def test_worker_readiness_rejects_missing_chrony_bootstrap(monkeypatch):
+    from apps.target_agent.worker_provisioning import (
+        observe_worker_readiness,
+        WorkerProvisioningError,
+    )
+
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
+    with pytest.raises(WorkerProvisioningError, match="INTERNAL_NTP_BOOTSTRAP_NOT_VERIFIED"):
+        observe_worker_readiness(
+            "metal3",
+            "workers",
+            NTP_IP,
+            runner=_ready_observation_runner("echo no chrony"),
+        )
+
+
+def test_handoff_workers_ready_requires_live_worker_observation(monkeypatch):
+    from apps.target_agent import main as target_main
+
+    monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", NTP_IP)
+    monkeypatch.setattr(
+        target_main,
+        "observe_worker_readiness",
+        lambda namespace, name, ntp_ip: {
+            "desired_worker_count": 2,
+            "ready_worker_count": 2,
+            "worker_ntp_sources": {
+                "worker-1": [ntp_ip],
+                "worker-2": [ntp_ip],
+            },
+            "worker_ntp_bootstrap_verified": True,
+            "workers_ready": True,
+        },
+    )
+    result = target_main.execute({
+        "action": "target.handoff.evaluate",
+        "deployment_checkpoint": {
+            "phase": "worker_provisioning",
+            "sequence": 7,
+            "state": {},
+        },
+        "payload": {
+            "next_phase": "workers_ready",
+            "namespace": "metal3",
+            "machine_deployment_name": "workers",
+            "evidence": {
+                "ironic_internal_ntp_ip": NTP_IP,
+            },
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["evidence"]["ready_worker_count"] == 2
+    assert result["output"]["evidence"]["worker_ntp_sources"]["worker-2"] == [NTP_IP]
