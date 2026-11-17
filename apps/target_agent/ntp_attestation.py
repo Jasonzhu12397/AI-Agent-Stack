@@ -13,7 +13,6 @@ class NtpAttestationError(ValueError):
 def verify_control_plane_ntp_bootstrap(
     machines_document: dict[str, Any],
     kubeadmconfigs_document: dict[str, Any],
-    configured_external_sources: Any,
     approved_external_sources: Any,
     worker_networks: Any,
     cluster_name: str,
@@ -21,7 +20,7 @@ def verify_control_plane_ntp_bootstrap(
 ) -> dict[str, Any]:
     try:
         approved, networks = validate_control_plane_ntp_profile(
-            configured_external_sources,
+            approved_external_sources,
             approved_external_sources,
             worker_networks,
         )
@@ -121,7 +120,7 @@ def verify_control_plane_ntp_bootstrap(
         })
     return {
         "target_control_plane_ntp_profile_verified": True,
-        "target_control_plane_ntp_external_sync_verified": True,
+        "target_control_plane_ntp_bootstrap_sync_gate_verified": True,
         "verified_control_plane_machines": verified,
         "verified_master_count": len(verified),
         "side_effects": False,
