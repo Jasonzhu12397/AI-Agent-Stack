@@ -126,40 +126,64 @@ resolvectl status
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", required=True, choices=("eph-live-os", "target-os"))
-    parser.add_argument(
-        "--ntp-server",
-        action="append",
-        type=validate_ntp_server,
-        required=True,
-    )
-    parser.add_argument(
-        "--dns-server",
-        action="append",
-        type=validate_dns_server,
-        required=True,
-    )
+    parser.add_argument("--ntp-server", action="append", type=validate_ntp_server, default=[])
+    parser.add_argument("--dns-server", action="append", type=validate_dns_server, default=[])
     parser.add_argument(
         "--search-domain",
         action="append",
         type=validate_search_domain,
         default=[],
     )
-    parser.add_argument(
-        "--dns-test-name",
-        type=validate_search_domain,
-        required=True,
-    )
+    parser.add_argument("--dns-test-name", type=validate_search_domain)
+    parser.add_argument("--profile-json")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+    if args.profile_json:
+        if args.ntp_server or args.dns_server or args.search_domain or args.dns_test_name:
+            parser.error("--profile-json cannot be combined with individual NTP/DNS arguments")
+        try:
+            profile = json.loads(Path(args.profile_json).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error("unable to read time DNS profile JSON: {}".format(exc))
+        role_key = "eph_live_os" if args.role == "eph-live-os" else "target_os"
+        roles = profile.get("apply_to") if isinstance(profile, dict) else None
+        if (
+            not isinstance(profile, dict)
+            or profile.get("version") != "v1"
+            or profile.get("chrony_required") is not True
+            or profile.get("resolver_backend") != "systemd-resolved"
+            or not isinstance(roles, list)
+            or len(roles) != 2
+            or any(not isinstance(role, str) for role in roles)
+            or set(roles) != {"eph_live_os", "target_os"}
+            or role_key not in roles
+        ):
+            parser.error("profile JSON does not satisfy the v1 EPH/Target time DNS contract")
+        try:
+            args.ntp_server = [
+                validate_ntp_server(item) for item in profile.get("ntp_servers", [])
+            ]
+            args.dns_server = [
+                validate_dns_server(item) for item in profile.get("dns_servers", [])
+            ]
+            args.search_domain = [
+                validate_search_domain(item) for item in profile.get("search_domains", [])
+            ]
+            args.dns_test_name = validate_search_domain(profile.get("dns_probe_name", ""))
+        except argparse.ArgumentTypeError as exc:
+            parser.error(str(exc))
+    if not args.ntp_server or not args.dns_server or not args.dns_test_name:
+        parser.error(
+            "provide --profile-json or explicit NTP servers, DNS servers and --dns-test-name"
+        )
     destination = Path(args.output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     content = render(args)
     temporary = destination.with_name(destination.name + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(destination)
-    print(f"Generated {destination} cloud-init user-data for {args.role}")
+    print("Generated {} cloud-init user-data for {}".format(destination, args.role))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
