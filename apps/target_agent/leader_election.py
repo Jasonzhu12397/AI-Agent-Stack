@@ -48,7 +48,12 @@ class KubernetesLeaseElector:
         )
         self.lease_url = f"{self.collection_url}/{self.lease_name}"
 
-    def _request(self, method: str, url: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    def _request(
+        self,
+        method: str,
+        url: str,
+        body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         token = self.token_path.read_text(encoding="utf-8").strip()
         payload = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
@@ -127,7 +132,11 @@ class KubernetesLeaseElector:
             "spec": {
                 "holderIdentity": self.identity,
                 "leaseDurationSeconds": self.duration_seconds,
-                "acquireTime": now_text if holder != self.identity else (spec.get("acquireTime") or now_text),
+                "acquireTime": (
+                    now_text
+                    if holder != self.identity
+                    else (spec.get("acquireTime") or now_text)
+                ),
                 "renewTime": now_text,
                 "leaseTransitions": int(spec.get("leaseTransitions") or 0)
                 + (1 if holder not in (None, self.identity) else 0),
