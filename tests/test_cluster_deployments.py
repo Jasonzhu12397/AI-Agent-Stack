@@ -1939,6 +1939,11 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
         },
+        "capi_pivot_execution": {
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
         "dual_agent": {
             "phase": "target_agent_verification_pending",
             "target_agent_owns_cluster": False,
@@ -1964,7 +1969,7 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         {
             "cluster_name": "edge-lab",
             "namespace": "metal3",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
@@ -2574,7 +2579,12 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
     }
     deployment.save(update_fields=["target_node", "status", "plan_result"])
     command = AgentCommand.objects.create(
@@ -2596,7 +2606,9 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
             "postflight_passed": True,
             "cluster_name": "edge-lab",
             "namespace": "default",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
             "side_effects": False,
             "complete_hardware_verification": False,
             "verification_scope": "capi_metal3_without_direct_ironic_api",
