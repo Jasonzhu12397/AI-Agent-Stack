@@ -28,7 +28,11 @@ from .handoff import (
     evaluate_transition,
     validate_phase_evidence,
 )
-from .leader_election import KubernetesLeaseElector, LeaseElectionError
+from .leader_election import (
+    KubernetesLeaseElector,
+    LeaderLeaseGuard,
+    LeaseElectionError,
+)
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_policy import (
     NtpPolicyError,
@@ -493,11 +497,20 @@ def main() -> int:
                     command = client.claim()
                     if command is not None:
                         started_at = datetime.now(timezone.utc)
-                        guard = CommandLeaseGuard(client, command)
-                        guard.start()
+                        leader_guard = LeaderLeaseGuard(elector)
+                        leader_guard.start()
+                        command_guard = CommandLeaseGuard(client, command)
+                        command_guard.start()
                         try:
-                            outcome = execute(command, guard.lost)
-                            if guard.lost.is_set():
+                            outcome = execute(command, command_guard.lost)
+                            if leader_guard.lost.is_set():
+                                LOG.warning(
+                                    "Leadership lost while command %s was executing; "
+                                    "result submission is suppressed",
+                                    command["command_id"],
+                                )
+                                continue
+                            if command_guard.lost.is_set():
                                 outcome = {
                                     "status": "failed",
                                     "error_code": "COMMAND_LEASE_LOST_DURING_EXECUTION",
@@ -508,7 +521,8 @@ def main() -> int:
                                 command.get("action") == "target.handoff.evaluate"
                                 and outcome["status"] == "succeeded"
                                 and not outcome["output"].get("already_applied")
-                                and not guard.lost.is_set()
+                                and not command_guard.lost.is_set()
+                                and not leader_guard.lost.is_set()
                             ):
                                 try:
                                     checkpoint_result = client.persist_checkpoint(
@@ -525,11 +539,13 @@ def main() -> int:
                                         "output": {"phase": outcome["output"]["to_phase"]},
                                         "side_effects": False,
                                     }
-                            client.report_result(
-                                _result(command, settings.agent_id, outcome, started_at)
-                            )
+                            if not leader_guard.lost.is_set():
+                                client.report_result(
+                                    _result(command, settings.agent_id, outcome, started_at)
+                                )
                         finally:
-                            guard.close()
+                            command_guard.close()
+                            leader_guard.close()
                 else:
                     LOG.debug("This Target Agent replica is not the elected leader")
             except (
