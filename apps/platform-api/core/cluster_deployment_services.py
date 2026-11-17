@@ -1125,18 +1125,10 @@ def queue_deployment_command(
             if isinstance(deployment.spec, dict)
             else None
         )
-        plan_result = deployment.plan_result
-        planned_time_dns_profile = (
-            plan_result.get("time_dns_profile")
-            if isinstance(plan_result, dict)
-            else None
+        time_dns_profile_hash = (
+            time_dns_profile.get("profile_hash") if time_dns_profile else None
         )
-        time_dns_profile_hash = time_dns_profile.get("profile_hash") if time_dns_profile else None
-        if (
-            not isinstance(time_dns_profile_hash, str)
-            or not isinstance(planned_time_dns_profile, dict)
-            or planned_time_dns_profile.get("profile_hash") != time_dns_profile_hash
-        ):
+        if not isinstance(time_dns_profile_hash, str):
             raise ValueError("CAPI_PIVOT_TIME_DNS_PROFILE_HASH_REQUIRED")
         payload["cluster_name"] = deployment.cluster_name
         payload["namespace"] = namespace
@@ -2009,15 +2001,13 @@ def handle_deployment_command_result(
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
-        time_dns_profile = (
-            deployment.plan_result.get("time_dns_profile")
-            if isinstance(deployment.plan_result, dict)
+        time_dns_profile = _validated_time_dns_profile(
+            deployment.spec.get("time_dns_profile")
+            if isinstance(deployment.spec, dict)
             else None
         )
         expected_time_dns_profile_hash = (
-            time_dns_profile.get("profile_hash")
-            if isinstance(time_dns_profile, dict)
-            else None
+            time_dns_profile.get("profile_hash") if time_dns_profile else None
         )
         valid_verification = (
             pivot_operation is not None
