@@ -2569,6 +2569,8 @@ def execute_command(
         metadata = cluster.get("metadata", {})
         actual_uid = metadata.get("uid")
         annotations = metadata.get("annotations", {})
+        if metadata.get("name") != cluster_name or metadata.get("namespace") != namespace:
+            raise NodeAgentError("TARGET_CLUSTER_IDENTITY_SCOPE_MISMATCH")
         source_uid_annotation = (
             annotations.get("ai-agent-stack.io/source-cluster-uid")
             if isinstance(annotations, dict)
@@ -2654,6 +2656,7 @@ def execute_command(
             "cluster_name": cluster_name,
             "namespace": namespace,
             "cluster_uid": actual_uid,
+            "target_cluster_uid": actual_uid,
             "source_cluster_uid": expected_uid,
             "cluster_identity_preserved": True,
             "machine_count": len(machine_names),
