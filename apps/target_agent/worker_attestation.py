@@ -145,7 +145,9 @@ def verify_worker_readiness(
         "desired_worker_count": replicas,
         "ready_worker_count": len(matched),
         "verified_workers": matched,
-        "worker_ntp_sources": {item["node"]: [ntp_ip] for item in matched},
+        "worker_ntp_bootstrap_sources": {
+            item["node"]: [ntp_ip] for item in matched
+        },
         "workers_ready": True,
         "side_effects": False,
     }
