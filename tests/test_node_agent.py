@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from node_agent import agent, capabilities
+from node_agent import runtime as agent, capabilities
 
 TEST_INFRA_API_VERSION = "infrastructure.cluster.x-k8s.io/v1beta1"
 
