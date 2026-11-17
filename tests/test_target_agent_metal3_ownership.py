@@ -44,7 +44,6 @@ def test_metal3_ownership_verifies_cluster_machine_m3m_and_bmh_chain():
             "spec": {
                 "infrastructureRef": {
                     "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
-                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                     "kind": "Metal3Machine",
                     "name": m3m_name,
                     "namespace": "metal3",
@@ -66,6 +65,7 @@ def test_metal3_ownership_verifies_cluster_machine_m3m_and_bmh_chain():
             "spec": {
                 "bootMACAddress": f"aa:bb:cc:dd:ee:0{index}",
                 "consumerRef": {
+                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
                     "kind": "Metal3Machine",
                     "name": m3m_name,
                     "namespace": "metal3",
