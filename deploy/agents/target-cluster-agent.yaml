@@ -7,7 +7,12 @@ metadata:
     app.kubernetes.io/name: target-cluster-agent
     app.kubernetes.io/part-of: ai-agent-studio
 spec:
-  replicas: 1
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: target-cluster-agent
@@ -20,6 +25,13 @@ spec:
       automountServiceAccountToken: true
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: target-cluster-agent
+              topologyKey: kubernetes.io/hostname
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -52,8 +64,18 @@ spec:
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
             - name: AGENT_NODE_TYPE
               value: target_cluster
-            - name: AGENT_HOST_SYSFS_PATH
-              value: /host/sys
+            - name: AGENT_LEADER_ELECTION_ENABLED
+              value: "true"
+            - name: AGENT_LEADER_ELECTION_LEASE_NAME
+              value: target-cluster-agent-leader
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: AGENT_CONTROL_URL
               valueFrom:
                 secretKeyRef:
@@ -99,9 +121,6 @@ spec:
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
               readOnly: true
-            - name: host-sysfs
-              mountPath: /host/sys
-              readOnly: true
           readinessProbe:
             exec:
               command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
@@ -115,10 +134,6 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
       volumes:
-        - name: host-sysfs
-          hostPath:
-            path: /sys
-            type: Directory
         - name: agent-health
           emptyDir:
             sizeLimit: 1Mi
@@ -133,3 +148,14 @@ spec:
               - key: tls.key
                 path: tls.key
             defaultMode: 0440
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: target-cluster-agent
+  namespace: ai-agent-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: target-cluster-agent
