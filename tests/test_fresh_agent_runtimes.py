@@ -180,3 +180,20 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
     })
     assert result["status"] == "succeeded"
     assert result["output"]["evidence"]["target_metal3_ownership_verified"] is True
+
+
+
+def test_target_agent_renders_control_plane_chronyd_profile_without_claiming_host_changes():
+    result = execute_target({
+        "action": "target.ntp.control_plane.render",
+        "payload": {
+            "configured_external_sources": ["192.0.2.10"],
+            "approved_external_sources": ["192.0.2.10"],
+            "worker_networks": ["10.130.60.80/28"],
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert "server 192.0.2.10 iburst" in result["output"]["chrony_config"]
+    assert "allow 10.130.60.80/28" in result["output"]["chrony_config"]
+    assert result["output"]["host_configuration_applied"] is False
+    assert result["side_effects"] is False
