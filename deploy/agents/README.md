@@ -33,13 +33,14 @@ Run `deploy.sh` only after the secrets below have been provisioned by your secre
 - `cloud-control-agent-database`: key `database-url` (PostgreSQL connection string).
 - `cloud-control-agent-mtls`: keys `tls.crt`, `tls.key`, `client-ca.crt`.
 
-The Cloud Control API listens on TCP/8443 and is exposed as a LoadBalancer Service. Configure the cloud provider's load-balancer policy and DNS so EPH and Target can reach it over HTTPS. The server requires client certificates.
+The Cloud Control API listens on TCP/8443 and is exposed as a LoadBalancer Service. Configure the cloud provider's load-balancer policy and DNS so EPH and Target can reach it over HTTPS. The server requires client certificates. Use a TCP/L4 load balancer with TLS passthrough; a TLS-terminating load balancer would break end-to-end mTLS unless it is explicitly configured to re-authenticate and forward the verified client identity through a separate trusted mechanism.
 
 ### EPH cluster
 
 - `eph-agent-credentials`: `control-url`, `agent-id`, `installation-id`.
 - `agent-control-plane-mtls`: `ca.crt`, `tls.crt`, `tls.key`.
-- `capi-pivot-kubeconfigs`: `source.kubeconfig`, `target.kubeconfig`.
+- `capi-pivot-source-kubeconfig`: key `kubeconfig` (required at EPH bootstrap).
+- `capi-pivot-target-kubeconfig`: key `kubeconfig` (optional until the Target Control Plane API is ready; mount it later before enabling the Pivot adapter).
 
 The EPH client certificate Common Name must equal the configured Agent UUID. EPH identity must not include a Target cluster ID.
 
