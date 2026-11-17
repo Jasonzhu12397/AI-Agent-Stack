@@ -144,7 +144,7 @@ def main(argv=None):
         try:
             profile = json.loads(Path(args.profile_json).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            parser.error("unable to read time DNS profile JSON: {}".format(exc))
+            parser.error(f"unable to read time DNS profile JSON: {exc}")
         role_key = "eph_live_os" if args.role == "eph-live-os" else "target_os"
         roles = profile.get("apply_to") if isinstance(profile, dict) else None
         if (
@@ -182,7 +182,7 @@ def main(argv=None):
     temporary = destination.with_name(destination.name + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(destination)
-    print("Generated {} cloud-init user-data for {}".format(destination, args.role))
+    print(f"Generated {destination} cloud-init user-data for {args.role}")
     return 0
 
 if __name__ == "__main__":
