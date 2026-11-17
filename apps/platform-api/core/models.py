@@ -1069,7 +1069,7 @@ class ClusterDeploymentPivotOperation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     deployment = models.OneToOneField(
         ClusterDeployment,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="capi_pivot_operation",
     )
     operation_id = models.UUIDField(unique=True, editable=False)
@@ -1157,7 +1157,6 @@ class ClusterDeploymentPivotEvent(models.Model):
                 name="capi_pivot_event_time_idx",
             )
         ]
-
 
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
