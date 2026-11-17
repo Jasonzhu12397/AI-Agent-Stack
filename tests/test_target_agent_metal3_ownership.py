@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from apps.target_agent.metal3_ownership import (
@@ -34,7 +36,8 @@ def test_metal3_ownership_verifies_cluster_machine_m3m_and_bmh_chain():
         m3m_name = f"metal3-{index}"
         m3m_uid = f"metal3-uid-{index}"
         host_name = f"host-{index}"
-        hardware_identity = f"system-uuid:system-{index}"
+        hardware_digest = hashlib.sha256(f"system-{index}".encode()).hexdigest()
+        hardware_identity = "system-uuid:sha256:" + hardware_digest
         machines.append({
             "metadata": {
                 "name": machine_name,
