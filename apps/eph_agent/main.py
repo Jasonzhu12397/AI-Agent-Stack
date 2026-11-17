@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from packages.agent_transport import AgentControlClient, AgentSettings, AgentTransportError, ConfigurationError
+from packages.agent_transport import (
+    AgentControlClient,
+    AgentSettings,
+    AgentTransportError,
+    ConfigurationError,
+)
 
 LOG = logging.getLogger("eph-agent")
 CAPABILITIES = ["eph.preflight", "eph.source.observe"]
@@ -80,14 +85,34 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
             and evidence["clusterctl"]["available"]
             and evidence["kubectl"]["available"]
         )
-        return {"status": "succeeded" if ready else "blocked", "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE", "output": evidence, "side_effects": False}
+        return {
+            "status": "succeeded" if ready else "blocked",
+            "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
+            "output": evidence,
+            "side_effects": False,
+        }
     if action == "eph.source.observe":
         result = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])
-        return {"status": "succeeded" if result["available"] else "failed", "error_code": None if result["available"] else "EPH_SOURCE_OBSERVE_FAILED", "output": result, "side_effects": False}
-    return {"status": "blocked", "error_code": "ACTION_NOT_IMPLEMENTED", "output": {"action": action}, "side_effects": False}
+        return {
+            "status": "succeeded" if result["available"] else "failed",
+            "error_code": None if result["available"] else "EPH_SOURCE_OBSERVE_FAILED",
+            "output": result,
+            "side_effects": False,
+        }
+    return {
+        "status": "blocked",
+        "error_code": "ACTION_NOT_IMPLEMENTED",
+        "output": {"action": action},
+        "side_effects": False,
+    }
 
 
-def _result(command: dict[str, Any], identity: UUID, outcome: dict[str, Any], started_at: datetime) -> dict[str, Any]:
+def _result(
+    command: dict[str, Any],
+    identity: UUID,
+    outcome: dict[str, Any],
+    started_at: datetime,
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     payload = json.dumps(outcome["output"], sort_keys=True, separators=(",", ":")).encode()
     return {
