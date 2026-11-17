@@ -39,7 +39,7 @@ The new branch contains:
 
 **Not yet production-complete:** a new EPH CAPI Pivot adapter now supports dry-run and approval-digest-gated `clusterctl move`, including provider-version checks, Target Control Plane controller placement checks, source UID annotation and postflight identity verification. It has not yet been run against the selected live CAPI/Metal3/Ironic provider matrix. Autonomous EPH cleanup, Worker provisioning, applying the generated chrony command to actual hosts, full platform API/UI integration and physical BMC/Ironic acceptance remain outstanding. Other mutating actions fail closed. Unit tests or QEMU boot tests do not prove physical bare-metal provisioning.
 
-The old `apps/node_agent` Python package is deprecated and is not imported by the new Agent runtimes or copied into the new images. It remains temporarily while the existing platform API registry, command lifecycle and legacy tests are migrated; deleting it is a required retirement step, not a supported compatibility contract.
+The legacy `apps/node_agent` package and its shared runtime have been removed from this branch. The Cloud Control, EPH and Target Agents have independent source packages, entrypoints, images, credentials and command allowlists. No compatibility shim or fallback to the old Node Agent is permitted.
 
 ## Local application quick start
 
