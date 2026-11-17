@@ -2222,12 +2222,12 @@ def test_control_plane_rejects_worker_preflight_without_healthy_provider_control
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
 @pytest.mark.django_db
-def test_approved_worker_provisioning_result_stays_simulation_only(
+def test_worker_provisioning_persists_real_create_and_queues_readiness(
     cluster_delivery_workspace,
 ):
     deployment, preflight_command, preflight_result = _worker_preflight_fixture(
         cluster_delivery_workspace,
-        "worker-provisioning-simulation",
+        "worker-provisioning-real-create",
     )
     handle_deployment_command_result(
         preflight_command,
@@ -2235,54 +2235,31 @@ def test_approved_worker_provisioning_result_stays_simulation_only(
         preflight_result,
         None,
     )
-    deployment.refresh_from_db()
     provision_command = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.worker.provision",
     )
-    assert provision_command.status == AgentCommand.Status.QUEUED
-
-    approver = get_user_model().objects.create_user(
-        username="worker-provisioning-simulation-approver",
-        password="test-password",
-    )
-    TenantMembership.objects.create(
-        tenant=deployment.tenant,
-        user=approver,
-        role=TenantMembership.Role.ADMIN,
-    )
     provision_command.status = AgentCommand.Status.SUCCEEDED
-    provision_command.approved_by = approver
-    provision_command.approved_at = timezone.now()
-    provision_command.approved_plan_hash = provision_command.plan_hash
-    provision_command.save(
-        update_fields=[
-            "status",
-            "approved_by",
-            "approved_at",
-            "approved_plan_hash",
-        ]
-    )
+    provision_command.save(update_fields=["status"])
     result = {
         "deployment_id": str(deployment.id),
         "cluster_name": deployment.cluster_name,
         "namespace": "default",
         "machine_deployment_name": "edge-workers",
-        "machine_deployment_uid": None,
+        "machine_deployment_uid": "machine-deployment-uid",
         "cluster_uid": provision_command.payload["expected_cluster_uid"],
         "provisioning_plan_hash": provision_command.payload[
             "provisioning_plan_hash"
         ],
         "machine_deployment_manifest_hash": "a" * 64,
-        "execution_mode": "server_side_dry_run_simulation",
-        "simulation_status": "ready_for_manual_execution",
+        "execution_mode": "real_create_or_idempotent_reconcile",
         "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
-        "created": False,
+        "created": True,
         "idempotent_reconciliation": False,
         "dry_run_passed": True,
-        "side_effects": False,
-        "execution_allowed": False,
-        "worker_creation_performed": False,
+        "side_effects": True,
+        "execution_allowed": True,
+        "worker_creation_performed": True,
         "worker_readiness_verified": False,
         "worker_machine_count": 0,
         "ready_worker_machine_count": 0,
@@ -2293,34 +2270,25 @@ def test_approved_worker_provisioning_result_stays_simulation_only(
     handle_deployment_command_result(provision_command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.PLAN_READY
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
     assert deployment.error is None
-    assert (
-        deployment.plan_result["dual_agent"]["phase"]
-        == "worker_provisioning_simulated_manual_execution_required"
+    assert deployment.plan_result["dual_agent"]["phase"] == (
+        "worker_provisioning_waiting_for_readiness"
     )
     assert deployment.plan_result["dual_agent"]["worker_provisioning_completed"] is False
-    assert deployment.plan_result["dual_agent"]["worker_provisioning_simulated"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    assert deployment.plan_result["worker_provisioning_simulation"] == result
+    assert deployment.plan_result["worker_provisioning"] == result
+    postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    )
+    assert postflight.node_id == deployment.target_node_id
+    assert postflight.status == AgentCommand.Status.QUEUED
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
     assert checkpoint.sequence == 1
     assert checkpoint.phase == "worker_provisioning"
     assert checkpoint.data["pending_step"] == "worker_provisioning"
     assert "worker_provisioning" not in checkpoint.data["completed_steps"]
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.postflight",
-    ).exists()
-
-    handle_deployment_command_result(provision_command, "succeeded", result, None)
-
-    deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.PLAN_READY
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.postflight",
-    ).exists()
 
 
 @pytest.mark.django_db
@@ -2369,7 +2337,7 @@ def test_worker_provisioning_rejects_payload_mutation_after_approval(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
@@ -2416,7 +2384,7 @@ def test_worker_provisioning_rejects_non_object_payload_without_crashing(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
@@ -2466,7 +2434,7 @@ def test_worker_provisioning_result_without_independent_approval_is_rejected(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
 
 
 
