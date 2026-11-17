@@ -34,6 +34,30 @@ TARGET_CAPI_CLUSTER_OBJECT = {
     "spec": TARGET_CAPI_CLUSTER_SPEC,
 }
 
+TARGET_CAPI_SOURCE_INVENTORY = [
+    {
+        "api_version": "cluster.x-k8s.io/v1beta1",
+        "kind": "Cluster",
+        "resource": "cluster.x-k8s.io/clusters",
+        "name": "edge-lab",
+        "namespace": "metal3",
+        "uid": "source-uid",
+        "spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
+        "consumer_ref": None,
+        "owner_references": [],
+        "owner_references_truncated": False,
+        "cluster_name": None,
+    }
+]
+TARGET_CAPI_SOURCE_INVENTORY_SHA256 = hashlib.sha256(
+    json.dumps(
+        TARGET_CAPI_SOURCE_INVENTORY,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+).hexdigest()
+
 
 def test_node_health_is_available_for_both_agent_roles():
     for node_type in ["eph_node", "target_cluster"]:
@@ -2410,6 +2434,9 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
             TARGET_CAPI_CLUSTER_OBJECT
         ),
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters": {
+            "items": [TARGET_CAPI_CLUSTER_OBJECT]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2472,6 +2499,8 @@ def test_target_agent_verifies_pivot_adoption_by_stable_cluster_spec_identity(mo
                 "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 "expected_target_cluster_uid": "target-uid",
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+                "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
+                "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
             },
         },
         "target_cluster",
@@ -2528,6 +2557,9 @@ def test_target_agent_rejects_malformed_machine_inventory(
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
             TARGET_CAPI_CLUSTER_OBJECT
         ),
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters": {
+            "items": [TARGET_CAPI_CLUSTER_OBJECT]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [machine]
         },
@@ -2555,6 +2587,8 @@ def test_target_agent_rejects_malformed_machine_inventory(
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 "expected_target_cluster_uid": "target-uid",
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+                "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
+                "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
                 },
             },
             "target_cluster",
@@ -2594,6 +2628,9 @@ def test_target_agent_rejects_malformed_capi_api_responses(
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
             TARGET_CAPI_CLUSTER_OBJECT
         ),
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters": {
+            "items": [TARGET_CAPI_CLUSTER_OBJECT]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2651,6 +2688,8 @@ def test_target_agent_rejects_malformed_capi_api_responses(
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 "expected_target_cluster_uid": "target-uid",
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+                "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
+                "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
                 },
             },
             "target_cluster",
@@ -2670,6 +2709,9 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters/edge-lab": (
             TARGET_CAPI_CLUSTER_OBJECT
         ),
+        "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/clusters": {
+            "items": [TARGET_CAPI_CLUSTER_OBJECT]
+        },
         "/apis/cluster.x-k8s.io/v1beta1/namespaces/metal3/machines": {
             "items": [
                 {
@@ -2729,6 +2771,8 @@ def test_target_agent_rejects_partial_machine_readiness_after_pivot(monkeypatch)
                 "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 "expected_target_cluster_uid": "target-uid",
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+                "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
+                "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
             },
         },
         "target_cluster",
@@ -2754,6 +2798,8 @@ def test_eph_agent_cannot_run_target_adoption_verification():
                     "expected_cluster_spec_sha256": TARGET_CAPI_CLUSTER_SPEC_SHA256,
                 "expected_target_cluster_uid": "target-uid",
                 "operation_id": "a3e0f2b1-6f34-4f5d-9a31-0d3e0e7c1234",
+                "expected_inventory": TARGET_CAPI_SOURCE_INVENTORY,
+                "expected_inventory_sha256": TARGET_CAPI_SOURCE_INVENTORY_SHA256,
                 },
             },
             "eph_node",
