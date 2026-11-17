@@ -3154,7 +3154,10 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                     "namespace": "default",
                     "uid": "bootstrap-template-uid",
                 },
+                "spec": {"template": {"spec": {}}},
             }
+        if "/kubeadmconfigtemplates/worker-bootstrap-ntp-" in path:
+            raise agent.NodeAgentError("KUBERNETES_API_HTTP_404")
         if "/baremetalhosts?" in path or path.endswith("/baremetalhosts"):
             return {"items": [
                 {"metadata": {"name": "bmh-01", "uid": "bmh-uid-01",
@@ -3179,6 +3182,7 @@ def test_target_worker_provisioning_preflight_requires_templates_hosts_and_dual_
                 "machine_deployment_name": "edge-workers",
                 "infrastructure_template_name": "worker-template",
                 "bootstrap_template_name": "worker-bootstrap",
+                "ironic_internal_ip": "10.0.0.123",
                 "baremetal_host_namespace": "metal3-system",
                 "host_selector": {"pool": "workers"},
                 "network_profile": profile,
@@ -3283,6 +3287,7 @@ def test_target_worker_provisioning_preflight_rejects_insufficient_baremetal_hos
                 "machine_deployment_name": "edge-workers",
                 "infrastructure_template_name": "worker-template",
                 "bootstrap_template_name": "worker-bootstrap",
+                "ironic_internal_ip": "10.0.0.123",
                 "baremetal_host_namespace": "metal3-system",
                 "host_selector": {"pool": "workers"},
                 "network_profile": profile,
@@ -3408,6 +3413,7 @@ def test_target_worker_provisioning_preflight_rejects_bmh_error_message(monkeypa
                     "machine_deployment_name": "edge-workers",
                     "infrastructure_template_name": "worker-template",
                     "bootstrap_template_name": "worker-bootstrap",
+                    "ironic_internal_ip": "10.0.0.123",
                     "baremetal_host_namespace": "metal3-system",
                     "host_selector": {"pool": "workers"},
                     "network_profile": profile,
@@ -3956,15 +3962,19 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         create_modes.append(dry_run)
         created_manifests.append(manifest)
         metadata = {
-            "name": "edge-workers",
+            "name": manifest["metadata"]["name"],
             "namespace": namespace,
-            "uid": "machine-deployment-uid",
-            "labels": manifest["metadata"]["labels"],
-            "annotations": manifest["metadata"]["annotations"],
+            "uid": (
+                "machine-deployment-uid"
+                if manifest["kind"] == "MachineDeployment"
+                else "chrony-bootstrap-template-uid"
+            ),
+            "labels": manifest["metadata"].get("labels", {}),
+            "annotations": manifest["metadata"].get("annotations", {}),
         }
         return {
             "apiVersion": manifest["apiVersion"],
-            "kind": "MachineDeployment",
+            "kind": manifest["kind"],
             "metadata": metadata,
             "spec": manifest["spec"],
         }
@@ -3973,7 +3983,21 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
     monkeypatch.setattr(agent, "list_all_kubernetes_items", fake_list)
     monkeypatch.setattr(
         agent,
+        "verify_ntp_server",
+        lambda server_ip: {
+            "server_ip": server_ip,
+            "synchronized": True,
+            "stratum": 2,
+        },
+    )
+    monkeypatch.setattr(
+        agent,
         "kubernetes_api_create_machine_deployment",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        agent,
+        "kubernetes_api_create_kubeadm_config_template",
         fake_create,
     )
     payload = {
@@ -3986,6 +4010,7 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
             "machine_deployment_name": "edge-workers",
             "infrastructure_template_name": "worker-template",
             "bootstrap_template_name": "worker-bootstrap",
+            "ironic_internal_ip": "10.0.0.123",
             "baremetal_host_namespace": "metal3-system",
             "host_selector": {"pool": "workers"},
             "network_profile": profile,
@@ -4013,14 +4038,14 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
         "target_cluster",
     )
 
-    assert create_modes == [True, False]
+    assert create_modes == [True, False, True, False]
     manifest = created_manifests[-1]
     assert manifest["kind"] == "MachineDeployment"
     assert manifest["spec"]["replicas"] == 2
     assert manifest["spec"]["template"]["spec"]["bootstrap"]["configRef"] == {
         "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
         "kind": "KubeadmConfigTemplate",
-        "name": "worker-bootstrap",
+        "name": "worker-bootstrap-ntp-123e4567",
     }
     assert manifest["spec"]["template"]["spec"]["infrastructureRef"] == {
         "apiVersion": TEST_INFRA_API_VERSION,
@@ -4038,6 +4063,9 @@ def test_approved_worker_provisioning_only_runs_server_side_dry_run(
     assert result["ready_worker_machine_count"] == 0
     assert result["worker_node_names"] == []
     assert result["machine_deployment_uid"] == "machine-deployment-uid"
+    assert result["chrony_bootstrap_template_name"] == "worker-bootstrap-ntp-123e4567"
+    assert result["chrony_bootstrap_template_uid"] == "chrony-bootstrap-template-uid"
+    assert result["chrony_ntp_server_ip"] == "10.0.0.123"
     assert len(result["machine_deployment_manifest_hash"]) == 64
     assert result["side_effects"] is True
 
