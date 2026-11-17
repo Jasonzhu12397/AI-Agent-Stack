@@ -31,9 +31,7 @@ class CommandLeaseGuard:
         )
 
     def _renew_loop(self) -> None:
-        for _ in iter(self._stop.wait, True):
-            if self._stop.wait(self.renew_interval_seconds):
-                return
+        for _ in iter(lambda: self._stop.wait(self.renew_interval_seconds), True):
             try:
                 self.client.renew_lease(self.command)
             except Exception as exc:
