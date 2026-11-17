@@ -3,6 +3,8 @@ linux-image-amd64
 live-boot
 live-config
 cloud-init
+chrony
+systemd-resolved
 ca-certificates
 curl
 iproute2
