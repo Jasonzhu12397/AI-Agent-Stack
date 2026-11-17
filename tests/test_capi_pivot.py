@@ -11,6 +11,7 @@ from worker_app.capi_pivot import (
     PivotVerificationError,
     pivot_cluster_api,
     verify_pivot_inventory,
+    _inventory_digest,
 )
 
 
@@ -274,3 +275,109 @@ def test_real_pivot_refuses_inventory_from_another_namespace():
             target_agent_ack=lambda payload: True,
             journal=MemoryPivotJournal(),
         )
+
+
+def test_pivot_inventory_digest_binds_api_version_and_spec():
+    changed = CapiObjectRef(
+        kind=INVENTORY[0].kind,
+        name=INVENTORY[0].name,
+        uid=INVENTORY[0].uid,
+        namespace=INVENTORY[0].namespace,
+        api_version=INVENTORY[0].api_version,
+        spec_sha256="f" * 64,
+    )
+
+    assert _inventory_digest(tuple(INVENTORY)) != _inventory_digest((changed,))
+
+
+def test_target_identity_requires_api_server_generated_uid():
+    replacement = {
+        **OBJECT,
+        "metadata": {key: value for key, value in OBJECT["metadata"].items() if key != "uid"},
+    }
+
+    def runner(command, timeout):
+        if command[0] == "kubectl":
+            return CommandResult(0, stdout=json.dumps(replacement))
+        return CommandResult(0)
+
+    with pytest.raises(PivotVerificationError, match="different stable identity"):
+        verify_pivot_inventory(
+            runner,
+            "source.kubeconfig",
+            "target.kubeconfig",
+            INVENTORY,
+        )
+
+
+def test_interrupted_pivot_recovers_when_target_owns_inventory_and_source_is_empty():
+    runner = SuccessfulPivotRunner()
+    journal = MemoryPivotJournal()
+    journal.save_state(
+        "pivot-operation-recover",
+        {
+            "state": "verifying",
+            "inventory_sha256": _inventory_digest(tuple(INVENTORY)),
+        },
+    )
+
+    result = pivot_cluster_api(
+        "source.kubeconfig",
+        "target.kubeconfig",
+        "metal3-system",
+        INVENTORY,
+        runner=runner,
+        execute=True,
+        operation_id="pivot-operation-recover",
+        target_agent_ack=lambda payload: True,
+        journal=journal,
+    )
+
+    assert result["state"] == "completed"
+    assert result["recovered_after_interruption"] is True
+    assert result["pivot_executed"] is True
+    assert journal.records["pivot-operation-recover"]["state"] == "completed"
+    assert not any(
+        command[0] == "clusterctl" and "--dry-run" not in command
+        for command in runner.commands
+    )
+
+
+def test_interrupted_pivot_does_not_retry_when_ownership_is_not_transferred():
+    calls = []
+
+    def runner(command, timeout):
+        calls.append(list(command))
+        if command[0] == "kubectl":
+            return CommandResult(
+                1,
+                stderr="Error from server (NotFound): clusters not found",
+            )
+        return CommandResult(0)
+
+    journal = MemoryPivotJournal()
+    journal.save_state(
+        "pivot-operation-incomplete",
+        {
+            "state": "executing",
+            "inventory_sha256": _inventory_digest(tuple(INVENTORY)),
+        },
+    )
+
+    with pytest.raises(PivotVerificationError, match="ownership is not fully transferred"):
+        pivot_cluster_api(
+            "source.kubeconfig",
+            "target.kubeconfig",
+            "metal3-system",
+            INVENTORY,
+            runner=runner,
+            execute=True,
+            operation_id="pivot-operation-incomplete",
+            target_agent_ack=lambda payload: True,
+            journal=journal,
+        )
+
+    assert not any(
+        command[0] == "clusterctl" and "--dry-run" not in command
+        for command in calls
+    )
