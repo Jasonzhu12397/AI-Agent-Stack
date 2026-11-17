@@ -7,7 +7,7 @@
 - The Target Agent is deployed as a Pod on a Target Control Plane master. It restores the deployment checkpoint from the durable cloud service and independently owns the handoff.
 - All BMH inventory and CAPI/Metal3 ownership required after bootstrap must be migrated and verified in the Target cluster before the EPH bootstrap environment is removed.
 - The Target Agent provisions all Target Worker nodes after EPH cleanup.
-- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. Install, configure and enable chronyd on EPH and verify synchronization before kubeadm init; perform the same check on Target Control Plane masters before kubeadm init/join; and on every Worker before kubeadm join.
+- Chronyd is mandatory on EPH, Target Control Plane masters and Target Worker hosts. EPH uses an independent bootstrap NTP source before its kubeadm init. Target Control Plane nodes synchronize from approved external NTP sources and serve NTP internally on the Ironic internal IP/VIP. Every Worker synchronizes only from that internal Ironic IP/VIP, never from external NTP servers.
 
 ## Lifecycle
 
@@ -29,11 +29,11 @@ Cloud Control Agent provides global scheduling, durable checkpoint storage, agen
 
 ### Chrony and time synchronization
 
-Before any kubeadm init/join operation, install the chrony package, deploy the approved chrony configuration, enable and start the chronyd service, verify the configured time sources are reachable, and require `chronyc tracking` to report synchronized state with acceptable leap status and offset. This gate applies to the EPH Single-Node host, every Target Control Plane master and every Target Worker host. A failed or unsynchronized clock blocks kubeadm; do not silently skip the check.
+Before any kubeadm init/join operation, install the chrony package, deploy the role-specific chrony configuration, enable and start chronyd, verify source reachability, and require `chronyc tracking` to report synchronized state with acceptable leap status and offset. EPH uses its bootstrap NTP source. Target Control Plane hosts synchronize from external NTP sources and must expose an internal NTP service at the Ironic internal IP/VIP on UDP/123. Workers configure only that internal Ironic IP/VIP as their NTP source; external NTP and fallback pools are forbidden on Workers. A failed or unsynchronized clock blocks kubeadm.
 
 ### Target Control Plane
 
-Require API reachability, healthy etcd, core networking and the expected Control Plane Node readiness before placing Target Agent.
+Require API reachability, healthy etcd, core networking, chronyd synchronization to external NTP and the internal Ironic NTP endpoint listening/reachable over UDP/123 before declaring the Control Plane ready for Worker provisioning or placing Target Agent.
 
 ### Target Agent adoption
 
@@ -53,7 +53,7 @@ Only the Target Agent may initiate cleanup after Target Agent adoption, CAPI piv
 
 ### Worker provisioning and chronyd
 
-After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker provisioning. Every Target Worker receives chronyd installation/configuration/enablement and time-sync verification as part of host preparation. Worker completion requires matching CAPI Machine and Kubernetes Node identities, Ready conditions, chronyd verification and network postflight.
+After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker provisioning. Every Target Worker receives chronyd installation/configuration/enablement with only the Ironic internal IP/VIP as its NTP source. Verify UDP/123 reachability and that chronyd selected the expected internal source before kubeadm join. Worker completion requires matching CAPI Machine and Kubernetes Node identities, Ready conditions, chronyd verification and network postflight.
 
 ## Recovery and idempotency
 
