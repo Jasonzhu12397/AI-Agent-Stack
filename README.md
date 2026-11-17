@@ -66,7 +66,7 @@ Docker Compose is for the local application/control-plane development stack. It 
 
 ## Build and deploy the three infrastructure Agents
 
-See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks.
+See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks. See the [EPH CAPI Pivot contract](docs/capi-pivot-contract.md) for approval, provider compatibility, controller placement and postflight gates.
 
 Deployment requires three distinct Kubernetes contexts:
 
