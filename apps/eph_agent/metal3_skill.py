@@ -454,18 +454,38 @@ def observe_capi_cluster(
         cluster = yaml.safe_load(cluster_result.get("stdout", ""))
     except (TypeError, ValueError, yaml.YAMLError) as exc:
         raise Metal3SkillError("CAPI_CLUSTER_STATUS_INVALID") from exc
-    status = cluster.get("status", {}) if isinstance(cluster, dict) else {}
+    if not isinstance(cluster, dict):
+        raise Metal3SkillError("CAPI_CLUSTER_STATUS_INVALID")
+    metadata = cluster.get("metadata", {})
+    status = cluster.get("status", {})
+    if not isinstance(metadata, dict) or not isinstance(status, dict):
+        raise Metal3SkillError("CAPI_CLUSTER_STATUS_INVALID")
+    generation = metadata.get("generation")
+    observed_generation = status.get("observedGeneration")
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 1
+        or not isinstance(observed_generation, int)
+        or isinstance(observed_generation, bool)
+        or observed_generation < 0
+    ):
+        raise Metal3SkillError("CAPI_CLUSTER_GENERATION_INVALID")
     conditions = {
         item.get("type"): item.get("status")
         for item in status.get("conditions", [])
         if isinstance(item, dict)
     }
-    control_plane_ready = conditions.get("ControlPlaneReady") == "True"
+    control_plane_ready = (
+        conditions.get("ControlPlaneReady") == "True"
+        and observed_generation >= generation
+    )
     return {
         "cluster_name": cluster_name,
         "namespace": namespace,
-        "cluster_uid": cluster.get("metadata", {}).get("uid"),
-        "observed_generation": status.get("observedGeneration"),
+        "cluster_uid": metadata.get("uid"),
+        "generation": generation,
+        "observed_generation": observed_generation,
         "control_plane_ready": control_plane_ready,
         "conditions": conditions,
         "failure_reason": status.get("failureReason"),
