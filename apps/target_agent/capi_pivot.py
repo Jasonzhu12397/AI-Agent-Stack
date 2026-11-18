@@ -7,6 +7,8 @@ import re
 import subprocess
 import time
 from pathlib import Path
+
+import yaml
 from threading import Event
 from typing import Any
 
@@ -459,6 +461,52 @@ def _inventory_digest(identities: list[dict[str, str]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _ensure_target_kubeconfig() -> str:
+    configured = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG")
+    path = Path(configured or "/tmp/target-agent-in-cluster.kubeconfig")
+    if path.is_file():
+        return str(path)
+    host = os.environ.get("KUBERNETES_SERVICE_HOST")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+    token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+    ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+    if (
+        not isinstance(host, str)
+        or not host
+        or not port.isdigit()
+        or not token_path.is_file()
+        or not ca_path.is_file()
+    ):
+        raise CapiPivotError("CAPI_PIVOT_TARGET_IN_CLUSTER_CREDENTIALS_UNAVAILABLE")
+    document = {
+        "apiVersion": "v1",
+        "kind": "Config",
+        "clusters": [{
+            "name": "target-in-cluster",
+            "cluster": {
+                "server": f"https://{host}:{port}",
+                "certificate-authority": str(ca_path),
+            },
+        }],
+        "users": [{
+            "name": "target-agent",
+            "user": {"tokenFile": str(token_path)},
+        }],
+        "contexts": [{
+            "name": "target-agent@target-in-cluster",
+            "context": {
+                "cluster": "target-in-cluster",
+                "user": "target-agent",
+            },
+        }],
+        "current-context": "target-agent@target-in-cluster",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
+
+
 def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
     payload = command.get("payload")
     if not isinstance(payload, dict):
@@ -482,9 +530,9 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     if not isinstance(expected_bmh, list) or not expected_bmh:
         raise CapiPivotError("CAPI_PIVOT_EXPECTED_BMH_INVENTORY_REQUIRED")
     source = os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", "")
-    target = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG", "")
-    if not Path(source).is_file() or not Path(target).is_file():
-        raise CapiPivotError("CAPI_PIVOT_SOURCE_OR_TARGET_KUBECONFIG_MISSING")
+    if not Path(source).is_file():
+        raise CapiPivotError("CAPI_PIVOT_SOURCE_KUBECONFIG_MISSING")
+    target = _ensure_target_kubeconfig()
     return payload, source, target
 
 
