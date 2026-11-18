@@ -52,6 +52,32 @@ def test_bmh_registration_uses_existing_secret_reference_and_server_side_apply()
     assert "--server-side" in calls[2][0]
 
 
+def test_bmh_registration_requires_existing_bmc_secret_reference():
+    def runner(_arguments, **_kwargs):
+        return {
+            "available": True,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "Error from server (NotFound): secrets not found",
+        }
+
+    with pytest.raises(Metal3SkillError, match="METAL3_BMC_CREDENTIAL_SECRET_MISSING"):
+        apply_baremetalhosts(
+            {"namespace": "metal3", "manifests": [_bmh_manifest()]},
+            runner,
+        )
+
+
+def test_metal3_skill_cannot_write_outside_configured_namespace(monkeypatch):
+    monkeypatch.setenv("EPH_CAPI_NAMESPACE", "metal3")
+
+    with pytest.raises(Metal3SkillError, match="METAL3_NAMESPACE_NOT_ALLOWED"):
+        observe_baremetalhosts(
+            {"namespace": "kube-system"},
+            lambda *_args, **_kwargs: {},
+        )
+
+
 def test_bmh_registration_rejects_credentials_embedded_in_bmc_url():
     manifest = _bmh_manifest()
     manifest["spec"]["bmc"]["address"] = (
