@@ -22,6 +22,7 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
+from .capi_pivot import execute_capi_pivot
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
 from .handoff import (
     HandoffError,
@@ -60,6 +61,8 @@ LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
     "target.cluster.observe",
     "target.capi.observe",
+    "target.capi.pivot.dry_run",
+    "target.capi.pivot",
     "target.metal3.observe",
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
@@ -978,6 +981,8 @@ def execute(
             "output": result,
             "side_effects": False,
         }
+    if action in ("target.capi.pivot.dry_run", "target.capi.pivot"):
+        return execute_capi_pivot(command, lease_lost_event)
     if action == "target.metal3.verify_ownership":
         try:
             evidence = _observe_target_metal3_ownership(
