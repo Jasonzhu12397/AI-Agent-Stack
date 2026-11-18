@@ -268,7 +268,9 @@ def _network_contract(
             if not isinstance(link, str) or not link:
                 raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_LINK_INVALID")
             if link in interface_bindings:
-                raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACE_MAPPED_MULTIPLE_TIMES")
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_NETWORK_INTERFACE_MAPPED_MULTIPLE_TIMES"
+                )
             interface_bindings[link] = (network_name, entry)
     control_binding = interface_bindings.get(control_interface)
     data_binding = interface_bindings.get(data_interface)
