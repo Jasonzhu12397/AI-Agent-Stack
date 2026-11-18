@@ -35,6 +35,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentListCreateView,
     ClusterDeploymentTargetAgentHandoffView,
     ClusterDeploymentTargetPostflightView,
+    ClusterDeploymentSriovConfigView,
 )
 from core.knowledge_views import (
     KnowledgeDocumentDetailView,
@@ -160,6 +161,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/",
         ClusterDeploymentDetailView.as_view(),
         name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/sriov-device-plugin/",
+        ClusterDeploymentSriovConfigView.as_view(),
+        name="cluster-deployment-sriov-device-plugin",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
