@@ -31,7 +31,9 @@ def test_three_agent_deploy_validates_role_specific_secrets():
         "ironic-api-url ironic-api-token"
     ) in script
     assert "capi-pivot-source-kubeconfig kubeconfig" in script
-    assert "capi-pivot-target-kubeconfig" not in script
+    assert 'require_secret_keys "$EPH_CONTEXT" capi-pivot-target-kubeconfig' not in script
+    assert 'get secret capi-pivot-target-kubeconfig' in script
+    assert 'ai-agent-stack.io/credential-scope=eph-agent' in script
 
 
 def test_target_agent_is_three_replicas_with_control_plane_anti_affinity_and_leases():
