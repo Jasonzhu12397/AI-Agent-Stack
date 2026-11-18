@@ -8,6 +8,8 @@ TARGET_CONTEXT="${TARGET_CONTEXT:-}"
 CLOUD_CONTROL_IMAGE="${CLOUD_CONTROL_IMAGE:-}"
 EPH_AGENT_IMAGE="${EPH_AGENT_IMAGE:-}"
 TARGET_AGENT_IMAGE="${TARGET_AGENT_IMAGE:-}"
+DEPLOYMENT_ID="${DEPLOYMENT_ID:-}"
+SOURCE_CLUSTER_UID="${SOURCE_CLUSTER_UID:-}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-10m}"
 IMAGE_PATTERN='^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$'
 
@@ -33,6 +35,26 @@ require_secret_keys() {
     done
 }
 
+mark_eph_cleanup_resources() {
+    local context="$1"
+    local kind="$2"
+    local name="$3"
+    kubectl --context "$context" --namespace ai-agent-system label "$kind" "$name" \
+        app.kubernetes.io/managed-by=ai-agent-stack \
+        ai-agent-stack.io/eph-cleanup=true \
+        "ai-agent-stack.io/deployment-id=$DEPLOYMENT_ID" --overwrite
+    kubectl --context "$context" --namespace ai-agent-system annotate "$kind" "$name" \
+        ai-agent-stack.io/eph-cleanup=true \
+        "ai-agent-stack.io/source-cluster-uid=$SOURCE_CLUSTER_UID" --overwrite
+}
+
+mark_eph_agent_pod_template() {
+    local patch
+    patch="$(printf '{"spec":{"template":{"metadata":{"labels":{"app.kubernetes.io/managed-by":"ai-agent-stack","ai-agent-stack.io/eph-cleanup":"true","ai-agent-stack.io/deployment-id":"%s"},"annotations":{"ai-agent-stack.io/eph-cleanup":"true","ai-agent-stack.io/source-cluster-uid":"%s"}}}}}' "$DEPLOYMENT_ID" "$SOURCE_CLUSTER_UID")"
+    kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system patch deployment eph-agent \
+        --type merge --patch "$patch"
+}
+
 rendered_apply() {
     local context="$1"
     local file="$2"
@@ -51,6 +73,8 @@ rendered_apply() {
 [ -n "$CLOUD_CONTEXT" ] || fail "CLOUD_CONTEXT_REQUIRED"
 [ -n "$EPH_CONTEXT" ] || fail "EPH_CONTEXT_REQUIRED"
 [ -n "$TARGET_CONTEXT" ] || fail "TARGET_CONTEXT_REQUIRED"
+[[ "$DEPLOYMENT_ID" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || fail "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL"
+[[ "$SOURCE_CLUSTER_UID" =~ ^[A-Za-z0-9-]{8,128}$ ]] || fail "SOURCE_CLUSTER_UID_INVALID"
 [ "$CLOUD_CONTEXT" != "$EPH_CONTEXT" ] || fail "CLOUD_AND_EPH_CONTEXTS_MUST_DIFFER"
 [ "$CLOUD_CONTEXT" != "$TARGET_CONTEXT" ] || fail "CLOUD_AND_TARGET_CONTEXTS_MUST_DIFFER"
 [ "$EPH_CONTEXT" != "$TARGET_CONTEXT" ] || fail "EPH_AND_TARGET_CONTEXTS_MUST_DIFFER"
@@ -72,6 +96,7 @@ require_secret_keys "$EPH_CONTEXT" eph-agent-credentials control-url agent-id in
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$EPH_CONTEXT" capi-pivot-source-kubeconfig kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id ironic-api-url ironic-api-token ironic-internal-ntp-ip
+require_secret_keys "$TARGET_CONTEXT" target-agent-source-observer kubeconfig
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" dry-run
@@ -81,6 +106,13 @@ rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGE
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" apply
 rendered_apply "$EPH_CONTEXT" "$SCRIPT_DIR/eph-agent.yaml" "$EPH_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-eph-agent:VERSION" apply
 rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGET_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION" apply
+
+mark_eph_cleanup_resources "$EPH_CONTEXT" deployment eph-agent
+mark_eph_agent_pod_template
+for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig capi-pivot-target-kubeconfig; do
+    mark_eph_cleanup_resources "$EPH_CONTEXT" secret "$secret"
+done
+mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-observer
 
 kubectl --context "$CLOUD_CONTEXT" --namespace ai-agent-system rollout status deployment/cloud-control-agent --timeout="$ROLLOUT_TIMEOUT"
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system rollout status deployment/eph-agent --timeout="$ROLLOUT_TIMEOUT"
