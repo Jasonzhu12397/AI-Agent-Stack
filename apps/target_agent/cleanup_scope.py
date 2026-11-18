@@ -24,6 +24,8 @@ RESOURCE_SCOPES = (
     ("secrets", True),
     ("clusterrolebindings.rbac.authorization.k8s.io", False),
     ("clusterroles.rbac.authorization.k8s.io", False),
+    ("roles.rbac.authorization.k8s.io", True),
+    ("rolebindings.rbac.authorization.k8s.io", True),
     ("serviceaccounts", True),
 )
 
