@@ -136,7 +136,7 @@ def _cluster_uid(
     namespace: str,
     cluster_name: str,
     proof: dict[str, Any],
-) -> str:
+) -> tuple[str, str]:
     result = _run(
         runner,
         [
@@ -152,7 +152,9 @@ def _cluster_uid(
     try:
         cluster = json.loads(result.get("stdout", ""))
     except (TypeError, ValueError) as exc:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_TARGET_CLUSTER_JSON_INVALID") from exc
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_TARGET_CLUSTER_JSON_INVALID"
+        ) from exc
     metadata = cluster.get("metadata", {})
     uid = metadata.get("uid")
     annotations = metadata.get("annotations", {})
@@ -160,7 +162,35 @@ def _cluster_uid(
         raise WorkerProvisioningError("WORKER_PROVISIONING_TARGET_CLUSTER_UID_MISMATCH")
     if annotations.get("ai-agent-stack.io/source-cluster-uid") != proof.get("source_cluster_uid"):
         raise WorkerProvisioningError("WORKER_PROVISIONING_SOURCE_CLUSTER_ANNOTATION_MISMATCH")
-    return uid
+    control_plane_ref = cluster.get("spec", {}).get("controlPlaneRef", {})
+    if (
+        control_plane_ref.get("apiGroup") != "controlplane.cluster.x-k8s.io"
+        or control_plane_ref.get("kind") != "KubeadmControlPlane"
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_KUBEADM_CONTROL_PLANE_REF_REQUIRED")
+    control_plane_name = _name(control_plane_ref.get("name"), "CONTROL_PLANE_NAME")
+    control_plane_result = _run(
+        runner,
+        [
+            "get",
+            "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io",
+            control_plane_name,
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+    )
+    try:
+        control_plane = json.loads(control_plane_result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_CONTROL_PLANE_JSON_INVALID"
+        ) from exc
+    version = control_plane.get("spec", {}).get("version")
+    if not isinstance(version, str) or not version:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROL_PLANE_VERSION_REQUIRED")
+    return uid, version
 
 
 def _network_contract(
@@ -568,12 +598,25 @@ def execute_worker_provisioning(
             "WORKER_PROVISIONING_IRONIC_INTERNAL_NTP_IP_REQUIRED"
         ) from exc
 
-    target_uid = _cluster_uid(runner, namespace, cluster_name, proof)
+    target_uid, control_plane_version = _cluster_uid(
+        runner,
+        namespace,
+        cluster_name,
+        proof,
+    )
     documents = _load_manifests(payload.get("worker_resources"))
     machine_deployment, _kubeadm, _metal3, _data = _validate_references(
         documents,
         cluster_name,
     )
+    worker_version = (
+        machine_deployment.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("version")
+    )
+    if worker_version != control_plane_version:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_KUBERNETES_VERSION_MISMATCH")
     ordered = _prepare_manifests(
         documents,
         namespace,
