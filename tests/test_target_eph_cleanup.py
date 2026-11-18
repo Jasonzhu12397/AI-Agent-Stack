@@ -270,3 +270,45 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
     assert calls["cleanup_payload"]["confirm_source_cluster_uid"] == "source-uid"
     assert result["eph_credentials_revoked"] is True
     assert result["target_ironic_inventory_verified"] is True
+
+
+
+def test_eph_cleanup_action_requires_completed_bmh_handoff_checkpoint(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_execute_attested_eph_cleanup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cleanup must not run before BMH handoff")
+        ),
+    )
+    outcome = target_main.execute({
+        "action": "target.eph.cleanup",
+        "payload": {},
+        "deployment_checkpoint": {"phase": "capi_pivot_verified"},
+    })
+    assert outcome["status"] == "blocked"
+    assert outcome["error_code"] == "EPH_CLEANUP_BMH_HANDOFF_CHECKPOINT_REQUIRED"
+
+
+def test_eph_cleanup_handoff_phase_does_not_delete_before_bmh_checkpoint(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_execute_attested_eph_cleanup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cleanup must not run before BMH handoff")
+        ),
+    )
+    outcome = target_main.execute({
+        "action": "target.handoff.evaluate",
+        "payload": {
+            "next_phase": "eph_cleanup_verified",
+            "evidence": {},
+        },
+        "deployment_checkpoint": {
+            "phase": "capi_pivot_verified",
+            "sequence": 4,
+            "state": {},
+        },
+    })
+    assert outcome["status"] == "blocked"
+    assert outcome["error_code"] == "EPH_CLEANUP_BMH_HANDOFF_CHECKPOINT_REQUIRED"
