@@ -84,7 +84,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             "kubeconfig": base64.b64encode(b"target kubeconfig").decode("ascii"),
         }
         source_objects["secrets"].append(target_kubeconfig_secret)
-    observer_secret = _resource("Secret", "target-agent-source-observer")
+    observer_secret = _resource("Secret", "target-agent-source-operator")
     observer_secret["data"] = {
         "kubeconfig": base64.b64encode(b"source kubeconfig").decode("ascii"),
     }
@@ -312,7 +312,7 @@ def test_cleanup_scope_rejects_observer_secret_with_unrelated_source_kubeconfig(
     else:
         raise AssertionError("Target observer Secret must contain the attested source kubeconfig")
     assert not any(
-        call[3] == "patch" and call[5] == "target-agent-source-observer"
+        call[3] == "patch" and call[5] == "target-agent-source-operator"
         for call in calls
         if len(call) > 5
     )
