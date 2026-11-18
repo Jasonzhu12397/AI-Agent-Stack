@@ -26,7 +26,7 @@ def _proof():
     }
 
 
-def _resource(kind, name, credential=False):
+def _resource(kind, name, credential=False, namespace="eph-system"):
     annotations = {
         "ai-agent-stack.io/eph-cleanup": "true",
         "ai-agent-stack.io/source-cluster-uid": "source-uid",
@@ -38,7 +38,7 @@ def _resource(kind, name, credential=False):
         "kind": kind,
         "metadata": {
             "name": name,
-            "namespace": "eph-system",
+            "namespace": namespace,
             "uid": f"{kind}-{name}-uid",
             "annotations": annotations,
             "labels": {
@@ -55,6 +55,18 @@ def _runner_factory():
     cluster_role_binding = _resource("ClusterRoleBinding", "eph-agent-preflight")
     cluster_role["metadata"].pop("namespace")
     cluster_role_binding["metadata"].pop("namespace")
+    metal3_role = _resource("Role", "eph-agent-metal3-deployer", namespace="metal3")
+    target_capi_role = _resource("Role", "target-agent-source-capi", namespace="metal3")
+    metal3_role_binding = _resource(
+        "RoleBinding",
+        "eph-agent-metal3-deployer",
+        namespace="metal3",
+    )
+    target_capi_role_binding = _resource(
+        "RoleBinding",
+        "target-agent-source-capi",
+        namespace="metal3",
+    )
     resources = {
         "deployments.apps": [_resource("Deployment", "eph-controller")],
         "statefulsets.apps": [],
@@ -65,24 +77,38 @@ def _runner_factory():
         "secrets": [_resource("Secret", "eph-agent-credentials", credential=True)],
         "clusterrolebindings.rbac.authorization.k8s.io": [cluster_role_binding],
         "clusterroles.rbac.authorization.k8s.io": [cluster_role],
+        "rolebindings.rbac.authorization.k8s.io": [metal3_role_binding, target_capi_role_binding],
+        "roles.rbac.authorization.k8s.io": [metal3_role, target_capi_role],
         "serviceaccounts": [_resource("ServiceAccount", "eph-agent")],
     }
     calls = []
 
     def runner(arguments, **_kwargs):
         calls.append(arguments)
+        namespace = (
+            arguments[arguments.index("--namespace") + 1]
+            if "--namespace" in arguments
+            else None
+        )
+        def in_scope(item):
+            item_namespace = item["metadata"].get("namespace")
+            return item_namespace == namespace if namespace is not None else item_namespace is None
         if arguments[0] == "get" and "--selector" in arguments:
             kind = arguments[1]
+            items = [item for item in resources[kind] if in_scope(item)]
             return {
                 "available": True,
-                "stdout": json.dumps({"items": resources[kind]}),
+                "stdout": json.dumps({"items": items}),
                 "stderr": "",
             }
         if arguments[0] == "get":
             kind = {"secret": "secrets"}.get(arguments[1], arguments[1])
             name = arguments[2]
             item = next(
-                (item for item in resources[kind] if item["metadata"]["name"] == name),
+                (
+                    item for item in resources[kind]
+                    if item["metadata"]["name"] == name and in_scope(item)
+                ),
                 None,
             )
             if item is None:
@@ -92,7 +118,8 @@ def _runner_factory():
             kind = arguments[1]
             name = arguments[2]
             resources[kind] = [
-                item for item in resources[kind] if item["metadata"]["name"] != name
+                item for item in resources[kind]
+                if not (item["metadata"]["name"] == name and in_scope(item))
             ]
             return {"available": True, "stdout": "deleted", "stderr": ""}
         if arguments[0] in ("label", "annotate"):
@@ -154,7 +181,7 @@ def test_eph_cleanup_deletes_only_attested_resources_and_revokes_credentials(tmp
     )
     assert result["eph_cleanup_verified"] is True
     assert result["eph_credentials_revoked"] is True
-    assert result["deleted_resource_count"] == 6
+    assert result["deleted_resource_count"] == 10
     assert result["revoked_credential_count"] == 1
     assert all(not items for items in resources.values())
     assert any(call[0] == "delete" and call[1] == "secrets" for call in calls)
