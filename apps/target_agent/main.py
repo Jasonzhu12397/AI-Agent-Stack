@@ -764,14 +764,29 @@ def _execute_attested_eph_cleanup(
     deployment_context: dict[str, Any] | None,
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
-    ownership = _observe_target_metal3_ownership(payload, deployment_context)
+    proof = (
+        deployment_context.get("eph_pivot_attestation", {})
+        if isinstance(deployment_context, dict)
+        else {}
+    )
+    target_payload = {
+        **payload,
+        "namespace": payload.get("target_namespace", payload.get("namespace")),
+        "cluster_name": payload.get("target_cluster_name", payload.get("cluster_name")),
+    }
+    cleanup_payload = {
+        **payload,
+        "namespace": payload.get("eph_namespace", "ai-agent-system"),
+        "confirm_source_cluster_uid": proof.get("source_cluster_uid"),
+        "confirm_target_cluster_uid": proof.get("target_cluster_uid"),
+    }
+    ownership = _observe_target_metal3_ownership(target_payload, deployment_context)
     cleanup = execute_eph_cleanup(
-        payload,
+        cleanup_payload,
         deployment_context,
         _kubectl,
         lease_lost_event,
     )
-    proof = deployment_context.get("eph_pivot_attestation", {})
     observer_revoked = _revoke_source_observer_secret(
         payload.get("deployment_id", ""),
         proof.get("source_cluster_uid", ""),
