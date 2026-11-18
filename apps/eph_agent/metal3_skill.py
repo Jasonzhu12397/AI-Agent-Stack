@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import time
@@ -34,12 +35,15 @@ MAC_PATTERN = re.compile(r"^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
 
 
 def _namespace(value: Any) -> str:
+    configured_namespace = os.environ.get("EPH_CAPI_NAMESPACE", "metal3")
     if (
         not isinstance(value, str)
         or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value)
         or len(value) > 63
     ):
         raise Metal3SkillError("METAL3_NAMESPACE_INVALID")
+    if value != configured_namespace:
+        raise Metal3SkillError("METAL3_NAMESPACE_NOT_ALLOWED")
     return value
 
 
