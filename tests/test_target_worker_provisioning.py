@@ -190,6 +190,17 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
                 }),
                 "stderr": "",
             }
+        if arguments[0] == "get" and arguments[1] == "ippools.ipam.metal3.io":
+            return {
+                "available": True,
+                "stdout": json.dumps({
+                    "items": [{
+                        "metadata": {"name": "workers-data"},
+                        "spec": {"clusterName": "target"},
+                    }],
+                }),
+                "stderr": "",
+            }
         if arguments[0] == "get" and arguments[1] == "baremetalhosts.metal3.io":
             hosts = [
                 {
@@ -253,6 +264,7 @@ def test_worker_provisioning_discovers_crds_dry_runs_and_applies_all_resources()
     assert result["worker_provisioning_controller_observed"] is True
     assert result["desired_worker_count"] == 2
     assert result["new_worker_capacity_verified"] is True
+    assert result["worker_ip_pools_verified"] == ["workers-data"]
     assert set(applied) == {
         "workers",
         "workers-bootstrap",
