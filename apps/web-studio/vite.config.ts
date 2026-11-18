@@ -29,6 +29,7 @@ export default defineConfig({
         /node_modules\/@vueuse\//,
         /node_modules\/@element-plus\/icons-vue\//,
         /node_modules\/memoize-one\//,
+        /node_modules\/async-validator\//,
       ],
     },
   },
