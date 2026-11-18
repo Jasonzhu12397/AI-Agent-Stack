@@ -11,9 +11,16 @@ from core.permissions import IsTenantAdmin
 from core.token_budget import get_tenant_token_usage
 
 
+class StrictPositiveIntegerField(serializers.IntegerField):
+    def to_internal_value(self, data):
+        if not isinstance(data, int) or isinstance(data, bool):
+            raise serializers.ValidationError("A positive integer is required.")
+        return super().to_internal_value(data)
+
+
 class TenantTokenBudgetUpdateSerializer(serializers.Serializer):
-    daily_limit = serializers.IntegerField(min_value=1)
-    monthly_limit = serializers.IntegerField(min_value=1)
+    daily_limit = StrictPositiveIntegerField(min_value=1, max_value=2**63 - 1)
+    monthly_limit = StrictPositiveIntegerField(min_value=1, max_value=2**63 - 1)
 
     def validate(self, attrs):
         if not attrs:
