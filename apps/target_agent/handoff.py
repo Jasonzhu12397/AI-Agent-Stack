@@ -7,7 +7,9 @@ from .ntp_policy import NtpPolicyError, validate_ironic_internal_ntp_ip
 
 
 class HandoffError(ValueError):
-    pass
+    def __init__(self, message: str, side_effects: bool = False) -> None:
+        super().__init__(message)
+        self.side_effects = side_effects
 
 
 class HandoffPhase(StrEnum):
