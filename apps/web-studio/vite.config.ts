@@ -28,6 +28,7 @@ export default defineConfig({
         /node_modules\/@vue\//,
         /node_modules\/@vueuse\//,
         /node_modules\/@element-plus\/icons-vue\//,
+        /node_modules\/memoize-one\//,
       ],
     },
   },
