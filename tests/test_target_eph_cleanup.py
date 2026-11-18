@@ -372,8 +372,6 @@ def test_eph_cleanup_discovers_and_revokes_late_target_kubeconfig_secret(tmp_pat
     kubeconfig.write_text("source credentials", encoding="utf-8")
     runner, resources, calls = _runner_factory()
     target_secret = _resource("Secret", "capi-pivot-target-kubeconfig", credential=True)
-    target_secret["metadata"]["labels"] = {}
-    target_secret["metadata"]["annotations"] = {}
     resources["secrets"].append(target_secret)
     result = execute_eph_cleanup(
         {
@@ -442,3 +440,84 @@ def test_eph_cleanup_reports_partial_deletion_and_recovers_on_retry(tmp_path):
     )
     assert result["eph_cleanup_verified"] is True
     assert all(not items for items in resources.values())
+
+
+
+def test_eph_cleanup_refuses_to_adopt_unowned_pivot_kubeconfig_secret(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, resources, calls = _runner_factory()
+    secret = _resource("Secret", "capi-pivot-target-kubeconfig", credential=True)
+    secret["metadata"]["labels"] = {}
+    secret["metadata"]["annotations"] = {}
+    resources["secrets"].append(secret)
+
+    try:
+        execute_eph_cleanup(
+            {
+                "namespace": "eph-system",
+                "deployment_id": "deployment-1",
+                "confirm_source_cluster_uid": "source-uid",
+                "confirm_target_cluster_uid": "target-uid",
+            },
+            _proof(),
+            runner,
+            environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+        )
+    except EphCleanupError as exc:
+        assert str(exc) == "EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH"
+    else:
+        raise AssertionError("An unowned kubeconfig secret must never be adopted or deleted")
+
+    assert not any(call[0] in ("label", "annotate", "delete") for call in calls)
+
+
+def test_eph_cleanup_requires_source_uid_attestation_on_every_resource(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, resources, calls = _runner_factory()
+    resources["deployments.apps"][0]["metadata"]["annotations"][
+        "ai-agent-stack.io/source-cluster-uid"
+    ] = "different-source"
+
+    try:
+        execute_eph_cleanup(
+            {
+                "namespace": "eph-system",
+                "deployment_id": "deployment-1",
+                "confirm_source_cluster_uid": "source-uid",
+                "confirm_target_cluster_uid": "target-uid",
+            },
+            _proof(),
+            runner,
+            environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+        )
+    except EphCleanupError as exc:
+        assert str(exc) == "EPH_CLEANUP_RESOURCE_OWNERSHIP_MISMATCH"
+    else:
+        raise AssertionError("Resources from a different source cluster must be rejected")
+
+    assert not any(call[0] == "delete" for call in calls)
+
+
+def test_eph_cleanup_delete_uses_uid_precondition(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, _resources, calls = _runner_factory()
+    execute_eph_cleanup(
+        {
+            "namespace": "eph-system",
+            "deployment_id": "deployment-1",
+            "confirm_source_cluster_uid": "source-uid",
+            "confirm_target_cluster_uid": "target-uid",
+        },
+        _proof(),
+        runner,
+        environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+    )
+    delete_calls = [call for call in calls if call[0] == "delete"]
+    assert delete_calls
+    assert all(
+        any(argument.startswith("--preconditions=uid=") for argument in call)
+        for call in delete_calls
+    )
