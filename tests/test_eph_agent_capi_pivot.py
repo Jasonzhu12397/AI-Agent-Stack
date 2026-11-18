@@ -69,6 +69,7 @@ def test_capi_pivot_blocks_when_approval_digest_does_not_match_plan(monkeypatch,
         "action": "eph.capi.pivot",
         "approval_digest": "a" * 64,
         "payload": {
+            "deployment_id": "deployment-1",
             "namespace": "metal3",
             "cluster_name": "cluster-1",
             "stable_cluster_identity": "logical-cluster-1",
@@ -122,6 +123,7 @@ def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
     result = capi_pivot.execute_capi_pivot({
         "action": "eph.capi.pivot.dry_run",
         "payload": {
+            "deployment_id": "deployment-1",
             "namespace": "metal3",
             "cluster_name": "cluster-1",
             "stable_cluster_identity": "logical-cluster-1",
@@ -258,6 +260,17 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
         "_target_controllers_ready",
         lambda *_args: {"ready": True, "controllers": []},
     )
+    monkeypatch.setattr(
+        capi_pivot,
+        "attest_cleanup_scope",
+        lambda *_args, **_kwargs: {
+            "cleanup_scope_attested": True,
+            "source_cleanup_resource_count": 6,
+            "target_observer_secret_source_uid_attested": True,
+            "optional_target_kubeconfig_marked": True,
+            "mutated_resource_count": 0,
+        },
+    )
     commands = []
     def run(command, *_args, **_kwargs):
         commands.append(command)
@@ -267,6 +280,7 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
         "action": "eph.capi.pivot",
         "approval_digest": "a" * 64,
         "payload": {
+            "deployment_id": "deployment-1",
             "namespace": "metal3",
             "cluster_name": "cluster-1",
             "stable_cluster_identity": "logical-cluster-1",
@@ -329,10 +343,22 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
         ),
     )
     monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: identities)
+    monkeypatch.setattr(
+        capi_pivot,
+        "attest_cleanup_scope",
+        lambda *_args, **_kwargs: {
+            "cleanup_scope_attested": True,
+            "source_cleanup_resource_count": 6,
+            "target_observer_secret_source_uid_attested": True,
+            "optional_target_kubeconfig_marked": True,
+            "mutated_resource_count": 0,
+        },
+    )
     result = capi_pivot.execute_capi_pivot({
         "action": "eph.capi.pivot",
         "approval_digest": "a" * 64,
         "payload": {
+            "deployment_id": "deployment-1",
             "namespace": "metal3",
             "cluster_name": "cluster-1",
             "stable_cluster_identity": "logical-cluster-1",
@@ -391,6 +417,7 @@ def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
         "action": "eph.capi.pivot",
         "approval_digest": "a" * 64,
         "payload": {
+            "deployment_id": "deployment-1",
             "namespace": "metal3",
             "cluster_name": "cluster-1",
             "stable_cluster_identity": "logical-cluster-1",
