@@ -46,6 +46,26 @@ def test_agent_prompt_estimator_rejects_oversized_context():
         _estimate_message_tokens(messages)
 
 
+def test_agent_prompt_budget_includes_tool_schemas():
+    messages = [{"role": "user", "content": "short request"}]
+    tools = [{"type": "function", "function": {"name": "large_schema", "parameters": {
+        "description": "x" * 25000
+    }}}]
+
+    with pytest.raises(PermanentTaskError, match="prompt and tool schemas"):
+        _estimate_message_tokens(messages, tools)
+
+
+def test_agent_prompt_estimator_counts_tool_schema_tokens():
+    messages = [{"role": "user", "content": "short request"}]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "x" * 500}},
+    }}}]
+
+    assert _estimate_message_tokens(messages, tools) > _estimate_message_tokens(messages)
+
+
 def test_agent_message_compaction_keeps_system_prompt_and_original_request():
     messages = [
         {"role": "system", "content": "system"},
