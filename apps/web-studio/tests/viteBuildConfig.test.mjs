@@ -10,5 +10,5 @@ test("Vite does not send ESM-only Vue and Day.js packages through CommonJS trans
   assert.ok(source.includes("/node_modules\\\\/dayjs\\\\//"));
   assert.ok(source.includes("/node_modules\\\\/vue\\\\//"));
   assert.ok(source.includes("/node_modules\\\\/@vue\\\\//"));
-  assert.doesNotMatch(source, /replacement:\\s*["']dayjs\\/esm\\/index\\.js/);
+  assert.ok(!source.includes("replacement: \"dayjs/esm/index.js\""));
 });
