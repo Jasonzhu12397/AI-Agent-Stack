@@ -118,7 +118,6 @@ def _runner_factory(include_optional_target_kubeconfig=True):
                     "stderr": "",
                 }
             name = arguments[2]
-            namespaced = "--namespace" in arguments
             objects = (
                 source_objects.get(resource, [])
                 if kubeconfig.endswith("source.kubeconfig")
