@@ -574,7 +574,10 @@ def execute_worker_provisioning(
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
         for index, document in enumerate(ordered):
             if lease_lost_event is not None and lease_lost_event.is_set():
-                raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_COMMAND_LEASE_LOST",
+                    side_effects=bool(applied_output),
+                )
             resource_path = Path(workdir) / f"resource-{index}.yaml"
             resource_path.write_text(
                 yaml.safe_dump(document, sort_keys=False),
@@ -598,16 +601,23 @@ def execute_worker_provisioning(
                 raise
             applied_output.append(applied.get("stdout", ""))
         if lease_lost_event is not None and lease_lost_event.is_set():
-            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_COMMAND_LEASE_LOST",
+                side_effects=bool(applied_output),
+            )
 
     md_name = machine_deployment["metadata"]["name"]
     observed = None
     for _attempt in range(20):
         if lease_lost_event is not None and lease_lost_event.is_set():
-            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
-        md_result = _run(
-            runner,
-            [
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_COMMAND_LEASE_LOST",
+                side_effects=bool(applied_output),
+            )
+        try:
+            md_result = _run(
+                runner,
+                [
                 "get",
                 "machinedeployments",
                 md_name,
@@ -623,7 +633,8 @@ def execute_worker_provisioning(
             observed = json.loads(md_result.get("stdout", ""))
         except (TypeError, ValueError) as exc:
             raise WorkerProvisioningError(
-                "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_JSON_INVALID"
+                "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_JSON_INVALID",
+                side_effects=bool(applied_output),
             ) from exc
         observed_metadata = observed.get("metadata", {})
         generation = observed_metadata.get("generation", 0)
@@ -632,11 +643,17 @@ def execute_worker_provisioning(
             break
         time.sleep(3)
     else:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED")
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED",
+            side_effects=bool(applied_output),
+        )
     observed_spec = observed.get("spec", {})
     desired = observed_spec.get("replicas")
     if not isinstance(desired, int) or desired < 1:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_DEPLOYMENT_SPEC_INVALID")
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_SPEC_INVALID",
+            side_effects=bool(applied_output),
+        )
     return {
         "worker_provisioning_resources_applied": True,
         "worker_provisioning_server_dry_run_passed": True,
