@@ -721,6 +721,7 @@ def execute_agent_run(task):
             calls = resume_calls
             resume_calls = None
         else:
+            token_reservation = None
             try:
                 messages = _compact_agent_messages(messages)
                 estimated_input_tokens = _estimate_message_tokens(messages, offered_tools)
@@ -753,7 +754,7 @@ def execute_agent_run(task):
                     tool_choice="auto" if offered_tools else None,
                 )
             except ModelGatewayError as exc:
-                if "token_reservation" in locals():
+                if token_reservation is not None:
                     release_tenant_tokens(usage=token_reservation)
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
