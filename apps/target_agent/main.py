@@ -41,6 +41,7 @@ from .leader_election import (
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
+from .postflight import PostflightError, verify_target_postflight
 from .ntp_policy import (
     NtpPolicyError,
     probe_ironic_internal_ntp_endpoint,
@@ -1128,7 +1129,46 @@ def execute(
                 )
                 evidence = {**evidence, **cleanup_evidence}
             if next_phase == HandoffPhase.COMPLETED.value:
-                raise HandoffError("TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED")
+                previous_evidence = _validated_checkpoint_evidence(
+                    checkpoint,
+                    HandoffPhase.WORKERS_READY.value,
+                )
+                cluster_name = previous_evidence.get("target_cluster_name")
+                namespace = previous_evidence.get("machine_deployment_namespace")
+                machine_deployment_name = previous_evidence.get("machine_deployment")
+                if not isinstance(previous_evidence.get("worker_network_contract"), dict):
+                    raise HandoffError("HANDOFF_WORKER_NETWORK_CONTRACT_CHECKPOINT_MISSING")
+                postflight_payload = {
+                    **payload,
+                    "target_cluster_name": cluster_name,
+                    "target_namespace": namespace,
+                    "namespace": namespace,
+                }
+                ownership_evidence = _observe_target_metal3_ownership(
+                    postflight_payload,
+                    command.get("deployment_context"),
+                )
+                postflight_evidence = verify_target_postflight(
+                    cluster_name=cluster_name,
+                    namespace=namespace,
+                    machine_deployment_name=machine_deployment_name,
+                    desired_worker_count=previous_evidence.get("desired_worker_count"),
+                    ironic_internal_ntp_ip=_require_configured_ironic_internal_ntp_ip(
+                        previous_evidence.get("ironic_internal_ntp_ip")
+                    ),
+                    worker_ntp_bootstrap_sources=previous_evidence.get(
+                        "worker_ntp_bootstrap_sources"
+                    ),
+                    worker_network_contract=previous_evidence["worker_network_contract"],
+                    ownership_evidence=ownership_evidence,
+                    deployment_checkpoint_durable=True,
+                    runner=_kubectl,
+                )
+                evidence = {
+                    **previous_evidence,
+                    **ownership_evidence,
+                    **postflight_evidence,
+                }
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
                 observed_pivot = _observe_target_capi_pivot({
                     **payload,
