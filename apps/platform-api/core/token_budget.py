@@ -52,18 +52,23 @@ def reserve_tenant_tokens(
     if (agent_run is None) == (workflow_run is None):
         raise ValueError("Exactly one AgentRun or WorkflowRun must own a token reservation")
     now = timezone.now()
+    lease_expires_at = task.lease_expires_at
+    if lease_expires_at is not None and lease_expires_at <= now:
+        raise ValueError("Cannot reserve tokens for an expired task lease")
+    reservation_expires_at = lease_expires_at or now + timedelta(minutes=5)
     budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
         tenant_id=task.tenant_id,
     )
-    usage, _ = TenantTokenUsage.objects.select_for_update().get_or_create(
+    usage, created = TenantTokenUsage.objects.select_for_update().get_or_create(
         tenant_id=task.tenant_id,
         idempotency_key=idempotency_key,
         defaults={
             "task": task,
             "agent_run": agent_run,
             "workflow_run": workflow_run,
-            "reserved_tokens": requested_tokens,
-            "expires_at": task.lease_expires_at or now + timedelta(minutes=5),
+            "status": TenantTokenUsage.Status.RELEASED,
+            "reserved_tokens": 0,
+            "expires_at": now,
         },
     )
     if (
@@ -74,10 +79,10 @@ def reserve_tenant_tokens(
         raise ValueError("Token reservation idempotency key belongs to another run")
     if usage.status == TenantTokenUsage.Status.SETTLED:
         raise ValueError("A settled provider call cannot be replayed with the same idempotency key")
-    if usage.status == TenantTokenUsage.Status.RESERVED and usage.expires_at > now:
+    if not created and usage.status == TenantTokenUsage.Status.RESERVED and usage.expires_at > now:
         if usage.reserved_tokens != requested_tokens:
             raise ValueError("Token reservation amount changed for an existing provider call")
-        usage.expires_at = task.lease_expires_at or now + timedelta(minutes=5)
+        usage.expires_at = reservation_expires_at
         usage.save(update_fields=["expires_at", "updated_at"])
         return usage
 
@@ -97,7 +102,7 @@ def reserve_tenant_tokens(
     usage.status = TenantTokenUsage.Status.RESERVED
     usage.reserved_tokens = requested_tokens
     usage.consumed_tokens = 0
-    usage.expires_at = task.lease_expires_at or now + timedelta(minutes=5)
+    usage.expires_at = reservation_expires_at
     usage.created_at = now
     usage.save()
     return usage
