@@ -196,9 +196,9 @@ def render_sriov_device_plugin_configmap(
             "name": name,
             "namespace": namespace,
             "labels": {
-                "app.kubernetes.io/managed-by": "target-agent",
+                "ai-agent-stack.io/managed-by": "target-agent",
                 "ai-agent-stack.io/deployment-id": deployment_id,
-                "ai-agent-stack.io/cluster-name": cluster_name,
+                "cluster.x-k8s.io/cluster-name": cluster_name,
             },
             "annotations": {
                 "ai-agent-stack.io/target-cluster-uid": target_cluster_uid,
