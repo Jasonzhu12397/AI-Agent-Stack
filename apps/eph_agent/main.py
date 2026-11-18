@@ -21,7 +21,6 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
-from .capi_pivot import execute_capi_pivot
 from .capi_renderer import render_bmh_manifests, render_capi_metal3_manifests
 from .metal3_skill import (
     Metal3SkillError,
@@ -43,8 +42,6 @@ CAPABILITIES = [
     "eph.capi.cluster.apply",
     "eph.capi.cluster.observe",
     "eph.capi.cluster.wait_ready",
-    "eph.capi.pivot.dry_run",
-    "eph.capi.pivot",
 ]
 
 
@@ -334,8 +331,6 @@ def execute(
             "output": evidence,
             "side_effects": False,
         }
-    if action in ("eph.capi.pivot.dry_run", "eph.capi.pivot"):
-        return execute_capi_pivot(command, lease_lost_event)
     if action == "eph.source.observe":
         result = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])
         return {
