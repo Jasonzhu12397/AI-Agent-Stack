@@ -34,6 +34,13 @@ def _require(evidence: dict[str, Any], key: str, expected: Any = True) -> None:
         raise HandoffError(f"HANDOFF_EVIDENCE_REQUIRED:{key}")
 
 
+def _require_positive_count(evidence: dict[str, Any], key: str, error: str) -> int:
+    value = evidence.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise HandoffError(error)
+    return value
+
+
 def _require_internal_ntp_ip(evidence: dict[str, Any]) -> str:
     try:
         return validate_ironic_internal_ntp_ip(
@@ -69,7 +76,11 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
     normalized = dict(evidence)
     if phase is HandoffPhase.EPH_SINGLE_NODE_READY:
         _require(evidence, "eph_ready")
-        if evidence.get("eph_node_count") != 1:
+        if (
+            not isinstance(evidence.get("eph_node_count"), int)
+            or isinstance(evidence.get("eph_node_count"), bool)
+            or evidence.get("eph_node_count") != 1
+        ):
             raise HandoffError("HANDOFF_EPH_MUST_BE_SINGLE_NODE")
         _require(evidence, "eph_source_preflight_passed")
     elif phase is HandoffPhase.BMH_REGISTERED:
@@ -81,13 +92,19 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
             not isinstance(count, int)
             or isinstance(count, bool)
             or count < 1
+            or not isinstance(inventory_count, int)
+            or isinstance(inventory_count, bool)
             or inventory_count != count
         ):
             raise HandoffError("HANDOFF_BMH_REGISTRATION_INVENTORY_INCOMPLETE")
     elif phase is HandoffPhase.BMH_READY:
-        expected = evidence.get("expected_bmh_count")
-        ready = evidence.get("bmh_ready_count")
-        if not isinstance(expected, int) or expected < 1 or ready != expected:
+        expected = _require_positive_count(
+            evidence, "expected_bmh_count", "HANDOFF_BMH_READINESS_INCOMPLETE"
+        )
+        ready = _require_positive_count(
+            evidence, "bmh_ready_count", "HANDOFF_BMH_READINESS_INCOMPLETE"
+        )
+        if ready != expected:
             raise HandoffError("HANDOFF_BMH_READINESS_INCOMPLETE")
         _require(evidence, "bmh_all_operational")
         _require(evidence, "ironic_inventory_verified")
@@ -146,13 +163,19 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         _require(evidence, "worker_provisioning_controller_observed")
         _require(evidence, "worker_network_contract_validated")
         _require(evidence, "preprovision_bmh_capacity_verified")
-        desired = evidence.get("desired_worker_count")
-        if not isinstance(desired, int) or isinstance(desired, bool) or desired < 1:
-            raise HandoffError("HANDOFF_WORKER_PROVISIONING_REPLICA_COUNT_INVALID")
+        _require_positive_count(
+            evidence,
+            "desired_worker_count",
+            "HANDOFF_WORKER_PROVISIONING_REPLICA_COUNT_INVALID",
+        )
     elif phase is HandoffPhase.WORKERS_READY:
-        desired = evidence.get("desired_worker_count")
-        ready = evidence.get("ready_worker_count")
-        if not isinstance(desired, int) or desired < 1 or ready != desired:
+        desired = _require_positive_count(
+            evidence, "desired_worker_count", "HANDOFF_WORKER_READINESS_INCOMPLETE"
+        )
+        ready = _require_positive_count(
+            evidence, "ready_worker_count", "HANDOFF_WORKER_READINESS_INCOMPLETE"
+        )
+        if ready != desired:
             raise HandoffError("HANDOFF_WORKER_READINESS_INCOMPLETE")
         ntp_ip = _require_internal_ntp_ip(evidence)
         sources = evidence.get("worker_ntp_bootstrap_sources")
