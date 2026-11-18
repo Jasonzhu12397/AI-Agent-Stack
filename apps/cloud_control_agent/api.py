@@ -1,3 +1,12 @@
+"""Cloud Control Agent HTTP control API.
+
+The control API authenticates agents with mTLS, registers agents and
+deployments, leases commands, renews leases, persists durable checkpoints and
+accepts command results. The Cloud Control Agent receives deployment requests,
+authorizes, budgets, dispatches and aggregates state; it does not approve a
+target takeover.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -23,6 +32,7 @@ class ControlApiError(ValueError):
 EPH_ACTIONS = frozenset({
     "eph.preflight",
     "eph.source.observe",
+    "eph.controlstack.apply",
     "eph.metal3.bmh.apply",
     "eph.metal3.bmh.observe",
     "eph.metal3.bmh.wait_ready",
@@ -44,6 +54,7 @@ TARGET_ACTIONS = frozenset({
     "target.handoff.evaluate",
     "target.eph.cleanup",
     "target.worker.provision",
+    "target.network.apply",
 })
 
 
