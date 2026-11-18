@@ -4,7 +4,7 @@ import base64
 import copy
 import json
 
-from apps.eph_agent.cleanup_scope import (
+from apps.target_agent.cleanup_scope import (
     CleanupScopeError,
     attest_cleanup_scope,
 )
