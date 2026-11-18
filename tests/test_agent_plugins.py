@@ -1,6 +1,4 @@
 import pytest
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
 
 from core.models import (
     AgentPluginDefinition,
@@ -10,6 +8,8 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
 
 
 @pytest.fixture
