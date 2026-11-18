@@ -99,7 +99,9 @@ def _runner_factory():
         ],
     }
     observer_secret = _resource("Secret", "target-agent-source-operator")
-    observer_secret["metadata"]["annotations"]["ai-agent-stack.io/credential-scope"] = "target-agent"
+    observer_secret["metadata"]["annotations"][
+        "ai-agent-stack.io/credential-scope"
+    ] = "target-agent"
     observer_secret["data"] = {
         "kubeconfig": base64.b64encode(b"source kubeconfig").decode("ascii"),
     }
