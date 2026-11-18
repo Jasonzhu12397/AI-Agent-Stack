@@ -281,7 +281,7 @@ def test_bmh_observer_reports_hardware_and_ironics_provisioning_state():
 
 def test_capi_cluster_observer_requires_control_plane_ready_condition():
     cluster = {
-        "metadata": {"name": "target-01", "uid": "cluster-uid"},
+        "metadata": {"name": "target-01", "uid": "cluster-uid", "generation": 4},
         "status": {
             "observedGeneration": 4,
             "conditions": [
@@ -303,6 +303,30 @@ def test_capi_cluster_observer_requires_control_plane_ready_condition():
 
     assert result["control_plane_ready"] is True
     assert result["cluster_uid"] == "cluster-uid"
+
+
+def test_capi_cluster_observer_rejects_stale_ready_condition():
+    cluster = {
+        "metadata": {"name": "target-01", "uid": "cluster-uid", "generation": 5},
+        "status": {
+            "observedGeneration": 4,
+            "conditions": [{"type": "ControlPlaneReady", "status": "True"}],
+        },
+    }
+
+    result = observe_capi_cluster(
+        {"namespace": "metal3", "cluster_name": "target-01"},
+        lambda *_args, **_kwargs: {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(cluster),
+            "stderr": "",
+        },
+    )
+
+    assert result["control_plane_ready"] is False
+    assert result["generation"] == 5
+    assert result["observed_generation"] == 4
 
 
 def test_bmh_wait_uses_backoff_until_all_expected_hosts_are_available():
@@ -380,8 +404,9 @@ def test_capi_wait_polls_until_control_plane_ready():
     def runner(_arguments, **_kwargs):
         ready = next(states)
         cluster = {
-            "metadata": {"name": "target-01", "uid": "cluster-uid"},
+            "metadata": {"name": "target-01", "uid": "cluster-uid", "generation": 1},
             "status": {
+                "observedGeneration": 1,
                 "conditions": [{
                     "type": "ControlPlaneReady",
                     "status": "True" if ready else "False",
