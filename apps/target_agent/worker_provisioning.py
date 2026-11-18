@@ -178,10 +178,18 @@ def _network_contract(
     ):
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACES_INVALID")
     try:
-        ipaddress.ip_network(contract.get("control_plane_cidr"), strict=False)
-        ipaddress.ip_network(contract.get("data_plane_cidr"), strict=False)
+        control_network = ipaddress.ip_network(
+            contract.get("control_plane_cidr"),
+            strict=False,
+        )
+        data_network = ipaddress.ip_network(
+            contract.get("data_plane_cidr"),
+            strict=False,
+        )
     except (TypeError, ValueError) as exc:
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_CIDR_INVALID") from exc
+    if control_network.version != data_network.version or control_network.overlaps(data_network):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROL_DATA_NETWORK_OVERLAP")
     mtu = contract.get("data_plane_mtu")
     if not isinstance(mtu, int) or isinstance(mtu, bool) or not 576 <= mtu <= 9216:
         raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_PLANE_MTU_INVALID")
@@ -243,8 +251,10 @@ def _ensure_worker_ntp(
             "$2 == server",
             "selected = 1",
         )
-        if sources != [ironic_internal_ntp_ip] or not all(
-            marker in script for marker in required
+        if (
+            sources != [ironic_internal_ntp_ip]
+            or re.search(r"(?m)^\s*pool\s+", script)
+            or not all(marker in script for marker in required)
         ):
             raise WorkerProvisioningError("WORKER_PROVISIONING_WORKER_NTP_SCRIPT_INVALID")
         return
