@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -22,8 +22,10 @@ from core.models import (
     WorkflowVersion,
 )
 from core.token_budget import (
-    TenantTokenBudgetExceeded, release_tenant_tokens,
-    reserve_tenant_tokens, settle_tenant_tokens,
+    TenantTokenBudgetExceeded,
+    release_tenant_tokens,
+    reserve_tenant_tokens,
+    settle_tenant_tokens,
 )
 
 
@@ -191,7 +193,7 @@ def test_workflow_model_calls_use_the_same_tenant_budget_ledger():
 @pytest.mark.django_db
 def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_budget_run):
     task, run, _ = token_budget_run
-    reserved_at = datetime(2026, 11, 17, 23, 59, tzinfo=dt_timezone.utc)
+    reserved_at = datetime(2026, 11, 17, 23, 59, tzinfo=UTC)
     settled_at = reserved_at + timedelta(minutes=2)
     with (
         patch("core.token_budget.timezone.now", side_effect=[reserved_at, settled_at]),
