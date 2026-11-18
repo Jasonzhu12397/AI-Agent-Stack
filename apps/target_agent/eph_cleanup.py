@@ -21,11 +21,17 @@ RESOURCE_ORDER = (
     "secrets",
     "clusterrolebindings.rbac.authorization.k8s.io",
     "clusterroles.rbac.authorization.k8s.io",
+    "rolebindings.rbac.authorization.k8s.io",
+    "roles.rbac.authorization.k8s.io",
     "serviceaccounts",
 )
 CLUSTER_SCOPED_RESOURCES = {
     "clusterrolebindings.rbac.authorization.k8s.io",
     "clusterroles.rbac.authorization.k8s.io",
+}
+METAL3_NAMESPACE_RESOURCES = {
+    "rolebindings.rbac.authorization.k8s.io",
+    "roles.rbac.authorization.k8s.io",
 }
 MAX_INVENTORY_BYTES = 8 * 1024 * 1024
 
@@ -119,53 +125,6 @@ def execute_eph_cleanup(
 
     if lease_lost_event is not None and lease_lost_event.is_set():
         raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-    optional_target_secret = runner(
-        [
-            "get",
-            "secret",
-            "capi-pivot-target-kubeconfig",
-            "--namespace",
-            namespace,
-            "-o",
-            "json",
-        ],
-        timeout=30,
-        max_output_bytes=MAX_INVENTORY_BYTES,
-        kubeconfig=source_kubeconfig,
-    )
-    if optional_target_secret.get("available") is True:
-        try:
-            secret_document = json.loads(optional_target_secret.get("stdout", ""))
-        except (TypeError, ValueError) as exc:
-            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_INVALID") from exc
-        secret_metadata = secret_document.get("metadata")
-        secret_labels = (
-            secret_metadata.get("labels", {})
-            if isinstance(secret_metadata, dict)
-            else None
-        )
-        secret_annotations = (
-            secret_metadata.get("annotations", {}) if isinstance(secret_metadata, dict) else None
-        )
-        if (
-            not isinstance(secret_metadata, dict)
-            or secret_metadata.get("name") != "capi-pivot-target-kubeconfig"
-            or secret_metadata.get("namespace") != namespace
-            or not isinstance(secret_labels, dict)
-            or not isinstance(secret_annotations, dict)
-            or secret_labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
-            or secret_labels.get(CLEANUP_ANNOTATION) != "true"
-            or secret_labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
-            or secret_annotations.get(CLEANUP_ANNOTATION) != "true"
-            or secret_annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
-            or secret_annotations.get(CREDENTIAL_SCOPE_ANNOTATION) != "eph-agent"
-        ):
-            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH")
-    elif "notfound" not in optional_target_secret.get("stderr", "").lower() and (
-        "not found" not in optional_target_secret.get("stderr", "").lower()
-    ):
-        raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OBSERVATION_FAILED")
-
     selector = ",".join((
         f"{CLEANUP_ANNOTATION}=true",
         "app.kubernetes.io/managed-by=ai-agent-stack",
@@ -175,12 +134,15 @@ def execute_eph_cleanup(
     for resource in RESOURCE_ORDER:
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+        resource_namespace = (
+            "metal3" if resource in METAL3_NAMESPACE_RESOURCES else namespace
+        )
         result = _run(
             runner,
             [
                 "get",
                 resource,
-                *_namespace_args(resource, namespace),
+                *_namespace_args(resource, resource_namespace),
                 "--selector",
                 selector,
                 "-o",
@@ -221,7 +183,7 @@ def execute_eph_cleanup(
             inventory.append({
                 "resource": resource,
                 "name": _valid_name(name, "RESOURCE_NAME"),
-                "namespace": namespace,
+                "namespace": resource_namespace,
                 "uid": metadata.get("uid"),
                 "credential": (
                     resource == "secrets"
@@ -235,7 +197,7 @@ def execute_eph_cleanup(
         for item in inventory:
             if lease_lost_event is not None and lease_lost_event.is_set():
                 raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-            namespace_args = _namespace_args(item["resource"], namespace)
+            namespace_args = _namespace_args(item["resource"], item["namespace"])
             arguments = [
                 "delete",
                 item["resource"],
@@ -268,7 +230,7 @@ def execute_eph_cleanup(
                 if (
                     current_metadata.get("uid") != item["uid"]
                     or current_metadata.get("namespace") != (
-                        None if item["resource"] in CLUSTER_SCOPED_RESOURCES else namespace
+                        None if item["resource"] in CLUSTER_SCOPED_RESOURCES else item["namespace"]
                     )
                     or current_metadata.get("labels", {}).get("app.kubernetes.io/managed-by")
                     != "ai-agent-stack"
