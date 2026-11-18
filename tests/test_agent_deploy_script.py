@@ -61,7 +61,8 @@ def test_target_agent_is_three_replicas_with_control_plane_anti_affinity_and_lea
     assert "target-agent-leader" in str(deployment)
     configmap_role = next(
         item for item in manifest
-        if item.get("kind") == "Role" and item["metadata"]["name"] == "target-agent-sriov-configmaps"
+        if item.get("kind") == "Role"
+        and item["metadata"]["name"] == "target-agent-sriov-configmaps"
     )
     configmap_binding = next(
         item for item in manifest
@@ -114,7 +115,6 @@ def test_new_build_script_builds_three_independent_images():
     assert "ONLY_LINUX_AMD64_IS_CURRENTLY_VERIFIED" in script
 
 
-
 def test_target_agent_receives_ironic_credentials_only_from_kubernetes_secret():
     manifest = list(yaml.safe_load_all(
         (ROOT / "deploy/agents/target-cluster-agent.yaml").read_text(encoding="utf-8")
@@ -123,5 +123,8 @@ def test_target_agent_receives_ironic_credentials_only_from_kubernetes_secret():
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     environment = {item["name"]: item for item in container["env"]}
     assert environment["IRONIC_API_URL"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-url"
-    assert environment["IRONIC_API_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] == "ironic-api-token"
+    assert (
+        environment["IRONIC_API_TOKEN"]["valueFrom"]["secretKeyRef"]["key"]
+        == "ironic-api-token"
+    )
     assert environment["IRONIC_API_MICROVERSION"]["value"] == "1.82"
