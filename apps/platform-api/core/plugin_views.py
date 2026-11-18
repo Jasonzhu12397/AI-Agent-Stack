@@ -702,6 +702,7 @@ class PluginConnectionListCreateView(APIView):
 class PluginConnectionTestView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, connection_id):
         connection = get_object_or_404(
             PluginConnection.objects.select_related(
@@ -712,7 +713,10 @@ class PluginConnectionTestView(APIView):
             ).filter(installation__tenant__memberships__user=request.user),
             pk=connection_id,
         )
-        installation = connection.installation
+        installation = PluginInstallation.objects.select_for_update().get(
+            pk=connection.installation_id
+        )
+        connection = PluginConnection.objects.select_for_update().get(pk=connection.pk)
         plugin = installation.plugin
         if not _can_manage_project(
             request.user,
@@ -830,6 +834,7 @@ class PluginConnectionTestView(APIView):
 class PluginConnectionStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, connection_id):
         connection = get_object_or_404(
             PluginConnection.objects.select_related(
@@ -840,7 +845,10 @@ class PluginConnectionStatusView(APIView):
             ).filter(installation__tenant__memberships__user=request.user),
             pk=connection_id,
         )
-        installation = connection.installation
+        installation = PluginInstallation.objects.select_for_update().get(
+            pk=connection.installation_id
+        )
+        connection = PluginConnection.objects.select_for_update().get(pk=connection.pk)
         if not _can_manage_project(
             request.user,
             installation.tenant,
