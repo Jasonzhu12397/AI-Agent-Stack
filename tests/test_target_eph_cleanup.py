@@ -560,3 +560,21 @@ def test_target_agent_requires_source_uid_on_observer_secret(monkeypatch):
         assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
     else:
         raise AssertionError("Missing source cluster UID must block credential revocation")
+
+
+
+def test_target_agent_treats_missing_observer_secret_as_idempotent_noop(monkeypatch):
+    calls = []
+
+    def runner(arguments, **_kwargs):
+        calls.append(arguments)
+        return {
+            "available": False,
+            "stdout": "",
+            "stderr": "Error from server (NotFound)",
+        }
+
+    monkeypatch.setattr(target_main, "_kubectl", runner)
+    assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is False
+    assert len(calls) == 1
+    assert not any(call[0] == "delete" for call in calls)
