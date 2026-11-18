@@ -6,7 +6,6 @@ import json
 import pytest
 
 from apps.target_agent import main as target_main
-
 from apps.target_agent.postflight import PostflightError, verify_target_postflight
 
 
