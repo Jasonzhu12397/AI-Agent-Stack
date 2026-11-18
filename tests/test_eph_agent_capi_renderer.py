@@ -76,6 +76,32 @@ def test_capi_template_renders_kubeadm_metal3_control_plane_and_worker_pool():
     assert machine_deployment["spec"]["replicas"] == 4
 
 
+def test_capi_renderer_uses_current_capi_and_capm3_v1beta2_contracts():
+    manifests = render_capi_metal3_manifests({
+        "name": "target-01",
+        "namespace": "metal3",
+        "infrastructure_provider": "metal3",
+        "control_plane_endpoint": "192.0.2.20",
+        "control_plane_count": 1,
+        "image_url": "https://images.example.test/ubuntu.qcow2",
+        "worker_pools": [{"name": "workers", "count": 2}],
+    })
+
+    api_versions = {item["kind"]: item["apiVersion"] for item in manifests}
+    assert api_versions["Cluster"] == "cluster.x-k8s.io/v1beta2"
+    assert api_versions["MachineDeployment"] == "cluster.x-k8s.io/v1beta2"
+    assert api_versions["Metal3Cluster"] == "infrastructure.cluster.x-k8s.io/v1beta2"
+    assert api_versions["Metal3MachineTemplate"] == "infrastructure.cluster.x-k8s.io/v1beta2"
+    assert api_versions["KubeadmControlPlane"] == "controlplane.cluster.x-k8s.io/v1beta2"
+    assert api_versions["KubeadmConfigTemplate"] == "bootstrap.cluster.x-k8s.io/v1beta2"
+
+    cluster = next(item for item in manifests if item["kind"] == "Cluster")
+    assert cluster["spec"]["controlPlaneRef"]["apiGroup"] == "controlplane.cluster.x-k8s.io"
+    assert "apiVersion" not in cluster["spec"]["controlPlaneRef"]
+    assert cluster["spec"]["infrastructureRef"]["apiGroup"] == "infrastructure.cluster.x-k8s.io"
+    assert "apiVersion" not in cluster["spec"]["infrastructureRef"]
+
+
 def test_capi_renderer_requires_explicit_image_url_and_supported_provider():
     base = {
         "name": "target-01",
