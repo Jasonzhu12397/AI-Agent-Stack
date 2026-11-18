@@ -41,6 +41,12 @@ from .leader_election import (
     LeaseElectionError,
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
+from .network_plugins import NetworkStackError, plan_network_stack
+from .network_stack_adapter import (
+    NetworkStackAdapterError,
+    apply_network_stack,
+    wait_for_network_stack_ready,
+)
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
 from .ntp_policy import (
     NtpPolicyError,
@@ -72,6 +78,7 @@ CAPABILITIES = [
     "target.handoff.evaluate",
     "target.eph.cleanup",
     "target.worker.provision",
+    "target.network.apply",
 ]
 
 
@@ -1055,6 +1062,63 @@ def execute(
             "error_code": None if result["available"] else "TARGET_METAL3_OBSERVE_FAILED",
             "output": result,
             "side_effects": False,
+        }
+    if action == "target.network.apply":
+        checkpoint = command.get("deployment_checkpoint", {})
+        current_phase = checkpoint.get("phase") if isinstance(checkpoint, dict) else None
+        if current_phase not in {
+            "capi_pivot_verified",
+            "bmh_registry_migrated",
+            "eph_cleanup_verified",
+        }:
+            return {
+                "status": "blocked",
+                "error_code": "NETWORK_STACK_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
+        try:
+            payload = _command_payload(command)
+            namespace = payload.get("target_namespace") or payload.get("namespace")
+            if (
+                not isinstance(namespace, str)
+                or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace)
+            ):
+                raise NetworkStackAdapterError("NETWORK_STACK_NAMESPACE_INVALID")
+            spec = payload.get("spec", payload)
+            manifests = payload.get("manifests")
+            plan = plan_network_stack(spec)
+            applied = apply_network_stack(
+                plan,
+                namespace,
+                _kubectl,
+                lease_lost_event,
+                manifests,
+            )
+            readiness = wait_for_network_stack_ready(
+                plan,
+                namespace,
+                _kubectl,
+                lease_lost_event,
+            )
+            evidence = {**applied, "readiness": readiness}
+        except (
+            NetworkStackAdapterError,
+            NetworkStackError,
+            TypeError,
+            AttributeError,
+        ) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "NETWORK_STACK_APPLY_FAILED",
+                "output": {},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": applied.get("side_effects", False),
         }
     if action == "target.worker.provision":
         try:
