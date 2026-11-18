@@ -6,9 +6,9 @@ from core.models import Project, Task, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from worker_app.tasks import (
+    PermanentTaskError,
     _allowed_agent_output_tokens,
     _resolve_and_settle_provider_usage,
-    PermanentTaskError,
     claim_next_task,
     fail_task,
     finish_task,
@@ -78,7 +78,6 @@ def test_worker_fails_task_after_unsupported_type(queued_task):
     assert queued_task.status == Task.Status.FAILED
     assert queued_task.error["code"] == "TASK_VALIDATION_FAILED"
     assert queued_task.attempts == 1
-
 
 
 @pytest.mark.django_db
@@ -155,9 +154,9 @@ def test_agent_run_output_budget_uses_conservative_input_ceiling():
     ) == 1000
 
 
-
 def test_invalid_provider_usage_settles_the_full_reserved_ceiling(monkeypatch):
     from types import SimpleNamespace
+
     import worker_app.tasks as worker_tasks
 
     reservation = SimpleNamespace(reserved_tokens=1200)
@@ -188,6 +187,7 @@ def test_invalid_provider_usage_settles_the_full_reserved_ceiling(monkeypatch):
 
 def test_valid_provider_usage_settles_actual_consumption(monkeypatch):
     from types import SimpleNamespace
+
     import worker_app.tasks as worker_tasks
 
     reservation = SimpleNamespace(reserved_tokens=1200)
@@ -214,7 +214,6 @@ def test_valid_provider_usage_settles_actual_consumption(monkeypatch):
 
     assert result == (700, 100)
     assert settlements == [(reservation, 800)]
-
 
 
 @pytest.mark.parametrize("worker_id", ["", "   ", None, 129 * "w"])
