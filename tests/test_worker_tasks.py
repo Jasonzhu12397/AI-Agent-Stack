@@ -214,3 +214,45 @@ def test_valid_provider_usage_settles_actual_consumption(monkeypatch):
 
     assert result == (700, 100)
     assert settlements == [(reservation, 800)]
+
+
+
+@pytest.mark.parametrize("worker_id", ["", "   ", None, 129 * "w"])
+@pytest.mark.django_db
+def test_worker_rejects_invalid_lease_identity_without_claiming_task(queued_task, worker_id):
+    with pytest.raises(ValueError, match="Worker identity"):
+        claim_next_task(worker_id)
+
+    queued_task.refresh_from_db()
+    assert queued_task.status == Task.Status.QUEUED
+    assert queued_task.attempts == 0
+
+
+@pytest.mark.parametrize("lease_seconds", [0, -1, True, False, 1.5, "30", 3601])
+@pytest.mark.django_db
+def test_worker_rejects_invalid_lease_duration_without_claiming_task(
+    queued_task, lease_seconds
+):
+    with pytest.raises(ValueError, match="between 1 and 3600"):
+        claim_next_task("worker-invalid-lease", lease_seconds=lease_seconds)
+
+    queued_task.refresh_from_db()
+    assert queued_task.status == Task.Status.QUEUED
+    assert queued_task.attempts == 0
+
+
+@pytest.mark.parametrize("lease_seconds", [0, -1, True, 1.5, "30", 3601])
+@pytest.mark.django_db
+def test_worker_rejects_invalid_lease_duration_during_renewal(queued_task, lease_seconds):
+    claimed = claim_next_task("worker-renewal-validation")
+
+    with pytest.raises(ValueError, match="between 1 and 3600"):
+        renew_lease(
+            queued_task.id,
+            claimed.lease_token,
+            "worker-renewal-validation",
+            lease_seconds=lease_seconds,
+        )
+
+    queued_task.refresh_from_db()
+    assert queued_task.lease_token == claimed.lease_token
