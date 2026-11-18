@@ -680,7 +680,7 @@ def _verify_sriov_configmap_ownership(
         if not result.get("available"):
             error_text = result.get("stderr", "")
             if isinstance(error_text, str) and re.search(
-                r"\\bnot\\s*found\\b|\\bnotfound\\b",
+                r"\bnot\s*found\b|\bnotfound\b",
                 error_text,
                 flags=re.IGNORECASE,
             ):
