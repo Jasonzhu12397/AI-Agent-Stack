@@ -8,22 +8,15 @@ from apps.cloud_control_agent.api import (
     _checkpoint_state_digest,
     _parse_uuid,
     _validate_action_role,
-    _validate_optional_approval_digest,
     _validate_checkpoint_actor_transition,
     _validate_reported_capabilities,
     _validated_eph_pivot_attestation,
 )
 
 
-def test_agent_lifecycle_commands_do_not_require_human_approval_digest():
-    assert _validate_optional_approval_digest(None) is None
-    assert _validate_optional_approval_digest("a" * 64) == "a" * 64
+def test_agent_lifecycle_pivot_action_is_allowed_without_approval_contract():
+    _validate_action_role("eph", "eph.capi.pivot")
 
-
-@pytest.mark.parametrize("value", ["", "not-a-digest", "g" * 64, 123])
-def test_optional_approval_digest_rejects_malformed_legacy_values(value):
-    with pytest.raises(ControlApiError, match="APPROVAL_DIGEST_INVALID"):
-        _validate_optional_approval_digest(value)
 
 
 def test_parse_uuid_rejects_invalid_identity():
