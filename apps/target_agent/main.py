@@ -841,6 +841,15 @@ def _execute_attested_eph_cleanup(
         if isinstance(deployment_context, dict)
         else {}
     )
+    if (
+        not isinstance(proof, dict)
+        or proof.get("cleanup_scope_attested") is not True
+        or proof.get("target_observer_secret_source_uid_attested") is not True
+        or not isinstance(proof.get("source_cleanup_resource_count"), int)
+        or isinstance(proof.get("source_cleanup_resource_count"), bool)
+        or proof.get("source_cleanup_resource_count") < 7
+    ):
+        raise HandoffError("EPH_CLEANUP_SCOPE_ATTESTATION_REQUIRED")
     target_payload = {
         **payload,
         "namespace": payload.get("target_namespace"),
