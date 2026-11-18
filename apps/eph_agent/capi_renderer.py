@@ -3,7 +3,6 @@ from __future__ import annotations
 import ipaddress
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Any
 from urllib.parse import urlsplit
 
