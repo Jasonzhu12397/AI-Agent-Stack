@@ -111,6 +111,8 @@ mark_eph_cleanup_resources "$EPH_CONTEXT" deployment eph-agent
 mark_eph_agent_pod_template
 for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig capi-pivot-target-kubeconfig; do
     mark_eph_cleanup_resources "$EPH_CONTEXT" secret "$secret"
+    kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret "$secret" \
+        ai-agent-stack.io/credential-scope=eph-agent --overwrite
 done
 mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-observer
 
