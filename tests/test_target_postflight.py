@@ -245,7 +245,7 @@ def test_postflight_rejects_missing_ovs_network_attachment_definition():
     documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"] = [
         documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]
     ]
-    with pytest.raises(PostflightError, match="POSTFLIGHT_OVS_DATA_PLANE_NAD_MISSING"):
+    with pytest.raises(PostflightError, match="POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_MISSING"):
         verify_target_postflight(runner=runner, **_kwargs())
 
 
