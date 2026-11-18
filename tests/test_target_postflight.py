@@ -318,13 +318,12 @@ def test_postflight_rejects_unready_ovs_daemonset():
 
 def test_postflight_rejects_required_nad_with_wrong_resource_name():
     runner, documents = _fixtures()
-    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["spec"]["config"] = json.dumps(
-        {
+    nad = documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]
+    nad["spec"]["config"] = json.dumps({
         "cniVersion": "0.3.1",
         "type": "sriov",
-            "resourceName": "intel.com/other_resource",
-        }
-    )
+        "resourceName": "intel.com/other_resource",
+    })
     with pytest.raises(PostflightError, match="POSTFLIGHT_NETWORK_ATTACHMENT_RESOURCE_MISMATCH"):
         verify_target_postflight(runner=runner, **_kwargs())
 
@@ -359,9 +358,21 @@ def test_postflight_rejects_malformed_resource_items(resource, items, error):
 @pytest.mark.parametrize(
     ("resource", "document", "error"),
     [
-        ("clusters.cluster.x-k8s.io", {"metadata": None}, "POSTFLIGHT_CAPI_CLUSTER_DOCUMENT_INVALID"),
-        ("machinedeployments.cluster.x-k8s.io", {"metadata": None}, "POSTFLIGHT_MACHINE_DEPLOYMENT_METADATA_INVALID"),
-        ("nodes", {"items": [{"metadata": {"name": "master-1"}, "status": None}]}, "POSTFLIGHT_NODE_STATUS_INVALID"),
+        (
+            "clusters.cluster.x-k8s.io",
+            {"metadata": None},
+            "POSTFLIGHT_CAPI_CLUSTER_DOCUMENT_INVALID",
+        ),
+        (
+            "machinedeployments.cluster.x-k8s.io",
+            {"metadata": None},
+            "POSTFLIGHT_MACHINE_DEPLOYMENT_METADATA_INVALID",
+        ),
+        (
+            "nodes",
+            {"items": [{"metadata": {"name": "master-1"}, "status": None}]},
+            "POSTFLIGHT_NODE_STATUS_INVALID",
+        ),
     ],
 )
 def test_postflight_rejects_malformed_resource_metadata_and_status(resource, document, error):
