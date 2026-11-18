@@ -755,7 +755,12 @@ def execute_agent_run(task):
                 )
             except ModelGatewayError as exc:
                 if token_reservation is not None:
-                    release_tenant_tokens(usage=token_reservation)
+                    # A timeout may happen after the provider accepted the request.
+                    # Charge the reserved ceiling unless non-consumption is proven.
+                    settle_tenant_tokens(
+                        usage=token_reservation,
+                        consumed_tokens=token_reservation.reserved_tokens,
+                    )
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
                 ) from exc
