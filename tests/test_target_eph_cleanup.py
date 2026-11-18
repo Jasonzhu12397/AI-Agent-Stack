@@ -185,7 +185,7 @@ def test_eph_cleanup_rejects_wrong_source_cluster_confirmation(tmp_path):
 def test_target_agent_revokes_only_the_attested_source_observer_secret(monkeypatch):
     secret = {
         "metadata": {
-            "name": "target-agent-source-observer",
+            "name": "target-agent-source-operator",
             "namespace": "ai-agent-system",
             "uid": "observer-secret-uid",
             "labels": {
@@ -212,14 +212,14 @@ def test_target_agent_revokes_only_the_attested_source_observer_secret(monkeypat
 
     monkeypatch.setattr(target_main, "_kubectl", runner)
     assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is True
-    assert calls[1][:3] == ["delete", "secret", "target-agent-source-observer"]
+    assert calls[1][:3] == ["delete", "secret", "target-agent-source-operator"]
     assert "--preconditions=uid=observer-secret-uid" in calls[1]
 
 
 def test_target_agent_refuses_to_revoke_another_deployments_observer_secret(monkeypatch):
     secret = {
         "metadata": {
-            "name": "target-agent-source-observer",
+            "name": "target-agent-source-operator",
             "namespace": "ai-agent-system",
             "uid": "observer-secret-uid",
             "labels": {
@@ -553,7 +553,7 @@ def test_eph_cleanup_delete_uses_uid_precondition(tmp_path):
 def test_target_agent_requires_source_uid_on_observer_secret(monkeypatch):
     secret = {
         "metadata": {
-            "name": "target-agent-source-observer",
+            "name": "target-agent-source-operator",
             "namespace": "ai-agent-system",
             "uid": "observer-secret-uid",
             "labels": {
