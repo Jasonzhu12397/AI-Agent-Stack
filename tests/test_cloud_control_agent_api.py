@@ -18,6 +18,18 @@ def test_agent_lifecycle_pivot_action_is_allowed_without_approval_contract():
     _validate_action_role("eph", "eph.capi.pivot")
 
 
+def test_cloud_control_exposes_metal3_and_capi_deployment_actions():
+    for action in (
+        "eph.metal3.bmh.apply",
+        "eph.metal3.bmh.observe",
+        "eph.metal3.bmh.wait_ready",
+        "eph.capi.cluster.apply",
+        "eph.capi.cluster.observe",
+        "eph.capi.cluster.wait_ready",
+    ):
+        _validate_action_role("eph", action)
+
+
 
 def test_parse_uuid_rejects_invalid_identity():
     with pytest.raises(ControlApiError):
