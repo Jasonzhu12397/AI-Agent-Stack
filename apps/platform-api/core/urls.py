@@ -21,6 +21,12 @@ from core.agent_node_views import (
     AgentRuntimePollView,
     AgentRuntimeResultView,
 )
+from core.agent_plugin_views import (
+    AgentPluginCatalogView,
+    AgentPluginDetailView,
+    AgentPluginInstallationListCreateView,
+    AgentPluginInstallationStatusView,
+)
 from core.agent_views import (
     AgentDetailView,
     AgentListCreateView,
@@ -269,6 +275,26 @@ urlpatterns = [
         "api/v1/agent-runtime/commands/<uuid:command_id>/result/",
         AgentRuntimeResultView.as_view(),
         name="agent-runtime-result",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/agent-plugins/",
+        AgentPluginCatalogView.as_view(),
+        name="agent-plugin-catalog",
+    ),
+    path(
+        "api/v1/agent-plugins/<uuid:plugin_id>/",
+        AgentPluginDetailView.as_view(),
+        name="agent-plugin-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-plugin-installations/",
+        AgentPluginInstallationListCreateView.as_view(),
+        name="agent-plugin-installations",
+    ),
+    path(
+        "api/v1/agent-plugin-installations/<uuid:installation_id>/status/",
+        AgentPluginInstallationStatusView.as_view(),
+        name="agent-plugin-installation-status",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agents/",
