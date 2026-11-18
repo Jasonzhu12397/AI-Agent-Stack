@@ -780,8 +780,8 @@ def _execute_attested_eph_cleanup(
     )
     target_payload = {
         **payload,
-        "namespace": payload.get("target_namespace", payload.get("namespace")),
-        "cluster_name": payload.get("target_cluster_name", payload.get("cluster_name")),
+        "namespace": payload.get("target_namespace"),
+        "cluster_name": payload.get("target_cluster_name"),
     }
     cleanup_payload = {
         **payload,
