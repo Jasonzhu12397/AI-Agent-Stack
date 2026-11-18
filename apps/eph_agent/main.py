@@ -135,7 +135,7 @@ def execute(
             "ready_nodes": ready_nodes,
             "node_observation_available": nodes["available"],
             "clusterctl": _run_read_only(["clusterctl", "version"]),
-            "kubectl": _run_read_only(["kubectl", "version", "client"]),
+            "kubectl": _run_read_only(["kubectl", "version", "--client"]),
             "observed_at": datetime.now(UTC).isoformat(),
         }
         ready = (
