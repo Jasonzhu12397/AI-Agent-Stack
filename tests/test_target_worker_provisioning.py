@@ -499,6 +499,27 @@ def test_worker_provisioning_requires_sriov_nad_resource_in_device_plugin_config
     assert not any(call[0] == "apply" for call in calls)
 
 
+def test_worker_provisioning_rejects_sriov_namespace_rbac_mismatch():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    payload["sriov_device_plugin_namespace"] = "kube-system"
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={
+                "IRONIC_INTERNAL_NTP_IP": "10.0.0.10",
+                "SRIOV_DEVICE_PLUGIN_NAMESPACE": "metal3",
+            },
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_SRIOV_NAMESPACE_MISMATCH"
+    else:
+        raise AssertionError("A namespace/RBAC mismatch must block worker provisioning")
+    assert not any(call[0] == "apply" for call in calls)
+
+
 def test_worker_provisioning_uses_dedicated_sriov_plugin_namespace():
     runner, calls, applied = _runner_factory()
     payload = _payload()

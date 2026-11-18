@@ -472,25 +472,33 @@ def _verify_sriov_device_plugin_daemonsets(
         raise WorkerProvisioningError(
             "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_INVENTORY_INVALID"
         )
-    daemonsets = [
-        item for item in document["items"]
-        if isinstance(item, dict)
-        and item.get("metadata", {}).get("namespace") == namespace
-    ]
+    daemonsets = []
+    for item in document["items"]:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata")
+        spec = item.get("spec")
+        if not isinstance(metadata, dict) or metadata.get("namespace") != namespace:
+            continue
+        if not isinstance(spec, dict):
+            continue
+        template = spec.get("template")
+        if not isinstance(template, dict):
+            continue
+        pod_spec = template.get("spec")
+        if not isinstance(pod_spec, dict):
+            continue
+        daemonsets.append((item, pod_spec))
     evidence = []
     for pool_name, pool in pools.items():
         configmap_name = pool["sriov_network_device_plugin_configmap_name"]
         candidates = []
-        for daemonset in daemonsets:
-            pod_spec = (
-                daemonset.get("spec", {})
-                .get("template", {})
-                .get("spec", {})
-            )
+        for daemonset, pod_spec in daemonsets:
             volumes = pod_spec.get("volumes", [])
             if isinstance(volumes, list) and any(
                 isinstance(volume, dict)
-                and volume.get("configMap", {}).get("name") == configmap_name
+                and isinstance(volume.get("configMap"), dict)
+                and volume["configMap"].get("name") == configmap_name
                 for volume in volumes
             ):
                 candidates.append((daemonset, pod_spec))
@@ -525,7 +533,7 @@ def _verify_sriov_device_plugin_daemonsets(
             "pool": pool_name,
             "configmap": configmap_name,
             "daemonsets": sorted(
-                item.get("metadata", {}).get("name", "")
+                item["metadata"].get("name", "")
                 for item in matching
             ),
             "node_selectors": pool["node_selectors"],

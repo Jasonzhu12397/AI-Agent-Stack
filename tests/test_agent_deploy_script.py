@@ -20,6 +20,7 @@ def test_three_agent_deploy_requires_three_distinct_contexts_and_digest_images()
     assert "network-inventory-agent" not in script
     assert "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL" in script
     assert "TARGET_CAPI_NAMESPACE_MUST_BE_A_DNS_LABEL" in script
+    assert "SRIOV_DEVICE_PLUGIN_NAMESPACE_MUST_BE_A_DNS_LABEL" in script
     assert "REPLACE_WITH_TARGET_CAPI_NAMESPACE" in script
     assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent' in script
     assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight' in script
