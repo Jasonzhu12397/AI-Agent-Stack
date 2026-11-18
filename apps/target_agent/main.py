@@ -41,7 +41,7 @@ from .leader_election import (
 )
 from .metal3_ownership import Metal3OwnershipError, verify_metal3_ownership
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
-from .postflight import PostflightError, verify_target_postflight
+from .postflight import verify_target_postflight
 from .ntp_policy import (
     NtpPolicyError,
     probe_ironic_internal_ntp_endpoint,
