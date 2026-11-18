@@ -30,7 +30,14 @@ PHASES = tuple(HandoffPhase)
 
 
 def _require(evidence: dict[str, Any], key: str, expected: Any = True) -> None:
-    if evidence.get(key) != expected:
+    actual = evidence.get(key)
+    if expected is True:
+        valid = actual is True
+    elif expected is False:
+        valid = actual is False
+    else:
+        valid = actual == expected
+    if not valid:
         raise HandoffError(f"HANDOFF_EVIDENCE_REQUIRED:{key}")
 
 
@@ -110,7 +117,12 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         _require(evidence, "ironic_inventory_verified")
     elif phase is HandoffPhase.TARGET_CONTROL_PLANE_READY:
         _require(evidence, "target_control_plane_ready")
-        if evidence.get("ready_master_count", 0) < 3:
+        ready_master_count = _require_positive_count(
+            evidence,
+            "ready_master_count",
+            "HANDOFF_THREE_TARGET_MASTERS_REQUIRED",
+        )
+        if ready_master_count < 3:
             raise HandoffError("HANDOFF_THREE_TARGET_MASTERS_REQUIRED")
         normalized["ironic_internal_ntp_ip"] = _require_internal_ntp_ip(evidence)
         _require(evidence, "target_control_plane_ntp_profile_verified")
@@ -119,7 +131,12 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
     elif phase is HandoffPhase.TARGET_AGENT_READY:
         _require(evidence, "target_agent_ready")
         _require(evidence, "target_agent_leader_elected")
-        if evidence.get("target_agent_replica_count") != 3:
+        target_agent_replica_count = _require_positive_count(
+            evidence,
+            "target_agent_replica_count",
+            "HANDOFF_THREE_TARGET_AGENT_REPLICAS_REQUIRED",
+        )
+        if target_agent_replica_count != 3:
             raise HandoffError("HANDOFF_THREE_TARGET_AGENT_REPLICAS_REQUIRED")
     elif phase is HandoffPhase.CAPI_PIVOT_VERIFIED:
         _require(evidence, "capi_pivot_succeeded")

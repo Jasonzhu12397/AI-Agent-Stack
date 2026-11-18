@@ -315,3 +315,52 @@ def test_handoff_rejects_boolean_values_as_capacity_counts(
 ):
     with pytest.raises(HandoffError, match=error):
         evaluate_transition(current, next_phase, evidence)
+
+
+
+def test_handoff_boolean_evidence_requires_boolean_true():
+    with pytest.raises(HandoffError, match="EVIDENCE_REQUIRED:eph_ready"):
+        evaluate_transition(
+            None,
+            "eph_single_node_ready",
+            {
+                "eph_ready": 1,
+                "eph_node_count": 1,
+                "eph_source_preflight_passed": True,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("phase", "next_phase", "evidence", "error"),
+    [
+        (
+            "bmh_ready",
+            "target_control_plane_ready",
+            {
+                "target_control_plane_ready": True,
+                "ready_master_count": 3.0,
+                "ironic_internal_ntp_ip": "10.130.60.84",
+                "target_control_plane_ntp_profile_verified": True,
+                "target_control_plane_ntp_bootstrap_sync_gate_verified": True,
+                "ironic_internal_ntp_service_reachable": True,
+            },
+            "THREE_TARGET_MASTERS_REQUIRED",
+        ),
+        (
+            "target_control_plane_ready",
+            "target_agent_ready",
+            {
+                "target_agent_ready": True,
+                "target_agent_leader_elected": True,
+                "target_agent_replica_count": 3.0,
+            },
+            "THREE_TARGET_AGENT_REPLICAS_REQUIRED",
+        ),
+    ],
+)
+def test_handoff_rejects_non_integer_replica_counts(
+    phase, next_phase, evidence, error
+):
+    with pytest.raises(HandoffError, match=error):
+        evaluate_transition(phase, next_phase, evidence)
