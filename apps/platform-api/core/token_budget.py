@@ -31,7 +31,9 @@ def _period_usage(tenant_id, start, now):
 
 
 @transaction.atomic
-def reserve_tenant_tokens(*, task, idempotency_key: str, requested_tokens: int, agent_run=None, workflow_run=None):
+def reserve_tenant_tokens(
+    *, task, idempotency_key: str, requested_tokens: int, agent_run=None, workflow_run=None
+):
     if (
         not isinstance(requested_tokens, int)
         or isinstance(requested_tokens, bool)
