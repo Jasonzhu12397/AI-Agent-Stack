@@ -312,7 +312,20 @@ class TenantTokenUsage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="token_usage")
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="token_usage")
-    agent_run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="token_usage")
+    agent_run = models.ForeignKey(
+        AgentRun,
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
+    workflow_run = models.ForeignKey(
+        WorkflowRun,
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
     idempotency_key = models.CharField(max_length=160)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
     reserved_tokens = models.PositiveBigIntegerField(default=0)
@@ -326,7 +339,14 @@ class TenantTokenUsage(models.Model):
             models.UniqueConstraint(
                 fields=["tenant", "idempotency_key"],
                 name="uniq_tenant_token_usage_idempotency",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agent_run__isnull=False, workflow_run__isnull=True)
+                    | models.Q(agent_run__isnull=True, workflow_run__isnull=False)
+                ),
+                name="tenant_token_usage_exactly_one_run",
+            ),
         ]
         indexes = [
             models.Index(
