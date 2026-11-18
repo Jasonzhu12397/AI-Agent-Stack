@@ -44,7 +44,10 @@ def test_validate_sriov_config_accepts_user_pci_bus_addresses_and_shared_configm
     }
     normalized = validate_sriov_device_plugin_config(config)
     assert normalized["pool4"]["sriov_network_device_plugin_configmap_name"] == "sriov-dp-configmap"
-    assert normalized["pool5"]["sriov_network_device_plugin_configmap_data"] == normalized["pool4"]["sriov_network_device_plugin_configmap_data"]
+    assert (
+        normalized["pool5"]["sriov_network_device_plugin_configmap_data"]
+        == normalized["pool4"]["sriov_network_device_plugin_configmap_data"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -71,7 +74,8 @@ def test_validate_sriov_config_rejects_same_configmap_with_conflicting_data():
 
 def test_validate_sriov_config_rejects_invalid_vendor_and_resource_name():
     config = {"pool4": _pool(["0000:2f:00.0"])}
-    config["pool4"]["sriov_network_device_plugin_configmap_data"]["resourceList"][0]["selectors"]["vendors"] = ["xyz"]
+    selectors = config["pool4"]["sriov_network_device_plugin_configmap_data"]
+    selectors["resourceList"][0]["selectors"]["vendors"] = ["xyz"]
     with pytest.raises(SriovDevicePluginConfigError, match="SELECTORS_INVALID"):
         validate_sriov_device_plugin_config(config)
 
@@ -86,7 +90,15 @@ def test_render_sriov_configmap_adds_deployment_ownership():
         target_cluster_uid="target-uid",
     )
     assert configmap["kind"] == "ConfigMap"
-    assert configmap["metadata"]["labels"]["ai-agent-stack.io/deployment-id"] == "deployment-1"
-    assert configmap["metadata"]["labels"]["ai-agent-stack.io/cluster-name"] == "edge-lab"
-    assert configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"] == "target-uid"
+    assert (
+        configmap["metadata"]["labels"]["ai-agent-stack.io/deployment-id"]
+        == "deployment-1"
+    )
+    assert (
+        configmap["metadata"]["labels"]["ai-agent-stack.io/cluster-name"] == "edge-lab"
+    )
+    assert (
+        configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"]
+        == "target-uid"
+    )
     assert '"rootDevices":["0000:2f:00.0"]' in configmap["data"]["config.json"]
