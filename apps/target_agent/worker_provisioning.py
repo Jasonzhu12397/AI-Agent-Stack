@@ -634,6 +634,7 @@ def _prepare_sriov_device_plugin_configmaps(
     namespace: str,
     deployment_id: str,
     cluster_name: str,
+    target_cluster_uid: str,
 ) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -684,13 +685,18 @@ def _verify_sriov_configmap_ownership(
         except (TypeError, ValueError) as exc:
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_JSON_INVALID") from exc
         metadata = existing.get("metadata", {})
-        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if not isinstance(metadata, dict):
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_METADATA_INVALID")
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        if not isinstance(annotations, dict):
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_METADATA_INVALID")
         if (
             not isinstance(labels, dict)
             or labels.get(MANAGED_BY_LABEL) != "target-agent"
             or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
             or labels.get(CLUSTER_NAME_LABEL) != cluster_name
-            or metadata.get("annotations", {}).get("ai-agent-stack.io/target-cluster-uid")
+            or annotations.get("ai-agent-stack.io/target-cluster-uid")
             != configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"]
         ):
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_OWNERSHIP_CONFLICT")
@@ -755,6 +761,7 @@ def execute_worker_provisioning(
         namespace,
         deployment_id,
         cluster_name,
+        target_uid,
     )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
