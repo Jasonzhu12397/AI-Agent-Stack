@@ -283,3 +283,23 @@ def test_provider_token_overrun_is_permanent_and_never_retried():
             match="automatic retry is unsafe",
         ):
             worker_tasks._settle_provider_usage(reservation, 41)
+
+
+
+def test_invalid_provider_token_usage_is_permanent_and_never_retried():
+    with patch.object(
+        worker_tasks,
+        "resolve_provider_token_usage",
+        side_effect=ValueError("Provider token usage must be non-negative integers"),
+    ):
+        with pytest.raises(
+            worker_tasks.PermanentTaskError,
+            match="automatic retry is unsafe",
+        ):
+            worker_tasks._resolve_provider_usage(
+                provider_type="openai_compatible",
+                reported_input_tokens=-1,
+                reported_output_tokens=0,
+                input_token_ceiling=40,
+                output_token_ceiling=20,
+            )
