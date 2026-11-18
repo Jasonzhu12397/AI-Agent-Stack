@@ -139,10 +139,8 @@ spec:
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
             - name: EPH_CAPI_NAMESPACE
               value: metal3
-            - name: CAPI_PIVOT_SOURCE_KUBECONFIG
-              value: /var/run/secrets/ai-agent/capi-pivot/source/kubeconfig
-            - name: CAPI_PIVOT_TARGET_KUBECONFIG
-              value: /var/run/secrets/ai-agent/capi-pivot/target/kubeconfig
+            - name: EPH_KUBECONFIG
+              value: /var/run/secrets/ai-agent/eph-cluster/kubeconfig
           resources:
             requests:
               cpu: 100m
@@ -161,9 +159,6 @@ spec:
               readOnly: true
             - name: source-kubeconfig
               mountPath: /var/run/secrets/ai-agent/capi-pivot/source
-              readOnly: true
-            - name: target-kubeconfig
-              mountPath: /var/run/secrets/ai-agent/capi-pivot/target
               readOnly: true
             - name: eph-tmp
               mountPath: /tmp
