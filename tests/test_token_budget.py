@@ -33,11 +33,16 @@ def token_budget_run(db):
 
 
 @pytest.mark.django_db
-def test_tenant_token_budget_reserves_before_provider_usage_and_rejects_over_limit(token_budget_run):
+def test_tenant_token_budget_rejects_reservations_over_the_daily_limit(token_budget_run):
     task, run, _ = token_budget_run
     reserve_tenant_tokens(task=task, agent_run=run, idempotency_key="run:1:0", requested_tokens=80)
     with pytest.raises(TenantTokenBudgetExceeded) as error:
-        reserve_tenant_tokens(task=task, agent_run=run, idempotency_key="run:1:1", requested_tokens=30)
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="run:1:1",
+            requested_tokens=30,
+        )
     assert error.value.period == "daily"
 
 
@@ -58,8 +63,18 @@ def test_tenant_token_budget_settlement_releases_unused_reservation(token_budget
 @pytest.mark.django_db
 def test_tenant_token_budget_reservation_is_idempotent_and_releasable(token_budget_run):
     task, run, _ = token_budget_run
-    first = reserve_tenant_tokens(task=task, agent_run=run, idempotency_key="run:1:0", requested_tokens=40)
-    second = reserve_tenant_tokens(task=task, agent_run=run, idempotency_key="run:1:0", requested_tokens=40)
+    first = reserve_tenant_tokens(
+        task=task,
+        agent_run=run,
+        idempotency_key="run:1:0",
+        requested_tokens=40,
+    )
+    second = reserve_tenant_tokens(
+        task=task,
+        agent_run=run,
+        idempotency_key="run:1:0",
+        requested_tokens=40,
+    )
     assert first.pk == second.pk
     release_tenant_tokens(usage=first)
     first.refresh_from_db()
