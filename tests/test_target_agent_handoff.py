@@ -167,7 +167,7 @@ def test_handoff_blocks_workers_until_control_plane_chronyd_is_verified():
         match="EVIDENCE_REQUIRED:target_control_plane_ntp_profile_verified",
     ):
         evaluate_transition(
-            "bmh_ready",
+            "eph_single_node_ready",
             "target_control_plane_ready",
             {
                 "target_control_plane_ready": True,

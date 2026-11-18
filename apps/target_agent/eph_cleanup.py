@@ -169,7 +169,22 @@ def execute_eph_cleanup(
                 expected_namespace = (
                     None if resource in CLUSTER_SCOPED_RESOURCES else resource_namespace
                 )
-                if resource == "secrets" and name == "capi-pivot-target-kubeconfig":
+                if (
+                    resource == "secrets"
+                    and name == "capi-pivot-target-kubeconfig"
+                    and (
+                        not isinstance(annotations, dict)
+                        or not isinstance(labels, dict)
+                        or annotations.get(CLEANUP_ANNOTATION) != "true"
+                        or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
+                        or labels.get(CLEANUP_ANNOTATION) != "true"
+                        or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
+                        or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
+                        or item_namespace != expected_namespace
+                        or not isinstance(metadata.get("uid"), str)
+                        or not metadata.get("uid")
+                    )
+                ):
                     raise EphCleanupError(
                         "EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH"
                     )

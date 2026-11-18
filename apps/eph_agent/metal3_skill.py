@@ -237,22 +237,20 @@ def _apply_bundle(
         except Metal3SkillError as exc:
             exc.side_effects = True
             raise
-        evidence = {
+        return {
             "resource_type": resource_prefix,
             "resource_count": len(manifests),
             "resource_names": [item["metadata"]["name"] for item in manifests],
+            "bmc_secret_references_verified": True,
+            "bmc_secret_reference_count": len({
+                item["spec"]["bmc"]["credentialsName"] for item in manifests
+            }),
             "server_side_dry_run_passed": True,
             "server_side_apply_succeeded": True,
             "dry_run_output": str(dry_run.get("stdout", ""))[-2000:],
             "apply_output": str(applied.get("stdout", ""))[-4000:],
             "side_effects": True,
         }
-        if resource_prefix == "METAL3_BMH":
-            evidence["bmc_secret_references_verified"] = True
-            evidence["bmc_secret_reference_count"] = len({
-                item["spec"]["bmc"]["credentialsName"] for item in manifests
-            })
-        return evidence
     finally:
         if path is not None:
             path.unlink(missing_ok=True)

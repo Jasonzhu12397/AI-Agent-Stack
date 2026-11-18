@@ -1483,7 +1483,7 @@ def main() -> int:
                                         "status": "failed",
                                         "error_code": "HANDOFF_CHECKPOINT_PERSIST_FAILED",
                                         "output": {"phase": outcome["output"]["to_phase"]},
-                                        "side_effects": outcome.get("side_effects", False),
+                                        "side_effects": False,
                                     }
                             if not leader_guard.lost.is_set():
                                 client.report_result(

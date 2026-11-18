@@ -365,14 +365,7 @@ def test_bmh_wait_uses_backoff_until_all_expected_hosts_are_available():
                 "status": {
                     "operationalStatus": "OK",
                     "provisioning": {"state": state},
-                    "hardware": {
-                        "systemUUID": "11111111-2222-3333-4444-555555555555",
-                        "systemSerialNumber": "SERIAL-01",
-                        "cpu": {"count": 32},
-                        "ramMebibytes": 131072,
-                        "nics": [{"name": "eno1"}],
-                        "storage": [{"name": "disk0"}],
-                    },
+                    "hardware": {},
                 },
             }]
         }

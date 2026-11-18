@@ -293,7 +293,7 @@ def test_target_agent_reads_worker_inventory_from_target_kubernetes_api(monkeypa
 
 
 def test_eph_preflight_emits_checkpoint_ready_evidence(monkeypatch, tmp_path):
-    monkeypatch.setenv("EPH_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
+    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
     (tmp_path / "source.kubeconfig").write_text("test", encoding="utf-8")
     node_list = {
         "items": [{
