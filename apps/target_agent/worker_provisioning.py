@@ -83,13 +83,29 @@ def _run(
     arguments: list[str],
     timeout: int = 60,
     max_output_bytes: int = 8 * 1024 * 1024,
+    lease_lost_event: Any = None,
 ) -> dict[str, Any]:
-    result = runner(
-        arguments,
-        timeout=timeout,
-        max_output_bytes=max_output_bytes,
-    )
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+    runner_arguments = {
+        "timeout": timeout,
+        "max_output_bytes": max_output_bytes,
+    }
+    if lease_lost_event is not None:
+        runner_arguments["lease_lost_event"] = lease_lost_event
+    try:
+        result = runner(arguments, **runner_arguments)
+    except TypeError as exc:
+        if lease_lost_event is not None:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_LEASE_AWARE_RUNNER_REQUIRED"
+            ) from exc
+        raise
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
     if not isinstance(result, dict) or result.get("available") is not True:
+        if isinstance(result, dict) and result.get("error") == "COMMAND_LEASE_LOST":
+            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
         raise WorkerProvisioningError("WORKER_PROVISIONING_KUBERNETES_API_FAILED")
     return result
 
@@ -1222,6 +1238,7 @@ def execute_worker_provisioning(
                 str(manifest_path),
             ],
             timeout=180,
+            lease_lost_event=lease_lost_event,
         )
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
@@ -1248,6 +1265,7 @@ def execute_worker_provisioning(
                         str(resource_path),
                     ],
                     timeout=180,
+                    lease_lost_event=lease_lost_event,
                 )
             except WorkerProvisioningError as exc:
                 exc.side_effects = True
