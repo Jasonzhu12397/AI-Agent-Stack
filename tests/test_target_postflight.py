@@ -192,7 +192,9 @@ def test_postflight_requires_live_cluster_worker_and_network_evidence():
     runner, _documents = _fixtures()
     result = verify_target_postflight(runner=runner, **_kwargs())
     assert result["target_postflight_passed"] is True
-    assert result["worker_network_postflight_passed"] is True
+    assert result["worker_network_postflight_passed"] is False
+    assert result["worker_chronyd_bootstrap_sync_verified"] is True
+    assert result["data_plane_pod_packet_path_verified"] is False
     assert result["ready_worker_count"] == 2
     assert result["ready_control_plane_count"] == 3
     assert result["worker_ntp_bootstrap_attested"] is True
