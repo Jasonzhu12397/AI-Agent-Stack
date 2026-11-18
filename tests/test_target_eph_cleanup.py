@@ -218,3 +218,51 @@ def test_target_agent_refuses_to_revoke_another_deployments_observer_secret(monk
         assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
     else:
         raise AssertionError("A secret owned by another deployment must not be revoked")
+
+
+
+def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_namespaces(
+    monkeypatch,
+):
+    context = {"eph_pivot_attestation": {
+        "source_cluster_uid": "source-uid",
+        "target_cluster_uid": "target-uid",
+    }}
+    calls = {}
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        lambda payload, _context: calls.setdefault("ownership_payload", payload)
+        or {"target_ironic_inventory_verified": True, "target_bmh_identities": []},
+    )
+    monkeypatch.setattr(
+        target_main,
+        "execute_eph_cleanup",
+        lambda payload, _context, _runner, _lease: calls.setdefault(
+            "cleanup_payload", payload
+        ) or {
+            "eph_credentials_revoked": True,
+            "revoked_credential_count": 2,
+            "side_effects": True,
+        },
+    )
+    monkeypatch.setattr(
+        target_main,
+        "_revoke_source_observer_secret",
+        lambda deployment_id, source_uid, _lease: (
+            deployment_id == "deployment-1" and source_uid == "source-uid"
+        ),
+    )
+    result = target_main._execute_attested_eph_cleanup(
+        {
+            "namespace": "metal3-system",
+            "cluster_name": "target-cluster",
+            "deployment_id": "deployment-1",
+        },
+        context,
+    )
+    assert calls["ownership_payload"]["namespace"] == "metal3-system"
+    assert calls["cleanup_payload"]["namespace"] == "ai-agent-system"
+    assert calls["cleanup_payload"]["confirm_source_cluster_uid"] == "source-uid"
+    assert result["eph_credentials_revoked"] is True
+    assert result["target_ironic_inventory_verified"] is True
