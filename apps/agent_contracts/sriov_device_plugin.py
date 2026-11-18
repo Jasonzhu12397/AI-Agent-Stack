@@ -4,6 +4,8 @@ import json
 import re
 from typing import Any
 
+import yaml
+
 
 class SriovDevicePluginConfigError(ValueError):
     pass
@@ -47,11 +49,15 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_NAME_INVALID")
         raw_config = pool.get("sriov_network_device_plugin_configmap_data")
         if isinstance(raw_config, str):
-            try:
-                config = json.loads(raw_config)
-            except ValueError as exc:
+            if len(raw_config.encode("utf-8")) > 1024 * 1024:
                 raise SriovDevicePluginConfigError(
-                    "SRIOV_DEVICE_PLUGIN_CONFIGMAP_JSON_INVALID"
+                    "SRIOV_DEVICE_PLUGIN_CONFIGMAP_DATA_TOO_LARGE"
+                )
+            try:
+                config = yaml.safe_load(raw_config)
+            except yaml.YAMLError as exc:
+                raise SriovDevicePluginConfigError(
+                    "SRIOV_DEVICE_PLUGIN_CONFIGMAP_DATA_INVALID"
                 ) from exc
         else:
             config = raw_config
@@ -124,6 +130,17 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_TOLERATIONS_INVALID")
         normalized_tolerations = []
         for toleration in tolerations:
+            if isinstance(toleration, str):
+                if len(toleration.encode("utf-8")) > 16 * 1024:
+                    raise SriovDevicePluginConfigError(
+                        "SRIOV_DEVICE_PLUGIN_TOLERATION_INVALID"
+                    )
+                try:
+                    toleration = yaml.safe_load(toleration)
+                except yaml.YAMLError as exc:
+                    raise SriovDevicePluginConfigError(
+                        "SRIOV_DEVICE_PLUGIN_TOLERATION_INVALID"
+                    ) from exc
             if not isinstance(toleration, dict):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_TOLERATION_INVALID")
             effect = toleration.get("effect")
