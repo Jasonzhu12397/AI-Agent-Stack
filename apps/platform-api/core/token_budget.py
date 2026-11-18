@@ -55,8 +55,10 @@ def reserve_tenant_tokens(*, task, agent_run, idempotency_key: str, requested_to
     if usage.task_id != task.id or usage.agent_run_id != agent_run.id:
         raise ValueError("Token reservation idempotency key belongs to another run")
     if usage.status == TenantTokenUsage.Status.SETTLED:
-        return usage
+        raise ValueError("A settled provider call cannot be replayed with the same idempotency key")
     if usage.status == TenantTokenUsage.Status.RESERVED and usage.expires_at > now:
+        if usage.reserved_tokens != requested_tokens:
+            raise ValueError("Token reservation amount changed for an existing provider call")
         usage.expires_at = task.lease_expires_at or now + timedelta(minutes=5)
         usage.save(update_fields=["expires_at", "updated_at"])
         return usage
