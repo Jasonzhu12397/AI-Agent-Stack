@@ -247,13 +247,20 @@ class ClusterDeploymentSriovConfigView(APIView):
                 ClusterDeployment.Status.FAILED,
                 ClusterDeployment.Status.CANCELLED,
             }:
-                return Response({"detail": "Terminal deployments cannot be reconfigured."}, status=409)
+                return Response(
+                    {"detail": "Terminal deployments cannot be reconfigured."},
+                    status=409,
+                )
             if AgentCommand.objects.filter(
                 deployment=deployment,
                 command_type="cluster.capi.worker.provision",
             ).exists():
                 return Response(
-                    {"detail": "SR-IOV configuration is immutable after worker provisioning is queued."},
+                    {
+                        "detail": (
+                            "SR-IOV configuration is immutable after worker provisioning is queued."
+                        )
+                    },
                     status=409,
                 )
             spec = dict(deployment.spec)
@@ -262,7 +269,12 @@ class ClusterDeploymentSriovConfigView(APIView):
                 worker_config = {}
             if not isinstance(worker_config, dict):
                 return Response(
-                    {"detail": "worker_provisioning must be an object before SR-IOV configuration can be attached."},
+                    {
+                        "detail": (
+                            "worker_provisioning must be an object before SR-IOV "
+                            "configuration can be attached."
+                        )
+                    },
                     status=409,
                 )
             worker_config = dict(worker_config)
