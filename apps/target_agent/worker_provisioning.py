@@ -800,6 +800,7 @@ def execute_worker_provisioning(
         "worker_network_contract_validated": True,
         "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,
+        "deployment_id": deployment_id,
         "target_cluster_name": cluster_name,
         "target_namespace": namespace,
         "worker_network_contract": copy.deepcopy(payload["worker_network_contract"]),
