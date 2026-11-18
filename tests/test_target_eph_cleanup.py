@@ -19,6 +19,9 @@ def _proof():
             "source_agent_id": "eph-agent-1",
             "command_id": "command-1",
             "attested_at": "2026-11-18T00:00:00Z",
+            "cleanup_scope_attested": True,
+            "target_observer_secret_source_uid_attested": True,
+            "source_cleanup_resource_count": 7,
         },
     }
 
