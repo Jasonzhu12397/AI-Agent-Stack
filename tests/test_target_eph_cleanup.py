@@ -85,6 +85,22 @@ def _runner_factory():
                 item for item in resources[kind] if item["metadata"]["name"] != name
             ]
             return {"available": True, "stdout": "deleted", "stderr": ""}
+        if arguments[0] in ("label", "annotate"):
+            kind = {"secret": "secrets"}.get(arguments[1], arguments[1])
+            name = arguments[2]
+            item = next(
+                item for item in resources[kind] if item["metadata"]["name"] == name
+            )
+            target = (
+                item["metadata"].setdefault("labels", {})
+                if arguments[0] == "label"
+                else item["metadata"].setdefault("annotations", {})
+            )
+            for value in arguments[3:]:
+                if "=" in value and not value.startswith("--"):
+                    key, label_value = value.split("=", 1)
+                    target[key] = label_value
+            return {"available": True, "stdout": "updated", "stderr": ""}
         raise AssertionError(arguments)
 
     return runner, resources, calls
@@ -341,3 +357,34 @@ def test_eph_cleanup_is_idempotent_after_resources_were_removed(tmp_path):
     assert second["deleted_resource_count"] == 0
     assert second["eph_workloads_absent"] is True
     assert second["eph_credentials_revoked"] is True
+
+
+
+def test_eph_cleanup_discovers_and_revokes_late_target_kubeconfig_secret(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, resources, calls = _runner_factory()
+    target_secret = _resource("Secret", "capi-pivot-target-kubeconfig", credential=True)
+    target_secret["metadata"]["labels"] = {}
+    target_secret["metadata"]["annotations"] = {}
+    resources["secrets"].append(target_secret)
+    result = execute_eph_cleanup(
+        {
+            "namespace": "eph-system",
+            "deployment_id": "deployment-1",
+            "confirm_source_cluster_uid": "source-uid",
+            "confirm_target_cluster_uid": "target-uid",
+        },
+        _proof(),
+        runner,
+        environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+    )
+    assert result["eph_cleanup_verified"] is True
+    assert result["revoked_credential_count"] == 2
+    assert not resources["secrets"]
+    assert any(
+        call[0] == "delete"
+        and call[1] == "secrets"
+        and call[2] == "capi-pivot-target-kubeconfig"
+        for call in calls
+    )
