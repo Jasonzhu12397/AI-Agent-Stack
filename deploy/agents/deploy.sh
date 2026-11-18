@@ -39,9 +39,10 @@ mark_eph_cleanup_resources() {
     local context="$1"
     local kind="$2"
     local name="$3"
+    local namespace="${4:-ai-agent-system}"
     local scope_args=()
     if [[ "$kind" != "clusterrole" && "$kind" != "clusterrolebinding" ]]; then
-        scope_args=(--namespace ai-agent-system)
+        scope_args=(--namespace "$namespace")
     fi
     kubectl --context "$context" "${scope_args[@]}" label "$kind" "$name" \
         app.kubernetes.io/managed-by=ai-agent-stack \
@@ -115,17 +116,13 @@ mark_eph_agent_pod_template
 mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent
 mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight
 mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding eph-agent-preflight
+mark_eph_cleanup_resources "$EPH_CONTEXT" role eph-agent-metal3-deployer metal3
+mark_eph_cleanup_resources "$EPH_CONTEXT" rolebinding eph-agent-metal3-deployer metal3
 for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig; do
     mark_eph_cleanup_resources "$EPH_CONTEXT" secret "$secret"
     kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret "$secret" \
         ai-agent-stack.io/credential-scope=eph-agent --overwrite
 done
-if kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
-    capi-pivot-target-kubeconfig >/dev/null 2>&1; then
-    mark_eph_cleanup_resources "$EPH_CONTEXT" secret capi-pivot-target-kubeconfig
-    kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret \
-        capi-pivot-target-kubeconfig ai-agent-stack.io/credential-scope=eph-agent --overwrite
-fi
 mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-operator
 
 kubectl --context "$CLOUD_CONTEXT" --namespace ai-agent-system rollout status deployment/cloud-control-agent --timeout="$ROLLOUT_TIMEOUT"
