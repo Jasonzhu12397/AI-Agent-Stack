@@ -45,7 +45,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
         tenant=tenant,
         created_by=user,
         name="Tool model",
-        provider_type=ModelProvider.ProviderType.FAKE,
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
     )
     model = ModelConfig.objects.create(
         provider=provider,
