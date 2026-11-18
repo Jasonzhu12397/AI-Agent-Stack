@@ -263,10 +263,17 @@ def verify_target_postflight(
     md_labels = md_metadata.get("labels", {})
     md_annotations = md_metadata.get("annotations", {})
     if (
-        md_labels.get("app.kubernetes.io/managed-by") != "target-agent"
+        md_metadata.get("name") != machine_deployment_name
+        or md_metadata.get("namespace") != namespace
+        or md_labels.get("app.kubernetes.io/managed-by") != "target-agent"
         or md_labels.get("ai-agent-stack.io/deployment-id") != deployment_id
         or md_annotations.get("ai-agent-stack.io/target-cluster-uid")
         != ownership_evidence.get("target_cluster_uid")
+        or machine_deployment.get("spec", {}).get("clusterName") != cluster_name
+        or machine_deployment.get("spec", {}).get("template", {}).get("spec", {}).get(
+            "version"
+        )
+        != control_plane_spec.get("version")
     ):
         raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_OWNERSHIP_MISMATCH")
     md_spec = machine_deployment.get("spec", {})
