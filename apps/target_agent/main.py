@@ -699,7 +699,7 @@ def _revoke_source_observer_secret(
     if not observed.get("available"):
         error = observed.get("stderr", "").lower()
         if "notfound" in error or "not found" in error:
-            return True
+            return False
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_OBSERVATION_FAILED")
     try:
         secret = json.loads(observed.get("stdout", ""))
@@ -859,19 +859,23 @@ def _execute_attested_eph_cleanup(
         _kubectl,
         lease_lost_event,
     )
-    observer_revoked = _revoke_source_observer_secret(
-        payload.get("deployment_id", ""),
-        proof.get("source_cluster_uid", ""),
-        lease_lost_event,
-    )
+    try:
+        observer_secret_deleted = _revoke_source_observer_secret(
+            payload.get("deployment_id", ""),
+            proof.get("source_cluster_uid", ""),
+            lease_lost_event,
+        )
+    except HandoffError as exc:
+        exc.side_effects = bool(cleanup.get("side_effects", False)) or exc.side_effects
+        raise
     source_credentials_revoked = cleanup.get("eph_credentials_revoked") is True
     return {
         **cleanup,
-        "eph_credentials_revoked": source_credentials_revoked and observer_revoked,
-        "source_observer_secret_revoked": observer_revoked,
+        "eph_credentials_revoked": source_credentials_revoked,
+        "source_observer_secret_revoked": True,
         "revoked_credential_count": cleanup.get("revoked_credential_count", 0)
-        + int(observer_revoked),
-        "side_effects": cleanup.get("side_effects", False) or observer_revoked,
+        + int(observer_secret_deleted),
+        "side_effects": cleanup.get("side_effects", False) or observer_secret_deleted,
         "target_metal3_ownership_verified": True,
         "target_ironic_inventory_verified": ownership.get(
             "target_ironic_inventory_verified"
