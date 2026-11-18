@@ -218,8 +218,20 @@ class ModelGateway:
                 raise TypeError("message content or tool_calls has an invalid type")
             if tool_calls and not tools:
                 raise TypeError("provider returned tool calls when no tools were offered")
-            input_tokens = int(usage.get("prompt_tokens", 0))
-            output_tokens = int(usage.get("completion_tokens", 0))
+            if not isinstance(usage, dict):
+                raise TypeError("usage must be an object")
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            if (
+                not isinstance(input_tokens, int)
+                or isinstance(input_tokens, bool)
+                or input_tokens < 0
+                or not isinstance(output_tokens, int)
+                or isinstance(output_tokens, bool)
+                or output_tokens < 0
+                or output_tokens > effective_max_tokens
+            ):
+                raise ValueError("provider token usage is outside the requested bounds")
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_INVALID_RESPONSE",
