@@ -759,6 +759,15 @@ def _revoke_source_observer_secret(
     return True
 
 
+def _require_eph_cleanup_checkpoint(command: dict[str, Any]) -> None:
+    checkpoint = command.get("deployment_checkpoint")
+    if (
+        not isinstance(checkpoint, dict)
+        or checkpoint.get("phase") != HandoffPhase.BMH_REGISTRY_MIGRATED.value
+    ):
+        raise HandoffError("EPH_CLEANUP_BMH_HANDOFF_CHECKPOINT_REQUIRED")
+
+
 def _execute_attested_eph_cleanup(
     payload: dict[str, Any],
     deployment_context: dict[str, Any] | None,
@@ -870,6 +879,7 @@ def execute(
         }
     if action == "target.eph.cleanup":
         try:
+            _require_eph_cleanup_checkpoint(command)
             evidence = _execute_attested_eph_cleanup(
                 command.get("payload", {}),
                 command.get("deployment_context"),
@@ -938,6 +948,8 @@ def execute(
                     "ironic_internal_ntp_ip": configured_ntp_ip,
                 }
             if next_phase == HandoffPhase.EPH_CLEANUP_VERIFIED.value:
+                if current_phase != HandoffPhase.BMH_REGISTRY_MIGRATED.value:
+                    raise HandoffError("EPH_CLEANUP_BMH_HANDOFF_CHECKPOINT_REQUIRED")
                 cleanup_evidence = _execute_attested_eph_cleanup(
                     payload,
                     command.get("deployment_context"),
