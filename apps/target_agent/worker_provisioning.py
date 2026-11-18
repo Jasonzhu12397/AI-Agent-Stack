@@ -13,15 +13,15 @@ from typing import Any
 
 import yaml
 
-from .ntp_policy import (
-    NtpPolicyError,
-    render_worker_chrony_pre_kubeadm_command,
-    validate_ironic_internal_ntp_ip,
-)
 from packages.agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     render_sriov_device_plugin_configmap,
     validate_sriov_device_plugin_config,
+)
+from .ntp_policy import (
+    NtpPolicyError,
+    render_worker_chrony_pre_kubeadm_command,
+    validate_ironic_internal_ntp_ip,
 )
 
 MAX_WORKERS = 2500
