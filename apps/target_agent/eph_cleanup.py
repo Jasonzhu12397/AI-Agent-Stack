@@ -138,37 +138,25 @@ def execute_eph_cleanup(
             secret_document = json.loads(optional_target_secret.get("stdout", ""))
         except (TypeError, ValueError) as exc:
             raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_INVALID") from exc
-        secret_metadata = secret_document.get("metadata", {})
-        secret_labels = secret_metadata.get("labels", {})
-        if not isinstance(secret_labels, dict):
-            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_METADATA_INVALID")
-        existing_deployment_id = secret_labels.get(DEPLOYMENT_ID_ANNOTATION)
-        if existing_deployment_id not in (None, deployment_id):
-            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH")
-        for arguments in (
-            [
-                "label",
-                "secret",
-                "capi-pivot-target-kubeconfig",
-                "--namespace",
-                namespace,
-                "app.kubernetes.io/managed-by=ai-agent-stack",
-                f"{CLEANUP_ANNOTATION}=true",
-                f"{DEPLOYMENT_ID_ANNOTATION}={deployment_id}",
-                "--overwrite",
-            ],
-            [
-                "annotate",
-                "secret",
-                "capi-pivot-target-kubeconfig",
-                "--namespace",
-                namespace,
-                f"{CLEANUP_ANNOTATION}=true",
-                f"{CREDENTIAL_SCOPE_ANNOTATION}=eph-agent",
-                "--overwrite",
-            ],
+        secret_metadata = secret_document.get("metadata")
+        secret_labels = secret_metadata.get("labels", {}) if isinstance(secret_metadata, dict) else None
+        secret_annotations = (
+            secret_metadata.get("annotations", {}) if isinstance(secret_metadata, dict) else None
+        )
+        if (
+            not isinstance(secret_metadata, dict)
+            or secret_metadata.get("name") != "capi-pivot-target-kubeconfig"
+            or secret_metadata.get("namespace") != namespace
+            or not isinstance(secret_labels, dict)
+            or not isinstance(secret_annotations, dict)
+            or secret_labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
+            or secret_labels.get(CLEANUP_ANNOTATION) != "true"
+            or secret_labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
+            or secret_annotations.get(CLEANUP_ANNOTATION) != "true"
+            or secret_annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
+            or secret_annotations.get(CREDENTIAL_SCOPE_ANNOTATION) != "eph-agent"
         ):
-            _run(runner, arguments, source_kubeconfig)
+            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH")
     elif "notfound" not in optional_target_secret.get("stderr", "").lower() and (
         "not found" not in optional_target_secret.get("stderr", "").lower()
     ):
@@ -216,6 +204,7 @@ def execute_eph_cleanup(
                 not isinstance(annotations, dict)
                 or not isinstance(labels, dict)
                 or annotations.get(CLEANUP_ANNOTATION) != "true"
+                or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
                 or labels.get(CLEANUP_ANNOTATION) != "true"
                 or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
                 or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
@@ -251,6 +240,7 @@ def execute_eph_cleanup(
                 "--wait=true",
                 "--timeout=120s",
                 "--ignore-not-found=true",
+                f"--preconditions=uid={item['uid']}",
             ]
             current_result = runner(
                 [
@@ -273,9 +263,17 @@ def execute_eph_cleanup(
                 current_metadata = current.get("metadata", {})
                 if (
                     current_metadata.get("uid") != item["uid"]
+                    or current_metadata.get("namespace") != (
+                        None if item["resource"] in CLUSTER_SCOPED_RESOURCES else namespace
+                    )
+                    or current_metadata.get("labels", {}).get("app.kubernetes.io/managed-by")
+                    != "ai-agent-stack"
                     or current_metadata.get("labels", {}).get(CLEANUP_ANNOTATION) != "true"
                     or current_metadata.get("labels", {}).get(DEPLOYMENT_ID_ANNOTATION)
                     != deployment_id
+                    or current_metadata.get("annotations", {}).get(CLEANUP_ANNOTATION) != "true"
+                    or current_metadata.get("annotations", {}).get(SOURCE_UID_ANNOTATION)
+                    != proof["source_cluster_uid"]
                 ):
                     raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_CHANGED")
             elif "notfound" not in current_result.get("stderr", "").lower() and (
