@@ -123,6 +123,8 @@ def settle_tenant_tokens(*, usage, consumed_tokens: int):
         return locked
     if locked.status != TenantTokenUsage.Status.RESERVED:
         raise ValueError("Only active token reservations can be settled")
+    if consumed_tokens > locked.reserved_tokens:
+        raise ValueError("Consumed tokens exceed the reserved provider-call ceiling")
     locked.status = TenantTokenUsage.Status.SETTLED
     locked.consumed_tokens = consumed_tokens
     locked.reserved_tokens = 0
