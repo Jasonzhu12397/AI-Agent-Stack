@@ -183,6 +183,7 @@ def test_target_agent_revokes_only_the_attested_source_observer_secret(monkeypat
     secret = {
         "metadata": {
             "name": "target-agent-source-observer",
+            "namespace": "ai-agent-system",
             "uid": "observer-secret-uid",
             "labels": {
                 "app.kubernetes.io/managed-by": "ai-agent-stack",
@@ -209,11 +210,14 @@ def test_target_agent_revokes_only_the_attested_source_observer_secret(monkeypat
     monkeypatch.setattr(target_main, "_kubectl", runner)
     assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is True
     assert calls[1][:3] == ["delete", "secret", "target-agent-source-observer"]
+    assert "--preconditions=uid=observer-secret-uid" in calls[1]
 
 
 def test_target_agent_refuses_to_revoke_another_deployments_observer_secret(monkeypatch):
     secret = {
         "metadata": {
+            "name": "target-agent-source-observer",
+            "namespace": "ai-agent-system",
             "uid": "observer-secret-uid",
             "labels": {
                 "app.kubernetes.io/managed-by": "ai-agent-stack",
@@ -521,3 +525,37 @@ def test_eph_cleanup_delete_uses_uid_precondition(tmp_path):
         any(argument.startswith("--preconditions=uid=") for argument in call)
         for call in delete_calls
     )
+
+
+
+def test_target_agent_requires_source_uid_on_observer_secret(monkeypatch):
+    secret = {
+        "metadata": {
+            "name": "target-agent-source-observer",
+            "namespace": "ai-agent-system",
+            "uid": "observer-secret-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "ai-agent-stack",
+                "ai-agent-stack.io/eph-cleanup": "true",
+                "ai-agent-stack.io/deployment-id": "deployment-1",
+            },
+            "annotations": {
+                "ai-agent-stack.io/eph-cleanup": "true",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda *_args, **_kwargs: {
+            "available": True,
+            "stdout": json.dumps(secret),
+            "stderr": "",
+        },
+    )
+    try:
+        target_main._revoke_source_observer_secret("deployment-1", "source-uid")
+    except target_main.HandoffError as exc:
+        assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
+    else:
+        raise AssertionError("Missing source cluster UID must block credential revocation")
