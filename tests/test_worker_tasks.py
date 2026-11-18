@@ -7,6 +7,8 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from worker_app.tasks import (
     _allowed_agent_output_tokens,
+    _resolve_and_settle_provider_usage,
+    PermanentTaskError,
     claim_next_task,
     fail_task,
     finish_task,
@@ -151,3 +153,64 @@ def test_agent_run_output_budget_uses_conservative_input_ceiling():
         0,
         15000,
     ) == 1000
+
+
+
+def test_invalid_provider_usage_settles_the_full_reserved_ceiling(monkeypatch):
+    from types import SimpleNamespace
+    import worker_app.tasks as worker_tasks
+
+    reservation = SimpleNamespace(reserved_tokens=1200)
+    settlements = []
+
+    def reject_usage(**kwargs):
+        raise PermanentTaskError("invalid provider usage")
+
+    monkeypatch.setattr(worker_tasks, "_resolve_provider_usage", reject_usage)
+    monkeypatch.setattr(
+        worker_tasks,
+        "_settle_provider_usage",
+        lambda usage, consumed_tokens: settlements.append((usage, consumed_tokens)),
+    )
+
+    with pytest.raises(PermanentTaskError, match="invalid provider usage"):
+        _resolve_and_settle_provider_usage(
+            token_reservation=reservation,
+            provider_type="openai_compatible",
+            reported_input_tokens=-1,
+            reported_output_tokens=0,
+            input_token_ceiling=1000,
+            output_token_ceiling=200,
+        )
+
+    assert settlements == [(reservation, 1200)]
+
+
+def test_valid_provider_usage_settles_actual_consumption(monkeypatch):
+    from types import SimpleNamespace
+    import worker_app.tasks as worker_tasks
+
+    reservation = SimpleNamespace(reserved_tokens=1200)
+    settlements = []
+    monkeypatch.setattr(
+        worker_tasks,
+        "_resolve_provider_usage",
+        lambda **kwargs: (700, 100),
+    )
+    monkeypatch.setattr(
+        worker_tasks,
+        "_settle_provider_usage",
+        lambda usage, consumed_tokens: settlements.append((usage, consumed_tokens)),
+    )
+
+    result = _resolve_and_settle_provider_usage(
+        token_reservation=reservation,
+        provider_type="openai_compatible",
+        reported_input_tokens=700,
+        reported_output_tokens=100,
+        input_token_ceiling=1000,
+        output_token_ceiling=200,
+    )
+
+    assert result == (700, 100)
+    assert settlements == [(reservation, 800)]
