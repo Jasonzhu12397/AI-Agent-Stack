@@ -378,8 +378,12 @@ def verify_target_postflight(
         raise PostflightError("POSTFLIGHT_CALICO_DAEMONSET_NOT_READY")
     if not multus:
         raise PostflightError("POSTFLIGHT_MULTUS_DAEMONSET_NOT_READY")
-    ovs_daemonset = _find_ready_daemonset(daemonsets, ("ovs", "openvswitch"))
-    if not ovs_daemonset:
+    ovs_daemonset = _find_ready_daemonset(daemonsets, ("ovs-cni",))
+    ovs_runtime_daemonset = _find_ready_daemonset(
+        daemonsets,
+        ("ovs-vswitchd", "openvswitch"),
+    )
+    if not ovs_daemonset or not ovs_runtime_daemonset:
         raise PostflightError("POSTFLIGHT_OVS_DAEMONSET_NOT_READY")
     sriov_daemonset = _find_ready_daemonset(
         daemonsets,
@@ -471,6 +475,7 @@ def verify_target_postflight(
         "multus_daemonset": multus,
         "sriov_daemonset": sriov_daemonset,
         "ovs_daemonset": ovs_daemonset,
+        "ovs_runtime_daemonset": ovs_runtime_daemonset,
         "sriov_nad_count": len(sriov_nads),
         "ovs_nad_count": len(ovs_nads),
         "sriov_resource_names": sorted(sriov_resource_names),
