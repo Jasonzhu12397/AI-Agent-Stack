@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from core.models import Tenant, TenantMembership, TenantTokenBudget
 from core.permissions import IsTenantAdmin
-from core.token_budget import _period_usage
+from core.token_budget import get_tenant_token_usage
 
 
 class TenantTokenBudgetUpdateSerializer(serializers.Serializer):
@@ -36,16 +36,6 @@ class TenantTokenBudgetView(APIView):
             pk=self.kwargs["tenant_id"],
         )
 
-    @staticmethod
-    def _usage(tenant_id, now):
-        local_now = timezone.localtime(now)
-        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        month_start = day_start.replace(day=1)
-        return {
-            "daily_used": _period_usage(tenant_id, day_start, now),
-            "monthly_used": _period_usage(tenant_id, month_start, now),
-        }
-
     def get(self, request, tenant_id):
         tenant = self.get_tenant()
         budget, _ = TenantTokenBudget.objects.get_or_create(tenant=tenant)
@@ -54,7 +44,7 @@ class TenantTokenBudgetView(APIView):
             {
                 "daily_limit": budget.daily_limit,
                 "monthly_limit": budget.monthly_limit,
-                **self._usage(tenant.id, now),
+                **get_tenant_token_usage(tenant.id, now),
             }
         )
 
