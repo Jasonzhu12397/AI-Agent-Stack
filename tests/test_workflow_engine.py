@@ -23,6 +23,7 @@ from core.workflow_engine import (
     WorkflowValidationError,
     _execute_node,
     _workflow_output_budget,
+    execute_workflow_run,
     validate_model_references,
     validate_workflow_definition,
 )
@@ -987,3 +988,80 @@ def test_workflow_llm_budget_blocks_before_provider_call(workflow_workspace):
             )
 
     complete.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_workflow_resumes_persisted_llm_result_after_lease_loss(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Lease recovery workflow",
+        slug="lease-recovery-workflow",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    published = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    created = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "resume without duplicate"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-lease-recovery-001",
+    )
+    assert created.status_code == 202
+    run = WorkflowRun.objects.select_related("task").get(pk=created.data["id"])
+    task = run.task
+    task.status = Task.Status.RUNNING
+    task.lease_owner = "workflow-recovery-worker"
+    task.lease_token = uuid4()
+    task.lease_expires_at = timezone.now() + timezone.timedelta(minutes=5)
+    task.save(
+        update_fields=[
+            "status",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "updated_at",
+        ]
+    )
+
+    response = SimpleNamespace(
+        content="durable workflow answer",
+        input_tokens=12,
+        output_tokens=7,
+        provider="fake",
+        model="workflow-fake",
+        latency_ms=5,
+    )
+    renew_calls = [0]
+
+    def lose_lease_after_llm(_task_id, _lease_token, _worker_id):
+        renew_calls[0] += 1
+        return renew_calls[0] < 4
+
+    with patch("core.workflow_engine.ModelGateway.complete", return_value=response) as complete:
+        with pytest.raises(RuntimeError, match="lease lost"):
+            execute_workflow_run(
+                task,
+                "workflow-recovery-worker",
+                lose_lease_after_llm,
+            )
+        persisted = WorkflowRun.objects.get(pk=run.pk)
+        assert persisted.state["_pending_llm"]["answer"]["content"] == (
+            "durable workflow answer"
+        )
+        result = execute_workflow_run(
+            task,
+            "workflow-recovery-worker",
+            lambda *_args: True,
+        )
+
+    assert complete.call_count == 1
+    assert result["output"]["content"] == "durable workflow answer"
