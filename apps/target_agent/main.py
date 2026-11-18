@@ -111,6 +111,7 @@ def _kubectl(
     timeout: int = 30,
     max_output_bytes: int = 512 * 1024,
     kubeconfig: str | None = None,
+    lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     allowed_environment = (
         "PATH",
@@ -129,18 +130,58 @@ def _kubectl(
         if key in os.environ
     }
     environment["KUBECONFIG"] = kubeconfig or os.environ.get("KUBECONFIG", "")
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        return {"available": False, "error": "COMMAND_LEASE_LOST"}
     try:
-        completed = subprocess.run(
-            ["kubectl", *arguments],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=environment,
-        )
+        if lease_lost_event is None:
+            completed = subprocess.run(
+                ["kubectl", *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=environment,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+            returncode = completed.returncode
+        else:
+            process = subprocess.Popen(
+                ["kubectl", *arguments],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+                start_new_session=True,
+            )
+            deadline = time.monotonic() + timeout
+            while True:
+                if lease_lost_event.is_set():
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.communicate()
+                    return {"available": False, "error": "COMMAND_LEASE_LOST"}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.communicate()
+                    return {"available": False, "error": "TimeoutExpired"}
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            returncode = process.returncode
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "error": type(exc).__name__}
-    output_size = len(completed.stdout.encode("utf-8"))
+    output_size = len(stdout.encode("utf-8"))
     if output_size > max_output_bytes:
         return {
             "available": False,
@@ -148,12 +189,11 @@ def _kubectl(
             "output_bytes": output_size,
         }
     return {
-        "available": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr[-2000:],
+        "available": returncode == 0,
+        "returncode": returncode,
+        "stdout": stdout,
+        "stderr": stderr[-2000:],
     }
-
 
 def _require_configured_ironic_internal_ntp_ip(requested: Any) -> str:
     configured = os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
