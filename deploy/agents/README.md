@@ -24,7 +24,6 @@ All images must be pinned by immutable SHA-256 digest:
 - `EPH_AGENT_IMAGE`
 - `TARGET_AGENT_IMAGE`
 - `DEPLOYMENT_ID`: stable DNS-label identifier shared by the EPH and Target cleanup scope.
-- `SOURCE_CLUSTER_UID`: UID of the source-side CAPI Cluster object preserved in the Pivot attestation.
 
 Run `deploy.sh` only after the secrets below have been provisioned by your secret manager. The script performs server-side dry-run validation before applying resources and waits for all three Deployments.
 
@@ -99,10 +98,9 @@ export CLOUD_CONTROL_IMAGE=<registry>/ai-agent-cloud-control-agent@sha256:<diges
 export EPH_AGENT_IMAGE=<registry>/ai-agent-eph-agent@sha256:<digest>
 export TARGET_AGENT_IMAGE=<registry>/ai-agent-target-agent@sha256:<digest>
 export DEPLOYMENT_ID=<stable-dns-label>
-export SOURCE_CLUSTER_UID=<source-capi-cluster-uid>
 bash deploy.sh
 ```
 
 ## Current implementation boundary
 
-The current runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, live CAPI/Metal3 ownership observation, TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH cleanup executor now requires the Cloud Control trusted Pivot attestation and live Target Metal3/Ironic ownership verification; it deletes only resources explicitly labelled for the matching deployment and source Cluster UID, verifies their absence, and removes the Target-side `target-agent-source-observer` Secret. `deploy.sh` applies the matching cleanup labels and requires `DEPLOYMENT_ID`, `SOURCE_CLUSTER_UID`, and the observer Secret. This cleanup path still requires live provider validation and fault-injection/retry verification before production use. Worker provisioning, host-level chronyd application/synchronization, autonomous diagnosis/repair, and the full three-Agent lifecycle E2E remain incomplete.
+The current runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, live CAPI/Metal3 ownership observation, TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH cleanup executor now requires the Cloud Control trusted Pivot attestation and live Target Metal3/Ironic ownership verification; it deletes only resources explicitly labelled for the matching deployment scope, with source Cluster identity taken from the trusted Pivot attestation, verifies their absence, and removes the Target-side `target-agent-source-observer` Secret. `deploy.sh` applies the matching cleanup labels and requires `DEPLOYMENT_ID` and the observer Secret. This cleanup path still requires live provider validation and fault-injection/retry verification before production use. Worker provisioning, host-level chronyd application/synchronization, autonomous diagnosis/repair, and the full three-Agent lifecycle E2E remain incomplete.
