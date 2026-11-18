@@ -272,9 +272,16 @@ def _validate_references(
     for document in documents:
         kind = document.get("kind")
         if kind not in RESOURCE_TYPES or kind in by_kind:
-            raise WorkerProvisioningError("WORKER_PROVISIONING_RESOURCE_KIND_UNSUPPORTED_OR_DUPLICATE")
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_RESOURCE_KIND_UNSUPPORTED_OR_DUPLICATE"
+            )
         by_kind[kind] = document
-    required = ("MachineDeployment", "KubeadmConfigTemplate", "Metal3MachineTemplate", "Metal3DataTemplate")
+    required = (
+        "MachineDeployment",
+        "KubeadmConfigTemplate",
+        "Metal3MachineTemplate",
+        "Metal3DataTemplate",
+    )
     if any(kind not in by_kind for kind in required):
         raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_RESOURCE_MISSING")
 
@@ -300,7 +307,9 @@ def _validate_references(
         or infrastructure_ref.get("apiGroup") != RESOURCE_TYPES["Metal3MachineTemplate"]["group"]
         or infrastructure_ref.get("name") != metal3_template.get("metadata", {}).get("name")
     ):
-        raise WorkerProvisioningError("WORKER_PROVISIONING_INFRASTRUCTURE_TEMPLATE_REFERENCE_INVALID")
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_INFRASTRUCTURE_TEMPLATE_REFERENCE_INVALID"
+        )
 
     data_template_name = (
         metal3_template.get("spec", {}).get("template", {}).get("spec", {})
@@ -354,7 +363,11 @@ def _prepare_manifests(
     md = by_kind["MachineDeployment"]
     md_spec = md.get("spec", {})
     replicas = md_spec.get("replicas")
-    if not isinstance(replicas, int) or isinstance(replicas, bool) or not 1 <= replicas <= MAX_WORKERS:
+    if (
+        not isinstance(replicas, int)
+        or isinstance(replicas, bool)
+        or not 1 <= replicas <= MAX_WORKERS
+    ):
         raise WorkerProvisioningError("WORKER_PROVISIONING_REPLICA_COUNT_INVALID")
     selector = md_spec.get("selector", {}).get("matchLabels")
     template_metadata = md_spec.get("template", {}).get("metadata", {})
@@ -404,7 +417,9 @@ def _verify_existing_ownership(
         try:
             existing = json.loads(result.get("stdout", ""))
         except (TypeError, ValueError) as exc:
-            raise WorkerProvisioningError("WORKER_PROVISIONING_EXISTING_RESOURCE_JSON_INVALID") from exc
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_EXISTING_RESOURCE_JSON_INVALID"
+            ) from exc
         metadata = existing.get("metadata", {})
         labels = metadata.get("labels", {})
         annotations = metadata.get("annotations", {})
@@ -478,7 +493,9 @@ def execute_worker_provisioning(
             else environ.get("IRONIC_INTERNAL_NTP_IP", "")
         )
     except (NtpPolicyError, TypeError, ValueError) as exc:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_IRONIC_INTERNAL_NTP_IP_REQUIRED") from exc
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_IRONIC_INTERNAL_NTP_IP_REQUIRED"
+        ) from exc
 
     target_uid = _cluster_uid(runner, namespace, cluster_name, proof)
     documents = _load_manifests(payload.get("worker_resources"))
