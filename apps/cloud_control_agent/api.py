@@ -37,6 +37,7 @@ TARGET_ACTIONS = frozenset({
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
     "target.eph.cleanup",
+    "target.worker.provision",
 })
 
 
