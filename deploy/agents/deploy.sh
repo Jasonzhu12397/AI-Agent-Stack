@@ -184,6 +184,8 @@ if kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
         capi-pivot-target-kubeconfig ai-agent-stack.io/credential-scope=eph-agent --overwrite
 fi
 mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-operator
+kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system annotate secret target-agent-source-operator \
+    ai-agent-stack.io/credential-scope=target-agent --overwrite
 
 kubectl --context "$CLOUD_CONTEXT" --namespace ai-agent-system rollout status deployment/cloud-control-agent --timeout="$ROLLOUT_TIMEOUT"
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system rollout status deployment/eph-agent --timeout="$ROLLOUT_TIMEOUT"

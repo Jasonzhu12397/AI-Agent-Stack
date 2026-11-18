@@ -434,13 +434,38 @@ def attest_cleanup_scope(
         )
         target_metadata = target_secret.get("metadata", {})
         target_data = target_secret.get("data", {})
+        target_labels = target_metadata.get("labels", {})
+        target_annotations = target_metadata.get("annotations", {})
         if (
             target_metadata.get("name") != TARGET_OBSERVER_SECRET
             or target_metadata.get("namespace") != NAMESPACE
             or not isinstance(target_data, dict)
+            or not isinstance(target_labels, dict)
+            or not isinstance(target_annotations, dict)
         ):
             raise CleanupScopeError(
                 "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_IDENTITY_MISMATCH",
+                side_effects=mutated > 0,
+            )
+        if (
+            target_labels.get(MANAGED_BY_LABEL) != "ai-agent-stack"
+            or target_labels.get(CLEANUP_LABEL) != "true"
+            or target_labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
+            or target_annotations.get(CLEANUP_ANNOTATION) != "true"
+            or target_annotations.get(CREDENTIAL_SCOPE_ANNOTATION) != "target-agent"
+        ):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_RESOURCE_OWNERSHIP_MISMATCH",
+                side_effects=mutated > 0,
+            )
+        if target_annotations.get(SOURCE_UID_ANNOTATION) not in (None, source_cluster_uid):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_SOURCE_UID_MISMATCH",
+                side_effects=mutated > 0,
+            )
+        if not isinstance(target_metadata.get("uid"), str) or not target_metadata.get("uid"):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_RESOURCE_UID_MISSING",
                 side_effects=mutated > 0,
             )
         encoded_source_kubeconfig = target_data.get("kubeconfig")
