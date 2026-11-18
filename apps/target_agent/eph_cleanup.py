@@ -169,6 +169,10 @@ def execute_eph_cleanup(
                 expected_namespace = (
                     None if resource in CLUSTER_SCOPED_RESOURCES else resource_namespace
                 )
+                if resource == "secrets" and name == "capi-pivot-target-kubeconfig":
+                    raise EphCleanupError(
+                        "EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH"
+                    )
                 if (
                     not isinstance(annotations, dict)
                     or not isinstance(labels, dict)

@@ -247,7 +247,7 @@ spec:
             - name: EPH_CAPI_NAMESPACE
               value: metal3
             - name: EPH_KUBECONFIG
-              value: /var/run/secrets/ai-agent/eph-cluster/kubeconfig
+              value: /var/run/secrets/ai-agent/capi-pivot/source/kubeconfig
           resources:
             requests:
               cpu: 100m

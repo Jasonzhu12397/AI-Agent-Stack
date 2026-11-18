@@ -177,6 +177,12 @@ for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-k
     kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret "$secret" \
         ai-agent-stack.io/credential-scope=eph-agent --overwrite
 done
+if kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
+    capi-pivot-target-kubeconfig >/dev/null 2>&1; then
+    mark_eph_cleanup_resources "$EPH_CONTEXT" secret capi-pivot-target-kubeconfig
+    kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret \
+        capi-pivot-target-kubeconfig ai-agent-stack.io/credential-scope=eph-agent --overwrite
+fi
 mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-operator
 
 kubectl --context "$CLOUD_CONTEXT" --namespace ai-agent-system rollout status deployment/cloud-control-agent --timeout="$ROLLOUT_TIMEOUT"

@@ -26,7 +26,7 @@ def test_agent_tool_result_omits_payload_over_context_limit():
 
     result = json.loads(serialized)
     assert result["ok"] is False
-    assert "32 KiB" in result["error"]
+    assert "8 KiB" in result["error"]
 
 
 def test_agent_tool_result_handles_circular_payloads():
