@@ -195,7 +195,7 @@ def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_bu
     reserved_at = datetime(2026, 11, 17, 23, 59, tzinfo=UTC)
     settled_at = reserved_at + timedelta(minutes=2)
     with (
-        patch("core.token_budget.timezone.now", side_effect=[reserved_at, settled_at]),
+        patch("core.token_budget.timezone.now", return_value=reserved_at),
         patch("core.token_budget.timezone.localtime", side_effect=lambda value: value),
     ):
         reservation = reserve_tenant_tokens(
