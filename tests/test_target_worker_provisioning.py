@@ -8,6 +8,7 @@ from apps.target_agent import main as target_main
 from apps.target_agent.ntp_policy import render_worker_chrony_pre_kubeadm_command
 from apps.target_agent.worker_provisioning import (
     WorkerProvisioningError,
+    _verify_sriov_configmap_ownership,
     execute_worker_provisioning,
 )
 
@@ -573,3 +574,54 @@ def test_worker_provisioning_applies_sriov_configmap_from_selected_pci_resources
     ]
     assert result["worker_provisioning_resources_applied"] is True
     assert sum(1 for call in calls if call[0] == "apply") == 6
+
+
+def test_sriov_configmap_ownership_accepts_kubernetes_not_found_variants():
+    configmaps = [{
+        "metadata": {
+            "name": "sriov-dp-configmap",
+            "annotations": {"ai-agent-stack.io/target-cluster-uid": "target-uid"},
+        },
+    }]
+    for stderr in (
+        'Error from server (NotFound): configmaps "sriov-dp-configmap" not found',
+        "NotFound",
+        'configmaps "sriov-dp-configmap" not found',
+    ):
+        _verify_sriov_configmap_ownership(
+            lambda *_args, **_kwargs: {
+                "available": False,
+                "stdout": "",
+                "stderr": stderr,
+            },
+            configmaps,
+            "metal3",
+            "deployment-1",
+            "target",
+        )
+
+
+def test_sriov_configmap_ownership_does_not_hide_api_or_transport_errors():
+    configmaps = [{
+        "metadata": {
+            "name": "sriov-dp-configmap",
+            "annotations": {"ai-agent-stack.io/target-cluster-uid": "target-uid"},
+        },
+    }]
+    for stderr in ("connection refused", "Unauthorized", "TLS handshake timeout"):
+        try:
+            _verify_sriov_configmap_ownership(
+                lambda *_args, **_kwargs: {
+                    "available": False,
+                    "stdout": "",
+                    "stderr": stderr,
+                },
+                configmaps,
+                "metal3",
+                "deployment-1",
+                "target",
+            )
+        except WorkerProvisioningError as exc:
+            assert str(exc) == "SRIOV_DEVICE_PLUGIN_CONFIGMAP_LOOKUP_FAILED"
+        else:
+            raise AssertionError(f"Unexpectedly ignored ConfigMap lookup error: {stderr}")
