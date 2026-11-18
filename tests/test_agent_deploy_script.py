@@ -128,3 +128,11 @@ def test_target_agent_receives_ironic_credentials_only_from_kubernetes_secret():
         == "ironic-api-token"
     )
     assert environment["IRONIC_API_MICROVERSION"]["value"] == "1.82"
+
+def test_legacy_shared_node_agent_runtime_is_absent():
+    assert not (ROOT / "apps/node_agent").exists()
+    assert not (ROOT / "Dockerfile.node-agent").exists()
+    assert not (ROOT / "deploy/agents/node-agent.yaml").exists()
+    assert (ROOT / "apps/cloud_control_agent/main.py").is_file()
+    assert (ROOT / "apps/eph_agent/main.py").is_file()
+    assert (ROOT / "apps/target_agent/main.py").is_file()
