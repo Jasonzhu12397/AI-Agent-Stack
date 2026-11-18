@@ -254,6 +254,7 @@ def _network_contract(
             or not attachment_namespace
             or not isinstance(attachment_name, str)
             or not attachment_name
+            or not isinstance(cni_type, str)
             or cni_type not in {"sriov", "ovs"}
             or (cni_type == "sriov" and (not isinstance(resource_name, str) or not resource_name))
             or (cni_type == "ovs" and resource_name is not None)
