@@ -313,7 +313,7 @@ def test_cleanup_scope_rejects_observer_secret_with_unrelated_source_kubeconfig(
     else:
         raise AssertionError("Target observer Secret must contain the attested source kubeconfig")
     assert not any(
-        call[3] == "patch" and call[4] == "secret"
+        call[3] == "patch" and call[5] == "target-agent-source-observer"
         for call in calls
-        if len(call) > 4
+        if len(call) > 5
     )
