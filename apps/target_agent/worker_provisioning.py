@@ -903,17 +903,38 @@ def execute_worker_provisioning(
         observed_metadata = observed.get("metadata", {})
         generation = observed_metadata.get("generation", 0)
         status = observed.get("status", {})
-        if status.get("observedGeneration", 0) >= generation:
+        observed_generation = status.get("observedGeneration")
+        updated_replicas = status.get("updatedReplicas")
+        current_replicas = status.get("replicas")
+        if (
+            isinstance(generation, int)
+            and not isinstance(generation, bool)
+            and generation > 0
+            and isinstance(observed_generation, int)
+            and not isinstance(observed_generation, bool)
+            and observed_generation >= generation
+            and isinstance(updated_replicas, int)
+            and not isinstance(updated_replicas, bool)
+            and isinstance(current_replicas, int)
+            and not isinstance(current_replicas, bool)
+            and updated_replicas >= desired_replicas
+            and current_replicas >= desired_replicas
+        ):
             break
         time.sleep(3)
     else:
         raise WorkerProvisioningError(
-            "WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED",
+            "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_REPLICAS_NOT_RECONCILED",
             side_effects=bool(applied_output),
         )
     observed_spec = observed.get("spec", {})
     desired = observed_spec.get("replicas")
-    if not isinstance(desired, int) or desired < 1:
+    if (
+        not isinstance(desired, int)
+        or isinstance(desired, bool)
+        or desired < 1
+        or desired != desired_replicas
+    ):
         raise WorkerProvisioningError(
             "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_SPEC_INVALID",
             side_effects=bool(applied_output),
@@ -924,7 +945,10 @@ def execute_worker_provisioning(
         "worker_provisioning_controller_observed": True,
         "machine_deployment": md_name,
         "available_bmh_count_before_provisioning": available_bmh_count,
-        "new_worker_capacity_verified": available_bmh_count >= additional_workers,
+        "preprovision_bmh_capacity_verified": available_bmh_count >= additional_workers,
+        "preprovision_available_bmh_count": available_bmh_count,
+        "controller_updated_replicas": observed.get("status", {}).get("updatedReplicas"),
+        "controller_observed_generation": observed.get("status", {}).get("observedGeneration"),
         "machine_deployment_namespace": namespace,
         "desired_worker_count": desired,
         "worker_template_resources": [
