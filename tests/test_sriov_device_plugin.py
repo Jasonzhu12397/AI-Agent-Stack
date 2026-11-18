@@ -1,6 +1,6 @@
 import pytest
 
-from apps.target_agent.sriov_device_plugin import (
+from packages.agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     render_sriov_device_plugin_configmap,
     validate_sriov_device_plugin_config,
