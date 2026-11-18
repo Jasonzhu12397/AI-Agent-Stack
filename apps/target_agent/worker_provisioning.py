@@ -1362,7 +1362,7 @@ def execute_worker_provisioning(
                     side_effects=bool(applied_output),
                 )
             try:
-                _run(
+                rollout_result = _run(
                     runner,
                     [
                         "rollout",
@@ -1376,6 +1376,10 @@ def execute_worker_provisioning(
                     timeout=130,
                     lease_lost_event=lease_lost_event,
                 )
+                if rollout_result.get("returncode", 0) != 0:
+                    raise WorkerProvisioningError(
+                        "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_ROLLOUT_FAILED"
+                    )
             except WorkerProvisioningError as exc:
                 if str(exc) == "WORKER_PROVISIONING_COMMAND_LEASE_LOST":
                     raise
