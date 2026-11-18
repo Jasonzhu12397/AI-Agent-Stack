@@ -665,9 +665,17 @@ def execute_agent_run(task):
                 0 if model_config.provider.provider_type == "fake"
                 else estimated_input_tokens
             )
+            output_payload = json.dumps(
+                {
+                    "content": response.content,
+                    "tool_calls": response.tool_calls,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
             actual_output_tokens = response.output_tokens or (
                 0 if model_config.provider.provider_type == "fake"
-                else (len(response.content.encode("utf-8")) + 1) // 2
+                else (len(output_payload) + 1) // 2
             )
             input_tokens += actual_input_tokens
             output_tokens += actual_output_tokens
