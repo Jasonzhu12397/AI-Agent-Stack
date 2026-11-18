@@ -172,10 +172,14 @@ def execute(
                 _run_kubectl,
                 lease_lost_event,
             )
-            observed = observe_baremetalhosts(
-                {"namespace": payload.get("namespace", "metal3")},
-                _run_kubectl,
-            )
+            try:
+                observed = observe_baremetalhosts(
+                    {"namespace": payload.get("namespace", "metal3")},
+                    _run_kubectl,
+                )
+            except Metal3SkillError as exc:
+                exc.side_effects = True
+                raise
             requested_names = {item["metadata"]["name"] for item in rendered}
             observed_names = {
                 item["name"] for item in observed["hosts"]
@@ -303,6 +307,14 @@ def execute(
             "side_effects": False,
         }
     if action == "eph.capi.cluster.wait_ready":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "bmh_ready":
+            return {
+                "status": "blocked",
+                "error_code": "CAPI_CONTROL_PLANE_BMH_READY_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
         try:
             evidence = wait_for_capi_control_plane_ready(
                 command.get("payload", {}),
