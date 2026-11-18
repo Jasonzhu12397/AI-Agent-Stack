@@ -10,6 +10,7 @@ RUN test -n "$KUBECTL_VERSION" && \
     curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ASSET_ARCH}/kubectl" && \
     echo "${CHECKSUM}  /usr/local/bin/kubectl" | sha256sum -c - && chmod 0755 /usr/local/bin/kubectl
 COPY pyproject.toml README.md ./
+COPY packages/__init__.py ./packages/__init__.py
 COPY packages/agent_contracts ./packages/agent_contracts
 COPY packages/agent_transport ./packages/agent_transport
 COPY apps/target_agent ./apps/target_agent
