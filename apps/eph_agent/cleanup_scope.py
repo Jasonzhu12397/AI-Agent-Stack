@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 CLEANUP_LABEL = "ai-agent-stack.io/eph-cleanup"
@@ -264,6 +266,7 @@ def _patch_source_uid(
 def _mark_optional_target_kubeconfig(
     runner: Callable[..., dict[str, Any]],
     source_kubeconfig: str,
+    target_kubeconfig: str,
     deployment_id: str,
     source_cluster_uid: str,
     lease_lost_event: Any = None,
@@ -300,16 +303,42 @@ def _mark_optional_target_kubeconfig(
     metadata = document.get("metadata", {})
     labels = metadata.get("labels", {})
     annotations = metadata.get("annotations", {})
-    if not isinstance(metadata, dict) or not isinstance(labels, dict) or not isinstance(
-        annotations,
-        dict,
+    data = document.get("data", {})
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(labels, dict)
+        or not isinstance(annotations, dict)
+        or not isinstance(data, dict)
     ):
         raise CleanupScopeError(
             "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_METADATA_INVALID"
         )
-    if metadata.get("namespace") != NAMESPACE:
+    if (
+        metadata.get("name") != OPTIONAL_TARGET_KUBECONFIG_SECRET
+        or metadata.get("namespace") != NAMESPACE
+    ):
         raise CleanupScopeError(
-            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_NAMESPACE_MISMATCH"
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_IDENTITY_MISMATCH"
+        )
+    encoded_kubeconfig = data.get("kubeconfig")
+    if not isinstance(encoded_kubeconfig, str) or not encoded_kubeconfig:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_DATA_MISSING"
+        )
+    if not Path(target_kubeconfig).is_file():
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_FILE_UNAVAILABLE"
+        )
+    try:
+        secret_kubeconfig = base64.b64decode(encoded_kubeconfig, validate=True)
+        mounted_kubeconfig = Path(target_kubeconfig).read_bytes()
+    except (OSError, ValueError) as exc:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_DATA_INVALID"
+        ) from exc
+    if not secret_kubeconfig or secret_kubeconfig != mounted_kubeconfig:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_IDENTITY_MISMATCH"
         )
     if (
         labels.get(MANAGED_BY_LABEL) not in (None, "ai-agent-stack")
@@ -392,6 +421,7 @@ def attest_cleanup_scope(
         optional_target_kubeconfig_marked = _mark_optional_target_kubeconfig(
             runner,
             source_kubeconfig,
+            target_kubeconfig,
             deployment_id,
             source_cluster_uid,
             lease_lost_event,
