@@ -15,7 +15,7 @@ from apps.cloud_control_agent.api import (
 
 
 def test_agent_lifecycle_pivot_action_is_allowed_without_approval_contract():
-    _validate_action_role("eph", "eph.capi.pivot")
+    _validate_action_role("target", "target.capi.pivot")
 
 
 def test_cloud_control_exposes_metal3_and_capi_deployment_actions():
@@ -119,7 +119,8 @@ def test_target_agent_cannot_skip_or_rewrite_checkpoint_phases(
     ("role", "action"),
     [
         ("eph", "eph.preflight"),
-        ("eph", "eph.capi.pivot"),
+        ("target", "target.capi.pivot"),
+        ("target", "target.capi.pivot"),
         ("target", "target.cluster.observe"),
         ("target", "target.handoff.evaluate"),
         ("target", "target.eph.cleanup"),
@@ -152,8 +153,8 @@ def test_cloud_control_rejects_cross_role_or_unregistered_agent_capabilities(
 def test_cloud_control_accepts_only_capabilities_owned_by_agent_role():
     assert _validate_reported_capabilities(
         "eph",
-        ["eph.preflight", "eph.capi.pivot"],
-    ) == ["eph.preflight", "eph.capi.pivot"]
+        ["eph.preflight", "eph.metal3.bmh.apply"],
+    ) == ["eph.preflight", "eph.metal3.bmh.apply"]
     assert _validate_reported_capabilities(
         "target",
         [
