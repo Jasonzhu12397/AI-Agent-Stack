@@ -22,11 +22,22 @@ from packages.agent_transport import (
 )
 
 from .capi_pivot import execute_capi_pivot
+from .metal3_skill import (
+    Metal3SkillError,
+    apply_baremetalhosts,
+    apply_capi_cluster_resources,
+    observe_baremetalhosts,
+    observe_capi_cluster,
+)
 
 LOG = logging.getLogger("eph-agent")
 CAPABILITIES = [
     "eph.preflight",
     "eph.source.observe",
+    "eph.metal3.bmh.apply",
+    "eph.metal3.bmh.observe",
+    "eph.capi.cluster.apply",
+    "eph.capi.cluster.observe",
     "eph.capi.pivot.dry_run",
     "eph.capi.pivot",
 ]
@@ -49,6 +60,33 @@ def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
         "returncode": completed.returncode,
         "stdout": completed.stdout[-4000:],
         "stderr": completed.stderr[-2000:],
+    }
+
+
+def _run_kubectl(
+    arguments: list[str],
+    timeout: int = 60,
+    max_output_bytes: int = 2 * 1024 * 1024,
+) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["kubectl", *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={
+                **os.environ,
+                "KUBECONFIG": os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", ""),
+            },
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "error": type(exc).__name__}
+    return {
+        "available": True,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-max_output_bytes:],
+        "stderr": completed.stderr[-4000:],
     }
 
 
@@ -104,6 +142,79 @@ def execute(
         return {
             "status": "succeeded" if ready else "blocked",
             "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
+            "output": evidence,
+            "side_effects": False,
+        }
+    if action == "eph.metal3.bmh.apply":
+        try:
+            evidence = apply_baremetalhosts(
+                command.get("payload", {}),
+                _run_kubectl,
+                lease_lost_event,
+            )
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"resource_type": "METAL3_BMH"},
+                "side_effects": exc.side_effects,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": True,
+        }
+    if action == "eph.metal3.bmh.observe":
+        try:
+            evidence = observe_baremetalhosts(command.get("payload", {}), _run_kubectl)
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": False,
+        }
+    if action == "eph.capi.cluster.apply":
+        try:
+            evidence = apply_capi_cluster_resources(
+                command.get("payload", {}),
+                _run_kubectl,
+                lease_lost_event,
+            )
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"resource_type": "CAPI_CLUSTER"},
+                "side_effects": exc.side_effects,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": True,
+        }
+    if action == "eph.capi.cluster.observe":
+        try:
+            evidence = observe_capi_cluster(command.get("payload", {}), _run_kubectl)
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        ready = evidence["control_plane_ready"]
+        return {
+            "status": "succeeded" if ready else "blocked",
+            "error_code": None if ready else "CAPI_CONTROL_PLANE_NOT_READY",
             "output": evidence,
             "side_effects": False,
         }
