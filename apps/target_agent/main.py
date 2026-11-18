@@ -935,6 +935,34 @@ def execute(
             "output": result,
             "side_effects": False,
         }
+    if action == "target.worker.provision":
+        try:
+            _require_worker_provisioning_checkpoint(command)
+            evidence = _execute_worker_provisioning(
+                command.get("payload", {}),
+                command.get("deployment_context"),
+                lease_lost_event,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": evidence,
+                "side_effects": evidence.get("side_effects", False),
+            }
+        except (
+            WorkerProvisioningError,
+            HandoffError,
+            Metal3OwnershipError,
+            NtpPolicyError,
+            TypeError,
+            AttributeError,
+        ) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "WORKER_PROVISIONING_FAILED",
+                "output": {},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
     if action == "target.eph.cleanup":
         try:
             _require_eph_cleanup_checkpoint(command)
@@ -996,10 +1024,14 @@ def execute(
                     **_observe_target_agent_readiness(),
                 }
             if next_phase == HandoffPhase.WORKER_PROVISIONING.value:
-                _require_configured_ironic_internal_ntp_ip(
-                    evidence.get("ironic_internal_ntp_ip")
+                if current_phase != HandoffPhase.EPH_CLEANUP_VERIFIED.value:
+                    raise HandoffError("WORKER_PROVISIONING_EPH_CLEANUP_CHECKPOINT_REQUIRED")
+                provisioning_evidence = _execute_worker_provisioning(
+                    payload,
+                    command.get("deployment_context"),
+                    lease_lost_event,
                 )
-                raise HandoffError("WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED")
+                evidence = {**evidence, **provisioning_evidence}
             if next_phase == HandoffPhase.WORKERS_READY.value:
                 configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
                     evidence.get("ironic_internal_ntp_ip")
