@@ -17,6 +17,10 @@ from core.agent_node_views import (
     _validate_payload,
 )
 from core.cluster_deployment_services import queue_deployment_command
+from target_agent.sriov_device_plugin import (
+    SriovDevicePluginConfigError,
+    validate_sriov_device_plugin_config,
+)
 from core.models import (
     AgentCommand,
     AgentNode,
@@ -217,6 +221,70 @@ class ClusterDeploymentDetailView(APIView):
                 user=request.user,
             ).exists():
                 return Response({"detail": "Project membership required."}, status=403)
+        return Response(_deployment_data(deployment))
+
+
+class ClusterDeploymentSriovConfigView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, deployment_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        try:
+            normalized = validate_sriov_device_plugin_config(request.data.get("pools"))
+        except SriovDevicePluginConfigError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status in {
+                ClusterDeployment.Status.SUCCEEDED,
+                ClusterDeployment.Status.FAILED,
+                ClusterDeployment.Status.CANCELLED,
+            }:
+                return Response({"detail": "Terminal deployments cannot be reconfigured."}, status=409)
+            if AgentCommand.objects.filter(
+                deployment=deployment,
+                command_type="cluster.capi.worker.provision",
+            ).exists():
+                return Response(
+                    {"detail": "SR-IOV configuration is immutable after worker provisioning is queued."},
+                    status=409,
+                )
+            spec = dict(deployment.spec)
+            worker_config = spec.get("worker_provisioning")
+            if worker_config is None:
+                worker_config = {}
+            if not isinstance(worker_config, dict):
+                return Response(
+                    {"detail": "worker_provisioning must be an object before SR-IOV configuration can be attached."},
+                    status=409,
+                )
+            worker_config = dict(worker_config)
+            worker_config["sriov_device_plugin"] = normalized
+            spec["worker_provisioning"] = worker_config
+            deployment.spec = spec
+            deployment.save(update_fields=["spec", "updated_at"])
+        record_audit_event(
+            request,
+            deployment.tenant,
+            "cluster_deployment.sriov_device_plugin_configured",
+            "cluster_deployment",
+            deployment.id,
+            project=deployment.project,
+            metadata={
+                "pool_names": sorted(normalized),
+                "configmap_names": sorted({
+                    pool["sriov_network_device_plugin_configmap_name"]
+                    for pool in normalized.values()
+                }),
+            },
+        )
         return Response(_deployment_data(deployment))
 
 
