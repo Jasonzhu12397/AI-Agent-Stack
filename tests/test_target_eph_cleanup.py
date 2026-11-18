@@ -39,6 +39,7 @@ def _resource(kind, name, credential=False):
             "annotations": annotations,
             "labels": {
                 "app.kubernetes.io/managed-by": "ai-agent-stack",
+                "ai-agent-stack.io/eph-cleanup": "true",
                 "ai-agent-stack.io/deployment-id": "deployment-1",
             },
         },
