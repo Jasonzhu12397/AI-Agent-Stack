@@ -46,6 +46,16 @@ services:
       QDRANT_URL: http://qdrant:6333
     command: ["sh", "-c", "python apps/platform-api/manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 platform_api.asgi:application"]
     ports: ["8000:8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"
+      interval: 5s
+      timeout: 4s
+      retries: 30
+      start_period: 15s
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -63,6 +73,7 @@ services:
       QDRANT_URL: http://qdrant:6333
     command: ["python", "-m", "worker_app.main"]
     depends_on:
+      api: {condition: service_healthy}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       qdrant: {condition: service_healthy}
