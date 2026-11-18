@@ -268,3 +268,18 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
     second_turn_messages = fake_gateway.calls[1]["messages"]
     assert second_turn_messages[-1]["role"] == "tool"
     assert "service-status-ready" in second_turn_messages[-1]["content"]
+
+
+
+def test_provider_token_overrun_is_permanent_and_never_retried():
+    reservation = SimpleNamespace(reserved_tokens=40)
+    with patch.object(
+        worker_tasks,
+        "settle_tenant_tokens",
+        side_effect=ValueError("Consumed tokens exceed the reserved provider-call ceiling"),
+    ):
+        with pytest.raises(
+            worker_tasks.PermanentTaskError,
+            match="automatic retry is unsafe",
+        ):
+            worker_tasks._settle_provider_usage(reservation, 41)
