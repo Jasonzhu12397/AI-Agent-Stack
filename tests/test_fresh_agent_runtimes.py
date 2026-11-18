@@ -737,6 +737,7 @@ def test_target_agent_rejects_unpinned_ntp_ip_during_worker_handoff(monkeypatch)
         },
         "payload": {
             "next_phase": "worker_provisioning",
+            "ironic_internal_ntp_ip": "10.130.60.85",
             "evidence": {
                 "ironic_internal_ntp_ip": "10.130.60.85",
                 "ironic_internal_ntp_service_reachable": True,
