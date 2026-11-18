@@ -5,11 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   build: {
     commonjsOptions: {
-      exclude: [
-        /node_modules\\/dayjs\\//,
-        /node_modules\\/vue\\//,
-        /node_modules\\/@vue\\//,
-      ],
+      exclude: [/dayjs/, /vue/, /@vue/],
     },
   },
   server: { host: "0.0.0.0", port: 5173 },
