@@ -602,14 +602,7 @@ def _execute_node(node, state, input_data, tenant, project, task):
             "input_tokens": input_tokens + actual_input_tokens,
             "output_tokens": output_tokens + actual_output_tokens,
         }
-        WorkflowRun.objects.filter(task=task).update(state={"_token_usage": usage})
-        state["_token_usage"] = usage
-        if (
-            usage["input_tokens"] + usage["output_tokens"] > MAX_WORKFLOW_RUN_TOTAL_TOKENS
-            or actual_output_tokens > allowed_output_tokens
-        ):
-            raise WorkflowValidationError("WORKFLOW_PROVIDER_USAGE_EXCEEDED_TOKEN_BUDGET")
-        return {
+        output = {
             "content": response.content,
             "input_tokens": actual_input_tokens,
             "output_tokens": actual_output_tokens,
@@ -617,6 +610,21 @@ def _execute_node(node, state, input_data, tenant, project, task):
             "model": response.model,
             "latency_ms": response.latency_ms,
         }
+        pending_llm = state.get("_pending_llm", {})
+        if not isinstance(pending_llm, dict):
+            raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
+        pending_llm = {**pending_llm, node["id"]: output}
+        WorkflowRun.objects.filter(task=task).update(
+            state={"_token_usage": usage, "_pending_llm": pending_llm}
+        )
+        state["_token_usage"] = usage
+        state["_pending_llm"] = pending_llm
+        if (
+            usage["input_tokens"] + usage["output_tokens"] > MAX_WORKFLOW_RUN_TOTAL_TOKENS
+            or actual_output_tokens > allowed_output_tokens
+        ):
+            raise WorkflowValidationError("WORKFLOW_PROVIDER_USAGE_EXCEEDED_TOKEN_BUDGET")
+        return output
     raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
 
 
@@ -654,6 +662,11 @@ def execute_workflow_run(task, worker_id, renew_lease):
         existing = step_records.get(node_id)
         if existing and existing.status == WorkflowStepRun.Status.SUCCEEDED:
             state[node_id] = existing.output_data
+            pending_llm = state.get("_pending_llm")
+            if isinstance(pending_llm, dict):
+                pending_llm.pop(node_id, None)
+                if not pending_llm:
+                    state.pop("_pending_llm", None)
             active_nodes.add(node_id)
             continue
         if existing and existing.status == WorkflowStepRun.Status.SKIPPED:
@@ -705,14 +718,18 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.input_data = {"active_predecessors": [edge["source"] for edge in active_incoming]}
         step.save()
         try:
-            output = _execute_node(
-                node,
-                state,
-                workflow_run.input_data,
-                workflow.tenant,
-                workflow.project,
-                workflow_run.task,
-            )
+            pending_llm = state.get("_pending_llm", {})
+            if node["type"] == "llm" and isinstance(pending_llm, dict) and node_id in pending_llm:
+                output = pending_llm[node_id]
+            else:
+                output = _execute_node(
+                    node,
+                    state,
+                    workflow_run.input_data,
+                    workflow.tenant,
+                    workflow.project,
+                    workflow_run.task,
+                )
             if not renew_lease(task.id, task.lease_token, worker_id):
                 raise RuntimeError("Workflow task cancellation requested or lease lost")
         except Exception as exc:
@@ -729,6 +746,11 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.finished_at = timezone.now()
         step.save(update_fields=["status", "output_data", "finished_at"])
         state[node_id] = output
+        pending_llm = state.get("_pending_llm")
+        if isinstance(pending_llm, dict):
+            pending_llm.pop(node_id, None)
+            if not pending_llm:
+                state.pop("_pending_llm", None)
         active_nodes.add(node_id)
         workflow_run.state = state
         workflow_run.save(update_fields=["state"])
