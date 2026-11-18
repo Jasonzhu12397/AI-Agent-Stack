@@ -739,9 +739,9 @@ def _revoke_source_observer_secret(
         "--ignore-not-found=true",
     ], timeout=150)
     if not deleted.get("available"):
-        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_REVOCATION_FAILED")
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_REVOCATION_FAILED", side_effects=True)
     if lease_lost_event is not None and lease_lost_event.is_set():
-        raise HandoffError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+        raise HandoffError("EPH_CLEANUP_COMMAND_LEASE_LOST", side_effects=True)
     verification = _kubectl([
         "get",
         "secret",
@@ -755,13 +755,13 @@ def _revoke_source_observer_secret(
         try:
             current = json.loads(verification.get("stdout", ""))
         except (TypeError, ValueError) as exc:
-            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_INVALID") from exc
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_INVALID", side_effects=True) from exc
         if current.get("metadata", {}).get("uid") == uid:
-            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_STILL_PRESENT")
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_STILL_PRESENT", side_effects=True)
     else:
         error = verification.get("stderr", "").lower()
         if "notfound" not in error and "not found" not in error:
-            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_FAILED")
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_FAILED", side_effects=True)
     return True
 
 
