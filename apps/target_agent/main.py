@@ -788,7 +788,8 @@ def _execute_worker_provisioning(
         else {}
     )
     if (
-        proof.get("cleanup_scope_attested") is not True
+        not isinstance(proof, dict)
+        or proof.get("cleanup_scope_attested") is not True
         or proof.get("target_observer_secret_source_uid_attested") is not True
         or not isinstance(proof.get("source_cleanup_resource_count"), int)
         or isinstance(proof.get("source_cleanup_resource_count"), bool)
