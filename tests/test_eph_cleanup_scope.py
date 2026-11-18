@@ -135,7 +135,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             name = arguments[2]
             objects = (
                 source_objects.get(resource, [])
-                if kubeconfig == "source.kubeconfig"
+                if kubeconfig.endswith("source.kubeconfig")
                 else target_objects.get(resource, [])
             )
             item = next(obj for obj in objects if obj["metadata"]["name"] == name)
