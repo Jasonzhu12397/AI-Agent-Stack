@@ -77,7 +77,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["target-agent-source-observer"]
+    resourceNames: ["target-agent-source-operator"]
     verbs: ["get", "delete"]
   - apiGroups: ["cluster.x-k8s.io"]
     resources: ["clusters", "machines", "machinedeployments"]
@@ -301,7 +301,7 @@ spec:
             sizeLimit: 16Mi
         - name: source-cluster-observer
           secret:
-            secretName: target-agent-source-observer
+            secretName: target-agent-source-operator
             items:
               - key: kubeconfig
                 path: config
