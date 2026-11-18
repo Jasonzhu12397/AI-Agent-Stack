@@ -9,6 +9,8 @@ from apps.eph_agent.metal3_skill import (
     apply_capi_cluster_resources,
     observe_baremetalhosts,
     observe_capi_cluster,
+    wait_for_baremetalhosts_ready,
+    wait_for_capi_control_plane_ready,
 )
 
 
@@ -260,3 +262,104 @@ def test_capi_cluster_observer_requires_control_plane_ready_condition():
 
     assert result["control_plane_ready"] is True
     assert result["cluster_uid"] == "cluster-uid"
+
+
+def test_bmh_wait_uses_backoff_until_all_expected_hosts_are_available():
+    clock = [0.0]
+    observations = iter(["registering", "available"])
+    calls = []
+
+    def runner(arguments, **_kwargs):
+        calls.append(arguments)
+        state = next(observations)
+        inventory = {
+            "items": [{
+                "metadata": {"name": "worker-01", "namespace": "metal3"},
+                "spec": {"bootMACAddress": "aa:bb:cc:dd:ee:ff", "online": True},
+                "status": {
+                    "operationalStatus": "OK",
+                    "provisioning": {"state": state},
+                    "hardware": {},
+                },
+            }]
+        }
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(inventory),
+            "stderr": "",
+        }
+
+    result = wait_for_baremetalhosts_ready(
+        {"namespace": "metal3", "host_names": ["worker-01"], "timeout_seconds": 60},
+        runner,
+        sleep=lambda delay: clock.__setitem__(0, clock[0] + delay),
+        monotonic=lambda: clock[0],
+    )
+
+    assert result["ready_host_names"] == ["worker-01"]
+    assert result["ready_host_count"] == 1
+    assert len(calls) == 2
+    assert clock[0] == 3.0
+
+
+def test_bmh_wait_fails_fast_on_ironic_error_message():
+    inventory = {
+        "items": [{
+            "metadata": {"name": "worker-01", "namespace": "metal3"},
+            "spec": {"bootMACAddress": "aa:bb:cc:dd:ee:ff"},
+            "status": {
+                "operationalStatus": "OK",
+                "provisioning": {"state": "registering"},
+                "errorType": "registration error",
+                "errorMessage": "BMC authentication failed",
+                "hardware": {},
+            },
+        }]
+    }
+
+    with pytest.raises(Metal3SkillError, match="METAL3_BMH_PROVISIONING_FAILED:worker-01"):
+        wait_for_baremetalhosts_ready(
+            {"namespace": "metal3", "host_names": ["worker-01"], "timeout_seconds": 60},
+            lambda *_args, **_kwargs: {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(inventory),
+                "stderr": "",
+            },
+            sleep=lambda _delay: None,
+            monotonic=lambda: 0.0,
+        )
+
+
+def test_capi_wait_polls_until_control_plane_ready():
+    clock = [0.0]
+    states = iter([False, True])
+
+    def runner(_arguments, **_kwargs):
+        ready = next(states)
+        cluster = {
+            "metadata": {"name": "target-01", "uid": "cluster-uid"},
+            "status": {
+                "conditions": [{
+                    "type": "ControlPlaneReady",
+                    "status": "True" if ready else "False",
+                }],
+            },
+        }
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(cluster),
+            "stderr": "",
+        }
+
+    result = wait_for_capi_control_plane_ready(
+        {"namespace": "metal3", "cluster_name": "target-01", "timeout_seconds": 120},
+        runner,
+        sleep=lambda delay: clock.__setitem__(0, clock[0] + delay),
+        monotonic=lambda: clock[0],
+    )
+
+    assert result["control_plane_ready"] is True
+    assert clock[0] == 20.0
