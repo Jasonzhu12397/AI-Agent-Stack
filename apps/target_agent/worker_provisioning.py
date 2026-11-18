@@ -684,6 +684,8 @@ def _verify_sriov_configmap_ownership(
             existing = json.loads(result.get("stdout", ""))
         except (TypeError, ValueError) as exc:
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_JSON_INVALID") from exc
+        if not isinstance(existing, dict):
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_JSON_INVALID")
         metadata = existing.get("metadata", {})
         if not isinstance(metadata, dict):
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_METADATA_INVALID")
