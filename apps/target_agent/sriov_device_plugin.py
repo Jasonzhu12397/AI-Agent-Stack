@@ -93,7 +93,10 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
                 or any(not isinstance(item, str) or not item for item in drivers)
                 or not isinstance(root_devices, list)
                 or not root_devices
-                or any(not isinstance(item, str) or not _BDF.fullmatch(item) for item in root_devices)
+                or any(
+                    not isinstance(item, str) or not _BDF.fullmatch(item)
+                    for item in root_devices
+                )
                 or not isinstance(selector_rdma, bool)
                 or selector_rdma != rdma
             ):
@@ -131,7 +134,10 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
                 or not isinstance(key, str)
                 or not key
                 or operator not in {"Equal", "Exists"}
-                or (operator == "Equal" and (not isinstance(toleration_value, str) or not toleration_value))
+                or (
+                    operator == "Equal"
+                    and (not isinstance(toleration_value, str) or not toleration_value)
+                )
                 or (operator == "Exists" and toleration_value not in (None, ""))
             ):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_TOLERATION_INVALID")
