@@ -1,10 +1,10 @@
 import pytest
 
-from apps.target_agent.ntp_policy import render_control_plane_chrony_pre_kubeadm_command
 from apps.target_agent.ntp_attestation import (
     NtpAttestationError,
     verify_control_plane_ntp_bootstrap,
 )
+from apps.target_agent.ntp_policy import render_control_plane_chrony_pre_kubeadm_command
 
 
 def _machine_and_config(
