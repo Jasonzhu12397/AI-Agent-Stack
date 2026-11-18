@@ -1,12 +1,3 @@
-"""Cloud Control Agent HTTP control API.
-
-The control API authenticates agents with mTLS, registers agents and
-deployments, leases commands, renews leases, persists durable checkpoints and
-accepts command results. The Cloud Control Agent receives deployment requests,
-authorizes, budgets, dispatches and aggregates state; it does not approve a
-target takeover.
-"""
-
 from __future__ import annotations
 
 import hashlib
