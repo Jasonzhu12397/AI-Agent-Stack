@@ -143,7 +143,6 @@ def execute_eph_cleanup(
                 or not isinstance(labels, dict)
                 or annotations.get(CLEANUP_ANNOTATION) != "true"
                 or labels.get(CLEANUP_ANNOTATION) != "true"
-                or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
                 or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
                 or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
                 or item_namespace != namespace
@@ -211,8 +210,9 @@ def execute_eph_cleanup(
             current_metadata = current.get("metadata", {})
             if (
                 current_metadata.get("uid") != item["uid"]
-                or current_metadata.get("annotations", {}).get(SOURCE_UID_ANNOTATION)
-                != proof["source_cluster_uid"]
+                or current_metadata.get("labels", {}).get(CLEANUP_ANNOTATION) != "true"
+                or current_metadata.get("labels", {}).get(DEPLOYMENT_ID_ANNOTATION)
+                != deployment_id
             ):
                 raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_CHANGED")
         elif "notfound" not in current_result.get("stderr", "").lower() and (
