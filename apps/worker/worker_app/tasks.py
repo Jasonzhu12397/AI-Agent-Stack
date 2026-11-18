@@ -359,6 +359,18 @@ def _allowed_agent_output_tokens(
     )
 
 
+def _settle_provider_usage(usage, consumed_tokens):
+    try:
+        return settle_tenant_tokens(
+            usage=usage,
+            consumed_tokens=consumed_tokens,
+        )
+    except ValueError as exc:
+        raise PermanentTaskError(
+            "Provider usage exceeded its reserved token ceiling; automatic retry is unsafe"
+        ) from exc
+
+
 def _persist_agent_execution_state(
     agent_run,
     messages,
@@ -799,7 +811,7 @@ def execute_agent_run(task):
                 input_token_ceiling=input_token_ceiling,
                 output_token_ceiling=allowed_output_tokens,
             )
-            settle_tenant_tokens(
+            _settle_provider_usage(
                 usage=token_reservation,
                 consumed_tokens=actual_input_tokens + actual_output_tokens,
             )
