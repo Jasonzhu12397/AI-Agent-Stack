@@ -5,14 +5,22 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
-
-from core.models import (
-    AgentDefinition, AgentRun, AgentVersion, Project, Task, Tenant,
-    TenantMembership, TenantTokenBudget, TenantTokenUsage,
-    WorkflowDefinition, WorkflowRun, WorkflowVersion,
-)
 from rest_framework.test import APIClient
 
+from core.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentVersion,
+    Project,
+    Task,
+    Tenant,
+    TenantMembership,
+    TenantTokenBudget,
+    TenantTokenUsage,
+    WorkflowDefinition,
+    WorkflowRun,
+    WorkflowVersion,
+)
 from core.token_budget import (
     TenantTokenBudgetExceeded, release_tenant_tokens,
     reserve_tenant_tokens, settle_tenant_tokens,
