@@ -31,13 +31,15 @@ def _period_usage(tenant_id, start, now):
 
 
 @transaction.atomic
-def reserve_tenant_tokens(*, task, agent_run, idempotency_key: str, requested_tokens: int):
+def reserve_tenant_tokens(*, task, idempotency_key: str, requested_tokens: int, agent_run=None, workflow_run=None):
     if (
         not isinstance(requested_tokens, int)
         or isinstance(requested_tokens, bool)
         or requested_tokens <= 0
     ):
         raise ValueError("Token reservation must be a positive integer")
+    if (agent_run is None) == (workflow_run is None):
+        raise ValueError("Exactly one AgentRun or WorkflowRun must own a token reservation")
     now = timezone.now()
     budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
         tenant_id=task.tenant_id,
@@ -48,11 +50,16 @@ def reserve_tenant_tokens(*, task, agent_run, idempotency_key: str, requested_to
         defaults={
             "task": task,
             "agent_run": agent_run,
+            "workflow_run": workflow_run,
             "reserved_tokens": requested_tokens,
             "expires_at": task.lease_expires_at or now + timedelta(minutes=5),
         },
     )
-    if usage.task_id != task.id or usage.agent_run_id != agent_run.id:
+    if (
+        usage.task_id != task.id
+        or usage.agent_run_id != (agent_run.id if agent_run is not None else None)
+        or usage.workflow_run_id != (workflow_run.id if workflow_run is not None else None)
+    ):
         raise ValueError("Token reservation idempotency key belongs to another run")
     if usage.status == TenantTokenUsage.Status.SETTLED:
         raise ValueError("A settled provider call cannot be replayed with the same idempotency key")
@@ -75,6 +82,7 @@ def reserve_tenant_tokens(*, task, agent_run, idempotency_key: str, requested_to
 
     usage.task = task
     usage.agent_run = agent_run
+    usage.workflow_run = workflow_run
     usage.status = TenantTokenUsage.Status.RESERVED
     usage.reserved_tokens = requested_tokens
     usage.consumed_tokens = 0
