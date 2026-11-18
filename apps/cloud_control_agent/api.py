@@ -125,6 +125,11 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
         or output.get("source_cluster_absent") is not True
         or output.get("target_cluster_ownership_verified") is not True
         or output.get("target_controllers_ready") is not True
+        or output.get("cleanup_scope_attested") is not True
+        or output.get("target_observer_secret_source_uid_attested") is not True
+        or not isinstance(output.get("source_cleanup_resource_count"), int)
+        or isinstance(output.get("source_cleanup_resource_count"), bool)
+        or output.get("source_cleanup_resource_count") < 7
         or output.get("target_source_cluster_uid_annotation")
         != output.get("source_cluster_uid")
         or not isinstance(output.get("source_cluster_uid"), str)
@@ -203,6 +208,9 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
         "source_bmh_identities": source_normalized,
         "source_bmh_digest": source_digest,
         "target_bmh_digest": target_digest,
+        "cleanup_scope_attested": True,
+        "source_cleanup_resource_count": output["source_cleanup_resource_count"],
+        "target_observer_secret_source_uid_attested": True,
     }
 
 
