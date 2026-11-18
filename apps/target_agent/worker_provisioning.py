@@ -618,17 +618,20 @@ def execute_worker_provisioning(
             md_result = _run(
                 runner,
                 [
-                "get",
-                "machinedeployments",
-                md_name,
-                "--namespace",
-                namespace,
-                "-o",
-                "json",
-            ],
-            timeout=60,
-            max_output_bytes=4 * 1024 * 1024,
-        )
+                    "get",
+                    "machinedeployments",
+                    md_name,
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "json",
+                ],
+                timeout=60,
+                max_output_bytes=4 * 1024 * 1024,
+            )
+        except WorkerProvisioningError as exc:
+            exc.side_effects = bool(applied_output)
+            raise
         try:
             observed = json.loads(md_result.get("stdout", ""))
         except (TypeError, ValueError) as exc:
