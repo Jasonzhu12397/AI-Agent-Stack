@@ -28,6 +28,8 @@ from .metal3_skill import (
     apply_capi_cluster_resources,
     observe_baremetalhosts,
     observe_capi_cluster,
+    wait_for_baremetalhosts_ready,
+    wait_for_capi_control_plane_ready,
 )
 
 LOG = logging.getLogger("eph-agent")
@@ -36,8 +38,10 @@ CAPABILITIES = [
     "eph.source.observe",
     "eph.metal3.bmh.apply",
     "eph.metal3.bmh.observe",
+    "eph.metal3.bmh.wait_ready",
     "eph.capi.cluster.apply",
     "eph.capi.cluster.observe",
+    "eph.capi.cluster.wait_ready",
     "eph.capi.pivot.dry_run",
     "eph.capi.pivot",
 ]
@@ -215,6 +219,46 @@ def execute(
         return {
             "status": "succeeded" if ready else "blocked",
             "error_code": None if ready else "CAPI_CONTROL_PLANE_NOT_READY",
+            "output": evidence,
+            "side_effects": False,
+        }
+    if action == "eph.metal3.bmh.wait_ready":
+        try:
+            evidence = wait_for_baremetalhosts_ready(
+                command.get("payload", {}),
+                _run_kubectl,
+                lease_lost_event,
+            )
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": False,
+        }
+    if action == "eph.capi.cluster.wait_ready":
+        try:
+            evidence = wait_for_capi_control_plane_ready(
+                command.get("payload", {}),
+                _run_kubectl,
+                lease_lost_event,
+            )
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
             "output": evidence,
             "side_effects": False,
         }
