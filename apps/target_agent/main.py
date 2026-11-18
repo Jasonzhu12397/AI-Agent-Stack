@@ -23,6 +23,7 @@ from packages.agent_transport import (
 )
 
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
+from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
 from .handoff import (
     HandoffError,
     HandoffPhase,
@@ -66,6 +67,7 @@ CAPABILITIES = [
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
     "target.eph.cleanup",
+    "target.worker.provision",
 ]
 
 
@@ -761,6 +763,58 @@ def _revoke_source_observer_secret(
         if "notfound" not in error and "not found" not in error:
             raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_FAILED")
     return True
+
+
+def _require_worker_provisioning_checkpoint(command: dict[str, Any]) -> None:
+    checkpoint = command.get("deployment_checkpoint")
+    if (
+        not isinstance(checkpoint, dict)
+        or checkpoint.get("phase") != HandoffPhase.EPH_CLEANUP_VERIFIED.value
+    ):
+        raise HandoffError("WORKER_PROVISIONING_EPH_CLEANUP_CHECKPOINT_REQUIRED")
+
+
+def _execute_worker_provisioning(
+    payload: dict[str, Any],
+    deployment_context: dict[str, Any] | None,
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
+    target_namespace = payload.get("target_namespace")
+    target_cluster_name = payload.get("target_cluster_name")
+    ownership = _observe_target_metal3_ownership(
+        {
+            **payload,
+            "namespace": target_namespace,
+            "cluster_name": target_cluster_name,
+        },
+        deployment_context,
+    )
+    if ownership.get("target_ironic_inventory_verified") is not True:
+        raise HandoffError("WORKER_PROVISIONING_TARGET_IRONIC_INVENTORY_REQUIRED")
+    if ownership.get("target_metal3_reconciliation_healthy") is not True:
+        raise HandoffError("WORKER_PROVISIONING_TARGET_METAL3_RECONCILIATION_REQUIRED")
+    ntp_ip = _require_configured_ironic_internal_ntp_ip(
+        payload.get("ironic_internal_ntp_ip")
+    )
+    ntp_probe = probe_ironic_internal_ntp_endpoint(ntp_ip)
+    agent_readiness = _observe_target_agent_readiness()
+    provisioning = execute_worker_provisioning(
+        payload,
+        deployment_context,
+        _kubectl,
+        lease_lost_event,
+    )
+    return {
+        **provisioning,
+        "ironic_internal_ntp_ip": ntp_ip,
+        "ironic_internal_ntp_service_reachable": True,
+        "ironic_internal_ntp_probe": ntp_probe,
+        "target_agent_leader_elected": agent_readiness["target_agent_leader_elected"],
+        "target_metal3_ownership_verified": True,
+        "target_metal3_reconciliation_healthy": True,
+        "target_ironic_inventory_verified": True,
+        "target_bmh_identity_count": ownership.get("target_bmh_identity_count"),
+    }
 
 
 def _require_eph_cleanup_checkpoint(command: dict[str, Any]) -> None:
