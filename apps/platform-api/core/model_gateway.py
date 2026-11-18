@@ -143,6 +143,34 @@ class ModelGateway:
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
+        effective_max_tokens = min(
+            max_tokens or model_config.max_output_tokens,
+            model_config.max_output_tokens,
+        )
+        request_bytes = len(
+            json.dumps(
+                {"messages": messages, "tools": tools or []},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if request_bytes > 256 * 1024:
+            raise ModelGatewayError(
+                "MODEL_REQUEST_CONTEXT_TOO_LARGE",
+                "The serialized model request exceeded the 256 KiB context limit.",
+            )
+        estimated_input_tokens = (request_bytes + 1) // 2
+        context_window = model_config.context_window
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window < 1
+            or estimated_input_tokens + effective_max_tokens > context_window
+        ):
+            raise ModelGatewayError(
+                "MODEL_CONTEXT_WINDOW_EXCEEDED",
+                "The estimated prompt and reserved output exceed the model context window.",
+            )
         started = time.monotonic()
         if provider.provider_type == ModelProvider.ProviderType.FAKE:
             content = provider.config.get("response", "Fake model response")
@@ -172,10 +200,7 @@ class ModelGateway:
             {
                 "model": model_config.model_name,
                 "messages": messages,
-                "max_tokens": min(
-                    max_tokens or model_config.max_output_tokens,
-                    model_config.max_output_tokens,
-                ),
+                "max_tokens": effective_max_tokens,
                 **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
             },
             timeout_seconds,
