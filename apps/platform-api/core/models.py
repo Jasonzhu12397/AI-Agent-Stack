@@ -320,7 +320,7 @@ class TenantTokenUsage(models.Model):
         blank=True,
     )
     workflow_run = models.ForeignKey(
-        WorkflowRun,
+        "WorkflowRun",
         on_delete=models.CASCADE,
         related_name="token_usage",
         null=True,
