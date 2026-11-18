@@ -801,6 +801,8 @@ def _execute_worker_provisioning(
     )
     ntp_probe = probe_ironic_internal_ntp_endpoint(ntp_ip)
     agent_readiness = _observe_target_agent_readiness()
+    if agent_readiness.get("target_agent_leader_elected") is not True:
+        raise HandoffError("WORKER_PROVISIONING_TARGET_AGENT_LEADER_REQUIRED")
     provisioning = execute_worker_provisioning(
         payload,
         deployment_context,
