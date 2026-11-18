@@ -43,6 +43,31 @@ class WorkflowValidationError(ValueError):
     pass
 
 
+MAX_WORKFLOW_RUN_TOTAL_TOKENS = 16000
+MAX_WORKFLOW_RUN_OUTPUT_TOKENS = 2048
+MAX_WORKFLOW_NODE_OUTPUT_TOKENS = 1024
+MAX_WORKFLOW_RUN_INPUT_BYTES = 24000
+
+
+def _workflow_output_budget(
+    configured_max_tokens,
+    model_max_tokens,
+    input_tokens,
+    output_tokens,
+    estimated_input_tokens,
+):
+    return min(
+        configured_max_tokens,
+        model_max_tokens,
+        MAX_WORKFLOW_NODE_OUTPUT_TOKENS,
+        MAX_WORKFLOW_RUN_OUTPUT_TOKENS - output_tokens,
+        MAX_WORKFLOW_RUN_TOTAL_TOKENS
+        - input_tokens
+        - output_tokens
+        - estimated_input_tokens,
+    )
+
+
 def validate_workflow_definition(definition):
     if not isinstance(definition, dict):
         raise WorkflowValidationError("Workflow definition must be a JSON object.")
@@ -524,24 +549,70 @@ def _execute_node(node, state, input_data, tenant, project, task):
             enabled=True,
             provider__enabled=True,
         )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        serialized_messages = json.dumps(
+            messages,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(serialized_messages) > MAX_WORKFLOW_RUN_INPUT_BYTES:
+            raise WorkflowValidationError("WORKFLOW_LLM_INPUT_BUDGET_EXCEEDED")
+        estimated_input_tokens = (len(serialized_messages) + 1) // 2
+        usage = state.get("_token_usage", {})
+        if not isinstance(usage, dict):
+            raise WorkflowValidationError("WORKFLOW_TOKEN_USAGE_STATE_INVALID")
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (input_tokens, output_tokens)
+        ):
+            raise WorkflowValidationError("WORKFLOW_TOKEN_USAGE_STATE_INVALID")
+        allowed_output_tokens = _workflow_output_budget(
+            config.get("max_tokens", model.max_output_tokens),
+            model.max_output_tokens,
+            input_tokens,
+            output_tokens,
+            estimated_input_tokens,
+        )
+        if allowed_output_tokens < 1:
+            raise WorkflowValidationError("WORKFLOW_RUN_TOKEN_BUDGET_EXHAUSTED")
         try:
             response = ModelGateway().complete(
                 model,
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=config.get("max_tokens", model.max_output_tokens),
+                messages,
+                max_tokens=allowed_output_tokens,
                 timeout_seconds=config.get("timeout_seconds", 60),
             )
         except ModelGatewayError as exc:
-            if exc.retryable:
-                raise RuntimeError(exc.code) from exc
-            raise WorkflowValidationError(exc.code) from exc
+            raise WorkflowValidationError(
+                "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
+            ) from exc
+        actual_input_tokens = response.input_tokens or (
+            0 if model.provider.provider_type == "fake" else estimated_input_tokens
+        )
+        output_bytes = len(response.content.encode("utf-8"))
+        actual_output_tokens = response.output_tokens or (
+            0 if model.provider.provider_type == "fake" else (output_bytes + 1) // 2
+        )
+        usage = {
+            "input_tokens": input_tokens + actual_input_tokens,
+            "output_tokens": output_tokens + actual_output_tokens,
+        }
+        WorkflowRun.objects.filter(task=task).update(state={"_token_usage": usage})
+        state["_token_usage"] = usage
+        if (
+            usage["input_tokens"] + usage["output_tokens"] > MAX_WORKFLOW_RUN_TOTAL_TOKENS
+            or actual_output_tokens > allowed_output_tokens
+        ):
+            raise WorkflowValidationError("WORKFLOW_PROVIDER_USAGE_EXCEEDED_TOKEN_BUDGET")
         return {
             "content": response.content,
-            "input_tokens": response.input_tokens,
-            "output_tokens": response.output_tokens,
+            "input_tokens": actual_input_tokens,
+            "output_tokens": actual_output_tokens,
             "provider": response.provider,
             "model": response.model,
             "latency_ms": response.latency_ms,
@@ -566,6 +637,18 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.node_id: step
         for step in WorkflowStepRun.objects.filter(workflow_run=workflow_run)
     }
+    usage = state.get("_token_usage")
+    if not isinstance(usage, dict):
+        usage = {"input_tokens": 0, "output_tokens": 0}
+        for completed_step in step_records.values():
+            if (
+                completed_step.status == WorkflowStepRun.Status.SUCCEEDED
+                and completed_step.node_type == "llm"
+                and isinstance(completed_step.output_data, dict)
+            ):
+                usage["input_tokens"] += completed_step.output_data.get("input_tokens", 0)
+                usage["output_tokens"] += completed_step.output_data.get("output_tokens", 0)
+    state["_token_usage"] = usage
     for node_id in graph["order"]:
         node = graph["nodes"][node_id]
         existing = step_records.get(node_id)
