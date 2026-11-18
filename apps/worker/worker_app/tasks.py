@@ -50,7 +50,19 @@ class TaskSuspendedForApproval(Exception):
     pass
 
 
+def _validate_lease_parameters(worker_id, lease_seconds):
+    if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 128:
+        raise ValueError("Worker identity must contain 1 to 128 characters")
+    if (
+        not isinstance(lease_seconds, int)
+        or isinstance(lease_seconds, bool)
+        or not 1 <= lease_seconds <= 3600
+    ):
+        raise ValueError("Task lease duration must be an integer between 1 and 3600 seconds")
+
+
 def claim_next_task(worker_id, lease_seconds=150):
+    _validate_lease_parameters(worker_id, lease_seconds)
     now = timezone.now()
     with transaction.atomic():
         task = (
@@ -137,6 +149,7 @@ def claim_next_task(worker_id, lease_seconds=150):
 
 
 def renew_lease(task_id, lease_token, worker_id, lease_seconds=150):
+    _validate_lease_parameters(worker_id, lease_seconds)
     now = timezone.now()
     updated = Task.objects.filter(
         pk=task_id,
