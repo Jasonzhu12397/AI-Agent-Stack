@@ -296,13 +296,18 @@ class AgentPublishView(APIView):
                     {"detail": "max_iterations must be between 1 and 8."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
+            if (
+                not isinstance(timeout_seconds, int)
+                or isinstance(timeout_seconds, bool)
+                or not 1 <= timeout_seconds <= 120
+            ):
                 return Response(
                     {"detail": "timeout_seconds must be between 1 and 120."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if (
                 not isinstance(max_tokens, int)
+                or isinstance(max_tokens, bool)
                 or not 1 <= max_tokens <= model_config.max_output_tokens
             ):
                 return Response(
