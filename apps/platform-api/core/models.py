@@ -755,6 +755,97 @@ class ClusterDeploymentCheckpoint(models.Model):
         ordering = ["-updated_at"]
 
 
+class AgentPluginDefinition(models.Model):
+    class Protocol(models.TextChoices):
+        HTTP_JSON = "http_json", "HTTP JSON"
+        MCP = "mcp", "Model Context Protocol"
+        A2A = "a2a", "Agent-to-Agent"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="agent_plugin_definitions",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_agent_plugin_definitions",
+    )
+    plugin_key = models.SlugField(max_length=100)
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    version = models.CharField(max_length=40)
+    protocol = models.CharField(max_length=16, choices=Protocol.choices)
+    endpoint_url = models.URLField(max_length=500)
+    auth_required = models.BooleanField(default=True)
+    capabilities = models.JSONField(default=list)
+    input_schema = models.JSONField(default=dict)
+    output_schema = models.JSONField(default=dict)
+    timeout_seconds = models.PositiveSmallIntegerField(default=60)
+    max_concurrency = models.PositiveSmallIntegerField(default=4)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "plugin_key", "version"],
+                name="uniq_agent_plugin_key_version",
+            )
+        ]
+
+
+class AgentPluginInstallation(models.Model):
+    class Status(models.TextChoices):
+        INSTALLED = "installed", "Installed"
+        DISABLED = "disabled", "Disabled"
+        UNINSTALLED = "uninstalled", "Uninstalled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="agent_plugin_installations",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="agent_plugin_installations",
+    )
+    plugin = models.ForeignKey(
+        AgentPluginDefinition,
+        on_delete=models.PROTECT,
+        related_name="installations",
+    )
+    plugin_version = models.CharField(max_length=40)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.INSTALLED,
+    )
+    granted_capabilities = models.JSONField(default=list)
+    credential_ref = models.CharField(max_length=200, blank=True)
+    installed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="agent_plugin_installations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["plugin__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "plugin"],
+                name="uniq_agent_plugin_installation_per_project",
+            )
+        ]
+
+
 class PluginDefinition(models.Model):
     class ConnectorType(models.TextChoices):
         NATIVE = "native", "Native"
