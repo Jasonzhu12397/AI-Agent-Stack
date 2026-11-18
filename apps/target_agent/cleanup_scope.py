@@ -13,7 +13,6 @@ MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
 CREDENTIAL_SCOPE_ANNOTATION = "ai-agent-stack.io/credential-scope"
 TARGET_OBSERVER_SECRET = "target-agent-source-operator"
-OPTIONAL_TARGET_KUBECONFIG_SECRET = "capi-pivot-target-kubeconfig"
 NAMESPACE = "ai-agent-system"
 RESOURCE_SCOPES = (
     ("deployments.apps", True),
