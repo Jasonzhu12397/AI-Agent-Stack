@@ -84,6 +84,7 @@ def test_new_deployment_path_does_not_reference_legacy_node_agent_images():
 def test_target_agent_blocks_handoff_phase_skips():
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "payload": {
             "current_phase": "eph_single_node_ready",
             "next_phase": "bmh_registry_migrated",
@@ -98,6 +99,7 @@ def test_target_agent_blocks_handoff_phase_skips():
 def test_target_agent_cannot_claim_eph_owned_bootstrap_checkpoint():
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "not_started",
             "sequence": 0,
@@ -134,6 +136,7 @@ def test_target_agent_handoff_recognizes_already_persisted_checkpoint():
     ).hexdigest()
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "eph_single_node_ready",
             "sequence": 1,
@@ -168,6 +171,7 @@ def test_target_agent_observes_live_metal3_ownership_before_checkpoint(monkeypat
     )
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "capi_pivot_verified",
             "sequence": 4,
@@ -227,6 +231,7 @@ def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monk
     )
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "eph_single_node_ready",
             "sequence": 1,
@@ -381,6 +386,7 @@ def test_target_agent_verifies_live_capi_pivot_annotations_and_cluster_readiness
     monkeypatch.setattr(target_main, "_kubectl", fake_kubectl)
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "target_agent_ready",
             "sequence": 2,
@@ -432,6 +438,7 @@ def test_target_agent_rejects_capi_pivot_when_live_target_source_uid_annotation_
     )
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "target_agent_ready",
             "sequence": 2,
@@ -706,6 +713,7 @@ def test_target_agent_rejects_unpinned_ntp_ip_during_worker_handoff(monkeypatch)
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
     result = execute_target({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "deployment_checkpoint": {
             "phase": "eph_cleanup_verified",
             "sequence": 6,
