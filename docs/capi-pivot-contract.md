@@ -31,7 +31,7 @@ Before the move, it writes these annotations to the source CAPI Cluster:
 - `ai-agent-stack.io/source-cluster-uid`
 - `ai-agent-stack.io/stable-cluster-identity`
 
-The Target Kubernetes API assigns a new metadata UID to the recreated object. The source and Target UIDs are recorded separately; equality is expected not. The source UID annotation and stable logical identity must survive the move.
+The Target Kubernetes API assigns a new metadata UID to the recreated object. The source and Target UIDs are recorded separately; equality is not expected. The source UID annotation and stable logical identity must survive the move.
 
 After `clusterctl move`, the adapter verifies source Cluster absence, Target Cluster presence, identity annotations, Target controller readiness and exact equality of source/Target BMH hardware-identity sets. It waits for Target BMH hardware identity reconciliation for up to five minutes. Any mismatch blocks EPH cleanup.
 

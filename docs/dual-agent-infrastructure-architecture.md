@@ -5,8 +5,8 @@
 ## 1. Agent roles and placement
 
 1. **Cloud Control Agent** runs in the Alibaba Cloud or Tencent Cloud management environment. It owns durable orchestration state, task scheduling, approval evidence, command dispatch, leases, status aggregation, audit correlation and failure coordination. It does not directly operate target Kubernetes resources.
-2. **EPH Agent** runs in the temporary EPH Live OS / temporary single-node Kubernetes management environment. EPH is exactly one temporary Kubernetes node and has no Worker pool. EPH Agent performs source-side hardware/network preflight and the approved source-side CAPI Pivot operation. Its local etcd, Pod filesystem and EPH-only credentials are disposable.
-3. **Target Agent** runs in the target Kubernetes cluster on Control Plane Master nodes. It is one logical cluster-scoped Agent deployed as three replicas, one per master, with Kubernetes Lease leader election. Only the leader claims or executes commands. It owns Target adoption, CAPI/Metal3/Ironic coordination, BMH ownership verification, EPH handoff/cleanup and Target Worker provisioning.
+2. **EPH Agent** runs in the temporary EPH Live OS / temporary single-node Kubernetes management environment. EPH is exactly one temporary Kubernetes node and has no Worker pool. EPH Agent performs source-side hardware/network preflight and records the source-side Cluster/BMH identity and digest evidence; it does not perform the CAPI Pivot or the Target takeover. Its local etcd, Pod filesystem and EPH-only credentials are disposable.
+3. **Target Agent** runs in the target Kubernetes cluster on Control Plane Master nodes. It is one logical cluster-scoped Agent deployed as three replicas, one per master, with Kubernetes Lease leader election. Only the leader claims or executes commands. It owns Target adoption, the CAPI Pivot (`clusterctl move`), CAPI/Metal3/Ironic coordination, BMH ownership verification, EPH handoff/cleanup and Target Worker provisioning.
 
 There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker facts are obtained through Kubernetes, CAPI, Metal3 and approved infrastructure APIs. Missing evidence is reported as unavailable, not inferred.
 
@@ -18,7 +18,7 @@ There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker fa
 - Cloud Control Agent coordinates and records the deployment, but does not own target adoption or approve EPH cleanup.
 - Target Control Plane masters are provisioned before Target Workers.
 - Target Agent starts on the Target Control Plane, restores the durable checkpoint and verifies the target API, etcd and required controllers.
-- CAPI/Metal3 management state is pivoted from EPH to Target. Cluster identity, owner references, controller reconciliation and exact BMH identity sets must be verified.
+- The Target Agent pivots CAPI/Metal3 management state from the EPH source cluster to the Target cluster. Cluster identity, owner references, controller reconciliation and exact BMH identity sets must be verified.
 - EPH cleanup is an autonomous Target Agent operation only after CAPI Pivot, target controller readiness, BMH ownership and credential handoff are positively verified. Any missing evidence leaves EPH intact.
 - Target Agent then provisions Workers through CAPI/Metal3/Ironic and verifies host, Node, network and NTP postflight.
 
