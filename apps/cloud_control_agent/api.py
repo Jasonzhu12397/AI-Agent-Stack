@@ -36,6 +36,7 @@ TARGET_ACTIONS = frozenset({
     "target.ntp.control_plane.verify_bootstrap",
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
+    "target.eph.cleanup",
 })
 
 
