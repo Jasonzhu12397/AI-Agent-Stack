@@ -107,15 +107,31 @@ def verify_control_plane_ntp_bootstrap(
             raise NtpAttestationError(f"TARGET_NTP_WORKER_NETWORK_PROFILE_MISMATCH:{machine_name}")
         if re.search(r"(?m)^\s*pool\s+", script):
             raise NtpAttestationError(f"TARGET_NTP_EXTERNAL_FALLBACK_FOUND:{machine_name}")
+        chrony_install_pattern = re.compile(
+            r"(?m)^\\s*(?:"
+            r"apt-get\\s+install\\s+-y|"
+            r"dnf\\s+install\\s+-y|"
+            r"yum\\s+install\\s+-y|"
+            r"zypper\\s+(?:--non-interactive\\s+)?install"
+            r")\\s+[^\\n]*\\bchrony\\b"
+        )
+        service_enable_pattern = re.compile(
+            r"(?m)^\\s*systemctl\\s+enable\\s+(?:chrony|chronyd)(?:\\s|$)"
+        )
+        service_restart_pattern = re.compile(
+            r"(?m)^\\s*systemctl\\s+restart\\s+(?:chrony|chronyd)(?:\\s|$)"
+        )
         required_markers = (
-            "install -y chrony",
             "chronyc -n sources",
             "chronyc tracking",
             "ss -lun",
-            "systemctl enable",
-            "systemctl restart",
         )
-        if not all(marker in script for marker in required_markers):
+        if (
+            not chrony_install_pattern.search(script)
+            or not service_enable_pattern.search(script)
+            or not service_restart_pattern.search(script)
+            or not all(marker in script for marker in required_markers)
+        ):
             raise NtpAttestationError(f"TARGET_NTP_BOOTSTRAP_VERIFICATION_MISSING:{machine_name}")
         verified.append({
             "machine": machine_name,
