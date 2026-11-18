@@ -23,7 +23,6 @@ from packages.agent_transport import (
 )
 
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
-from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
 from .handoff import (
     HandoffError,
     HandoffPhase,
@@ -54,6 +53,7 @@ from .ntp_policy import (
     validate_worker_ntp_sources,
 )
 from .worker_attestation import WorkerAttestationError, verify_worker_readiness
+from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
