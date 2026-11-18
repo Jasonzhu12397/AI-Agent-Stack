@@ -627,6 +627,36 @@ def _observe_control_plane_ntp_bootstrap(payload: dict[str, Any]) -> dict[str, A
 
 
 
+def _validated_checkpoint_evidence(
+    checkpoint: dict[str, Any],
+    expected_phase: str,
+) -> dict[str, Any]:
+    if checkpoint.get("phase") != expected_phase:
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_PHASE_MISMATCH")
+    sequence = checkpoint.get("sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_SEQUENCE_INVALID")
+    state = checkpoint.get("state")
+    if not isinstance(state, dict):
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_STATE_INVALID")
+    evidence = state.get("evidence")
+    digest = state.get("state_digest")
+    if not isinstance(evidence, dict) or not isinstance(digest, str):
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_EVIDENCE_INVALID")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_DIGEST_INVALID")
+    canonical = json.dumps(
+        evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    actual_digest = hashlib.sha256(canonical).hexdigest()
+    if actual_digest != digest:
+        raise HandoffError("HANDOFF_DURABLE_CHECKPOINT_DIGEST_MISMATCH")
+    return dict(evidence)
+
+
 def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     namespace = payload.get("namespace")
     deployment_name = payload.get("machine_deployment_name")
@@ -1065,14 +1095,26 @@ def execute(
                 )
                 evidence = {**evidence, **provisioning_evidence}
             if next_phase == HandoffPhase.WORKERS_READY.value:
-                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
-                    evidence.get("ironic_internal_ntp_ip")
+                previous_evidence = _validated_checkpoint_evidence(
+                    checkpoint,
+                    HandoffPhase.WORKER_PROVISIONING.value,
                 )
-                observed_workers = _observe_worker_readiness(payload)
+                if not isinstance(previous_evidence.get("worker_network_contract"), dict):
+                    raise HandoffError("HANDOFF_WORKER_NETWORK_CONTRACT_CHECKPOINT_MISSING")
+                configured_ntp_ip = _require_configured_ironic_internal_ntp_ip(
+                    previous_evidence.get("ironic_internal_ntp_ip")
+                )
+                readiness_payload = {
+                    **payload,
+                    "namespace": previous_evidence.get("machine_deployment_namespace"),
+                    "machine_deployment_name": previous_evidence.get("machine_deployment"),
+                }
+                observed_workers = _observe_worker_readiness(readiness_payload)
                 if observed_workers.get("ironic_internal_ntp_ip") != configured_ntp_ip:
                     raise HandoffError("HANDOFF_WORKER_NTP_SOURCE_MISMATCH")
                 evidence = {
                     **evidence,
+                    **previous_evidence,
                     **observed_workers,
                     "ironic_internal_ntp_ip": configured_ntp_ip,
                 }
