@@ -9,7 +9,7 @@ class SriovDevicePluginConfigError(ValueError):
     pass
 
 
-_BDF = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]$")
+_BDF = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$")
 _RESOURCE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _PREFIX = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}$")
 _VENDOR = re.compile(r"^[0-9a-fA-F]{4}$")
