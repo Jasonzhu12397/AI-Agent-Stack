@@ -168,7 +168,12 @@ def _proof():
     }
 
 
-def _runner_factory(available_bmhs=2, existing_machine_deployment=None, updated_replicas=2, missing_attachments=None):
+def _runner_factory(
+    available_bmhs=2,
+    existing_machine_deployment=None,
+    updated_replicas=2,
+    missing_attachments=None,
+):
     calls = []
     applied = {}
     cluster = {
