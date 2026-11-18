@@ -657,9 +657,9 @@ def execute_agent_run(task):
                     tool_choice="auto" if offered_tools else None,
                 )
             except ModelGatewayError as exc:
-                if exc.retryable:
-                    raise RuntimeError(exc.code) from exc
-                raise PermanentTaskError(exc.code) from exc
+                raise PermanentTaskError(
+                    "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
+                ) from exc
             _renew_agent_lease(task)
             actual_input_tokens = response.input_tokens or (
                 0 if model_config.provider.provider_type == "fake"
