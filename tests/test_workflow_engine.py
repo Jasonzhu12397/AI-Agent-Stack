@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from uuid import uuid4
 from unittest.mock import patch
 
 import pytest
@@ -972,7 +973,7 @@ def test_workflow_llm_budget_blocks_before_provider_call(workflow_workspace):
         "input": "question",
         "_token_usage": {"input_tokens": 16000, "output_tokens": 0},
     }
-    task = SimpleNamespace(id="00000000-0000-0000-0000-000000000099")
+    task = Task(id=uuid4())
 
     with patch("core.workflow_engine.ModelGateway.complete") as complete:
         with pytest.raises(WorkflowValidationError, match="TOKEN_BUDGET_EXHAUSTED"):
