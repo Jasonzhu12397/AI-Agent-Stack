@@ -18,7 +18,7 @@ from .ntp_policy import (
     render_worker_chrony_pre_kubeadm_command,
     validate_ironic_internal_ntp_ip,
 )
-from .sriov_device_plugin import (
+from packages.agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     render_sriov_device_plugin_configmap,
     validate_sriov_device_plugin_config,
