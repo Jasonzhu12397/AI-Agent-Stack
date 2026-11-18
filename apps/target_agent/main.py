@@ -1165,6 +1165,7 @@ def execute(
                     cluster_name=cluster_name,
                     namespace=namespace,
                     machine_deployment_name=machine_deployment_name,
+                    deployment_id=previous_evidence.get("deployment_id"),
                     desired_worker_count=previous_evidence.get("desired_worker_count"),
                     ironic_internal_ntp_ip=_require_configured_ironic_internal_ntp_ip(
                         previous_evidence.get("ironic_internal_ntp_ip")
