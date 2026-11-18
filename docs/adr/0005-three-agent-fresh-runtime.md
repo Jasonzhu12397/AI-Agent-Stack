@@ -13,8 +13,8 @@ The user has explicitly rejected continued use of the old Agent implementation. 
 
 Implement exactly three Agent roles from new code:
 
-1. **Cloud Control Agent** — deployed in Alibaba Cloud or Tencent Cloud. Owns global scheduling, authorization/approval, durable orchestration state, tenant/project scope, task dispatch, status aggregation, audit and failure coordination.
-2. **EPH Agent** — runs as a Kubernetes Pod inside the temporary, RAM-booted, single-node EPH Kubernetes cluster. Owns source-side preflight, temporary bootstrap checks and the approved source-side CAPI Pivot operation.
+1. **Cloud Control Agent** — deployed in Alibaba Cloud or Tencent Cloud. Owns global scheduling, durable orchestration state, tenant/project scope, task dispatch, status aggregation and failure coordination. It does not approve, review or gate Target takeover.
+2. **EPH Agent** — runs as a Kubernetes Pod inside the temporary, RAM-booted, single-node EPH Kubernetes cluster. Owns source-side preflight, temporary bootstrap checks and the source-side CAPI Pivot operation.
 3. **Target Agent** — one logical cluster-scoped service, deployed as three replicas across the three target Kubernetes Control Plane master nodes with anti-affinity, leader election and disruption protection. Owns target adoption, CAPI/Metal3/Ironic coordination, target cluster lifecycle, Worker provisioning and postflight.
 
 There is no Node Agent role, no per-Worker resident Agent, and no network-inventory Agent DaemonSet. Target Worker facts must be obtained from Kubernetes, CAPI, Metal3 and explicitly approved infrastructure APIs. Facts unavailable from those sources must be reported as unavailable, never fabricated.
@@ -37,7 +37,7 @@ There is no Node Agent role, no per-Worker resident Agent, and no network-invent
 - Target Control Plane chronyd synchronizes from approved external NTP sources and exposes the internal NTP service at the Ironic internal IP/VIP.
 - Every Target Worker synchronizes only from that Ironic internal IP/VIP. Worker configuration must not contain external NTP pools or fallback sources. Verify endpoint reachability and actual synchronization before kubeadm join.
 - EPH uses an independent bootstrap NTP source because Target Control Plane does not exist during EPH bootstrap.
-- CAPI Pivot, BMH registry migration, EPH cleanup and Worker provisioning are separate checkpointed phases. Each side effect requires positive preconditions, idempotency and postflight evidence. Any ambiguous ownership or missing evidence fails closed.
+- CAPI Pivot, autonomous Target takeover, BMH registry migration, EPH cleanup and Worker provisioning are separate checkpointed phases. Target Agent detects completed Target Control Plane readiness, validates cluster identity, then autonomously performs the handoff without Cloud approval or manual review. It migrates BMH registry ownership, cleans up the temporary EPH workload and proceeds with Worker provisioning. Each side effect requires positive preconditions, idempotency and postflight evidence. Any ambiguous ownership or missing evidence fails closed.
 - Control Plane and Data Plane network roles remain separate. Pod traffic uses the Data Plane; Data Plane integration must support the specified Multus/SR-IOV/DPDK design while the Control Plane uses ordinary NIC connectivity.
 
 ## Delivery sequence
