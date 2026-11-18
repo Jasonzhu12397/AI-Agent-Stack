@@ -55,7 +55,15 @@ def test_capi_template_renders_kubeadm_metal3_control_plane_and_worker_pool():
                 "objectNames": [{"key": "hostname", "object": "machine"}],
             },
             "network_data": {
-                "links": {"ethernets": [{"type": "phy", "id": "control", "macAddress": {"fromHostInterface": "eno1"}}]},
+                "links": {
+                    "ethernets": [
+                        {
+                            "type": "phy",
+                            "id": "control",
+                            "macAddress": {"fromHostInterface": "eno1"},
+                        },
+                    ],
+                },
                 "networks": {"ipv4DHCP": [{"id": "control", "link": "control"}]},
             },
         },
@@ -68,7 +76,15 @@ def test_capi_template_renders_kubeadm_metal3_control_plane_and_worker_pool():
                     "objectNames": [{"key": "hostname", "object": "machine"}],
                 },
                 "network_data": {
-                    "links": {"ethernets": [{"type": "phy", "id": "data", "macAddress": {"fromHostInterface": "eno2"}}]},
+                    "links": {
+                        "ethernets": [
+                            {
+                                "type": "phy",
+                                "id": "data",
+                                "macAddress": {"fromHostInterface": "eno2"},
+                            },
+                        ],
+                    },
                     "networks": {"ipv4DHCP": [{"id": "data", "link": "data"}]},
                 },
             },
