@@ -23,6 +23,8 @@ NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
 STABLE_ID_ANNOTATION = "ai-agent-stack.io/stable-cluster-identity"
+SERVICE_ACCOUNT_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
+TARGET_KUBECONFIG_PATH = Path("/tmp/target-agent-in-cluster.kubeconfig")
 
 
 def _valid_name(value: Any, field: str) -> str:
@@ -463,28 +465,41 @@ def _inventory_digest(identities: list[dict[str, str]]) -> str:
 
 def _ensure_target_kubeconfig() -> str:
     configured = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG") or os.environ.get("KUBECONFIG")
-    path = Path(configured or "/tmp/target-agent-in-cluster.kubeconfig")
+    if configured:
+        configured_path = Path(configured)
+        if not configured_path.is_file():
+            raise CapiPivotError("CAPI_PIVOT_TARGET_KUBECONFIG_MISSING")
+        return str(configured_path)
+    path = TARGET_KUBECONFIG_PATH
     if path.is_file():
         return str(path)
     host = os.environ.get("KUBERNETES_SERVICE_HOST")
     port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
-    token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+    token_path = SERVICE_ACCOUNT_DIR / "token"
+    ca_path = SERVICE_ACCOUNT_DIR / "ca.crt"
+    try:
+        port_number = int(port)
+    except (TypeError, ValueError) as exc:
+        raise CapiPivotError(
+            "CAPI_PIVOT_TARGET_IN_CLUSTER_CREDENTIALS_UNAVAILABLE"
+        ) from exc
     if (
         not isinstance(host, str)
         or not host
-        or not port.isdigit()
+        or any(character.isspace() or character in "/?#" for character in host)
+        or not 1 <= port_number <= 65535
         or not token_path.is_file()
         or not ca_path.is_file()
     ):
         raise CapiPivotError("CAPI_PIVOT_TARGET_IN_CLUSTER_CREDENTIALS_UNAVAILABLE")
+    server_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     document = {
         "apiVersion": "v1",
         "kind": "Config",
         "clusters": [{
             "name": "target-in-cluster",
             "cluster": {
-                "server": f"https://{host}:{port}",
+                "server": f"https://{server_host}:{port_number}",
                 "certificate-authority": str(ca_path),
             },
         }],
@@ -501,9 +516,18 @@ def _ensure_target_kubeconfig() -> str:
         }],
         "current-context": "target-agent@target-in-cluster",
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-    path.chmod(0o600)
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_text(
+            yaml.safe_dump(document, sort_keys=False),
+            encoding="utf-8",
+        )
+        temporary_path.chmod(0o600)
+        temporary_path.replace(path)
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        raise CapiPivotError("CAPI_PIVOT_TARGET_KUBECONFIG_WRITE_FAILED") from exc
     return str(path)
 
 

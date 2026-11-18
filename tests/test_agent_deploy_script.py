@@ -53,6 +53,12 @@ def test_target_agent_is_three_replicas_with_control_plane_anti_affinity_and_lea
     spec = deployment["spec"]
     pod_spec = spec["template"]["spec"]
     assert spec["replicas"] == 3
+    target_agent_service_account = next(
+        item for item in manifest
+        if item.get("kind") == "ServiceAccount"
+        and item["metadata"]["name"] == "target-agent"
+    )
+    assert target_agent_service_account["automountServiceAccountToken"] is True
     assert pod_spec["nodeSelector"] == {"node-role.kubernetes.io/control-plane": ""}
     assert pod_spec["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
     assert any(item.get("kind") == "Role" for item in manifest)
