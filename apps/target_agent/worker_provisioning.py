@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -557,35 +558,42 @@ def execute_worker_provisioning(
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
 
     md_name = machine_deployment["metadata"]["name"]
-    md_result = _run(
-        runner,
-        [
-            "get",
-            "machinedeployments",
-            md_name,
-            "--namespace",
-            namespace,
-            "-o",
-            "json",
-        ],
-        timeout=60,
-        max_output_bytes=4 * 1024 * 1024,
-    )
-    try:
-        observed = json.loads(md_result.get("stdout", ""))
-    except (TypeError, ValueError) as exc:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_DEPLOYMENT_JSON_INVALID") from exc
-    observed_metadata = observed.get("metadata", {})
+    observed = None
+    for _attempt in range(20):
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+        md_result = _run(
+            runner,
+            [
+                "get",
+                "machinedeployments",
+                md_name,
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+            timeout=60,
+            max_output_bytes=4 * 1024 * 1024,
+        )
+        try:
+            observed = json.loads(md_result.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_JSON_INVALID"
+            ) from exc
+        observed_metadata = observed.get("metadata", {})
+        generation = observed_metadata.get("generation", 0)
+        status = observed.get("status", {})
+        if status.get("observedGeneration", 0) >= generation:
+            break
+        time.sleep(3)
+    else:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED")
     observed_spec = observed.get("spec", {})
     desired = observed_spec.get("replicas")
-    generation = observed_metadata.get("generation", 0)
-    status = observed.get("status", {})
-    if (
-        not isinstance(desired, int)
-        or desired < 1
-        or status.get("observedGeneration", 0) < generation
-    ):
-        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED")
+    if not isinstance(desired, int) or desired < 1:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_DEPLOYMENT_SPEC_INVALID")
     return {
         "worker_provisioning_resources_applied": True,
         "worker_provisioning_server_dry_run_passed": True,
