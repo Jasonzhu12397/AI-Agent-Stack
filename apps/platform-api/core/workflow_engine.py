@@ -589,7 +589,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         token_reservation = None
         if workflow_run is not None:
             reservation_key = hashlib.sha256(
-                f"{task.id}:{task.attempts}:workflow:{node['id']}".encode("utf-8")
+                f"{task.id}:{task.attempts}:workflow:{node['id']}".encode()
             ).hexdigest()
             try:
                 token_reservation = reserve_tenant_tokens(
