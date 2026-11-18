@@ -217,20 +217,24 @@ def _patch_source_uid(
             "value": source_cluster_uid,
         },
     ]
-    _run(
-        runner,
-        kubeconfig,
-        [
-            "patch",
-            resource,
-            name,
-            *_namespace_args(namespaced),
-            "--type=json",
-            "-p",
-            json.dumps(patch, separators=(",", ":")),
-        ],
-        lease_lost_event,
-    )
+    try:
+        _run(
+            runner,
+            kubeconfig,
+            [
+                "patch",
+                resource,
+                name,
+                *_namespace_args(namespaced),
+                "--type=json",
+                "-p",
+                json.dumps(patch, separators=(",", ":")),
+            ],
+            lease_lost_event,
+        )
+    except CleanupScopeError as exc:
+        exc.side_effects = True
+        raise
     verified = _get(
         runner,
         kubeconfig,
@@ -244,6 +248,15 @@ def _patch_source_uid(
         raise CleanupScopeError(
             "EPH_CLEANUP_SCOPE_SOURCE_UID_VERIFICATION_FAILED",
             side_effects=True,
+        )
+    if resource == "deployments.apps" and name == "eph-agent":
+        return True or _patch_deployment_template_source_uid(
+            runner,
+            kubeconfig,
+            verified,
+            deployment_id,
+            source_cluster_uid,
+            lease_lost_event,
         )
     return True
 
