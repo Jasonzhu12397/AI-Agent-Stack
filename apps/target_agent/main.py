@@ -938,6 +938,19 @@ def _execute_attested_eph_cleanup(
     }
 
 
+def _command_payload(command: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = command.get("payload", {})
+    if not isinstance(raw_payload, dict):
+        raise HandoffError("AGENT_COMMAND_PAYLOAD_INVALID")
+    payload = dict(raw_payload)
+    deployment_id = command.get("deployment_id") or payload.get("deployment_id")
+    if not isinstance(deployment_id, str) or not deployment_id:
+        raise HandoffError("AGENT_COMMAND_DEPLOYMENT_ID_REQUIRED")
+    if payload.get("deployment_id") not in (None, deployment_id):
+        raise HandoffError("AGENT_COMMAND_DEPLOYMENT_ID_MISMATCH")
+    payload["deployment_id"] = deployment_id
+    return payload
+
 def execute(
     command: dict[str, Any],
     lease_lost_event: Any = None,
@@ -1002,7 +1015,7 @@ def execute(
         try:
             _require_worker_provisioning_checkpoint(command)
             evidence = _execute_worker_provisioning(
-                command.get("payload", {}),
+                _command_payload(command),
                 command.get("deployment_context"),
                 lease_lost_event,
             )
@@ -1030,7 +1043,7 @@ def execute(
         try:
             _require_eph_cleanup_checkpoint(command)
             evidence = _execute_attested_eph_cleanup(
-                command.get("payload", {}),
+                _command_payload(command),
                 command.get("deployment_context"),
                 lease_lost_event,
             )
@@ -1054,7 +1067,7 @@ def execute(
                 "side_effects": getattr(exc, "side_effects", False),
             }
     if action == "target.handoff.evaluate":
-        payload = command.get("payload", {})
+        payload = _command_payload(command)
         checkpoint = command.get("deployment_checkpoint")
         try:
             if not isinstance(checkpoint, dict):
