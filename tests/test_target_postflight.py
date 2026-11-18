@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
+
+from apps.target_agent import main as target_main
 
 from apps.target_agent.postflight import PostflightError, verify_target_postflight
 
@@ -208,3 +211,49 @@ def test_postflight_rejects_missing_ovs_network_attachment_definition():
     ]
     with pytest.raises(PostflightError, match="POSTFLIGHT_OVS_DATA_PLANE_NAD_MISSING"):
         verify_target_postflight(runner=runner, **_kwargs())
+
+
+
+def test_durable_checkpoint_evidence_is_verified_before_postflight():
+    evidence = {
+        "desired_worker_count": 2,
+        "worker_network_contract": {"pod_traffic_network": "data"},
+    }
+    canonical = json.dumps(
+        evidence,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    checkpoint = {
+        "phase": "workers_ready",
+        "sequence": 8,
+        "state": {
+            "state_digest": hashlib.sha256(canonical).hexdigest(),
+            "evidence": evidence,
+        },
+    }
+    assert target_main._validated_checkpoint_evidence(
+        checkpoint,
+        "workers_ready",
+    ) == evidence
+
+
+def test_postflight_rejects_tampered_checkpoint_evidence():
+    evidence = {"desired_worker_count": 2}
+    checkpoint = {
+        "phase": "workers_ready",
+        "sequence": 8,
+        "state": {
+            "state_digest": "0" * 64,
+            "evidence": evidence,
+        },
+    }
+    with pytest.raises(
+        target_main.HandoffError,
+        match="HANDOFF_DURABLE_CHECKPOINT_DIGEST_MISMATCH",
+    ):
+        target_main._validated_checkpoint_evidence(
+            checkpoint,
+            "workers_ready",
+        )
