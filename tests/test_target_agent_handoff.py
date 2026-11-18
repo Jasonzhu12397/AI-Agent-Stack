@@ -175,6 +175,7 @@ def test_handoff_completion_requires_durable_workers_ready_checkpoint():
 
     outcome = execute({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "payload": {
             "next_phase": "completed",
             "evidence": {
