@@ -40,7 +40,11 @@ def _ready_condition(conditions: Any) -> bool:
 
 
 def _control_plane_node(node: dict[str, Any]) -> bool:
+    if not isinstance(node, dict):
+        raise PostflightError("POSTFLIGHT_NODE_DOCUMENT_INVALID")
     metadata = node.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise PostflightError("POSTFLIGHT_NODE_METADATA_INVALID")
     labels = metadata.get("labels", {})
     if not isinstance(labels, dict):
         raise PostflightError("POSTFLIGHT_NODE_LABELS_INVALID")
@@ -85,18 +89,18 @@ def _sriov_resource_names(value: Any) -> set[str]:
 
 
 def _daemonset_ready(daemonset: dict[str, Any]) -> bool:
+    if not isinstance(daemonset, dict):
+        raise PostflightError("POSTFLIGHT_DAEMONSET_DOCUMENT_INVALID")
     status = daemonset.get("status", {})
+    if not isinstance(status, dict):
+        raise PostflightError("POSTFLIGHT_DAEMONSET_STATUS_INVALID")
     desired = status.get("desiredNumberScheduled", 0)
     ready = status.get("numberReady", 0)
     available = status.get("numberAvailable", ready)
-    return (
-        isinstance(desired, int)
-        and desired > 0
-        and isinstance(ready, int)
-        and isinstance(available, int)
-        and ready >= desired
-        and available >= desired
-    )
+    counters = (desired, ready, available)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counters):
+        raise PostflightError("POSTFLIGHT_DAEMONSET_COUNTER_INVALID")
+    return desired > 0 and ready >= desired and available >= desired
 
 
 def _find_ready_daemonset(
@@ -104,8 +108,14 @@ def _find_ready_daemonset(
     patterns: tuple[str, ...],
 ) -> str | None:
     for item in daemonsets:
+        if not isinstance(item, dict):
+            raise PostflightError("POSTFLIGHT_DAEMONSET_DOCUMENT_INVALID")
         metadata = item.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise PostflightError("POSTFLIGHT_DAEMONSET_METADATA_INVALID")
         labels = metadata.get("labels", {})
+        if not isinstance(labels, dict):
+            raise PostflightError("POSTFLIGHT_DAEMONSET_LABELS_INVALID")
         identity = " ".join(
             [
                 str(metadata.get("name", "")),
@@ -299,16 +309,21 @@ def verify_target_postflight(
     machines = machines_document.get("items")
     if not isinstance(machines, list):
         raise PostflightError("POSTFLIGHT_MACHINE_INVENTORY_INVALID")
-    worker_machines = [
-        machine
-        for machine in machines
-        if machine.get("metadata", {}).get("labels", {}).get(
-            "cluster.x-k8s.io/deployment-name"
-        ) == machine_deployment_name
-        and machine.get("metadata", {}).get("labels", {}).get(
-            "cluster.x-k8s.io/cluster-name"
-        ) == cluster_name
-    ]
+    worker_machines = []
+    for machine in machines:
+        if not isinstance(machine, dict):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_INVALID")
+        metadata = machine.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_METADATA_INVALID")
+        labels = metadata.get("labels", {})
+        if not isinstance(labels, dict):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_LABELS_INVALID")
+        if (
+            labels.get("cluster.x-k8s.io/deployment-name") == machine_deployment_name
+            and labels.get("cluster.x-k8s.io/cluster-name") == cluster_name
+        ):
+            worker_machines.append(machine)
     if not isinstance(worker_machines, list) or len(worker_machines) != desired_worker_count:
         raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINES_NOT_READY")
     worker_node_names = []
@@ -316,6 +331,8 @@ def verify_target_postflight(
         if not isinstance(machine, dict):
             raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_INVALID")
         status = machine.get("status", {})
+        if not isinstance(status, dict):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_STATUS_INVALID")
         node_ref = status.get("nodeRef", {})
         node_name = node_ref.get("name") if isinstance(node_ref, dict) else None
         if (
@@ -341,6 +358,8 @@ def verify_target_postflight(
         if not isinstance(node, dict):
             raise PostflightError("POSTFLIGHT_NODE_DOCUMENT_INVALID")
         metadata = node.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise PostflightError("POSTFLIGHT_NODE_METADATA_INVALID")
         node_name = metadata.get("name")
         if not isinstance(node_name, str) or not node_name or node_name in nodes_by_name:
             raise PostflightError("POSTFLIGHT_NODE_IDENTITY_INVALID")
@@ -409,19 +428,70 @@ def verify_target_postflight(
     sriov_nads = []
     ovs_nads = []
     sriov_resource_names = set()
+    required_attachments = worker_network_contract.get("required_network_attachments")
+    if not isinstance(required_attachments, list) or not required_attachments:
+        raise PostflightError("POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENTS_INVALID")
+    observed_nads = {}
     for nad in nads:
+        if not isinstance(nad, dict):
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_DOCUMENT_INVALID")
+        metadata = nad.get("metadata", {})
+        spec = nad.get("spec", {})
+        if not isinstance(metadata, dict) or not isinstance(spec, dict):
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_METADATA_OR_SPEC_INVALID")
+        nad_namespace = metadata.get("namespace")
+        nad_name = metadata.get("name")
+        if not isinstance(nad_namespace, str) or not nad_namespace or not isinstance(nad_name, str) or not nad_name:
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_IDENTITY_INVALID")
+        key = (nad_namespace, nad_name)
+        if key in observed_nads:
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_IDENTITY_DUPLICATE")
+        observed_nads[key] = nad
+    for requirement in required_attachments:
+        if not isinstance(requirement, dict):
+            raise PostflightError("POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_INVALID")
+        required_namespace = requirement.get("namespace")
+        required_name = requirement.get("name")
+        expected_type = requirement.get("cni_type")
+        expected_resource = requirement.get("resource_name")
+        if (
+            not isinstance(required_namespace, str)
+            or not required_namespace
+            or not isinstance(required_name, str)
+            or not required_name
+            or expected_type not in {"sriov", "ovs"}
+            or (expected_type == "sriov" and (not isinstance(expected_resource, str) or not expected_resource))
+            or (expected_type == "ovs" and expected_resource is not None)
+        ):
+            raise PostflightError("POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_INVALID")
+        nad = observed_nads.get((required_namespace, required_name))
+        if nad is None:
+            raise PostflightError(
+                f"POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_MISSING:{required_namespace}/{required_name}"
+            )
         config = nad.get("spec", {}).get("config")
         if not isinstance(config, str):
-            continue
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_CONFIG_INVALID")
         try:
             config_document = json.loads(config)
-        except ValueError:
-            continue
+        except (TypeError, ValueError) as exc:
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_CONFIG_INVALID") from exc
+        if not isinstance(config_document, dict):
+            raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_CONFIG_INVALID")
         plugin_types = _plugin_types(config_document)
-        if any("sriov" in item for item in plugin_types):
+        if expected_type not in plugin_types:
+            raise PostflightError(
+                f"POSTFLIGHT_NETWORK_ATTACHMENT_CNI_TYPE_MISMATCH:{required_namespace}/{required_name}"
+            )
+        if expected_type == "sriov":
+            resource_names = _sriov_resource_names(config_document)
+            if expected_resource not in resource_names:
+                raise PostflightError(
+                    f"POSTFLIGHT_NETWORK_ATTACHMENT_RESOURCE_MISMATCH:{required_namespace}/{required_name}"
+                )
             sriov_nads.append(nad)
-            sriov_resource_names.update(_sriov_resource_names(config_document))
-        if any("ovs" in item for item in plugin_types):
+            sriov_resource_names.add(expected_resource)
+        else:
             ovs_nads.append(nad)
     if not sriov_nads or not sriov_resource_names:
         raise PostflightError("POSTFLIGHT_SRIOV_DATA_PLANE_NAD_MISSING")
