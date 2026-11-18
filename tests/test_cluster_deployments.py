@@ -3054,7 +3054,10 @@ def test_cluster_deployment_sriov_config_is_validated_and_persisted(cluster_deli
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
     config = deployment.spec["worker_provisioning"]["sriov_device_plugin"]
     assert config["pool4"]["sriov_network_device_plugin_configmap_name"] == "sriov-dp-configmap"
-    assert config["pool5"]["sriov_network_device_plugin_configmap_data"] == config["pool4"]["sriov_network_device_plugin_configmap_data"]
+    assert (
+        config["pool5"]["sriov_network_device_plugin_configmap_data"]
+        == config["pool4"]["sriov_network_device_plugin_configmap_data"]
+    )
     command = queue_deployment_command(deployment, "cluster.capi.worker.provision", node=_node)
     assert command.payload["worker_provisioning"]["sriov_device_plugin"] == config
 
@@ -3064,7 +3067,8 @@ def test_cluster_deployment_sriov_config_rejects_invalid_pci_bdf(cluster_deliver
     _user, tenant, project, node, _token, client = cluster_delivery_workspace
     created = create_deployment(client, tenant, project, node, key="sriov-config-invalid")
     pools = _sriov_pools()
-    pools["pool4"]["sriov_network_device_plugin_configmap_data"]["resourceList"][0]["selectors"]["rootDevices"] = ["2f:00.0"]
+    selectors = pools["pool4"]["sriov_network_device_plugin_configmap_data"]
+    selectors["resourceList"][0]["selectors"]["rootDevices"] = ["2f:00.0"]
     response = client.put(
         f"/api/v1/cluster-deployments/{created.data['id']}/sriov-device-plugin/",
         {"pools": pools},
