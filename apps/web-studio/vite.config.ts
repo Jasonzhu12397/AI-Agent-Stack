@@ -31,6 +31,7 @@ export default defineConfig({
         /node_modules\/memoize-one\//,
         /node_modules\/async-validator\//,
         /node_modules\\/@ctrl\\/tinycolor\\//,
+        /node_modules\\/@ctrl\\/tinycolor\\//,
       ],
     },
   },
