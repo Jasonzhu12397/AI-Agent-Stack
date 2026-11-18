@@ -53,6 +53,15 @@ function addPool(): void {
   });
   selectedPool.value = name;
 }
+function duplicatePool(): void {
+  const source = selectedPool.value;
+  if (!source) return;
+  let index = 4;
+  while (props.modelValue["pool" + index]) index += 1;
+  const name = "pool" + index;
+  update((draft) => { draft[name] = JSON.parse(JSON.stringify(draft[source])) as SriovPool; });
+  selectedPool.value = name;
+}
 function removePool(name: string): void {
   update((draft) => { delete draft[name]; });
   selectedPool.value = Object.keys(props.modelValue).find((item) => item !== name) ?? "";
@@ -140,7 +149,10 @@ defineExpose({ validate });
         <h3>SR-IOV Network Device Plugin</h3>
         <p>Assign PCI BDF addresses to extended resources and bind each pool to its node selector.</p>
       </div>
-      <el-button size="small" type="primary" plain @click="addPool">Add resource pool</el-button>
+      <div class="editor-actions">
+        <el-button size="small" plain :disabled="!selectedPool" @click="duplicatePool">Duplicate selected pool</el-button>
+        <el-button size="small" type="primary" plain @click="addPool">Add empty pool</el-button>
+      </div>
     </div>
     <el-alert
       title="PCI addresses are applied to the selected Target Cluster. Confirm each BDF against the machine's PCI inventory before deployment."
@@ -246,6 +258,7 @@ defineExpose({ validate });
 <style scoped>
 .sriov-editor { display: grid; gap: 14px; margin-top: 18px; padding: 16px; border: 1px solid rgba(112,151,187,.2); border-radius: 12px; background: rgba(8,22,36,.5); }
 .editor-heading,.pool-title,.resource-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.editor-actions { display:flex; flex-wrap:wrap; gap:6px; }
 .editor-heading h3 { margin:0; color:#e4effa; font-size:14px; }
 .editor-heading p { margin:5px 0 0; color:#8299b0; font-size:11px; }
 .pool-layout { display:grid; grid-template-columns:130px minmax(0,1fr); gap:14px; }
