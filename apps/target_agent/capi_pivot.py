@@ -462,7 +462,7 @@ def _inventory_digest(identities: list[dict[str, str]]) -> str:
 
 
 def _ensure_target_kubeconfig() -> str:
-    configured = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG")
+    configured = os.environ.get("CAPI_PIVOT_TARGET_KUBECONFIG") or os.environ.get("KUBECONFIG")
     path = Path(configured or "/tmp/target-agent-in-cluster.kubeconfig")
     if path.is_file():
         return str(path)
