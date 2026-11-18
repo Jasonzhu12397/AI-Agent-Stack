@@ -192,7 +192,7 @@ const sriovPciAddresses = computed(() => {
   const addresses = new Set<string>();
   const visit = (value: unknown): void => {
     if (typeof value === "string") {
-      const matches = value.match(/(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]/g) ?? [];
+      const matches = value.match(/(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]/g) ?? [];
       for (const match of matches) addresses.add(match.length === 7 ? "0000:" + match : match.toLowerCase());
     } else if (Array.isArray(value)) {
       value.forEach(visit);
