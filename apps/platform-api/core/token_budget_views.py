@@ -1,0 +1,89 @@
+from datetime import datetime
+
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import serializers, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from core.models import Tenant, TenantMembership, TenantTokenBudget
+from core.permissions import IsTenantAdmin
+from core.token_budget import _period_usage
+
+
+class TenantTokenBudgetUpdateSerializer(serializers.Serializer):
+    daily_limit = serializers.IntegerField(min_value=1, required=False)
+    monthly_limit = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("At least one budget limit must be supplied.")
+        return attrs
+
+
+class TenantTokenBudgetView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        permissions = [IsAuthenticated]
+        if self.request.method in {"PUT", "PATCH"}:
+            permissions.append(IsTenantAdmin)
+        return [permission() for permission in permissions]
+
+    def get_tenant(self):
+        return get_object_or_404(
+            Tenant.objects.filter(memberships__user=self.request.user),
+            pk=self.kwargs["tenant_id"],
+        )
+
+    @staticmethod
+    def _usage(tenant_id, now):
+        local_now = timezone.localtime(now)
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = day_start.replace(day=1)
+        return {
+            "daily_used": _period_usage(tenant_id, day_start, now),
+            "monthly_used": _period_usage(tenant_id, month_start, now),
+        }
+
+    def get(self, request, tenant_id):
+        tenant = self.get_tenant()
+        budget, _ = TenantTokenBudget.objects.get_or_create(tenant=tenant)
+        now = timezone.now()
+        return Response(
+            {
+                "daily_limit": budget.daily_limit,
+                "monthly_limit": budget.monthly_limit,
+                **self._usage(tenant.id, now),
+            }
+        )
+
+    @transaction.atomic
+    def put(self, request, tenant_id):
+        return self._update(request, tenant_id)
+
+    @transaction.atomic
+    def patch(self, request, tenant_id):
+        return self._update(request, tenant_id)
+
+    def _update(self, request, tenant_id):
+        tenant = self.get_tenant()
+        serializer = TenantTokenBudgetUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
+            tenant=tenant
+        )
+        for field, value in serializer.validated_data.items():
+            setattr(budget, field, value)
+        budget.save(update_fields=[*serializer.validated_data, "updated_at"])
+        now = timezone.now()
+        return Response(
+            {
+                "daily_limit": budget.daily_limit,
+                "monthly_limit": budget.monthly_limit,
+                **self._usage(tenant.id, now),
+            },
+            status=status.HTTP_200_OK,
+        )
