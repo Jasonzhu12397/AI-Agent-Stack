@@ -3,12 +3,16 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.urls import reverse
 from django.utils import timezone
 
 from core.models import (
     AgentDefinition, AgentRun, AgentVersion, Project, Task, Tenant,
-    TenantTokenBudget, TenantTokenUsage, WorkflowDefinition, WorkflowRun, WorkflowVersion,
+    TenantMembership, TenantTokenBudget, TenantTokenUsage,
+    WorkflowDefinition, WorkflowRun, WorkflowVersion,
 )
+from rest_framework.test import APIClient
+
 from core.token_budget import (
     TenantTokenBudgetExceeded, release_tenant_tokens,
     reserve_tenant_tokens, settle_tenant_tokens,
@@ -168,3 +172,32 @@ def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_bu
             idempotency_key="next-day-call",
             requested_tokens=66,
         )
+
+
+@pytest.mark.django_db
+def test_tenant_token_budget_api_is_tenant_admin_managed(token_budget_run):
+    task, _, budget = token_budget_run
+    owner = task.created_by
+    TenantMembership.objects.create(
+        tenant=task.tenant,
+        user=owner,
+        role=TenantMembership.Role.OWNER,
+    )
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    url = reverse("tenant-token-budget", kwargs={"tenant_id": task.tenant_id})
+
+    response = client.patch(url, {"daily_limit": 75}, format="json")
+    assert response.status_code == 200
+    assert response.data["daily_limit"] == 75
+    assert response.data["monthly_limit"] == budget.monthly_limit
+
+    member = get_user_model().objects.create_user(username="token-budget-member")
+    TenantMembership.objects.create(
+        tenant=task.tenant,
+        user=member,
+        role=TenantMembership.Role.MEMBER,
+    )
+    client.force_authenticate(user=member)
+    denied = client.patch(url, {"daily_limit": 50}, format="json")
+    assert denied.status_code == 403
