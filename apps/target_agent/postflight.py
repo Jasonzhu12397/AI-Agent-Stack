@@ -131,6 +131,7 @@ def verify_target_postflight(
     cluster_name: str,
     namespace: str,
     machine_deployment_name: str,
+    deployment_id: str,
     desired_worker_count: int,
     ironic_internal_ntp_ip: str,
     worker_ntp_bootstrap_sources: dict[str, list[str]],
@@ -258,9 +259,19 @@ def verify_target_postflight(
         ],
         "worker-machine-deployment",
     )
+    md_metadata = machine_deployment.get("metadata", {})
+    md_labels = md_metadata.get("labels", {})
+    md_annotations = md_metadata.get("annotations", {})
+    if (
+        md_labels.get("app.kubernetes.io/managed-by") != "target-agent"
+        or md_labels.get("ai-agent-stack.io/deployment-id") != deployment_id
+        or md_annotations.get("ai-agent-stack.io/target-cluster-uid")
+        != ownership_evidence.get("target_cluster_uid")
+    ):
+        raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_OWNERSHIP_MISMATCH")
     md_spec = machine_deployment.get("spec", {})
     md_status = machine_deployment.get("status", {})
-    generation = machine_deployment.get("metadata", {}).get("generation", 0)
+    generation = md_metadata.get("generation", 0)
     if (
         md_spec.get("replicas") != desired_worker_count
         or md_status.get("readyReplicas") != desired_worker_count
