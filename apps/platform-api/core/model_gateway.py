@@ -243,10 +243,15 @@ class ModelGateway:
                 "INVALID_EMBEDDING_INPUT",
                 "Embedding input must be a non-empty list of non-empty strings.",
             )
-        if len(inputs) > 128 or any(len(item) > 20000 for item in inputs):
+        if (
+            len(inputs) > 128
+            or any(len(item) > 20000 for item in inputs)
+            or sum(len(item.encode("utf-8")) for item in inputs) > 256 * 1024
+        ):
             raise ModelGatewayError(
                 "EMBEDDING_INPUT_LIMIT",
-                "Embedding requests are limited to 128 texts of at most 20,000 characters each.",
+                "Embedding requests are limited to 128 texts, 20,000 characters each, "
+                "and 256 KiB total UTF-8 input.",
             )
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
