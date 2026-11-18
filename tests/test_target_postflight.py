@@ -347,3 +347,19 @@ def test_postflight_rejects_malformed_resource_items(resource, items, error):
     documents[resource]["items"] = items
     with pytest.raises(PostflightError, match=error):
         verify_target_postflight(runner=runner, **_kwargs())
+
+
+@pytest.mark.parametrize(
+    ("resource", "document", "error"),
+    [
+        ("clusters.cluster.x-k8s.io", {"metadata": None}, "POSTFLIGHT_CAPI_CLUSTER_DOCUMENT_INVALID"),
+        ("machinedeployments.cluster.x-k8s.io", {"metadata": None}, "POSTFLIGHT_MACHINE_DEPLOYMENT_METADATA_INVALID"),
+        ("nodes", {"items": [{"metadata": {"name": "master-1"}, "status": None}]}, "POSTFLIGHT_NODE_STATUS_INVALID"),
+    ],
+)
+def test_postflight_rejects_malformed_resource_metadata_and_status(resource, document, error):
+    runner, documents = _fixtures()
+    original = documents[resource]
+    documents[resource] = {**original, **document}
+    with pytest.raises(PostflightError, match=error):
+        verify_target_postflight(runner=runner, **_kwargs())
