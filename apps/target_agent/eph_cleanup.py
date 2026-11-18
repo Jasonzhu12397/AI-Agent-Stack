@@ -162,18 +162,6 @@ def execute_eph_cleanup(
                 ),
             })
 
-    workload_resources = {
-        "deployments.apps",
-        "statefulsets.apps",
-        "daemonsets.apps",
-        "jobs.batch",
-        "pods",
-    }
-    if not any(item["resource"] in workload_resources for item in inventory):
-        raise EphCleanupError("EPH_CLEANUP_MANAGED_WORKLOAD_INVENTORY_EMPTY")
-    if not any(item["credential"] for item in inventory):
-        raise EphCleanupError("EPH_CLEANUP_EPH_CREDENTIAL_INVENTORY_EMPTY")
-
     deleted: list[dict[str, Any]] = []
     for item in inventory:
         if lease_lost_event is not None and lease_lost_event.is_set():
@@ -248,6 +236,7 @@ def execute_eph_cleanup(
         deleted.append(item)
 
     remaining = 0
+    remaining_secrets = 0
     for resource in RESOURCE_ORDER:
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
@@ -273,13 +262,15 @@ def execute_eph_cleanup(
         if not isinstance(items, list):
             raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID")
         remaining += len(items)
+        if resource == "secrets":
+            remaining_secrets = len(items)
     if remaining:
         raise EphCleanupError("EPH_CLEANUP_RESOURCES_REMAIN")
 
     return {
         "eph_cleanup_verified": True,
         "eph_workloads_absent": True,
-        "eph_credentials_revoked": sum(item["credential"] for item in deleted) > 0,
+        "eph_credentials_revoked": remaining_secrets == 0,
         "eph_api_no_longer_required": True,
         "target_agent_owns_handoff": True,
         "source_cluster_uid": proof["source_cluster_uid"],
