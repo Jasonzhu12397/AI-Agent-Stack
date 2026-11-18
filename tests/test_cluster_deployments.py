@@ -23,6 +23,7 @@ from core.cluster_deployment_services import (
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
+    queue_deployment_command,
 )
 
 
@@ -2997,3 +2998,93 @@ def test_control_plane_accepts_pivot_with_distinct_source_and_target_uids(
         status=AgentCommand.Status.QUEUED,
         node=target_node,
     ).exists()
+
+
+def _sriov_pools():
+    resource_list = [
+        {
+            "resourceName": "mlnx_dpdk_left",
+            "resourcePrefix": "mellanox.com",
+            "isRdma": True,
+            "selectors": {
+                "vendors": ["15b3"],
+                "drivers": ["mlx5_core"],
+                "rootDevices": ["0000:2f:00.0", "0000:8a:00.0"],
+                "isRdma": True,
+            },
+        },
+        {
+            "resourceName": "mlnx_dpdk_right",
+            "resourcePrefix": "mellanox.com",
+            "isRdma": True,
+            "selectors": {
+                "vendors": ["15b3"],
+                "drivers": ["mlx5_core"],
+                "rootDevices": ["0000:2f:00.1", "0000:8a:00.1"],
+                "isRdma": True,
+            },
+        },
+    ]
+    pool = {
+        "node_selectors": {"type": "high-throughput"},
+        "tolerations": [
+            {
+                "effect": "NoSchedule",
+                "key": "high-throughput",
+                "operator": "Equal",
+                "value": "true",
+            }
+        ],
+        "sriov_network_device_plugin_configmap_name": "sriov-dp-configmap",
+        "sriov_network_device_plugin_configmap_data": {"resourceList": resource_list},
+    }
+    return {"pool4": pool, "pool5": pool}
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_is_validated_and_persisted(cluster_delivery_workspace):
+    _user, _tenant, _project, _node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, _tenant, _project, _node, key="sriov-config-save")
+    response = client.put(
+        f"/api/v1/cluster-deployments/{created.data['id']}/sriov-device-plugin/",
+        {"pools": _sriov_pools()},
+        format="json",
+    )
+    assert response.status_code == 200
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    config = deployment.spec["worker_provisioning"]["sriov_device_plugin"]
+    assert config["pool4"]["sriov_network_device_plugin_configmap_name"] == "sriov-dp-configmap"
+    assert config["pool5"]["sriov_network_device_plugin_configmap_data"] == config["pool4"]["sriov_network_device_plugin_configmap_data"]
+    command = queue_deployment_command(deployment, "cluster.capi.worker.provision", node=_node)
+    assert command.payload["worker_provisioning"]["sriov_device_plugin"] == config
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_rejects_invalid_pci_bdf(cluster_delivery_workspace):
+    _user, tenant, project, node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node, key="sriov-config-invalid")
+    pools = _sriov_pools()
+    pools["pool4"]["sriov_network_device_plugin_configmap_data"]["resourceList"][0]["selectors"]["rootDevices"] = ["2f:00.0"]
+    response = client.put(
+        f"/api/v1/cluster-deployments/{created.data['id']}/sriov-device-plugin/",
+        {"pools": pools},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert response.data["detail"] == "SRIOV_DEVICE_PLUGIN_SELECTORS_INVALID"
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_is_immutable_after_worker_provision_command(
+    cluster_delivery_workspace,
+):
+    _user, tenant, project, node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node, key="sriov-config-immutable")
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    queue_deployment_command(deployment, "cluster.capi.worker.provision", node=node)
+    response = client.put(
+        f"/api/v1/cluster-deployments/{deployment.id}/sriov-device-plugin/",
+        {"pools": _sriov_pools()},
+        format="json",
+    )
+    assert response.status_code == 409
