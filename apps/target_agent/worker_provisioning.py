@@ -581,17 +581,21 @@ def execute_worker_provisioning(
                 encoding="utf-8",
             )
             os.chmod(resource_path, 0o600)
-            applied = _run(
-                runner,
-                [
-                    "apply",
-                    "--server-side",
-                    f"--field-manager={FIELD_MANAGER}",
-                    "-f",
-                    str(resource_path),
-                ],
-                timeout=180,
-            )
+            try:
+                applied = _run(
+                    runner,
+                    [
+                        "apply",
+                        "--server-side",
+                        f"--field-manager={FIELD_MANAGER}",
+                        "-f",
+                        str(resource_path),
+                    ],
+                    timeout=180,
+                )
+            except WorkerProvisioningError as exc:
+                exc.side_effects = True
+                raise
             applied_output.append(applied.get("stdout", ""))
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
