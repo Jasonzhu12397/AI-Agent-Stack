@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 
 import pytest
@@ -127,16 +126,9 @@ def _fixtures():
             ],
         },
     }
+
     def runner(arguments, **_kwargs):
-        resource = arguments[1]
-        if resource == "clusters.cluster.x-k8s.io":
-            document = documents[resource]
-        elif resource == "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io":
-            document = documents[resource]
-        elif resource == "machinedeployments.cluster.x-k8s.io":
-            document = documents[resource]
-        else:
-            document = documents[resource]
+        document = documents[arguments[1]]
         return {"available": True, "stdout": json.dumps(document), "stderr": ""}
     return runner, documents
 
