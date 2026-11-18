@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from apps.target_agent import main as target_main
 from apps.target_agent.eph_cleanup import (
     EphCleanupError,
     execute_eph_cleanup,
@@ -152,3 +153,68 @@ def test_eph_cleanup_rejects_wrong_source_cluster_confirmation(tmp_path):
         assert str(exc) == "EPH_CLEANUP_SOURCE_CLUSTER_CONFIRMATION_MISMATCH"
     else:
         raise AssertionError("Mismatched source cluster must be rejected")
+
+
+
+def test_target_agent_revokes_only_the_attested_source_observer_secret(monkeypatch):
+    secret = {
+        "metadata": {
+            "name": "target-agent-source-observer",
+            "uid": "observer-secret-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "ai-agent-stack",
+                "ai-agent-stack.io/eph-cleanup": "true",
+                "ai-agent-stack.io/deployment-id": "deployment-1",
+            },
+            "annotations": {
+                "ai-agent-stack.io/eph-cleanup": "true",
+                "ai-agent-stack.io/source-cluster-uid": "source-uid",
+            },
+        },
+    }
+    responses = iter([
+        {"available": True, "stdout": json.dumps(secret), "stderr": ""},
+        {"available": True, "stdout": "secret deleted", "stderr": ""},
+        {"available": False, "stdout": "", "stderr": "Error from server (NotFound)"},
+    ])
+    calls = []
+
+    def runner(arguments, **_kwargs):
+        calls.append(arguments)
+        return next(responses)
+
+    monkeypatch.setattr(target_main, "_kubectl", runner)
+    assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is True
+    assert calls[1][:3] == ["delete", "secret", "target-agent-source-observer"]
+
+
+def test_target_agent_refuses_to_revoke_another_deployments_observer_secret(monkeypatch):
+    secret = {
+        "metadata": {
+            "uid": "observer-secret-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "ai-agent-stack",
+                "ai-agent-stack.io/eph-cleanup": "true",
+                "ai-agent-stack.io/deployment-id": "other-deployment",
+            },
+            "annotations": {
+                "ai-agent-stack.io/eph-cleanup": "true",
+                "ai-agent-stack.io/source-cluster-uid": "source-uid",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        target_main,
+        "_kubectl",
+        lambda *_args, **_kwargs: {
+            "available": True,
+            "stdout": json.dumps(secret),
+            "stderr": "",
+        },
+    )
+    try:
+        target_main._revoke_source_observer_secret("deployment-1", "source-uid")
+    except target_main.HandoffError as exc:
+        assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
+    else:
+        raise AssertionError("A secret owned by another deployment must not be revoked")
