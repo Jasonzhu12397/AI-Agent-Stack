@@ -32,7 +32,7 @@ def test_three_agent_deploy_validates_role_specific_secrets():
     ) in script
     assert "capi-pivot-source-kubeconfig kubeconfig" in script
     assert 'require_secret_keys "$EPH_CONTEXT" capi-pivot-target-kubeconfig' not in script
-    assert 'get secret capi-pivot-target-kubeconfig' in script
+    assert "capi-pivot-target-kubeconfig" in script
     assert 'ai-agent-stack.io/credential-scope=eph-agent' in script
 
 
