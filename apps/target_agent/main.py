@@ -714,13 +714,13 @@ def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _revoke_source_observer_secret(
+def _revoke_source_operator_secret(
     deployment_id: str,
     source_cluster_uid: str,
     lease_lost_event: Any = None,
 ) -> bool:
     namespace = os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system")
-    secret_name = "target-agent-source-observer"
+    secret_name = "target-agent-source-operator"
     observed = _kubectl([
         "get",
         "secret",
@@ -917,7 +917,7 @@ def _execute_attested_eph_cleanup(
         lease_lost_event,
     )
     try:
-        observer_secret_deleted = _revoke_source_observer_secret(
+        observer_secret_deleted = _revoke_source_operator_secret(
             payload.get("deployment_id", ""),
             proof.get("source_cluster_uid", ""),
             lease_lost_event,
