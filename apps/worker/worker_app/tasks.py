@@ -738,12 +738,16 @@ def execute_agent_run(task):
             try:
                 messages = _compact_agent_messages(messages)
                 estimated_input_tokens = _estimate_message_tokens(messages, offered_tools)
+                input_token_ceiling = _estimate_message_token_upper_bound(
+                    messages,
+                    offered_tools,
+                )
                 allowed_output_tokens = _allowed_agent_output_tokens(
                     config["max_tokens"],
                     model_config.max_output_tokens,
                     input_tokens,
                     output_tokens,
-                    estimated_input_tokens,
+                    input_token_ceiling,
                 )
                 if allowed_output_tokens < 1:
                     raise PermanentTaskError("Agent run reached its cumulative token budget")
@@ -753,8 +757,7 @@ def execute_agent_run(task):
                         agent_run=agent_run,
                         idempotency_key=f"{task.id}:{task.attempts}:{iteration}",
                         requested_tokens=(
-                            _estimate_message_token_upper_bound(messages, offered_tools)
-                            + allowed_output_tokens
+                            input_token_ceiling + allowed_output_tokens
                         ),
                     )
                 except TenantTokenBudgetExceeded as exc:
