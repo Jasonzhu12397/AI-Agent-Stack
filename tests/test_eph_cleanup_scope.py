@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 
@@ -40,6 +41,12 @@ def _resource(kind, name, namespaced=True, source_uid=None):
     return document
 
 
+def _target_kubeconfig(tmp_path):
+    path = tmp_path / "target.kubeconfig"
+    path.write_bytes(b"target kubeconfig")
+    return str(path)
+
+
 def _runner_factory(include_optional_target_kubeconfig=True):
     source_objects = {
         "deployments.apps": [_resource("Deployment", "eph-agent")],
@@ -62,9 +69,11 @@ def _runner_factory(include_optional_target_kubeconfig=True):
         "serviceaccounts": [_resource("ServiceAccount", "eph-agent")],
     }
     if include_optional_target_kubeconfig:
-        source_objects["secrets"].append(
-            _resource("Secret", "capi-pivot-target-kubeconfig")
-        )
+        target_kubeconfig_secret = _resource("Secret", "capi-pivot-target-kubeconfig")
+        target_kubeconfig_secret["data"] = {
+            "kubeconfig": base64.b64encode(b"target kubeconfig").decode("ascii"),
+        }
+        source_objects["secrets"].append(target_kubeconfig_secret)
     target_objects = {
         "secrets": [
             _resource("Secret", "target-agent-source-observer"),
@@ -127,11 +136,11 @@ def _runner_factory(include_optional_target_kubeconfig=True):
     return runner, source_objects, target_objects, calls
 
 
-def test_cleanup_scope_attests_source_resources_and_target_observer_secret():
+def test_cleanup_scope_attests_source_resources_and_target_observer_secret(tmp_path):
     runner, source, target, calls = _runner_factory()
     result = attest_cleanup_scope(
         "source.kubeconfig",
-        "target.kubeconfig",
+        _target_kubeconfig(tmp_path),
         DEPLOYMENT_ID,
         SOURCE_UID,
         runner,
@@ -163,7 +172,7 @@ def test_cleanup_scope_attests_source_resources_and_target_observer_secret():
     assert all("--type=json" in call for call in patches)
 
 
-def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret():
+def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret(tmp_path):
     runner, _source, _target, _calls = _runner_factory(
         include_optional_target_kubeconfig=False
     )
@@ -178,7 +187,7 @@ def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret():
     assert result["optional_target_kubeconfig_marked"] is False
 
 
-def test_cleanup_scope_rejects_source_uid_conflict_without_overwriting_it():
+def test_cleanup_scope_rejects_source_uid_conflict_without_overwriting_it(tmp_path):
     runner, source, _target, _calls = _runner_factory()
     source["secrets"][0]["metadata"]["annotations"][
         "ai-agent-stack.io/source-cluster-uid"
@@ -197,7 +206,7 @@ def test_cleanup_scope_rejects_source_uid_conflict_without_overwriting_it():
         raise AssertionError("Conflicting source UID evidence must not be overwritten")
 
 
-def test_cleanup_scope_rejects_target_observer_secret_from_another_deployment():
+def test_cleanup_scope_rejects_target_observer_secret_from_another_deployment(tmp_path):
     runner, _source, target, _calls = _runner_factory()
     target["secrets"][0]["metadata"]["labels"][
         "ai-agent-stack.io/deployment-id"
@@ -216,7 +225,7 @@ def test_cleanup_scope_rejects_target_observer_secret_from_another_deployment():
         raise AssertionError("Foreign observer secret must not be attested")
 
 
-def test_cleanup_scope_reports_partial_mutation_when_patch_fails():
+def test_cleanup_scope_reports_partial_mutation_when_patch_fails(tmp_path):
     runner, _source, _target, _calls = _runner_factory()
     patch_count = 0
 
@@ -240,3 +249,26 @@ def test_cleanup_scope_reports_partial_mutation_when_patch_fails():
         assert exc.side_effects is True
     else:
         raise AssertionError("Partial cleanup scope annotation must report side effects")
+
+
+
+def test_cleanup_scope_rejects_unrelated_optional_target_kubeconfig_secret(tmp_path):
+    runner, source, _target, calls = _runner_factory()
+    source["secrets"][-1]["data"]["kubeconfig"] = base64.b64encode(
+        b"unrelated kubeconfig"
+    ).decode("ascii")
+
+    try:
+        attest_cleanup_scope(
+            "source.kubeconfig",
+            _target_kubeconfig(tmp_path),
+            DEPLOYMENT_ID,
+            SOURCE_UID,
+            runner,
+        )
+    except CleanupScopeError as exc:
+        assert str(exc) == "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_IDENTITY_MISMATCH"
+    else:
+        raise AssertionError("An unrelated secret must not be adopted for EPH cleanup")
+
+    assert not any(call[3] == "patch" for call in calls)
