@@ -6,6 +6,7 @@ from core.models import Project, Task, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from worker_app.tasks import (
+    _allowed_agent_output_tokens,
     claim_next_task,
     fail_task,
     finish_task,
@@ -140,3 +141,13 @@ def test_agent_token_reservation_uses_utf8_byte_upper_bound():
     ).encode("utf-8")
     assert upper_bound == len(serialized)
     assert upper_bound >= estimated
+
+
+def test_agent_run_output_budget_uses_conservative_input_ceiling():
+    assert _allowed_agent_output_tokens(
+        2048,
+        4096,
+        0,
+        0,
+        15000,
+    ) == 1000
