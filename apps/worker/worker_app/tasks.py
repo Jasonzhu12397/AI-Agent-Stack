@@ -738,7 +738,6 @@ def execute_agent_run(task):
             token_reservation = None
             try:
                 messages = _compact_agent_messages(messages)
-                estimated_input_tokens = _estimate_message_tokens(messages, offered_tools)
                 input_token_ceiling = _estimate_message_token_upper_bound(
                     messages,
                     offered_tools,
