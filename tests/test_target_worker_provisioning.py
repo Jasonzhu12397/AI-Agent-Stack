@@ -589,10 +589,10 @@ def test_sriov_configmap_ownership_accepts_kubernetes_not_found_variants():
         'configmaps "sriov-dp-configmap" not found',
     ):
         _verify_sriov_configmap_ownership(
-            lambda *_args, **_kwargs: {
+            lambda *_args, _stderr=stderr, **_kwargs: {
                 "available": False,
                 "stdout": "",
-                "stderr": stderr,
+                "stderr": _stderr,
             },
             configmaps,
             "metal3",
@@ -611,10 +611,10 @@ def test_sriov_configmap_ownership_does_not_hide_api_or_transport_errors():
     for stderr in ("connection refused", "Unauthorized", "TLS handshake timeout"):
         try:
             _verify_sriov_configmap_ownership(
-                lambda *_args, **_kwargs: {
+                lambda *_args, _stderr=stderr, **_kwargs: {
                     "available": False,
                     "stdout": "",
-                    "stderr": stderr,
+                    "stderr": _stderr,
                 },
                 configmaps,
                 "metal3",
