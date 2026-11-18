@@ -1,0 +1,539 @@
+from __future__ import annotations
+
+import copy
+import ipaddress
+import json
+import os
+import re
+import tempfile
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .ntp_policy import (
+    NtpPolicyError,
+    render_worker_chrony_pre_kubeadm_command,
+    validate_ironic_internal_ntp_ip,
+)
+
+MAX_WORKERS = 2500
+FIELD_MANAGER = "ai-agent-target-agent"
+MANAGED_BY_LABEL = "ai-agent-stack.io/managed-by"
+DEPLOYMENT_ID_LABEL = "ai-agent-stack.io/deployment-id"
+TARGET_CLUSTER_UID_ANNOTATION = "ai-agent-stack.io/target-cluster-uid"
+CLUSTER_NAME_LABEL = "cluster.x-k8s.io/cluster-name"
+
+RESOURCE_TYPES = {
+    "MachineDeployment": {
+        "group": "cluster.x-k8s.io",
+        "plural": "machinedeployments",
+        "crd": "machinedeployments.cluster.x-k8s.io",
+    },
+    "KubeadmConfigTemplate": {
+        "group": "bootstrap.cluster.x-k8s.io",
+        "plural": "kubeadmconfigtemplates",
+        "crd": "kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io",
+    },
+    "Metal3MachineTemplate": {
+        "group": "infrastructure.cluster.x-k8s.io",
+        "plural": "metal3machinetemplates",
+        "crd": "metal3machinetemplates.infrastructure.cluster.x-k8s.io",
+    },
+    "Metal3DataTemplate": {
+        "group": "infrastructure.cluster.x-k8s.io",
+        "plural": "metal3datatemplates",
+        "crd": "metal3datatemplates.infrastructure.cluster.x-k8s.io",
+    },
+}
+RESOURCE_ORDER = (
+    "KubeadmConfigTemplate",
+    "Metal3DataTemplate",
+    "Metal3MachineTemplate",
+    "MachineDeployment",
+)
+
+
+class WorkerProvisioningError(ValueError):
+    pass
+
+
+def _name(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 63
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value)
+    ):
+        raise WorkerProvisioningError(f"WORKER_PROVISIONING_{field}_INVALID")
+    return value
+
+
+def _run(
+    runner: Callable[..., dict[str, Any]],
+    arguments: list[str],
+    timeout: int = 60,
+    max_output_bytes: int = 8 * 1024 * 1024,
+) -> dict[str, Any]:
+    result = runner(
+        arguments,
+        timeout=timeout,
+        max_output_bytes=max_output_bytes,
+    )
+    if not isinstance(result, dict) or result.get("available") is not True:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_KUBERNETES_API_FAILED")
+    return result
+
+
+def _not_found(result: dict[str, Any]) -> bool:
+    error = result.get("stderr", "").lower()
+    return "notfound" in error or "not found" in error
+
+
+def _load_manifests(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_RESOURCE_PLAN_REQUIRED")
+    documents = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_RESOURCE_INVALID")
+        documents.append(copy.deepcopy(item))
+    return documents
+
+
+def _crd_version_is_served(
+    runner: Callable[..., dict[str, Any]],
+    kind: str,
+    api_version: str,
+) -> None:
+    info = RESOURCE_TYPES[kind]
+    result = _run(runner, ["get", "crd", info["crd"], "-o", "json"])
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CRD_JSON_INVALID") from exc
+    spec = document.get("spec", {})
+    versions = spec.get("versions", [])
+    group, version = api_version.split("/", 1)
+    if group != info["group"]:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_API_GROUP_MISMATCH")
+    served = [
+        item for item in versions
+        if isinstance(item, dict) and item.get("name") == version and item.get("served") is True
+    ]
+    if not served:
+        raise WorkerProvisioningError(f"WORKER_PROVISIONING_CRD_VERSION_NOT_SERVED:{kind}")
+    schema = served[0].get("schema", {}).get("openAPIV3Schema")
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        raise WorkerProvisioningError(f"WORKER_PROVISIONING_CRD_SCHEMA_MISSING:{kind}")
+
+
+def _cluster_uid(
+    runner: Callable[..., dict[str, Any]],
+    namespace: str,
+    cluster_name: str,
+    proof: dict[str, Any],
+) -> str:
+    result = _run(
+        runner,
+        [
+            "get",
+            "clusters.cluster.x-k8s.io",
+            cluster_name,
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+    )
+    try:
+        cluster = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_TARGET_CLUSTER_JSON_INVALID") from exc
+    metadata = cluster.get("metadata", {})
+    uid = metadata.get("uid")
+    annotations = metadata.get("annotations", {})
+    if uid != proof.get("target_cluster_uid"):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_TARGET_CLUSTER_UID_MISMATCH")
+    if annotations.get("ai-agent-stack.io/source-cluster-uid") != proof.get("source_cluster_uid"):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_SOURCE_CLUSTER_ANNOTATION_MISMATCH")
+    return uid
+
+
+def _network_contract(
+    contract: Any,
+    data_template: dict[str, Any],
+) -> None:
+    if not isinstance(contract, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_CONTRACT_REQUIRED")
+    control_interface = contract.get("control_plane_interface")
+    data_interface = contract.get("data_plane_interface")
+    if (
+        not isinstance(control_interface, str)
+        or not control_interface
+        or not isinstance(data_interface, str)
+        or not data_interface
+        or control_interface == data_interface
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACES_INVALID")
+    try:
+        ipaddress.ip_network(contract.get("control_plane_cidr"), strict=False)
+        ipaddress.ip_network(contract.get("data_plane_cidr"), strict=False)
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_CIDR_INVALID") from exc
+    mtu = contract.get("data_plane_mtu")
+    if not isinstance(mtu, int) or isinstance(mtu, bool) or not 576 <= mtu <= 9216:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_PLANE_MTU_INVALID")
+    required_features = (
+        "calico_enabled",
+        "multus_enabled",
+        "ovs_enabled",
+        "sriov_cni_enabled",
+        "sriov_dpdk_enabled",
+    )
+    if any(contract.get(feature) is not True for feature in required_features):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_PLANE_FEATURES_INCOMPLETE")
+    if contract.get("pod_traffic_network") != "data":
+        raise WorkerProvisioningError("WORKER_PROVISIONING_POD_TRAFFIC_MUST_USE_DATA_PLANE")
+
+    network_data = data_template.get("spec", {}).get("networkData")
+    if not isinstance(network_data, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_METAL3_NETWORK_DATA_REQUIRED")
+    links = network_data.get("links", {})
+    ethernets = links.get("ethernets", []) if isinstance(links, dict) else []
+    if isinstance(ethernets, dict):
+        interface_ids = set(ethernets)
+    elif isinstance(ethernets, list):
+        interface_ids = {
+            item.get("id")
+            for item in ethernets
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+    else:
+        interface_ids = set()
+    if not {control_interface, data_interface}.issubset(interface_ids):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACE_NOT_IN_DATA_TEMPLATE")
+    if not network_data.get("networks"):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_SUBNETS_REQUIRED")
+
+
+def _ensure_worker_ntp(
+    kubeadm_template: dict[str, Any],
+    ironic_internal_ntp_ip: str,
+) -> None:
+    spec = kubeadm_template.get("spec", {}).get("template", {}).get("spec")
+    if not isinstance(spec, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_KUBEADM_TEMPLATE_SPEC_INVALID")
+    commands = spec.setdefault("preKubeadmCommands", [])
+    if not isinstance(commands, list) or not all(isinstance(item, str) for item in commands):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_PRE_KUBEADM_COMMANDS_INVALID")
+    ntp_commands = [
+        command for command in commands
+        if "chronyc -n sources" in command or "chronyc tracking" in command
+    ]
+    if ntp_commands:
+        script = "\n".join(ntp_commands)
+        sources = re.findall(r"(?m)^\s*server\s+(\S+)", script)
+        required = (
+            "chronyc -n sources",
+            "chronyc tracking",
+            "Leap status",
+            "systemctl restart",
+            "$2 == server",
+            "selected = 1",
+        )
+        if sources != [ironic_internal_ntp_ip] or not all(
+            marker in script for marker in required
+        ):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_WORKER_NTP_SCRIPT_INVALID")
+        return
+    try:
+        commands.append(render_worker_chrony_pre_kubeadm_command(ironic_internal_ntp_ip))
+    except NtpPolicyError as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_WORKER_NTP_IP_INVALID") from exc
+
+
+def _validate_references(
+    documents: list[dict[str, Any]],
+    cluster_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    by_kind: dict[str, dict[str, Any]] = {}
+    for document in documents:
+        kind = document.get("kind")
+        if kind not in RESOURCE_TYPES or kind in by_kind:
+            raise WorkerProvisioningError("WORKER_PROVISIONING_RESOURCE_KIND_UNSUPPORTED_OR_DUPLICATE")
+        by_kind[kind] = document
+    required = ("MachineDeployment", "KubeadmConfigTemplate", "Metal3MachineTemplate", "Metal3DataTemplate")
+    if any(kind not in by_kind for kind in required):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_RESOURCE_MISSING")
+
+    machine_deployment = by_kind["MachineDeployment"]
+    md_spec = machine_deployment.get("spec", {})
+    if md_spec.get("clusterName") != cluster_name:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_DEPLOYMENT_CLUSTER_MISMATCH")
+    template_spec = md_spec.get("template", {}).get("spec", {})
+    bootstrap_ref = template_spec.get("bootstrap", {}).get("configRef", {})
+    infrastructure_ref = template_spec.get("infrastructureRef", {})
+    kubeadm_template = by_kind["KubeadmConfigTemplate"]
+    metal3_template = by_kind["Metal3MachineTemplate"]
+    data_template = by_kind["Metal3DataTemplate"]
+
+    if (
+        bootstrap_ref.get("kind") != "KubeadmConfigTemplate"
+        or bootstrap_ref.get("apiGroup") != RESOURCE_TYPES["KubeadmConfigTemplate"]["group"]
+        or bootstrap_ref.get("name") != kubeadm_template.get("metadata", {}).get("name")
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_BOOTSTRAP_TEMPLATE_REFERENCE_INVALID")
+    if (
+        infrastructure_ref.get("kind") != "Metal3MachineTemplate"
+        or infrastructure_ref.get("apiGroup") != RESOURCE_TYPES["Metal3MachineTemplate"]["group"]
+        or infrastructure_ref.get("name") != metal3_template.get("metadata", {}).get("name")
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_INFRASTRUCTURE_TEMPLATE_REFERENCE_INVALID")
+
+    data_template_name = (
+        metal3_template.get("spec", {}).get("template", {}).get("spec", {})
+        .get("dataTemplate", {}).get("name")
+    )
+    if data_template_name != data_template.get("metadata", {}).get("name"):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_TEMPLATE_REFERENCE_INVALID")
+    if data_template.get("spec", {}).get("clusterName") != cluster_name:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_TEMPLATE_CLUSTER_MISMATCH")
+    return machine_deployment, kubeadm_template, metal3_template, data_template
+
+
+def _prepare_manifests(
+    documents: list[dict[str, Any]],
+    namespace: str,
+    cluster_name: str,
+    deployment_id: str,
+    target_cluster_uid: str,
+    ironic_internal_ntp_ip: str,
+    network_contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    ordered = []
+    by_kind = {item["kind"]: item for item in documents}
+    for kind in RESOURCE_ORDER:
+        document = by_kind[kind]
+        api_version = document.get("apiVersion")
+        if not isinstance(api_version, str) or "/" not in api_version:
+            raise WorkerProvisioningError("WORKER_PROVISIONING_API_VERSION_INVALID")
+        metadata = document.get("metadata")
+        if not isinstance(metadata, dict):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_METADATA_REQUIRED")
+        if metadata.get("namespace") != namespace:
+            raise WorkerProvisioningError("WORKER_PROVISIONING_NAMESPACE_MISMATCH")
+        _name(metadata.get("name"), "RESOURCE_NAME")
+        labels = metadata.setdefault("labels", {})
+        annotations = metadata.setdefault("annotations", {})
+        if not isinstance(labels, dict) or not isinstance(annotations, dict):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_METADATA_LABELS_INVALID")
+        if labels.get(MANAGED_BY_LABEL) not in (None, "target-agent"):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_RESOURCE_OWNER_CONFLICT")
+        if labels.get(DEPLOYMENT_ID_LABEL) not in (None, deployment_id):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_DEPLOYMENT_OWNER_CONFLICT")
+        if annotations.get(TARGET_CLUSTER_UID_ANNOTATION) not in (None, target_cluster_uid):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_TARGET_UID_OWNER_CONFLICT")
+        labels[MANAGED_BY_LABEL] = "target-agent"
+        labels[DEPLOYMENT_ID_LABEL] = deployment_id
+        labels[CLUSTER_NAME_LABEL] = cluster_name
+        annotations[TARGET_CLUSTER_UID_ANNOTATION] = target_cluster_uid
+        ordered.append(document)
+
+    md = by_kind["MachineDeployment"]
+    md_spec = md.get("spec", {})
+    replicas = md_spec.get("replicas")
+    if not isinstance(replicas, int) or isinstance(replicas, bool) or not 1 <= replicas <= MAX_WORKERS:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_REPLICA_COUNT_INVALID")
+    selector = md_spec.get("selector", {}).get("matchLabels")
+    template_metadata = md_spec.get("template", {}).get("metadata", {})
+    template_labels = template_metadata.get("labels")
+    if not isinstance(selector, dict) or not selector or not isinstance(template_labels, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_SELECTOR_INVALID")
+    if selector.get(CLUSTER_NAME_LABEL) != cluster_name:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_SELECTOR_CLUSTER_LABEL_REQUIRED")
+    if any(template_labels.get(key) != value for key, value in selector.items()):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_SELECTOR_TEMPLATE_MISMATCH")
+    if template_labels.get(CLUSTER_NAME_LABEL) != cluster_name:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_TEMPLATE_CLUSTER_LABEL_REQUIRED")
+    _ensure_worker_ntp(by_kind["KubeadmConfigTemplate"], ironic_internal_ntp_ip)
+    _network_contract(network_contract, by_kind["Metal3DataTemplate"])
+    return ordered
+
+
+def _verify_existing_ownership(
+    runner: Callable[..., dict[str, Any]],
+    documents: list[dict[str, Any]],
+    namespace: str,
+    deployment_id: str,
+    target_cluster_uid: str,
+) -> None:
+    for document in documents:
+        kind = document["kind"]
+        info = RESOURCE_TYPES[kind]
+        name = document["metadata"]["name"]
+        result = runner(
+            [
+                "get",
+                info["plural"],
+                name,
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+            timeout=30,
+            max_output_bytes=2 * 1024 * 1024,
+        )
+        if result.get("available") is not True:
+            if _not_found(result):
+                continue
+            raise WorkerProvisioningError("WORKER_PROVISIONING_EXISTING_RESOURCE_LOOKUP_FAILED")
+        try:
+            existing = json.loads(result.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError("WORKER_PROVISIONING_EXISTING_RESOURCE_JSON_INVALID") from exc
+        metadata = existing.get("metadata", {})
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        if (
+            labels.get(MANAGED_BY_LABEL) != "target-agent"
+            or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
+            or annotations.get(TARGET_CLUSTER_UID_ANNOTATION) != target_cluster_uid
+        ):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_EXISTING_RESOURCE_NOT_OWNED")
+
+
+def execute_worker_provisioning(
+    payload: dict[str, Any],
+    deployment_context: dict[str, Any] | None,
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+    environ: Any = None,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(deployment_context, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_TRUSTED_CONTEXT_REQUIRED")
+    proof = deployment_context.get("eph_pivot_attestation")
+    if not isinstance(proof, dict):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_PIVOT_ATTESTATION_REQUIRED")
+    namespace = _name(payload.get("target_namespace"), "NAMESPACE")
+    cluster_name = _name(payload.get("target_cluster_name"), "CLUSTER_NAME")
+    deployment_id = _name(payload.get("deployment_id"), "DEPLOYMENT_ID")
+    try:
+        ironic_ntp_ip = validate_ironic_internal_ntp_ip(
+            os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
+            if environ is None
+            else environ.get("IRONIC_INTERNAL_NTP_IP", "")
+        )
+    except (NtpPolicyError, TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_IRONIC_INTERNAL_NTP_IP_REQUIRED") from exc
+
+    target_uid = _cluster_uid(runner, namespace, cluster_name, proof)
+    documents = _load_manifests(payload.get("worker_resources"))
+    machine_deployment, _kubeadm, _metal3, _data = _validate_references(
+        documents,
+        cluster_name,
+    )
+    ordered = _prepare_manifests(
+        documents,
+        namespace,
+        cluster_name,
+        deployment_id,
+        target_uid,
+        ironic_ntp_ip,
+        payload.get("worker_network_contract"),
+    )
+    for document in ordered:
+        _crd_version_is_served(runner, document["kind"], document["apiVersion"])
+    _verify_existing_ownership(runner, ordered, namespace, deployment_id, target_uid)
+
+    descriptor, manifest_path = tempfile.mkstemp(
+        prefix="target-worker-plan-",
+        suffix=".yaml",
+        dir="/tmp",
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            yaml.safe_dump_all(ordered, stream, sort_keys=False)
+        dry_run = _run(
+            runner,
+            [
+                "apply",
+                "--server-side",
+                f"--field-manager={FIELD_MANAGER}",
+                "--dry-run=server",
+                "-f",
+                manifest_path,
+            ],
+            timeout=180,
+        )
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+        applied = _run(
+            runner,
+            [
+                "apply",
+                "--server-side",
+                f"--field-manager={FIELD_MANAGER}",
+                "-f",
+                manifest_path,
+            ],
+            timeout=300,
+        )
+    finally:
+        Path(manifest_path).unlink(missing_ok=True)
+
+    md_name = machine_deployment["metadata"]["name"]
+    md_result = _run(
+        runner,
+        [
+            "get",
+            "machinedeployments",
+            md_name,
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+        timeout=60,
+        max_output_bytes=4 * 1024 * 1024,
+    )
+    try:
+        observed = json.loads(md_result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_MACHINE_DEPLOYMENT_JSON_INVALID") from exc
+    observed_metadata = observed.get("metadata", {})
+    observed_spec = observed.get("spec", {})
+    desired = observed_spec.get("replicas")
+    generation = observed_metadata.get("generation", 0)
+    status = observed.get("status", {})
+    if (
+        not isinstance(desired, int)
+        or desired < 1
+        or status.get("observedGeneration", 0) < generation
+    ):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROLLER_NOT_OBSERVED")
+    return {
+        "worker_provisioning_resources_applied": True,
+        "worker_provisioning_server_dry_run_passed": True,
+        "worker_provisioning_controller_observed": True,
+        "machine_deployment": md_name,
+        "machine_deployment_namespace": namespace,
+        "desired_worker_count": desired,
+        "worker_template_resources": [
+            {
+                "kind": item["kind"],
+                "name": item["metadata"]["name"],
+                "api_version": item["apiVersion"],
+            }
+            for item in ordered
+        ],
+        "ironic_internal_ntp_ip": ironic_ntp_ip,
+        "worker_network_contract_verified": True,
+        "target_cluster_uid": target_uid,
+        "applied_stdout": applied.get("stdout", "")[-4000:],
+        "dry_run_stdout": dry_run.get("stdout", "")[-4000:],
+        "side_effects": True,
+    }
