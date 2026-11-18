@@ -1066,3 +1066,13 @@ def test_workflow_resumes_persisted_llm_result_after_lease_loss(workflow_workspa
 
     assert complete.call_count == 1
     assert result["output"]["content"] == "durable workflow answer"
+
+
+def test_workflow_output_budget_uses_conservative_input_ceiling():
+    assert _workflow_output_budget(
+        2048,
+        4096,
+        0,
+        0,
+        15000,
+    ) == 1000
