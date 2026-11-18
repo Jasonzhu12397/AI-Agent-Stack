@@ -64,12 +64,10 @@ def test_checkpoint_digest_changes_when_evidence_changes():
 
 
 
-def test_eph_agent_can_persist_only_initial_single_node_checkpoint():
-    _validate_checkpoint_actor_transition(
-        "eph",
-        "not_started",
-        "eph_single_node_ready",
-    )
+def test_eph_agent_can_persist_bootstrap_and_metal3_checkpoints():
+    _validate_checkpoint_actor_transition("eph", "not_started", "eph_single_node_ready")
+    _validate_checkpoint_actor_transition("eph", "eph_single_node_ready", "bmh_registered")
+    _validate_checkpoint_actor_transition("eph", "bmh_registered", "bmh_ready")
 
 
 @pytest.mark.parametrize(
@@ -77,6 +75,7 @@ def test_eph_agent_can_persist_only_initial_single_node_checkpoint():
     [
         ("not_started", "target_control_plane_ready"),
         ("eph_single_node_ready", "target_agent_ready"),
+        ("bmh_ready", "target_control_plane_ready"),
         ("eph_single_node_ready", "eph_cleanup_verified"),
         ("workers_ready", "completed"),
     ],
@@ -92,7 +91,7 @@ def test_eph_agent_cannot_write_target_owned_or_skipped_checkpoints(
 def test_target_agent_can_advance_from_eph_checkpoint_in_order():
     _validate_checkpoint_actor_transition(
         "target",
-        "eph_single_node_ready",
+        "bmh_ready",
         "target_control_plane_ready",
     )
 
@@ -102,6 +101,7 @@ def test_target_agent_can_advance_from_eph_checkpoint_in_order():
     [
         ("not_started", "target_control_plane_ready"),
         ("eph_single_node_ready", "bmh_registry_migrated"),
+        ("bmh_ready", "capi_pivot_verified"),
         ("target_agent_ready", "eph_single_node_ready"),
         ("completed", "completed"),
     ],
