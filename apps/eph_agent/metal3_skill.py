@@ -226,6 +226,10 @@ def _apply_bundle(
             "resource_type": resource_prefix,
             "resource_count": len(manifests),
             "resource_names": [item["metadata"]["name"] for item in manifests],
+            "bmc_secret_references_verified": True,
+            "bmc_secret_reference_count": len({
+                item["spec"]["bmc"]["credentialsName"] for item in manifests
+            }),
             "server_side_dry_run_passed": True,
             "server_side_apply_succeeded": True,
             "dry_run_output": str(dry_run.get("stdout", ""))[-2000:],
@@ -348,10 +352,27 @@ def wait_for_baremetalhosts_ready(
             delay = min(delay * 1.5, 30.0)
     if pending:
         raise Metal3SkillError("METAL3_BMH_READY_TIMEOUT:" + ",".join(sorted(pending)))
+    inventory_verified = all(
+        (
+            host.get("hardware", {}).get("system_uuid")
+            or host.get("hardware", {}).get("serial_number")
+        )
+        and isinstance(host.get("hardware", {}).get("nics"), list)
+        and bool(host.get("hardware", {}).get("nics"))
+        and isinstance(host.get("hardware", {}).get("cpu"), dict)
+        and isinstance(host.get("hardware", {}).get("ram_mib"), int)
+        for host in observed.values()
+    )
+    if not inventory_verified:
+        raise Metal3SkillError("METAL3_BMH_IRONIC_HARDWARE_INVENTORY_INCOMPLETE")
     return {
         "namespace": namespace,
         "ready_host_names": sorted(observed),
         "ready_host_count": len(observed),
+        "expected_bmh_count": len(host_names),
+        "bmh_ready_count": len(observed),
+        "bmh_all_operational": True,
+        "ironic_inventory_verified": True,
         "host_evidence": observed,
         "side_effects": False,
     }
