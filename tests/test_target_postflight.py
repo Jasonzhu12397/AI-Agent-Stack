@@ -381,3 +381,10 @@ def test_postflight_rejects_malformed_resource_metadata_and_status(resource, doc
     documents[resource] = {**original, **document}
     with pytest.raises(PostflightError, match=error):
         verify_target_postflight(runner=runner, **_kwargs())
+
+
+def test_postflight_rejects_non_mapping_worker_allocatable_inventory():
+    runner, documents = _fixtures()
+    documents["nodes"]["items"][3]["status"]["allocatable"] = None
+    with pytest.raises(PostflightError, match="POSTFLIGHT_NODE_ALLOCATABLE_INVALID"):
+        verify_target_postflight(runner=runner, **_kwargs())
