@@ -395,3 +395,50 @@ def test_eph_cleanup_discovers_and_revokes_late_target_kubeconfig_secret(tmp_pat
         and call[2] == "capi-pivot-target-kubeconfig"
         for call in calls
     )
+
+
+
+def test_eph_cleanup_reports_partial_deletion_and_recovers_on_retry(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, resources, _calls = _runner_factory()
+    delete_count = 0
+
+    def fail_second_delete(arguments, **kwargs):
+        nonlocal delete_count
+        if arguments[0] == "delete":
+            delete_count += 1
+            if delete_count == 2:
+                return {
+                    "available": False,
+                    "stdout": "",
+                    "stderr": "simulated source API timeout",
+                }
+        return runner(arguments, **kwargs)
+
+    payload = {
+        "namespace": "eph-system",
+        "deployment_id": "deployment-1",
+        "confirm_source_cluster_uid": "source-uid",
+        "confirm_target_cluster_uid": "target-uid",
+    }
+    try:
+        execute_eph_cleanup(
+            payload,
+            _proof(),
+            fail_second_delete,
+            environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+        )
+    except EphCleanupError as exc:
+        assert exc.side_effects is True
+    else:
+        raise AssertionError("A partial source cleanup must report side effects")
+
+    result = execute_eph_cleanup(
+        payload,
+        _proof(),
+        runner,
+        environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+    )
+    assert result["eph_cleanup_verified"] is True
+    assert all(not items for items in resources.values())
