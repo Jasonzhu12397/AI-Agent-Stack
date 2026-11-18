@@ -988,7 +988,7 @@ def execute(
                 "status": "blocked",
                 "error_code": str(exc) or "EPH_CLEANUP_FAILED",
                 "output": {},
-                "side_effects": False,
+                "side_effects": getattr(exc, "side_effects", False),
             }
     if action == "target.handoff.evaluate":
         payload = command.get("payload", {})
