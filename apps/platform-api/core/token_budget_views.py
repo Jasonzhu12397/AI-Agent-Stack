@@ -74,7 +74,7 @@ class TenantTokenBudgetView(APIView):
             {
                 "daily_limit": budget.daily_limit,
                 "monthly_limit": budget.monthly_limit,
-                **self._usage(tenant.id, now),
+                **get_tenant_token_usage(tenant.id, now),
             },
             status=status.HTTP_200_OK,
         )
