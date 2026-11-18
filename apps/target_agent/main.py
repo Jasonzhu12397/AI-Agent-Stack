@@ -782,6 +782,19 @@ def _execute_worker_provisioning(
     deployment_context: dict[str, Any] | None,
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
+    proof = (
+        deployment_context.get("eph_pivot_attestation", {})
+        if isinstance(deployment_context, dict)
+        else {}
+    )
+    if (
+        proof.get("cleanup_scope_attested") is not True
+        or proof.get("target_observer_secret_source_uid_attested") is not True
+        or not isinstance(proof.get("source_cleanup_resource_count"), int)
+        or isinstance(proof.get("source_cleanup_resource_count"), bool)
+        or proof.get("source_cleanup_resource_count") < 7
+    ):
+        raise HandoffError("WORKER_PROVISIONING_CLEANUP_SCOPE_ATTESTATION_REQUIRED")
     target_namespace = payload.get("target_namespace")
     target_cluster_name = payload.get("target_cluster_name")
     ownership = _observe_target_metal3_ownership(
