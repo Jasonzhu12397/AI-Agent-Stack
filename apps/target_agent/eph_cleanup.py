@@ -188,8 +188,7 @@ def execute_eph_cleanup(
             [
                 "get",
                 resource,
-                "--namespace",
-                namespace,
+                *_namespace_args(resource, namespace),
                 "--selector",
                 selector,
                 "-o",
@@ -210,6 +209,9 @@ def execute_eph_cleanup(
             labels = metadata.get("labels", {})
             name = metadata.get("name")
             item_namespace = metadata.get("namespace")
+            expected_namespace = (
+                None if resource in CLUSTER_SCOPED_RESOURCES else namespace
+            )
             if (
                 not isinstance(annotations, dict)
                 or not isinstance(labels, dict)
@@ -217,7 +219,7 @@ def execute_eph_cleanup(
                 or labels.get(CLEANUP_ANNOTATION) != "true"
                 or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
                 or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
-                or item_namespace != namespace
+                or item_namespace != expected_namespace
                 or not isinstance(name, str)
                 or not isinstance(metadata.get("uid"), str)
                 or not metadata.get("uid")
