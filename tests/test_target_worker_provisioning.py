@@ -420,3 +420,47 @@ def test_worker_provisioning_action_requires_completed_eph_cleanup_checkpoint(mo
     })
     assert outcome["status"] == "blocked"
     assert outcome["error_code"] == "WORKER_PROVISIONING_EPH_CLEANUP_CHECKPOINT_REQUIRED"
+
+
+
+def test_worker_provisioning_rejects_swapped_control_and_data_network_bindings():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    network_data = payload["worker_resources"][3]["spec"]["networkData"]["networks"]
+    network_data["ipv4DHCP"][0]["link"] = "ens1f0"
+    network_data["ipv4"][0]["link"] = "eno1"
+
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_DATA_INTERFACE_IP_POOL_REQUIRED"
+    else:
+        raise AssertionError("The data-plane interface must be backed by its IP pool")
+
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_rejects_one_interface_bound_to_multiple_networks():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    network_data = payload["worker_resources"][3]["spec"]["networkData"]["networks"]
+    network_data["ipv4"][0]["link"] = "eno1"
+
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_NETWORK_INTERFACE_MAPPED_MULTIPLE_TIMES"
+    else:
+        raise AssertionError("An interface must not be attached to multiple network definitions")
+
+    assert not any(call[0] == "apply" for call in calls)
