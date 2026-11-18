@@ -678,6 +678,79 @@ def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _revoke_source_observer_secret(
+    deployment_id: str,
+    source_cluster_uid: str,
+) -> bool:
+    namespace = os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system")
+    secret_name = "target-agent-source-observer"
+    observed = _kubectl([
+        "get",
+        "secret",
+        secret_name,
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ])
+    if not observed.get("available"):
+        error = observed.get("stderr", "").lower()
+        if "notfound" in error or "not found" in error:
+            return True
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_OBSERVATION_FAILED")
+    try:
+        secret = json.loads(observed.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_JSON_INVALID") from exc
+    metadata = secret.get("metadata", {})
+    labels = metadata.get("labels", {})
+    annotations = metadata.get("annotations", {})
+    if (
+        labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
+        or labels.get("ai-agent-stack.io/eph-cleanup") != "true"
+        or labels.get("ai-agent-stack.io/deployment-id") != deployment_id
+        or annotations.get("ai-agent-stack.io/eph-cleanup") != "true"
+        or annotations.get("ai-agent-stack.io/source-cluster-uid") != source_cluster_uid
+    ):
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH")
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_UID_MISSING")
+    deleted = _kubectl([
+        "delete",
+        "secret",
+        secret_name,
+        "--namespace",
+        namespace,
+        "--wait=true",
+        "--timeout=120s",
+        "--ignore-not-found=true",
+    ], timeout=150)
+    if not deleted.get("available"):
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_REVOCATION_FAILED")
+    verification = _kubectl([
+        "get",
+        "secret",
+        secret_name,
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ])
+    if verification.get("available"):
+        try:
+            current = json.loads(verification.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_INVALID") from exc
+        if current.get("metadata", {}).get("uid") == uid:
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_STILL_PRESENT")
+    else:
+        error = verification.get("stderr", "").lower()
+        if "notfound" not in error and "not found" not in error:
+            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_FAILED")
+    return True
+
+
 def _execute_attested_eph_cleanup(
     payload: dict[str, Any],
     deployment_context: dict[str, Any] | None,
@@ -690,13 +763,24 @@ def _execute_attested_eph_cleanup(
         _kubectl,
         lease_lost_event,
     )
+    proof = deployment_context.get("eph_pivot_attestation", {})
+    observer_revoked = _revoke_source_observer_secret(
+        payload.get("deployment_id", ""),
+        proof.get("source_cluster_uid", ""),
+    )
+    source_credentials_revoked = cleanup.get("eph_credentials_revoked") is True
     return {
         **cleanup,
+        "eph_credentials_revoked": source_credentials_revoked and observer_revoked,
+        "source_observer_secret_revoked": observer_revoked,
+        "revoked_credential_count": cleanup.get("revoked_credential_count", 0)
+        + int(observer_revoked),
+        "side_effects": cleanup.get("side_effects", False) or observer_revoked,
         "target_metal3_ownership_verified": True,
         "target_ironic_inventory_verified": ownership.get(
             "target_ironic_inventory_verified"
         ) is True,
-        "target_bmh_identity_count": ownership.get("target_bmh_identity_count"),
+        "target_bmh_identity_count": len(ownership.get("target_bmh_identities", [])),
     }
 
 
