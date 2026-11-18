@@ -353,6 +353,40 @@ def wait_for_baremetalhosts_ready(
     }
 
 
+def wait_for_capi_control_plane_ready(
+    payload: dict[str, Any],
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    timeout_seconds = payload.get("timeout_seconds", 1800)
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or not 60 <= timeout_seconds <= 3600
+    ):
+        raise Metal3SkillError("CAPI_READY_TIMEOUT_INVALID")
+    deadline = monotonic() + timeout_seconds
+    delay = 20.0
+    latest = {}
+    while monotonic() < deadline:
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise Metal3SkillError("COMMAND_LEASE_LOST_DURING_CAPI_WAIT")
+        latest = observe_capi_cluster(payload, runner)
+        if latest.get("control_plane_ready") is True:
+            latest["control_plane_ready_wait_seconds"] = timeout_seconds - max(
+                0, int(deadline - monotonic())
+            )
+            return latest
+        if latest.get("failure_reason"):
+            raise Metal3SkillError("CAPI_CONTROL_PLANE_FAILED")
+        remaining = max(0.0, deadline - monotonic())
+        sleep(min(delay, remaining))
+        delay = min(delay * 1.5, 60.0)
+    raise Metal3SkillError("CAPI_CONTROL_PLANE_READY_TIMEOUT")
+
+
 def observe_capi_cluster(
     payload: dict[str, Any],
     runner: Callable[..., dict[str, Any]],
