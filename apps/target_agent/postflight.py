@@ -98,7 +98,10 @@ def _daemonset_ready(daemonset: dict[str, Any]) -> bool:
     ready = status.get("numberReady", 0)
     available = status.get("numberAvailable", ready)
     counters = (desired, ready, available)
-    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counters):
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in counters
+    ):
         raise PostflightError("POSTFLIGHT_DAEMONSET_COUNTER_INVALID")
     return desired > 0 and ready >= desired and available >= desired
 
@@ -472,7 +475,12 @@ def verify_target_postflight(
             raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_METADATA_OR_SPEC_INVALID")
         nad_namespace = metadata.get("namespace")
         nad_name = metadata.get("name")
-        if not isinstance(nad_namespace, str) or not nad_namespace or not isinstance(nad_name, str) or not nad_name:
+        if (
+            not isinstance(nad_namespace, str)
+            or not nad_namespace
+            or not isinstance(nad_name, str)
+            or not nad_name
+        ):
             raise PostflightError("POSTFLIGHT_NETWORK_ATTACHMENT_IDENTITY_INVALID")
         key = (nad_namespace, nad_name)
         if key in observed_nads:
@@ -492,7 +500,10 @@ def verify_target_postflight(
             or not required_name
             or not isinstance(expected_type, str)
             or expected_type not in {"sriov", "ovs"}
-            or (expected_type == "sriov" and (not isinstance(expected_resource, str) or not expected_resource))
+            or (
+                expected_type == "sriov"
+                and (not isinstance(expected_resource, str) or not expected_resource)
+            )
             or (expected_type == "ovs" and expected_resource is not None)
         ):
             raise PostflightError("POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_INVALID")
