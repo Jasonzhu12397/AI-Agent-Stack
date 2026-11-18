@@ -755,7 +755,10 @@ def _revoke_source_observer_secret(
         try:
             current = json.loads(verification.get("stdout", ""))
         except (TypeError, ValueError) as exc:
-            raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_VERIFY_INVALID", side_effects=True) from exc
+            raise HandoffError(
+                "EPH_SOURCE_OBSERVER_SECRET_VERIFY_INVALID",
+                side_effects=True,
+            ) from exc
         if current.get("metadata", {}).get("uid") == uid:
             raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_STILL_PRESENT", side_effects=True)
     else:
