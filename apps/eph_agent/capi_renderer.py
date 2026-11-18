@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
+
+import yaml
 
 from .metal3_skill import Metal3SkillError
 
