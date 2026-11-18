@@ -12,11 +12,11 @@ DEPLOYMENT_ID_ANNOTATION = "ai-agent-stack.io/deployment-id"
 CREDENTIAL_SCOPE_ANNOTATION = "ai-agent-stack.io/credential-scope"
 
 RESOURCE_ORDER = (
-    "pods",
-    "jobs.batch",
-    "daemonsets.apps",
     "deployments.apps",
     "statefulsets.apps",
+    "daemonsets.apps",
+    "jobs.batch",
+    "pods",
     "configmaps",
     "secrets",
 )
@@ -145,6 +145,8 @@ def execute_eph_cleanup(
                 or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
                 or item_namespace != namespace
                 or not isinstance(name, str)
+                or not isinstance(metadata.get("uid"), str)
+                or not metadata.get("uid")
             ):
                 raise EphCleanupError("EPH_CLEANUP_RESOURCE_OWNERSHIP_MISMATCH")
             inventory.append({
@@ -171,9 +173,7 @@ def execute_eph_cleanup(
             "--wait=true",
             "--timeout=120s",
         ]
-        _run(runner, arguments, source_kubeconfig, timeout=150)
-        verify = _run(
-            runner,
+        current_result = runner(
             [
                 "get",
                 item["resource"],
@@ -183,14 +183,52 @@ def execute_eph_cleanup(
                 "-o",
                 "json",
             ],
-            source_kubeconfig,
+            timeout=30,
+            max_output_bytes=MAX_INVENTORY_BYTES,
+            kubeconfig=source_kubeconfig,
         )
-        try:
-            current = json.loads(verify.get("stdout", ""))
-        except (TypeError, ValueError):
-            current = None
-        if isinstance(current, dict) and current.get("metadata", {}).get("uid") == item["uid"]:
-            raise EphCleanupError("EPH_CLEANUP_RESOURCE_STILL_PRESENT")
+        if current_result.get("available") is True:
+            try:
+                current = json.loads(current_result.get("stdout", ""))
+            except (TypeError, ValueError) as exc:
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_INVALID") from exc
+            current_metadata = current.get("metadata", {})
+            if (
+                current_metadata.get("uid") != item["uid"]
+                or current_metadata.get("annotations", {}).get(SOURCE_UID_ANNOTATION)
+                != proof["source_cluster_uid"]
+            ):
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_CHANGED")
+        elif "notfound" not in current_result.get("stderr", "").lower() and (
+            "not found" not in current_result.get("stderr", "").lower()
+        ):
+            raise EphCleanupError("EPH_CLEANUP_RESOURCE_PREDELETE_OBSERVATION_FAILED")
+        _run(runner, arguments, source_kubeconfig, timeout=150)
+        verify = runner(
+            [
+                "get",
+                item["resource"],
+                item["name"],
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+            timeout=30,
+            max_output_bytes=MAX_INVENTORY_BYTES,
+            kubeconfig=source_kubeconfig,
+        )
+        if verify.get("available") is True:
+            try:
+                current = json.loads(verify.get("stdout", ""))
+            except (TypeError, ValueError) as exc:
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_JSON_INVALID") from exc
+            if current.get("metadata", {}).get("uid") == item["uid"]:
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_STILL_PRESENT")
+        elif "notfound" not in verify.get("stderr", "").lower() and (
+            "not found" not in verify.get("stderr", "").lower()
+        ):
+            raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_FAILED")
         deleted.append(item)
 
     remaining = 0
