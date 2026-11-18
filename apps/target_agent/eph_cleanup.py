@@ -166,11 +166,11 @@ def execute_eph_cleanup(
     ):
         raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OBSERVATION_FAILED")
 
-    selector = (
-        f"{CLEANUP_ANNOTATION}=true,"
-        f"app.kubernetes.io/managed-by=ai-agent-stack,"
-        f"ai-agent-stack.io/deployment-id={deployment_id}"
-    )
+    selector = ",".join((
+        f"{CLEANUP_ANNOTATION}=true",
+        "app.kubernetes.io/managed-by=ai-agent-stack",
+        f"ai-agent-stack.io/deployment-id={deployment_id}",
+    ))
     inventory: list[dict[str, Any]] = []
     for resource in RESOURCE_ORDER:
         if lease_lost_event is not None and lease_lost_event.is_set():
