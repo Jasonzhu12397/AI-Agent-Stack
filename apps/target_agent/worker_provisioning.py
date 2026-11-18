@@ -6,7 +6,6 @@ import json
 import os
 import re
 import tempfile
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -448,15 +447,14 @@ def execute_worker_provisioning(
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
     _verify_existing_ownership(runner, ordered, namespace, deployment_id, target_uid)
 
-    descriptor, manifest_path = tempfile.mkstemp(
-        prefix="target-worker-plan-",
-        suffix=".yaml",
-        dir="/tmp",
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            yaml.safe_dump_all(ordered, stream, sort_keys=False)
+    applied_output = []
+    with tempfile.TemporaryDirectory(prefix="target-worker-plan-", dir="/tmp") as workdir:
+        manifest_path = Path(workdir) / "worker-plan.yaml"
+        manifest_path.write_text(
+            yaml.safe_dump_all(ordered, sort_keys=False),
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o600)
         dry_run = _run(
             runner,
             [
@@ -465,25 +463,35 @@ def execute_worker_provisioning(
                 f"--field-manager={FIELD_MANAGER}",
                 "--dry-run=server",
                 "-f",
-                manifest_path,
+                str(manifest_path),
             ],
             timeout=180,
         )
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
-        applied = _run(
-            runner,
-            [
-                "apply",
-                "--server-side",
-                f"--field-manager={FIELD_MANAGER}",
-                "-f",
-                manifest_path,
-            ],
-            timeout=300,
-        )
-    finally:
-        Path(manifest_path).unlink(missing_ok=True)
+        for index, document in enumerate(ordered):
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
+            resource_path = Path(workdir) / f"resource-{index}.yaml"
+            resource_path.write_text(
+                yaml.safe_dump(document, sort_keys=False),
+                encoding="utf-8",
+            )
+            os.chmod(resource_path, 0o600)
+            applied = _run(
+                runner,
+                [
+                    "apply",
+                    "--server-side",
+                    f"--field-manager={FIELD_MANAGER}",
+                    "-f",
+                    str(resource_path),
+                ],
+                timeout=180,
+            )
+            applied_output.append(applied.get("stdout", ""))
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
 
     md_name = machine_deployment["metadata"]["name"]
     md_result = _run(
@@ -531,9 +539,9 @@ def execute_worker_provisioning(
             for item in ordered
         ],
         "ironic_internal_ntp_ip": ironic_ntp_ip,
-        "worker_network_contract_verified": True,
+        "worker_network_contract_validated": True,
         "target_cluster_uid": target_uid,
-        "applied_stdout": applied.get("stdout", "")[-4000:],
+        "applied_stdout": "\n".join(applied_output)[-4000:],
         "dry_run_stdout": dry_run.get("stdout", "")[-4000:],
         "side_effects": True,
     }
