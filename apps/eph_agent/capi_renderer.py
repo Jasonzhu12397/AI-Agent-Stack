@@ -112,6 +112,38 @@ def render_bmh_manifests(hosts: Any, namespace: str = "metal3") -> list[dict[str
     return documents
 
 
+def _render_data_template(
+    cluster_name: str,
+    namespace: str,
+    template_name: str,
+    value: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Metal3SkillError("CAPI_METAL3_DATA_TEMPLATE_REQUIRED")
+    meta_data = value.get("meta_data")
+    network_data = value.get("network_data")
+    if not isinstance(meta_data, dict) or not isinstance(network_data, dict):
+        raise Metal3SkillError("CAPI_METAL3_DATA_TEMPLATE_CONTENT_INVALID")
+    if not {"links", "networks"}.issubset(network_data):
+        raise Metal3SkillError("CAPI_METAL3_NETWORK_DATA_INCOMPLETE")
+    document = {
+        "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta2",
+        "kind": "Metal3DataTemplate",
+        "metadata": {
+            "name": template_name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "clusterName": cluster_name,
+            "metaData": meta_data,
+            "networkData": network_data,
+        },
+    }
+    if len(yaml.safe_dump(document, sort_keys=False).encode("utf-8")) > 64 * 1024:
+        raise Metal3SkillError("CAPI_METAL3_DATA_TEMPLATE_TOO_LARGE")
+    return document
+
+
 def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     if not isinstance(cluster_spec, dict):
         raise Metal3SkillError("CAPI_CLUSTER_SPEC_INVALID")
@@ -181,8 +213,20 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         ):
             raise Metal3SkillError("CAPI_WORKER_POOL_LABELS_INVALID")
         pool["node_labels"] = labels
+        pool["data_template"] = _render_data_template(
+            cluster["name"],
+            cluster["namespace"],
+            f"{cluster['name']}-{pool['name']}-template",
+            pool.get("data_template"),
+        )
         normalized_pools.append(pool)
     cluster["worker_pools"] = normalized_pools
+    control_plane_data_template = _render_data_template(
+        cluster["name"],
+        cluster["namespace"],
+        f"{cluster['name']}-controlplane-template",
+        cluster.get("control_plane_data_template"),
+    )
     try:
         rendered = _environment().get_template("capi/cluster-template.yaml.j2").render(
             cluster=cluster
@@ -192,4 +236,7 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         raise Metal3SkillError("CAPI_METAL3_TEMPLATE_RENDER_FAILED") from exc
     if not documents:
         raise Metal3SkillError("CAPI_METAL3_TEMPLATE_EMPTY")
-    return documents
+    data_templates = [control_plane_data_template] + [
+        pool["data_template"] for pool in normalized_pools
+    ]
+    return documents + data_templates
