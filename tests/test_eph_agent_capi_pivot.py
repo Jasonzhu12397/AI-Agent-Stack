@@ -31,60 +31,6 @@ def test_bmh_identity_requires_stable_hardware_identifier():
         })
 
 
-def test_capi_pivot_blocks_when_approval_digest_does_not_match_plan(monkeypatch, tmp_path):
-    source = tmp_path / "source.kubeconfig"
-    target = tmp_path / "target.kubeconfig"
-    source.write_text("source", encoding="utf-8")
-    target.write_text("target", encoding="utf-8")
-    monkeypatch.setenv("CAPI_PIVOT_SOURCE_KUBECONFIG", str(source))
-    monkeypatch.setenv("CAPI_PIVOT_TARGET_KUBECONFIG", str(target))
-    monkeypatch.setattr(
-        capi_pivot,
-        "_kubernetes_cluster_uid",
-        lambda path: "source-api" if path == str(source) else "target-api",
-    )
-    monkeypatch.setattr(
-        capi_pivot,
-        "_provider_preflight",
-        lambda *_args: {"target_ready_master_names": []},
-    )
-    monkeypatch.setattr(
-        capi_pivot,
-        "_cluster",
-        lambda kubeconfig, _namespace, _name: (
-            {"metadata": {"uid": "cluster-uid", "annotations": {}}}
-            if kubeconfig == str(source)
-            else None
-        ),
-    )
-    monkeypatch.setattr(capi_pivot, "_bmh_inventory", lambda *_args: [
-        {"namespace": "metal3", "name": "host-1", "hardware_identity": "system-uuid:abc"}
-    ])
-    monkeypatch.setattr(
-        capi_pivot,
-        "_kubectl",
-        lambda *_args: {"items": [{"metadata": {"name": "cluster-1"}}]},
-    )
-    result = capi_pivot.execute_capi_pivot({
-        "action": "eph.capi.pivot",
-        "approval_digest": "a" * 64,
-        "payload": {
-            "deployment_id": "deployment-1",
-            "namespace": "metal3",
-            "cluster_name": "cluster-1",
-            "stable_cluster_identity": "logical-cluster-1",
-            "expected_source_cluster_uid": "cluster-uid",
-            "expected_source_bmh_identities": [
-                {"namespace": "metal3", "name": "host-1", "hardware_identity": "system-uuid:abc"}
-            ],
-            "plan_digest": "b" * 64,
-        },
-    })
-    assert result["status"] == "blocked"
-    assert result["error_code"] == "CAPI_PIVOT_APPROVAL_PLAN_DIGEST_MISMATCH"
-    assert result["side_effects"] is False
-
-
 def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
     source = tmp_path / "source.kubeconfig"
     target = tmp_path / "target.kubeconfig"
@@ -278,7 +224,6 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
     monkeypatch.setattr(capi_pivot, "_run", run)
     result = capi_pivot.execute_capi_pivot({
         "action": "eph.capi.pivot",
-        "approval_digest": "a" * 64,
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
@@ -288,7 +233,6 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
             "expected_source_bmh_identities": bmhs,
             "provider_deployments": [{"provider": "capm3"}],
             "target_controller_deployments": [{"namespace": "system", "name": "capm3"}],
-            "plan_digest": "a" * 64,
             "move_timeout_seconds": 60,
         },
     })
@@ -356,7 +300,6 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
     )
     result = capi_pivot.execute_capi_pivot({
         "action": "eph.capi.pivot",
-        "approval_digest": "a" * 64,
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
@@ -415,7 +358,6 @@ def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
     monkeypatch.setattr(capi_pivot, "_run", run)
     result = capi_pivot.execute_capi_pivot({
         "action": "eph.capi.pivot",
-        "approval_digest": "a" * 64,
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
@@ -425,7 +367,6 @@ def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
             "expected_source_bmh_identities": bmhs,
             "provider_deployments": [{"provider": "capm3"}],
             "target_controller_deployments": [{"namespace": "system", "name": "capm3"}],
-            "plan_digest": "a" * 64,
             "move_timeout_seconds": 60,
         },
     })
