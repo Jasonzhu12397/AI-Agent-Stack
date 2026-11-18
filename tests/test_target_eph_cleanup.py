@@ -314,6 +314,7 @@ def test_eph_cleanup_action_requires_completed_bmh_handoff_checkpoint(monkeypatc
     )
     outcome = target_main.execute({
         "action": "target.eph.cleanup",
+        "deployment_id": "deployment-1",
         "payload": {},
         "deployment_checkpoint": {"phase": "capi_pivot_verified"},
     })
@@ -331,6 +332,7 @@ def test_eph_cleanup_handoff_phase_does_not_delete_before_bmh_checkpoint(monkeyp
     )
     outcome = target_main.execute({
         "action": "target.handoff.evaluate",
+        "deployment_id": "deployment-1",
         "payload": {
             "next_phase": "eph_cleanup_verified",
             "evidence": {},
@@ -594,6 +596,7 @@ def test_target_cleanup_requires_trusted_cleanup_scope_attestation(monkeypatch):
     )
     outcome = target_main.execute({
         "action": "target.eph.cleanup",
+        "deployment_id": "deployment-1",
         "payload": {
             "deployment_id": "deployment-1",
             "target_namespace": "metal3",
