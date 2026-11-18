@@ -90,6 +90,7 @@ def _fixtures():
                         "phase": "Running",
                         "infrastructureReady": True,
                         "bootstrapReady": True,
+                        "nodeRef": {"name": "worker-1"},
                     },
                 },
                 {
@@ -103,6 +104,7 @@ def _fixtures():
                         "phase": "Running",
                         "infrastructureReady": True,
                         "bootstrapReady": True,
+                        "nodeRef": {"name": "worker-2"},
                     },
                 },
             ],
@@ -112,6 +114,7 @@ def _fixtures():
                 _node("master-1", control_plane=True),
                 _node("worker-1"),
                 _node("worker-2"),
+                _node("infra-1"),
             ],
         },
         "daemonsets.apps": {
@@ -119,6 +122,7 @@ def _fixtures():
                 _ready_daemonset("calico-node"),
                 _ready_daemonset("kube-multus-ds"),
                 _ready_daemonset("sriov-network-config-daemon", "sriov-network-operator"),
+                _ready_daemonset("ovs-cni"),
             ],
         },
         "network-attachment-definitions.k8s.cni.cncf.io": {
@@ -191,6 +195,7 @@ def test_postflight_requires_live_cluster_worker_and_network_evidence():
     assert result["worker_ntp_bootstrap_attested"] is True
     assert result["sriov_nad_count"] == 1
     assert result["ovs_nad_count"] == 1
+    assert result["ovs_daemonset"] == "kube-system/ovs-cni"
 
 
 def test_postflight_rejects_workers_without_dpdk_device_resources():
@@ -270,3 +275,24 @@ def test_postflight_rejects_tampered_checkpoint_evidence():
             checkpoint,
             "workers_ready",
         )
+
+
+
+def test_postflight_uses_capi_machine_node_references_not_all_non_control_plane_nodes():
+    runner, _documents = _fixtures()
+    result = verify_target_postflight(runner=runner, **_kwargs())
+    assert result["ready_worker_count"] == 2
+
+
+def test_postflight_rejects_machine_without_node_reference():
+    runner, documents = _fixtures()
+    documents["machines.cluster.x-k8s.io"]["items"][1]["status"].pop("nodeRef")
+    with pytest.raises(PostflightError, match="POSTFLIGHT_CAPI_WORKER_MACHINES_NOT_READY"):
+        verify_target_postflight(runner=runner, **_kwargs())
+
+
+def test_postflight_rejects_unready_ovs_daemonset():
+    runner, documents = _fixtures()
+    documents["daemonsets.apps"]["items"][-1]["status"]["numberReady"] = 1
+    with pytest.raises(PostflightError, match="POSTFLIGHT_OVS_DAEMONSET_NOT_READY"):
+        verify_target_postflight(runner=runner, **_kwargs())
