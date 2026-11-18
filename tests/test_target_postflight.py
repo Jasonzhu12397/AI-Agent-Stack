@@ -176,6 +176,20 @@ def _kwargs():
             "data_plane_interface": "ens1f0",
             "control_plane_cidr": "10.130.60.0/24",
             "data_plane_cidr": "10.130.61.0/24",
+            "required_network_attachments": [
+                {
+                    "namespace": "metal3",
+                    "name": "data-sriov",
+                    "cni_type": "sriov",
+                    "resource_name": "intel.com/sriov_dpdk",
+                },
+                {
+                    "namespace": "metal3",
+                    "name": "data-ovs",
+                    "cni_type": "ovs",
+                    "resource_name": None,
+                },
+            ],
         },
         "ownership_evidence": {
             "target_metal3_ownership_verified": True,
@@ -299,4 +313,37 @@ def test_postflight_rejects_unready_ovs_daemonset():
     runner, documents = _fixtures()
     documents["daemonsets.apps"]["items"][-1]["status"]["numberReady"] = 1
     with pytest.raises(PostflightError, match="POSTFLIGHT_OVS_DAEMONSET_NOT_READY"):
+        verify_target_postflight(runner=runner, **_kwargs())
+
+
+def test_postflight_rejects_required_nad_with_wrong_resource_name():
+    runner, documents = _fixtures()
+    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["spec"]["config"] = json.dumps({
+        "cniVersion": "0.3.1",
+        "type": "sriov",
+        "resourceName": "intel.com/other_resource",
+    })
+    with pytest.raises(PostflightError, match="POSTFLIGHT_NETWORK_ATTACHMENT_RESOURCE_MISMATCH"):
+        verify_target_postflight(runner=runner, **_kwargs())
+
+
+def test_postflight_rejects_unrelated_nads_when_required_attachment_is_missing():
+    runner, documents = _fixtures()
+    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["metadata"]["name"] = "unrelated-sriov"
+    with pytest.raises(PostflightError, match="POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_MISSING"):
+        verify_target_postflight(runner=runner, **_kwargs())
+
+
+@pytest.mark.parametrize(
+    ("resource", "items", "error"),
+    [
+        ("machines.cluster.x-k8s.io", [None], "POSTFLIGHT_CAPI_WORKER_MACHINE_INVALID"),
+        ("daemonsets.apps", [None], "POSTFLIGHT_DAEMONSET_DOCUMENT_INVALID"),
+        ("network-attachment-definitions.k8s.cni.cncf.io", [None], "POSTFLIGHT_NETWORK_ATTACHMENT_DOCUMENT_INVALID"),
+    ],
+)
+def test_postflight_rejects_malformed_resource_items(resource, items, error):
+    runner, documents = _fixtures()
+    documents[resource]["items"] = items
+    with pytest.raises(PostflightError, match=error):
         verify_target_postflight(runner=runner, **_kwargs())
