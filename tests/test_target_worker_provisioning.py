@@ -174,7 +174,10 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
         calls.append(arguments)
         if arguments[0] == "get" and arguments[1] == "clusters.cluster.x-k8s.io":
             return {"available": True, "stdout": json.dumps(cluster), "stderr": ""}
-        if arguments[0] == "get" and arguments[1] == "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io":
+        if (
+            arguments[0] == "get"
+            and arguments[1] == "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io"
+        ):
             return {
                 "available": True,
                 "stdout": json.dumps({"spec": {"version": "v1.37.0"}}),
