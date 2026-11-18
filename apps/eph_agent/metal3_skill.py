@@ -27,6 +27,15 @@ CAPI_KINDS = {
     "KubeadmConfigTemplate",
     "MachineDeployment",
 }
+CAPI_API_VERSIONS = {
+    "Cluster": {"cluster.x-k8s.io/v1beta2"},
+    "MachineDeployment": {"cluster.x-k8s.io/v1beta2"},
+    "Metal3Cluster": {"infrastructure.cluster.x-k8s.io/v1beta2"},
+    "Metal3MachineTemplate": {"infrastructure.cluster.x-k8s.io/v1beta2"},
+    "Metal3DataTemplate": {"infrastructure.cluster.x-k8s.io/v1beta2"},
+    "KubeadmControlPlane": {"controlplane.cluster.x-k8s.io/v1beta2"},
+    "KubeadmConfigTemplate": {"bootstrap.cluster.x-k8s.io/v1beta2"},
+}
 BMH_KIND = "BareMetalHost"
 FIELD_MANAGER = "ai-agent-eph-agent"
 MAX_MANIFESTS = 200
@@ -167,7 +176,12 @@ def apply_capi_cluster_resources(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     namespace = _namespace(payload.get("namespace", "metal3"))
-    manifests = _validate_bundle(payload.get("manifests"), namespace, CAPI_KINDS)
+    manifests = _validate_bundle(
+        payload.get("manifests"),
+        namespace,
+        CAPI_KINDS,
+        CAPI_API_VERSIONS,
+    )
     return _apply_bundle(manifests, runner, lease_lost_event, "CAPI_CLUSTER")
 
 
