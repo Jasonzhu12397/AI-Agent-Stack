@@ -35,6 +35,51 @@ require_secret_keys() {
     done
 }
 
+
+create_target_source_operator_secret() {
+    local tmpdir server token ca_data
+    tmpdir="$(mktemp -d)"
+    kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: target-agent-source-operator-token
+  namespace: ai-agent-system
+  annotations:
+    kubernetes.io/service-account.name: target-agent-source-operator
+type: kubernetes.io/service-account-token
+EOF
+    for attempt in $(seq 1 30); do
+        token="$(kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
+            target-agent-source-operator-token -o jsonpath='{.data.token}' 2>/dev/null || true)"
+        ca_data="$(kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
+            target-agent-source-operator-token -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)"
+        if [ -n "$token" ] && [ -n "$ca_data" ]; then
+            break
+        fi
+        sleep 2
+    done
+    [ -n "$token" ] || fail "EPH_SOURCE_OPERATOR_TOKEN_NOT_READY"
+    [ -n "$ca_data" ] || fail "EPH_SOURCE_OPERATOR_CA_NOT_READY"
+    server="$(kubectl --context "$EPH_CONTEXT" config view --minify \
+        -o jsonpath='{.clusters[0].cluster.server}')"
+    [ -n "$server" ] || fail "EPH_API_SERVER_ENDPOINT_MISSING"
+    printf '%s' "$ca_data" | base64 --decode > "$tmpdir/ca.crt"
+    kubectl config --kubeconfig="$tmpdir/source.kubeconfig" set-cluster eph-source \
+        --server="$server" --certificate-authority="$tmpdir/ca.crt" --embed-certs=true >/dev/null
+    kubectl config --kubeconfig="$tmpdir/source.kubeconfig" set-credentials target-agent-source-operator \
+        --token="$token" >/dev/null
+    kubectl config --kubeconfig="$tmpdir/source.kubeconfig" set-context target-agent-source-operator \
+        --cluster=eph-source --user=target-agent-source-operator >/dev/null
+    kubectl config --kubeconfig="$tmpdir/source.kubeconfig" use-context \
+        target-agent-source-operator >/dev/null
+    chmod 0600 "$tmpdir/source.kubeconfig"
+    kubectl --context "$TARGET_CONTEXT" --namespace ai-agent-system create secret generic \
+        target-agent-source-operator --from-file=kubeconfig="$tmpdir/source.kubeconfig" \
+        --dry-run=client -o yaml | kubectl --context "$TARGET_CONTEXT" apply -f -
+    rm -rf "$tmpdir"
+}
+
 mark_eph_cleanup_resources() {
     local context="$1"
     local kind="$2"
@@ -100,15 +145,17 @@ require_secret_keys "$EPH_CONTEXT" eph-agent-credentials control-url agent-id in
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$EPH_CONTEXT" capi-pivot-source-kubeconfig kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id ironic-api-url ironic-api-token ironic-internal-ntp-ip
-require_secret_keys "$TARGET_CONTEXT" target-agent-source-operator kubeconfig
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" dry-run
 rendered_apply "$EPH_CONTEXT" "$SCRIPT_DIR/eph-agent.yaml" "$EPH_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-eph-agent:VERSION" dry-run
-rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGET_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION" dry-run
 
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" apply
 rendered_apply "$EPH_CONTEXT" "$SCRIPT_DIR/eph-agent.yaml" "$EPH_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-eph-agent:VERSION" apply
+
+create_target_source_operator_secret
+require_secret_keys "$TARGET_CONTEXT" target-agent-source-operator kubeconfig
+rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGET_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION" dry-run
 rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGET_AGENT_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION" apply
 
 mark_eph_cleanup_resources "$EPH_CONTEXT" deployment eph-agent
@@ -118,7 +165,14 @@ mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight
 mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding eph-agent-preflight
 mark_eph_cleanup_resources "$EPH_CONTEXT" role eph-agent-metal3-deployer metal3
 mark_eph_cleanup_resources "$EPH_CONTEXT" rolebinding eph-agent-metal3-deployer metal3
-for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig; do
+mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount target-agent-source-operator
+mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole target-agent-source-operator
+mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding target-agent-source-operator
+mark_eph_cleanup_resources "$EPH_CONTEXT" role target-agent-source-capi metal3
+mark_eph_cleanup_resources "$EPH_CONTEXT" rolebinding target-agent-source-capi metal3
+mark_eph_cleanup_resources "$EPH_CONTEXT" role target-agent-source-cleanup
+mark_eph_cleanup_resources "$EPH_CONTEXT" rolebinding target-agent-source-cleanup
+for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig target-agent-source-operator-token; do
     mark_eph_cleanup_resources "$EPH_CONTEXT" secret "$secret"
     kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret "$secret" \
         ai-agent-stack.io/credential-scope=eph-agent --overwrite
