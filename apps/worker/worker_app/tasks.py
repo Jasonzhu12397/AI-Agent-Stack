@@ -763,6 +763,15 @@ def execute_agent_run(task):
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
                 ) from exc
+            except Exception as exc:
+                if token_reservation is not None:
+                    settle_tenant_tokens(
+                        usage=token_reservation,
+                        consumed_tokens=token_reservation.reserved_tokens,
+                    )
+                raise PermanentTaskError(
+                    "MODEL_PROVIDER_REQUEST_FAILED_UNEXPECTEDLY"
+                ) from exc
             actual_input_tokens = response.input_tokens or (
                 0 if model_config.provider.provider_type == "fake"
                 else estimated_input_tokens
