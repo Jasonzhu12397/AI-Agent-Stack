@@ -28,6 +28,17 @@ def _period_usage(tenant_id, start, now):
     return settled + reserved
 
 
+def get_tenant_token_usage(tenant_id, now=None):
+    current_time = now or timezone.now()
+    local_now = timezone.localtime(current_time)
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = day_start.replace(day=1)
+    return {
+        "daily_used": _period_usage(tenant_id, day_start, current_time),
+        "monthly_used": _period_usage(tenant_id, month_start, current_time),
+    }
+
+
 @transaction.atomic
 def reserve_tenant_tokens(
     *, task, idempotency_key: str, requested_tokens: int, agent_run=None, workflow_run=None
