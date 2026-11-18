@@ -336,6 +336,41 @@ def _allowed_agent_output_tokens(
     )
 
 
+def _persist_agent_execution_state(
+    agent_run,
+    messages,
+    iteration,
+    input_tokens,
+    output_tokens,
+    latency_ms,
+    total_tool_calls,
+    pending_raw_tool_calls=None,
+    next_call_index=0,
+    final_result=None,
+):
+    state = {
+        "version": 1,
+        "messages": messages,
+        "next_iteration": iteration,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "latency_ms": latency_ms,
+        "total_tool_calls": total_tool_calls,
+        "pending_raw_tool_calls": pending_raw_tool_calls,
+        "next_call_index": next_call_index,
+    }
+    if final_result is not None:
+        state["completed"] = True
+        state["final_result"] = final_result
+    AgentRun.objects.filter(pk=agent_run.pk).update(
+        execution_state=state,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+    )
+    return state
+
+
 def _serialize_agent_tool_result(result):
     try:
         serialized = json.dumps(
