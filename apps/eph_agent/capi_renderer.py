@@ -11,7 +11,6 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
 from .metal3_skill import Metal3SkillError
 
-
 TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates"
 _NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _VERSION_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
