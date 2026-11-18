@@ -307,6 +307,20 @@ def _estimate_message_tokens(messages, tools=None):
     return (len(serialized) + 1) // 2
 
 
+def _estimate_message_token_upper_bound(messages, tools=None):
+    serialized = json.dumps(
+        {"messages": messages, "tools": tools or []},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(serialized) > MAX_AGENT_RUN_INPUT_BYTES:
+        raise PermanentTaskError(
+            "Agent prompt and tool schemas exceeded the 24 KiB input budget"
+        )
+    return len(serialized)
+
+
 def _compact_agent_messages(messages):
     if len(messages) <= 6:
         return messages
@@ -738,7 +752,10 @@ def execute_agent_run(task):
                         task=task,
                         agent_run=agent_run,
                         idempotency_key=f"{task.id}:{task.attempts}:{iteration}",
-                        requested_tokens=estimated_input_tokens + allowed_output_tokens,
+                        requested_tokens=(
+                            _estimate_message_token_upper_bound(messages, offered_tools)
+                            + allowed_output_tokens
+                        ),
                     )
                 except TenantTokenBudgetExceeded as exc:
                     raise PermanentTaskError(
