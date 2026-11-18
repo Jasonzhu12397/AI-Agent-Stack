@@ -102,6 +102,63 @@ def execute_eph_cleanup(
     if payload.get("confirm_target_cluster_uid") != proof["target_cluster_uid"]:
         raise EphCleanupError("EPH_CLEANUP_TARGET_CLUSTER_CONFIRMATION_MISMATCH")
 
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+    optional_target_secret = runner(
+        [
+            "get",
+            "secret",
+            "capi-pivot-target-kubeconfig",
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+        timeout=30,
+        max_output_bytes=MAX_INVENTORY_BYTES,
+        kubeconfig=source_kubeconfig,
+    )
+    if optional_target_secret.get("available") is True:
+        try:
+            secret_document = json.loads(optional_target_secret.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_INVALID") from exc
+        secret_metadata = secret_document.get("metadata", {})
+        secret_labels = secret_metadata.get("labels", {})
+        if not isinstance(secret_labels, dict):
+            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_METADATA_INVALID")
+        existing_deployment_id = secret_labels.get(DEPLOYMENT_ID_ANNOTATION)
+        if existing_deployment_id not in (None, deployment_id):
+            raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH")
+        for arguments in (
+            [
+                "label",
+                "secret",
+                "capi-pivot-target-kubeconfig",
+                "--namespace",
+                namespace,
+                "app.kubernetes.io/managed-by=ai-agent-stack",
+                f"{CLEANUP_ANNOTATION}=true",
+                f"{DEPLOYMENT_ID_ANNOTATION}={deployment_id}",
+                "--overwrite",
+            ],
+            [
+                "annotate",
+                "secret",
+                "capi-pivot-target-kubeconfig",
+                "--namespace",
+                namespace,
+                f"{CLEANUP_ANNOTATION}=true",
+                f"{CREDENTIAL_SCOPE_ANNOTATION}=eph-agent",
+                "--overwrite",
+            ],
+        ):
+            _run(runner, arguments, source_kubeconfig)
+    elif "notfound" not in optional_target_secret.get("stderr", "").lower() and (
+        "not found" not in optional_target_secret.get("stderr", "").lower()
+    ):
+        raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_OBSERVATION_FAILED")
+
     selector = (
         f"{CLEANUP_ANNOTATION}=true,"
         f"app.kubernetes.io/managed-by=ai-agent-stack,"
