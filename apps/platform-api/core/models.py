@@ -351,9 +351,13 @@ class TenantTokenUsage(models.Model):
         ]
         indexes = [
             models.Index(
-                fields=["tenant", "status", "created_at"],
-                name="tenant_token_usage_period_idx",
-            )
+                fields=["tenant", "status", "settled_at"],
+                name="tenant_token_settled_idx",
+            ),
+            models.Index(
+                fields=["tenant", "status", "expires_at"],
+                name="tenant_token_reserved_idx",
+            ),
         ]
 
 
