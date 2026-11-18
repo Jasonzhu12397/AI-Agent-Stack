@@ -2,6 +2,7 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -245,22 +246,29 @@ class AgentPluginCatalogView(APIView):
         ):
             return Response({"detail": "max_concurrency must be an integer between 1 and 64."}, status=400)
 
-        plugin = AgentPluginDefinition.objects.create(
-            tenant=tenant,
-            created_by=request.user,
-            plugin_key=data["plugin_key"],
-            name=data["name"],
-            description=description,
-            version=data["version"],
-            protocol=data["protocol"],
-            endpoint_url=data["endpoint_url"],
-            auth_required=auth_required,
-            capabilities=capabilities,
-            input_schema=input_schema,
-            output_schema=output_schema,
-            timeout_seconds=timeout_seconds,
-            max_concurrency=max_concurrency,
-        )
+        try:
+            with transaction.atomic():
+                plugin = AgentPluginDefinition.objects.create(
+                    tenant=tenant,
+                    created_by=request.user,
+                    plugin_key=data["plugin_key"],
+                    name=data["name"],
+                    description=description,
+                    version=data["version"],
+                    protocol=data["protocol"],
+                    endpoint_url=data["endpoint_url"],
+                    auth_required=auth_required,
+                    capabilities=capabilities,
+                    input_schema=input_schema,
+                    output_schema=output_schema,
+                    timeout_seconds=timeout_seconds,
+                    max_concurrency=max_concurrency,
+                )
+        except IntegrityError:
+            return Response(
+                {"detail": "An agent plugin with this key and version already exists."},
+                status=409,
+            )
         record_audit_event(
             request,
             tenant,
