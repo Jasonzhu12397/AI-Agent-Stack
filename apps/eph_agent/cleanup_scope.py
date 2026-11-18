@@ -506,6 +506,13 @@ def attest_cleanup_scope(
     except CleanupScopeError as exc:
         exc.side_effects = exc.side_effects or mutated > 0
         raise
+    except Exception as exc:
+        if mutated > 0:
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_EXECUTION_FAILED",
+                side_effects=True,
+            ) from exc
+        raise
     return {
         "cleanup_scope_attested": True,
         "source_cleanup_resource_count": source_resource_count,
