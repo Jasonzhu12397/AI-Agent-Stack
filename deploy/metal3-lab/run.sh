@@ -55,11 +55,16 @@ checkout_upstream() {
     if [[ ! -d "${UPSTREAM_DIR}/.git" ]]; then
         log "Cloning Metal3 dev-env"
         git clone --filter=blob:none "${UPSTREAM_REPO}" "${UPSTREAM_DIR}"
+    else
+        local origin
+        origin="$(git -C "${UPSTREAM_DIR}" remote get-url origin)"
+        [[ "${origin}" == "${UPSTREAM_REPO}" ]] ||
+            die "Unexpected upstream origin: ${origin}"
     fi
     git -C "${UPSTREAM_DIR}" fetch --no-tags origin "${UPSTREAM_COMMIT}"
     git -C "${UPSTREAM_DIR}" checkout --detach "${UPSTREAM_COMMIT}"
     local actual
-    actual="$(git -C "${UPSTREAM_DIR}" rev-parse HEAD)"
+    actual="$(cd -- "${UPSTREAM_DIR}" && git rev-parse HEAD)"
     [[ "${actual}" == "${UPSTREAM_COMMIT}" ]] ||
         die "Upstream checkout mismatch: expected ${UPSTREAM_COMMIT}, got ${actual}"
     log "Pinned upstream checkout: ${actual}"
