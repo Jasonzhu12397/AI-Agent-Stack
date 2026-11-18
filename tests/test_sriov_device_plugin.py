@@ -83,8 +83,10 @@ def test_render_sriov_configmap_adds_deployment_ownership():
         namespace="metal3",
         deployment_id="deployment-1",
         cluster_name="edge-lab",
+        target_cluster_uid="target-uid",
     )
     assert configmap["kind"] == "ConfigMap"
     assert configmap["metadata"]["labels"]["ai-agent-stack.io/deployment-id"] == "deployment-1"
     assert configmap["metadata"]["labels"]["ai-agent-stack.io/cluster-name"] == "edge-lab"
+    assert configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"] == "target-uid"
     assert '"rootDevices":["0000:2f:00.0"]' in configmap["data"]["config.json"]
