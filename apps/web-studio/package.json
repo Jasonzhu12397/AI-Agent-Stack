@@ -10,6 +10,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@ctrl/tinycolor": "4.1.0",
     "element-plus": "^2.9.3",
     "pinia": "^2.3.1",
     "vue": "^3.5.13",
@@ -22,6 +23,6 @@
     "vue-tsc": "^2.2.0"
   },
   "overrides": {
-    "@ctrl/tinycolor": "3.6.1"
+    "@ctrl/tinycolor": "4.1.0"
   }
 }
