@@ -53,7 +53,7 @@ def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "KUBECONFIG": os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", "")},
+            env={**os.environ, "KUBECONFIG": os.environ.get("EPH_KUBECONFIG", "")},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "error": type(exc).__name__}
@@ -79,7 +79,7 @@ def _run_kubectl(
             timeout=timeout,
             env={
                 **os.environ,
-                "KUBECONFIG": os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", ""),
+                "KUBECONFIG": os.environ.get("EPH_KUBECONFIG", ""),
             },
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -98,7 +98,7 @@ def execute(
 ) -> dict[str, Any]:
     action = command.get("action")
     if action == "eph.preflight":
-        source_kubeconfig = Path(os.environ.get("CAPI_PIVOT_SOURCE_KUBECONFIG", ""))
+        source_kubeconfig = Path(os.environ.get("EPH_KUBECONFIG", ""))
         nodes = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])
         node_count = None
         ready_nodes = []
