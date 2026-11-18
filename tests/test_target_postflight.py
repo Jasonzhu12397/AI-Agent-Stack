@@ -57,6 +57,13 @@ def _fixtures():
                 "name": "target-workers",
                 "namespace": "metal3",
                 "generation": 4,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "target-agent",
+                    "ai-agent-stack.io/deployment-id": "deployment-1",
+                },
+                "annotations": {
+                    "ai-agent-stack.io/target-cluster-uid": "target-cluster-uid",
+                },
             },
             "spec": {"replicas": 2},
             "status": {
@@ -141,6 +148,7 @@ def _kwargs():
         "cluster_name": "target",
         "namespace": "metal3",
         "machine_deployment_name": "target-workers",
+        "deployment_id": "deployment-1",
         "desired_worker_count": 2,
         "ironic_internal_ntp_ip": "10.130.60.84",
         "worker_ntp_bootstrap_sources": {
@@ -163,6 +171,7 @@ def _kwargs():
             "target_metal3_ownership_verified": True,
             "target_metal3_reconciliation_healthy": True,
             "target_ironic_inventory_verified": True,
+            "target_cluster_uid": "target-cluster-uid",
         },
         "deployment_checkpoint_durable": True,
     }
