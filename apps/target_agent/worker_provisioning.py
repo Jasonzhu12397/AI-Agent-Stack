@@ -57,7 +57,9 @@ RESOURCE_ORDER = (
 
 
 class WorkerProvisioningError(ValueError):
-    pass
+    def __init__(self, message: str, side_effects: bool = False) -> None:
+        super().__init__(message)
+        self.side_effects = side_effects
 
 
 def _name(value: Any, field: str) -> str:
