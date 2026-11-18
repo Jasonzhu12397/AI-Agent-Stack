@@ -1,8 +1,8 @@
-import pytest
 from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
 from apps.target_agent import main as target_main
