@@ -70,14 +70,30 @@ def test_target_agent_is_three_replicas_with_control_plane_anti_affinity_and_lea
         and item["metadata"]["name"] == "target-agent-metal3-operator"
     )
     assert metal3_operator_role["metadata"]["namespace"] == "REPLACE_WITH_TARGET_CAPI_NAMESPACE"
-    assert {"configmaps", "secrets"}.issubset(
-        set(metal3_operator_role["rules"][0]["resources"])
-    )
+    assert metal3_operator_role["rules"][0]["resources"] == ["secrets"]
     assert set(metal3_operator_role["rules"][0]["verbs"]) == {
         "get", "list", "watch", "create", "patch", "update", "delete"
     }
     assert metal3_operator_binding["roleRef"]["name"] == "target-agent-metal3-operator"
     assert metal3_operator_binding["subjects"][0]["namespace"] == "ai-agent-system"
+
+    sriov_role = next(
+        item for item in manifest
+        if item.get("kind") == "Role"
+        and item["metadata"]["name"] == "target-agent-sriov-configmaps"
+    )
+    sriov_binding = next(
+        item for item in manifest
+        if item.get("kind") == "RoleBinding"
+        and item["metadata"]["name"] == "target-agent-sriov-configmaps"
+    )
+    assert sriov_role["metadata"]["namespace"] == "REPLACE_WITH_SRIOV_DEVICE_PLUGIN_NAMESPACE"
+    assert sriov_role["rules"][0]["resources"] == ["configmaps"]
+    assert set(sriov_role["rules"][0]["verbs"]) == {
+        "get", "list", "watch", "create", "patch", "update"
+    }
+    assert sriov_binding["roleRef"]["name"] == "target-agent-sriov-configmaps"
+    assert sriov_binding["subjects"][0]["namespace"] == "ai-agent-system"
     assert "ai-agent-target-agent:VERSION" in pod_spec["containers"][0]["image"]
 
 

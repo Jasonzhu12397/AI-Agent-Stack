@@ -933,11 +933,24 @@ def execute_worker_provisioning(
     namespace = _name(payload.get("target_namespace"), "NAMESPACE")
     cluster_name = _name(payload.get("target_cluster_name"), "CLUSTER_NAME")
     deployment_id = _name(payload.get("deployment_id"), "DEPLOYMENT_ID")
+    environment = os.environ if environ is None else environ
+    configured_sriov_namespace = environment.get("SRIOV_DEVICE_PLUGIN_NAMESPACE")
+    requested_sriov_namespace = payload.get("sriov_device_plugin_namespace")
+    if (
+        configured_sriov_namespace
+        and requested_sriov_namespace
+        and configured_sriov_namespace != requested_sriov_namespace
+    ):
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_NAMESPACE_MISMATCH"
+        )
+    sriov_namespace = _name(
+        requested_sriov_namespace or configured_sriov_namespace or namespace,
+        "SRIOV_DEVICE_PLUGIN_NAMESPACE",
+    )
     try:
         ironic_ntp_ip = validate_ironic_internal_ntp_ip(
-            os.environ.get("IRONIC_INTERNAL_NTP_IP", "")
-            if environ is None
-            else environ.get("IRONIC_INTERNAL_NTP_IP", "")
+            environment.get("IRONIC_INTERNAL_NTP_IP", "")
         )
     except (NtpPolicyError, TypeError, ValueError) as exc:
         raise WorkerProvisioningError(
@@ -980,7 +993,7 @@ def execute_worker_provisioning(
     )
     sriov_configmaps = _prepare_sriov_device_plugin_configmaps(
         payload.get("sriov_device_plugin"),
-        namespace,
+        sriov_namespace,
         deployment_id,
         cluster_name,
         target_uid,
@@ -1012,7 +1025,7 @@ def execute_worker_provisioning(
         )
     sriov_device_plugin_pool_evidence = _verify_sriov_device_plugin_daemonsets(
         runner,
-        namespace,
+        sriov_namespace,
         payload.get("sriov_device_plugin"),
     )
     for document in ordered:
@@ -1033,7 +1046,7 @@ def execute_worker_provisioning(
     _verify_sriov_configmap_ownership(
         runner,
         sriov_configmaps,
-        namespace,
+        sriov_namespace,
         deployment_id,
         cluster_name,
     )
@@ -1208,6 +1221,7 @@ def execute_worker_provisioning(
         "verified_network_attachments": network_attachment_evidence,
         "required_sriov_resources": sorted(required_sriov_resources),
         "configured_sriov_resources": sorted(configured_sriov_resources),
+        "sriov_device_plugin_namespace": sriov_namespace,
         "sriov_device_plugin_pools_verified": sriov_device_plugin_pool_evidence,
         "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,

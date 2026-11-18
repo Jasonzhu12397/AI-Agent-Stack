@@ -240,6 +240,7 @@ def _runner_factory(
                 "stderr": "",
             }
         if arguments[0] == "get" and arguments[1] == "daemonsets.apps":
+            namespace = arguments[arguments.index("--namespace") + 1]
             tolerations = [{
                 "effect": "NoSchedule",
                 "key": "high-throughput",
@@ -254,7 +255,7 @@ def _runner_factory(
                 daemonsets.append({
                     "metadata": {
                         "name": f"sriov-device-plugin-{configmap_name}",
-                        "namespace": "metal3",
+                        "namespace": namespace,
                     },
                     "spec": {
                         "template": {
@@ -496,6 +497,30 @@ def test_worker_provisioning_requires_sriov_nad_resource_in_device_plugin_config
     else:
         raise AssertionError("An unexposed SR-IOV resource must block worker provisioning")
     assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_uses_dedicated_sriov_plugin_namespace():
+    runner, calls, applied = _runner_factory()
+    payload = _payload()
+    payload["sriov_device_plugin_namespace"] = "kube-system"
+    result = execute_worker_provisioning(
+        payload,
+        _proof(),
+        runner,
+        environ={
+            "IRONIC_INTERNAL_NTP_IP": "10.0.0.10",
+            "SRIOV_DEVICE_PLUGIN_NAMESPACE": "kube-system",
+        },
+    )
+    assert applied["sriov-device-plugin-pool4"]["metadata"]["namespace"] == "kube-system"
+    assert result["sriov_device_plugin_namespace"] == "kube-system"
+    assert any(
+        call[0] == "get"
+        and call[1] == "daemonsets.apps"
+        and "--namespace" in call
+        and call[call.index("--namespace") + 1] == "kube-system"
+        for call in calls
+    )
 
 
 def test_worker_provisioning_requires_sriov_daemonset_node_selectors_to_match_pool():

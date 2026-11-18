@@ -9,6 +9,7 @@ CLOUD_CONTROL_IMAGE="${CLOUD_CONTROL_IMAGE:-}"
 EPH_AGENT_IMAGE="${EPH_AGENT_IMAGE:-}"
 TARGET_AGENT_IMAGE="${TARGET_AGENT_IMAGE:-}"
 TARGET_CAPI_NAMESPACE="${TARGET_CAPI_NAMESPACE:-metal3}"
+SRIOV_DEVICE_PLUGIN_NAMESPACE="${SRIOV_DEVICE_PLUGIN_NAMESPACE:-$TARGET_CAPI_NAMESPACE}"
 DEPLOYMENT_ID="${DEPLOYMENT_ID:-}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-10m}"
 IMAGE_PATTERN='^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$'
@@ -111,10 +112,12 @@ rendered_apply() {
     local placeholder="$4"
     local mode="$5"
     if [ "$mode" = "dry-run" ]; then
-        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" "$file" |
+        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \\
+        -e "s|REPLACE_WITH_SRIOV_DEVICE_PLUGIN_NAMESPACE|$SRIOV_DEVICE_PLUGIN_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply --dry-run=server -f -
     else
-        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" "$file" |
+        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \\
+        -e "s|REPLACE_WITH_SRIOV_DEVICE_PLUGIN_NAMESPACE|$SRIOV_DEVICE_PLUGIN_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply -f -
     fi
 }
@@ -123,6 +126,7 @@ rendered_apply() {
 [ -n "$EPH_CONTEXT" ] || fail "EPH_CONTEXT_REQUIRED"
 [ -n "$TARGET_CONTEXT" ] || fail "TARGET_CONTEXT_REQUIRED"
 [[ "$TARGET_CAPI_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#TARGET_CAPI_NAMESPACE} -le 63 ]] || fail "TARGET_CAPI_NAMESPACE_MUST_BE_A_DNS_LABEL"
+[[ "$SRIOV_DEVICE_PLUGIN_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#SRIOV_DEVICE_PLUGIN_NAMESPACE} -le 63 ]] || fail "SRIOV_DEVICE_PLUGIN_NAMESPACE_MUST_BE_A_DNS_LABEL"
 [[ "$DEPLOYMENT_ID" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#DEPLOYMENT_ID} -le 63 ]] || fail "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL"
 [ "$CLOUD_CONTEXT" != "$EPH_CONTEXT" ] || fail "CLOUD_AND_EPH_CONTEXTS_MUST_DIFFER"
 [ "$CLOUD_CONTEXT" != "$TARGET_CONTEXT" ] || fail "CLOUD_AND_TARGET_CONTEXTS_MUST_DIFFER"
