@@ -280,8 +280,43 @@ def _record_connector_tool_event(task, tool, connection, outcome):
         logger.exception("Unable to persist connector tool audit event")
 
 
-MAX_AGENT_TOOL_CALLS = 32
-MAX_AGENT_TOOL_RESULT_BYTES = 32768
+MAX_AGENT_TOOL_CALLS = 12
+MAX_AGENT_TOOL_RESULT_BYTES = 8192
+MAX_AGENT_RUN_TOTAL_TOKENS = 16000
+MAX_AGENT_RUN_OUTPUT_TOKENS = 2048
+MAX_AGENT_RUN_INPUT_BYTES = 24000
+
+
+def _estimate_message_tokens(messages):
+    serialized = json.dumps(
+        messages,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(serialized) > MAX_AGENT_RUN_INPUT_BYTES:
+        raise PermanentTaskError("Agent prompt exceeded the 24 KiB input budget")
+    return (len(serialized) + 1) // 2
+
+
+def _compact_agent_messages(messages):
+    if len(messages) <= 6:
+        return messages
+    system = messages[0]
+    first_user = next(
+        (message for message in messages[1:] if message.get("role") == "user"),
+        None,
+    )
+    recent = messages[-4:]
+    retained_ids = {id(system)}
+    if first_user is not None:
+        retained_ids.add(id(first_user))
+    retained_ids.update(id(message) for message in recent)
+    compacted = [
+        message for message in messages
+        if id(message) in retained_ids
+    ]
+    return compacted
 
 
 def _serialize_agent_tool_result(result):
@@ -520,9 +555,9 @@ def execute_agent_run(task):
         or not 1 <= max_iterations <= 8
     ):
         raise PermanentTaskError("Published agent max_iterations is invalid")
-    input_tokens = 0
-    output_tokens = 0
-    latency_ms = 0
+    input_tokens = agent_run.input_tokens
+    output_tokens = agent_run.output_tokens
+    latency_ms = agent_run.latency_ms
     total_tool_calls = 0
     start_iteration = 0
     resume_calls = None
@@ -585,10 +620,24 @@ def execute_agent_run(task):
             resume_calls = None
         else:
             try:
+                messages = _compact_agent_messages(messages)
+                estimated_input_tokens = _estimate_message_tokens(messages)
+                remaining_total = (
+                    MAX_AGENT_RUN_TOTAL_TOKENS - input_tokens - output_tokens
+                )
+                remaining_output = MAX_AGENT_RUN_OUTPUT_TOKENS - output_tokens
+                allowed_output_tokens = min(
+                    config["max_tokens"],
+                    model_config.max_output_tokens,
+                    remaining_output,
+                    remaining_total - estimated_input_tokens,
+                )
+                if allowed_output_tokens < 1:
+                    raise PermanentTaskError("Agent run reached its cumulative token budget")
                 response = gateway.complete(
                     model_config,
                     messages,
-                    max_tokens=config["max_tokens"],
+                    max_tokens=allowed_output_tokens,
                     timeout_seconds=config["timeout_seconds"],
                     tools=offered_tools if offered_tools else None,
                     tool_choice="auto" if offered_tools else None,
@@ -598,9 +647,29 @@ def execute_agent_run(task):
                     raise RuntimeError(exc.code) from exc
                 raise PermanentTaskError(exc.code) from exc
             _renew_agent_lease(task)
-            input_tokens += response.input_tokens
-            output_tokens += response.output_tokens
+            actual_input_tokens = response.input_tokens or (
+                0 if model_config.provider.provider_type == "fake"
+                else estimated_input_tokens
+            )
+            actual_output_tokens = response.output_tokens or (
+                0 if model_config.provider.provider_type == "fake"
+                else (len(response.content.encode("utf-8")) + 1) // 2
+            )
+            if (
+                actual_input_tokens + actual_output_tokens
+                > remaining_total
+            ):
+                raise PermanentTaskError(
+                    "Provider usage exceeded the remaining agent token budget"
+                )
+            input_tokens += actual_input_tokens
+            output_tokens += actual_output_tokens
             latency_ms += response.latency_ms
+            AgentRun.objects.filter(pk=agent_run.pk).update(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_ms=latency_ms,
+            )
             if not response.tool_calls:
                 return {
                     "content": response.content,
