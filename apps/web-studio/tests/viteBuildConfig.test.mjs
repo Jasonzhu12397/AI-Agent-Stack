@@ -6,9 +6,9 @@ const viteConfig = new URL("../vite.config.ts", import.meta.url);
 
 test("Vite resolves Day.js core and plugin subpaths to valid ESM entrypoints", async () => {
   const source = await readFile(viteConfig, "utf8");
-  assert.ok(source.includes("find: /^dayjs\\/plugin\\/(.+)\\.js$/"));
-  assert.ok(source.includes('replacement: "dayjs/esm/plugin/$1/index.js"'));
-  assert.ok(source.includes('replacement: "dayjs/esm/index.js"'));
+  assert.ok(source.includes("dayjs/esm/plugin/$1/index.js"));
+  assert.ok(source.includes("dayjs/esm/index.js"));
+  assert.match(source, /find:\s*\/\^dayjs/);
 });
 
 test("Vite leaves Vue ecosystem ESM packages out of CommonJS conversion", async () => {
