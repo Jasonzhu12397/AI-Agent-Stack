@@ -323,10 +323,16 @@ class TenantTokenUsage(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["tenant", "idempotency_key"], name="uniq_tenant_token_usage_idempotency")
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="uniq_tenant_token_usage_idempotency",
+            )
         ]
         indexes = [
-            models.Index(fields=["tenant", "status", "created_at"], name="tenant_token_usage_period_idx")
+            models.Index(
+                fields=["tenant", "status", "created_at"],
+                name="tenant_token_usage_period_idx",
+            )
         ]
 
 
