@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from .cleanup_scope import CleanupScopeError, attest_cleanup_scope
+
 
 class CapiPivotError(RuntimeError):
     pass
@@ -22,7 +24,11 @@ STABLE_ID_ANNOTATION = "ai-agent-stack.io/stable-cluster-identity"
 
 
 def _valid_name(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not NAME_PATTERN.fullmatch(value):
+    if (
+        not isinstance(value, str)
+        or len(value) > 63
+        or not NAME_PATTERN.fullmatch(value)
+    ):
         raise CapiPivotError(f"CAPI_PIVOT_{field}_INVALID")
     return value
 
@@ -527,6 +533,7 @@ def execute_capi_pivot(
         payload, source, target = _validate_pivot_inputs(command)
         namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
         cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
+    deployment_id = _valid_name(payload.get("deployment_id"), "DEPLOYMENT_ID")
         stable_identity = payload["stable_cluster_identity"].strip()
         source_api_uid = _kubernetes_cluster_uid(source)
         target_api_uid = _kubernetes_cluster_uid(target)
