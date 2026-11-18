@@ -463,8 +463,12 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     payload = command.get("payload")
     if not isinstance(payload, dict):
         raise CapiPivotError("CAPI_PIVOT_PAYLOAD_REQUIRED")
+    payload = dict(payload)
+    if not payload.get("deployment_id"):
+        payload["deployment_id"] = command.get("deployment_id")
     _valid_name(payload.get("namespace"), "NAMESPACE")
     _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
+    _valid_name(payload.get("deployment_id"), "DEPLOYMENT_ID")
     stable_identity = payload.get("stable_cluster_identity")
     expected_source_uid = payload.get("expected_source_cluster_uid")
     expected_bmh = payload.get("expected_source_bmh_identities")
@@ -533,7 +537,7 @@ def execute_capi_pivot(
         payload, source, target = _validate_pivot_inputs(command)
         namespace = _valid_name(payload.get("namespace"), "NAMESPACE")
         cluster_name = _valid_name(payload.get("cluster_name"), "CLUSTER_NAME")
-    deployment_id = _valid_name(payload.get("deployment_id"), "DEPLOYMENT_ID")
+        deployment_id = payload["deployment_id"]
         stable_identity = payload["stable_cluster_identity"].strip()
         source_api_uid = _kubernetes_cluster_uid(source)
         target_api_uid = _kubernetes_cluster_uid(target)
