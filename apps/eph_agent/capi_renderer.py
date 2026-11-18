@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
+
+import yaml
 
 from .metal3_skill import Metal3SkillError
 
@@ -165,7 +166,7 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
             r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",
             endpoint,
         ):
-            raise Metal3SkillError("CAPI_CONTROL_PLANE_ENDPOINT_INVALID")
+            raise Metal3SkillError("CAPI_CONTROL_PLANE_ENDPOINT_INVALID") from None
     port = cluster.get("control_plane_port", 6443)
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
         raise Metal3SkillError("CAPI_CONTROL_PLANE_PORT_INVALID")
