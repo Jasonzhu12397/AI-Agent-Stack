@@ -257,6 +257,9 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
     context = {"eph_pivot_attestation": {
         "source_cluster_uid": "source-uid",
         "target_cluster_uid": "target-uid",
+        "cleanup_scope_attested": True,
+        "target_observer_secret_source_uid_attested": True,
+        "source_cleanup_resource_count": 7,
     }}
     calls = {}
 
