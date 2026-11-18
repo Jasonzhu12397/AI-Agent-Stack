@@ -13,7 +13,7 @@ export default defineConfig({
   },
   build: {
     commonjsOptions: {
-      exclude: [/node_modules\\/dayjs\\/esm\\//, /node_modules\\/lodash-es\\//],
+      exclude: [/dayjs/, /lodash-es/],
     },
   },
   server: { host: "0.0.0.0", port: 5173 },
