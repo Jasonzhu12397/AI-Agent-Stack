@@ -239,4 +239,10 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     data_templates = [control_plane_data_template] + [
         pool["data_template"] for pool in normalized_pools
     ]
-    return documents + data_templates
+    cluster_documents = [
+        item for item in documents if item["kind"] in {"Cluster", "Metal3Cluster"}
+    ]
+    remaining_documents = [
+        item for item in documents if item["kind"] not in {"Cluster", "Metal3Cluster"}
+    ]
+    return cluster_documents + data_templates + remaining_documents
