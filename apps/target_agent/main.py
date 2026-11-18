@@ -22,6 +22,7 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
+from .eph_cleanup import EphCleanupError, execute_eph_cleanup
 from .handoff import (
     HandoffError,
     HandoffPhase,
@@ -64,6 +65,7 @@ CAPABILITIES = [
     "target.ntp.control_plane.verify_bootstrap",
     "target.ntp.internal.probe",
     "target.handoff.evaluate",
+    "target.eph.cleanup",
 ]
 
 
@@ -736,6 +738,27 @@ def execute(
             "output": result,
             "side_effects": False,
         }
+    if action == "target.eph.cleanup":
+        try:
+            evidence = execute_eph_cleanup(
+                command.get("payload", {}),
+                command.get("deployment_context"),
+                _kubectl,
+                lease_lost_event,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": evidence,
+                "side_effects": evidence.get("side_effects", False),
+            }
+        except (EphCleanupError, TypeError, AttributeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "EPH_CLEANUP_FAILED",
+                "output": {},
+                "side_effects": False,
+            }
     if action == "target.handoff.evaluate":
         payload = command.get("payload", {})
         checkpoint = command.get("deployment_checkpoint")
@@ -786,7 +809,13 @@ def execute(
                     "ironic_internal_ntp_ip": configured_ntp_ip,
                 }
             if next_phase == HandoffPhase.EPH_CLEANUP_VERIFIED.value:
-                raise HandoffError("EPH_CLEANUP_EXECUTOR_NOT_REGISTERED")
+                cleanup_evidence = execute_eph_cleanup(
+                    payload,
+                    command.get("deployment_context"),
+                    _kubectl,
+                    lease_lost_event,
+                )
+                evidence = {**evidence, **cleanup_evidence}
             if next_phase == HandoffPhase.COMPLETED.value:
                 raise HandoffError("TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED")
             if next_phase == HandoffPhase.CAPI_PIVOT_VERIFIED.value:
