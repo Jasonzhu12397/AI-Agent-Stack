@@ -120,3 +120,22 @@ def test_expired_worker_cannot_fail_task_before_reclaim(queued_task):
     second = claim_next_task("worker-recovered-failure", lease_seconds=30)
     assert second is not None
     assert second.lease_token != old_token
+
+
+def test_agent_token_reservation_uses_utf8_byte_upper_bound():
+    from worker_app.tasks import (
+        _estimate_message_token_upper_bound,
+        _estimate_message_tokens,
+    )
+
+    messages = [{"role": "user", "content": "你好，部署 SR-IOV"}]
+    estimated = _estimate_message_tokens(messages)
+    upper_bound = _estimate_message_token_upper_bound(messages)
+
+    serialized = __import__("json").dumps(
+        {"messages": messages, "tools": []},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert upper_bound == len(serialized)
+    assert upper_bound >= estimated
