@@ -295,6 +295,41 @@ class AgentRun(models.Model):
         ordering = ["-created_at"]
 
 
+class TenantTokenBudget(models.Model):
+    tenant = models.OneToOneField(Tenant, on_delete=models.CASCADE, related_name="token_budget")
+    daily_limit = models.PositiveBigIntegerField(default=100_000)
+    monthly_limit = models.PositiveBigIntegerField(default=1_000_000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TenantTokenUsage(models.Model):
+    class Status(models.TextChoices):
+        RESERVED = "reserved", "Reserved"
+        SETTLED = "settled", "Settled"
+        RELEASED = "released", "Released"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="token_usage")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="token_usage")
+    agent_run = models.ForeignKey(AgentRun, on_delete=models.CASCADE, related_name="token_usage")
+    idempotency_key = models.CharField(max_length=160)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
+    reserved_tokens = models.PositiveBigIntegerField(default=0)
+    consumed_tokens = models.PositiveBigIntegerField(default=0)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["tenant", "idempotency_key"], name="uniq_tenant_token_usage_idempotency")
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "status", "created_at"], name="tenant_token_usage_period_idx")
+        ]
+
+
 class WorkflowDefinition(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="workflows")
