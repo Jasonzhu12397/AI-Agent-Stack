@@ -208,7 +208,11 @@ class AgentPluginCatalogView(APIView):
             for field in required_strings
         ):
             return Response(
-                {"detail": "plugin_key, name, version, protocol and endpoint_url are required strings."},
+                {
+                    "detail": (
+                        "plugin_key, name, version, protocol and endpoint_url are required strings."
+                    )
+                },
                 status=400,
             )
         if len(data["name"]) > 120 or len(data["version"]) > 40 or len(data["plugin_key"]) > 100:
@@ -381,7 +385,11 @@ class AgentPluginInstallationListCreateView(APIView):
             credential_ref and not _CREDENTIAL_REF_PATTERN.fullmatch(credential_ref)
         ):
             return Response(
-                {"detail": "credential_ref must be a valid secret reference, not a credential value."},
+                {
+                    "detail": (
+                        "credential_ref must be a valid secret reference, not a credential value."
+                    )
+                },
                 status=400,
             )
         if plugin.auth_required and not credential_ref:
