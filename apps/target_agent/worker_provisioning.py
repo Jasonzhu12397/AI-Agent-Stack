@@ -423,6 +423,117 @@ def _verify_network_attachment_definitions(
     return evidence
 
 
+def _toleration_matches(required: dict[str, Any], actual: dict[str, Any]) -> bool:
+    for key in ("key", "operator", "value", "effect", "tolerationSeconds"):
+        expected = required.get(key)
+        observed = actual.get(key)
+        if key == "operator":
+            expected = expected or "Equal"
+            observed = observed or "Equal"
+        if expected is not None and observed != expected:
+            return False
+    return True
+
+
+def _verify_sriov_device_plugin_daemonsets(
+    runner: Callable[..., dict[str, Any]],
+    namespace: str,
+    value: Any,
+) -> list[dict[str, Any]]:
+    try:
+        pools = validate_sriov_device_plugin_config(value)
+    except SriovDevicePluginConfigError as exc:
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_CONFIG_INVALID"
+        ) from exc
+    if not pools:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_REQUIRED")
+    result = _run(
+        runner,
+        ["get", "daemonsets.apps", "--namespace", namespace, "-o", "json"],
+        timeout=60,
+        max_output_bytes=4 * 1024 * 1024,
+    )
+    if result.get("returncode", 0) != 0:
+        if _not_found(result):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_NOT_FOUND"
+            )
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_LOOKUP_FAILED"
+        )
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_INVENTORY_INVALID"
+        ) from exc
+    if not isinstance(document, dict) or not isinstance(document.get("items"), list):
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_INVENTORY_INVALID"
+        )
+    daemonsets = [
+        item for item in document["items"]
+        if isinstance(item, dict)
+        and item.get("metadata", {}).get("namespace") == namespace
+    ]
+    evidence = []
+    for pool_name, pool in pools.items():
+        configmap_name = pool["sriov_network_device_plugin_configmap_name"]
+        candidates = []
+        for daemonset in daemonsets:
+            pod_spec = (
+                daemonset.get("spec", {})
+                .get("template", {})
+                .get("spec", {})
+            )
+            volumes = pod_spec.get("volumes", [])
+            if isinstance(volumes, list) and any(
+                isinstance(volume, dict)
+                and volume.get("configMap", {}).get("name") == configmap_name
+                for volume in volumes
+            ):
+                candidates.append((daemonset, pod_spec))
+        if not candidates:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_NOT_FOUND"
+            )
+        matching = []
+        for daemonset, pod_spec in candidates:
+            node_selector = pod_spec.get("nodeSelector", {})
+            tolerations = pod_spec.get("tolerations", [])
+            if not isinstance(node_selector, dict) or not isinstance(tolerations, list):
+                continue
+            selectors_match = all(
+                node_selector.get(key) == value
+                for key, value in pool["node_selectors"].items()
+            )
+            tolerations_match = all(
+                any(
+                    isinstance(actual, dict) and _toleration_matches(required, actual)
+                    for actual in tolerations
+                )
+                for required in pool["tolerations"]
+            )
+            if selectors_match and tolerations_match:
+                matching.append(daemonset)
+        if not matching:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_SCHEDULING_POLICY_MISMATCH"
+            )
+        evidence.append({
+            "pool": pool_name,
+            "configmap": configmap_name,
+            "daemonsets": sorted(
+                item.get("metadata", {}).get("name", "")
+                for item in matching
+            ),
+            "node_selectors": pool["node_selectors"],
+            "tolerations": pool["tolerations"],
+        })
+    return evidence
+
+
 def _ip_pool_references(value: Any) -> set[str]:
     references = set()
     if isinstance(value, dict):
@@ -899,6 +1010,11 @@ def execute_worker_provisioning(
         raise WorkerProvisioningError(
             "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_CONFIGURED"
         )
+    sriov_device_plugin_pool_evidence = _verify_sriov_device_plugin_daemonsets(
+        runner,
+        namespace,
+        payload.get("sriov_device_plugin"),
+    )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
     ip_pool_references = _verify_ip_pools(
@@ -1092,6 +1208,7 @@ def execute_worker_provisioning(
         "verified_network_attachments": network_attachment_evidence,
         "required_sriov_resources": sorted(required_sriov_resources),
         "configured_sriov_resources": sorted(configured_sriov_resources),
+        "sriov_device_plugin_pools_verified": sriov_device_plugin_pool_evidence,
         "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,
         "deployment_id": deployment_id,

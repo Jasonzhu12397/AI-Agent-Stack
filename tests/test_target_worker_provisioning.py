@@ -239,6 +239,42 @@ def _runner_factory(
                 }),
                 "stderr": "",
             }
+        if arguments[0] == "get" and arguments[1] == "daemonsets.apps":
+            tolerations = [{
+                "effect": "NoSchedule",
+                "key": "high-throughput",
+                "operator": "Equal",
+                "value": "true",
+            }]
+            daemonsets = []
+            for configmap_name in (
+                "sriov-device-plugin-pool4",
+                "sriov-dp-configmap",
+            ):
+                daemonsets.append({
+                    "metadata": {
+                        "name": f"sriov-device-plugin-{configmap_name}",
+                        "namespace": "metal3",
+                    },
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "nodeSelector": {"type": "high-throughput"},
+                                "tolerations": tolerations,
+                                "volumes": [{
+                                    "name": "device-plugin-config",
+                                    "configMap": {"name": configmap_name},
+                                }],
+                            },
+                        },
+                    },
+                })
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps({"items": daemonsets}),
+                "stderr": "",
+            }
         if (
             arguments[0] == "get"
             and arguments[1] == "network-attachment-definitions.k8s.cni.cncf.io"
@@ -459,6 +495,44 @@ def test_worker_provisioning_requires_sriov_nad_resource_in_device_plugin_config
         assert str(exc) == "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_CONFIGURED"
     else:
         raise AssertionError("An unexposed SR-IOV resource must block worker provisioning")
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_requires_sriov_daemonset_node_selectors_to_match_pool():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    payload["sriov_device_plugin"]["pool4"]["node_selectors"] = {
+        "type": "different-hardware-pool"
+    }
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_SCHEDULING_POLICY_MISMATCH"
+    else:
+        raise AssertionError("Mismatched SR-IOV node selectors must block workers")
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_requires_sriov_daemonset_tolerations_to_match_pool():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    payload["sriov_device_plugin"]["pool4"]["tolerations"][0]["key"] = "other-taint"
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_SCHEDULING_POLICY_MISMATCH"
+    else:
+        raise AssertionError("Mismatched SR-IOV tolerations must block workers")
     assert not any(call[0] == "apply" for call in calls)
 
 
