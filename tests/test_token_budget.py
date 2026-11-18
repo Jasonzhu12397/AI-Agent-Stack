@@ -20,6 +20,7 @@ from core.token_budget import (
     TenantTokenBudgetExceeded,
     release_tenant_tokens,
     reserve_tenant_tokens,
+    resolve_provider_token_usage,
     settle_tenant_tokens,
 )
 from django.contrib.auth import get_user_model
@@ -291,15 +292,12 @@ def test_tenant_token_budget_api_is_tenant_admin_managed(token_budget_run):
         ("fake", 0, 0, (0, 0)),
     ],
 )
-@pytest.mark.django_db
 def test_provider_token_usage_falls_back_to_reserved_ceilings(
     provider_type,
     reported_input,
     reported_output,
     expected,
 ):
-    from core.token_budget import resolve_provider_token_usage
-
     assert resolve_provider_token_usage(
         provider_type=provider_type,
         reported_input_tokens=reported_input,
@@ -311,8 +309,6 @@ def test_provider_token_usage_falls_back_to_reserved_ceilings(
 
 @pytest.mark.parametrize("invalid", [True, -1, 1.5, "12"])
 def test_provider_token_usage_rejects_invalid_counts(invalid):
-    from core.token_budget import resolve_provider_token_usage
-
     with pytest.raises(ValueError, match="non-negative integers"):
         resolve_provider_token_usage(
             provider_type="openai_compatible",
