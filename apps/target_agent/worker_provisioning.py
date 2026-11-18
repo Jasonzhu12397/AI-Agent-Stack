@@ -13,6 +13,11 @@ from typing import Any
 
 import yaml
 
+from .sriov_device_plugin import (
+    SriovDevicePluginConfigError,
+    render_sriov_device_plugin_configmap,
+    validate_sriov_device_plugin_config,
+)
 from .ntp_policy import (
     NtpPolicyError,
     render_worker_chrony_pre_kubeadm_command,
@@ -624,6 +629,70 @@ def _available_bmh_count(
     return available
 
 
+def _prepare_sriov_device_plugin_configmaps(
+    value: Any,
+    namespace: str,
+    deployment_id: str,
+    cluster_name: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    try:
+        pools = validate_sriov_device_plugin_config(value)
+    except SriovDevicePluginConfigError as exc:
+        raise WorkerProvisioningError(str(exc)) from exc
+    configmaps = {}
+    for pool in pools.values():
+        try:
+            configmap = render_sriov_device_plugin_configmap(
+                pool,
+                namespace=namespace,
+                deployment_id=deployment_id,
+                cluster_name=cluster_name,
+            )
+        except SriovDevicePluginConfigError as exc:
+            raise WorkerProvisioningError(str(exc)) from exc
+        name = configmap["metadata"]["name"]
+        existing = configmaps.get(name)
+        if existing is not None and existing != configmap:
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_CONTENT_CONFLICT")
+        configmaps[name] = configmap
+    return list(configmaps.values())
+
+
+def _verify_sriov_configmap_ownership(
+    runner: Callable[..., dict[str, Any]],
+    configmaps: list[dict[str, Any]],
+    namespace: str,
+    deployment_id: str,
+    cluster_name: str,
+) -> None:
+    for configmap in configmaps:
+        name = configmap["metadata"]["name"]
+        result = runner(
+            ["get", "configmaps", name, "--namespace", namespace, "-o", "json"],
+            timeout=60,
+            max_output_bytes=4 * 1024 * 1024,
+        )
+        if not result.get("available"):
+            if "not found" in result.get("stderr", "").lower():
+                continue
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_LOOKUP_FAILED")
+        try:
+            existing = json.loads(result.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_JSON_INVALID") from exc
+        metadata = existing.get("metadata", {})
+        labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+        if (
+            not isinstance(labels, dict)
+            or labels.get(MANAGED_BY_LABEL) != "target-agent"
+            or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
+            or labels.get(CLUSTER_NAME_LABEL) != cluster_name
+        ):
+            raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_OWNERSHIP_CONFLICT")
+
+
 def execute_worker_provisioning(
     payload: dict[str, Any],
     deployment_context: dict[str, Any] | None,
@@ -678,6 +747,12 @@ def execute_worker_provisioning(
         ironic_ntp_ip,
         payload.get("worker_network_contract"),
     )
+    sriov_configmaps = _prepare_sriov_device_plugin_configmaps(
+        payload.get("sriov_device_plugin"),
+        namespace,
+        deployment_id,
+        cluster_name,
+    )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
     ip_pool_references = _verify_ip_pools(
@@ -692,6 +767,13 @@ def execute_worker_provisioning(
         namespace,
         deployment_id,
         target_uid,
+    )
+    _verify_sriov_configmap_ownership(
+        runner,
+        sriov_configmaps,
+        namespace,
+        deployment_id,
+        cluster_name,
     )
     md_name = machine_deployment["metadata"]["name"]
     desired_replicas = machine_deployment["spec"]["replicas"]
@@ -713,8 +795,9 @@ def execute_worker_provisioning(
     applied_output = []
     with tempfile.TemporaryDirectory(prefix="target-worker-plan-", dir="/tmp") as workdir:
         manifest_path = Path(workdir) / "worker-plan.yaml"
+        dry_run_documents = [*sriov_configmaps, *ordered]
         manifest_path.write_text(
-            yaml.safe_dump_all(ordered, sort_keys=False),
+            yaml.safe_dump_all(dry_run_documents, sort_keys=False),
             encoding="utf-8",
         )
         os.chmod(manifest_path, 0o600)
@@ -732,7 +815,7 @@ def execute_worker_provisioning(
         )
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise WorkerProvisioningError("WORKER_PROVISIONING_COMMAND_LEASE_LOST")
-        for index, document in enumerate(ordered):
+        for index, document in enumerate(dry_run_documents):
             if lease_lost_event is not None and lease_lost_event.is_set():
                 raise WorkerProvisioningError(
                     "WORKER_PROVISIONING_COMMAND_LEASE_LOST",
