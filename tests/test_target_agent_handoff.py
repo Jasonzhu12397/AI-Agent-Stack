@@ -165,7 +165,7 @@ def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
 
 
 
-def test_handoff_completion_is_blocked_without_live_postflight_executor():
+def test_handoff_completion_requires_durable_workers_ready_checkpoint():
     from apps.target_agent.main import execute
 
     outcome = execute({
@@ -175,6 +175,8 @@ def test_handoff_completion_is_blocked_without_live_postflight_executor():
             "evidence": {
                 "target_postflight_passed": True,
                 "worker_network_postflight_passed": True,
+                "worker_chronyd_bootstrap_sync_verified": True,
+                "data_plane_pod_packet_path_verified": True,
                 "deployment_checkpoint_durable": True,
             },
         },
@@ -185,8 +187,24 @@ def test_handoff_completion_is_blocked_without_live_postflight_executor():
         },
     })
     assert outcome["status"] == "blocked"
-    assert outcome["error_code"] == "TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED"
+    assert outcome["error_code"] == "HANDOFF_DURABLE_CHECKPOINT_EVIDENCE_INVALID"
 
+
+def test_handoff_completion_rejects_unverified_data_plane_packet_path():
+    with pytest.raises(
+        HandoffError,
+        match="HANDOFF_EVIDENCE_REQUIRED:data_plane_pod_packet_path_verified",
+    ):
+        validate_phase_evidence(
+            HandoffPhase.COMPLETED,
+            {
+                "target_postflight_passed": True,
+                "worker_network_postflight_passed": True,
+                "worker_chronyd_bootstrap_sync_verified": True,
+                "data_plane_pod_packet_path_verified": False,
+                "deployment_checkpoint_durable": True,
+            },
+        )
 
 
 def test_handoff_requires_applied_worker_resources_and_validated_network_contract():
