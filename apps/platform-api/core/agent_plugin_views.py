@@ -191,7 +191,9 @@ class AgentPluginCatalogView(APIView):
 
     def get(self, request, tenant_id):
         tenant = _tenant_for_user(request, tenant_id)
-        plugins = AgentPluginDefinition.objects.filter(tenant=tenant).order_by("name", "-created_at")
+        plugins = AgentPluginDefinition.objects.filter(tenant=tenant).order_by(
+            "name", "-created_at"
+        )
         return Response([_definition_data(plugin) for plugin in plugins])
 
     def post(self, request, tenant_id):
@@ -201,15 +203,30 @@ class AgentPluginCatalogView(APIView):
 
         data = request.data
         required_strings = ("plugin_key", "name", "version", "protocol", "endpoint_url")
-        if any(not isinstance(data.get(field), str) or not data[field].strip() for field in required_strings):
-            return Response({"detail": "plugin_key, name, version, protocol and endpoint_url are required strings."}, status=400)
+        if any(
+            not isinstance(data.get(field), str) or not data[field].strip()
+            for field in required_strings
+        ):
+            return Response(
+                {"detail": "plugin_key, name, version, protocol and endpoint_url are required strings."},
+                status=400,
+            )
         if len(data["name"]) > 120 or len(data["version"]) > 40 or len(data["plugin_key"]) > 100:
-            return Response({"detail": "Agent plugin identity fields exceed their maximum lengths."}, status=400)
+            return Response(
+                {"detail": "Agent plugin identity fields exceed their maximum lengths."},
+                status=400,
+            )
         if not _PLUGIN_KEY_PATTERN.fullmatch(data["plugin_key"]):
-            return Response({"detail": "plugin_key must be a lowercase hyphenated identifier."}, status=400)
+            return Response(
+                {"detail": "plugin_key must be a lowercase hyphenated identifier."},
+                status=400,
+            )
         description = data.get("description", "")
         if not isinstance(description, str) or len(description) > 4000:
-            return Response({"detail": "description must be a string no longer than 4,000 characters."}, status=400)
+            return Response(
+                {"detail": "description must be a string no longer than 4,000 characters."},
+                status=400,
+            )
         if data["protocol"] not in AgentPluginDefinition.Protocol.values:
             return Response({"detail": "Unsupported agent plugin protocol."}, status=400)
 
@@ -222,7 +239,8 @@ class AgentPluginCatalogView(APIView):
             return Response({"detail": capability_error}, status=400)
         input_schema = data.get("input_schema", {})
         output_schema = data.get("output_schema", {})
-        for schema, field_name in ((input_schema, "input_schema"), (output_schema, "output_schema")):
+        schemas = ((input_schema, "input_schema"), (output_schema, "output_schema"))
+        for schema, field_name in schemas:
             schema_error = _validate_schema(schema, field_name)
             if schema_error:
                 return Response({"detail": schema_error}, status=400)
@@ -237,13 +255,19 @@ class AgentPluginCatalogView(APIView):
             or isinstance(timeout_seconds, bool)
             or not 1 <= timeout_seconds <= 300
         ):
-            return Response({"detail": "timeout_seconds must be an integer between 1 and 300."}, status=400)
+            return Response(
+                {"detail": "timeout_seconds must be an integer between 1 and 300."},
+                status=400,
+            )
         if (
             not isinstance(max_concurrency, int)
             or isinstance(max_concurrency, bool)
             or not 1 <= max_concurrency <= 64
         ):
-            return Response({"detail": "max_concurrency must be an integer between 1 and 64."}, status=400)
+            return Response(
+                {"detail": "max_concurrency must be an integer between 1 and 64."},
+                status=400,
+            )
 
         try:
             with transaction.atomic():
@@ -274,7 +298,11 @@ class AgentPluginCatalogView(APIView):
             "agent_plugin.registered",
             "agent_plugin_definition",
             plugin.id,
-            metadata={"plugin_key": plugin.plugin_key, "version": plugin.version, "protocol": plugin.protocol},
+            metadata={
+                "plugin_key": plugin.plugin_key,
+                "version": plugin.version,
+                "protocol": plugin.protocol,
+            },
         )
         return Response(_definition_data(plugin), status=201)
 
@@ -343,17 +371,29 @@ class AgentPluginInstallationListCreateView(APIView):
         if capability_error:
             return Response({"detail": capability_error}, status=400)
         if not set(granted).issubset(set(plugin.capabilities)):
-            return Response({"detail": "Granted capabilities must be declared by the agent plugin."}, status=400)
+            return Response(
+                {"detail": "Granted capabilities must be declared by the agent plugin."},
+                status=400,
+            )
 
         credential_ref = request.data.get("credential_ref", "")
         if not isinstance(credential_ref, str) or (
             credential_ref and not _CREDENTIAL_REF_PATTERN.fullmatch(credential_ref)
         ):
-            return Response({"detail": "credential_ref must be a valid secret reference, not a credential value."}, status=400)
+            return Response(
+                {"detail": "credential_ref must be a valid secret reference, not a credential value."},
+                status=400,
+            )
         if plugin.auth_required and not credential_ref:
-            return Response({"detail": "A credential reference is required for this agent plugin."}, status=400)
+            return Response(
+                {"detail": "A credential reference is required for this agent plugin."},
+                status=400,
+            )
         if not plugin.auth_required and credential_ref:
-            return Response({"detail": "This agent plugin does not accept a credential reference."}, status=400)
+            return Response(
+                {"detail": "This agent plugin does not accept a credential reference."},
+                status=400,
+            )
 
         installation, created = AgentPluginInstallation.objects.get_or_create(
             tenant=tenant,
@@ -367,7 +407,10 @@ class AgentPluginInstallationListCreateView(APIView):
             },
         )
         if not created:
-            return Response({"detail": "Agent plugin is already installed in this project."}, status=409)
+            return Response(
+                {"detail": "Agent plugin is already installed in this project."},
+                status=409,
+            )
         record_audit_event(
             request,
             tenant,
@@ -399,7 +442,10 @@ class AgentPluginInstallationStatusView(APIView):
             AgentPluginInstallation.Status.UNINSTALLED,
         }:
             return Response({"detail": "Unsupported agent plugin installation status."}, status=400)
-        if status_value == AgentPluginInstallation.Status.INSTALLED and not installation.plugin.enabled:
+        if (
+            status_value == AgentPluginInstallation.Status.INSTALLED
+            and not installation.plugin.enabled
+        ):
             return Response({"detail": "Disabled agent plugins cannot be reactivated."}, status=409)
         previous_status = installation.status
         installation.status = status_value
@@ -411,6 +457,10 @@ class AgentPluginInstallationStatusView(APIView):
             "agent_plugin_installation",
             installation.id,
             project=installation.project,
-            metadata={"plugin_key": installation.plugin.plugin_key, "previous_status": previous_status, "status": status_value},
+            metadata={
+                "plugin_key": installation.plugin.plugin_key,
+                "previous_status": previous_status,
+                "status": status_value,
+            },
         )
         return Response(_installation_data(installation))
