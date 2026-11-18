@@ -21,6 +21,7 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     seen_configmaps: dict[str, dict[str, Any]] = {}
     devices_by_configmap: dict[str, set[str]] = {}
+    device_configmap: dict[str, str] = {}
 
     for pool_name, pool in value.items():
         if not isinstance(pool_name, str) or not re.fullmatch(r"pool[0-9]+", pool_name):
@@ -57,6 +58,8 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
         if not isinstance(resources, list) or not resources:
             raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_LIST_REQUIRED")
         normalized_resources = []
+        pool_resource_ids: set[tuple[str, str]] = set()
+        pool_devices: set[str] = set()
         for resource in resources:
             if not isinstance(resource, dict):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_INVALID")
@@ -74,6 +77,9 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             ):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_INVALID")
             identity = (prefix, name)
+            if identity in pool_resource_ids:
+                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_DUPLICATE")
+            pool_resource_ids.add(identity)
             vendors = device_selectors.get("vendors")
             drivers = device_selectors.get("drivers")
             root_devices = device_selectors.get("rootDevices")
@@ -95,8 +101,9 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             normalized_bdfs = [item.lower() for item in root_devices]
             if len(set(normalized_bdfs)) != len(normalized_bdfs):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_DUPLICATE")
-            if len({(prefix, name)}) != 1:
-                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_DUPLICATE")
+            if pool_devices.intersection(normalized_bdfs):
+                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_DUPLICATE")
+            pool_devices.update(normalized_bdfs)
             normalized_resources.append({
                 "resourceName": name,
                 "resourcePrefix": prefix,
@@ -145,8 +152,13 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             for device in resource["selectors"]["rootDevices"]
         )
         previous_devices = devices_by_configmap.setdefault(configmap_name, set())
-        if previous_devices.intersection(devices) and previous_config is None:
-            raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_DUPLICATE")
+        if previous_config is None:
+            for device in devices:
+                if device in device_configmap and device_configmap[device] != configmap_name:
+                    raise SriovDevicePluginConfigError(
+                        "SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_ASSIGNED_TO_MULTIPLE_CONFIGMAPS"
+                    )
+                device_configmap[device] = configmap_name
         previous_devices.update(devices)
         normalized[pool_name] = {
             "node_selectors": dict(selectors),
@@ -163,6 +175,7 @@ def render_sriov_device_plugin_configmap(
     namespace: str,
     deployment_id: str,
     cluster_name: str,
+    target_cluster_uid: str,
 ) -> dict[str, Any]:
     if not isinstance(pool, dict):
         raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_POOL_INVALID")
@@ -180,6 +193,9 @@ def render_sriov_device_plugin_configmap(
                 "app.kubernetes.io/managed-by": "target-agent",
                 "ai-agent-stack.io/deployment-id": deployment_id,
                 "ai-agent-stack.io/cluster-name": cluster_name,
+            },
+            "annotations": {
+                "ai-agent-stack.io/target-cluster-uid": target_cluster_uid,
             },
         },
         "data": {
