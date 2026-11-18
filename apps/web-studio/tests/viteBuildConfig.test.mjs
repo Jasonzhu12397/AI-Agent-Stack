@@ -23,6 +23,7 @@ test("Vite excludes ESM-only dependencies from CommonJS conversion", async () =>
     "@vueuse",
     "@element-plus",
     "memoize-one",
+    "async-validator",
   ]) {
     assert.ok(exclusions.includes(packageName), `Missing CommonJS exclusion for ${packageName}`);
   }
