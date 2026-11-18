@@ -13,10 +13,15 @@ test("Vite resolves Day.js core and plugin subpaths to valid ESM entrypoints", a
 
 test("Vite leaves Vue ecosystem ESM packages out of CommonJS conversion", async () => {
   const source = await readFile(viteConfig, "utf8");
-  assert.ok(source.includes("/node_modules\\/vue\\//"));
-  assert.ok(source.includes("/node_modules\\/@vue\\//"));
-  assert.ok(source.includes("/node_modules\\/@vueuse\\//"));
-  assert.ok(source.includes("/node_modules\\/@element-plus\\/icons-vue\\//"));
-  assert.ok(source.includes("/node_modules\\/lodash-es\\//"));
+  for (const packageName of [
+    "dayjs/esm",
+    "lodash-es",
+    "/vue/",
+    "@vue/",
+    "@vueuse/",
+    "@element-plus/icons-vue/",
+  ]) {
+    assert.ok(source.includes(packageName), `Missing CommonJS exclusion for ${packageName}`);
+  }
   assert.ok(source.includes("commonjsOptions"));
 });
