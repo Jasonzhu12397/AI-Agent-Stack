@@ -353,21 +353,25 @@ def _mark_optional_target_kubeconfig(
         {"op": "add", "path": "/metadata/labels", "value": patched_labels},
         {"op": "add", "path": "/metadata/annotations", "value": patched_annotations},
     ]
-    _run(
-        runner,
-        source_kubeconfig,
-        [
-            "patch",
-            "secret",
-            OPTIONAL_TARGET_KUBECONFIG_SECRET,
-            "--namespace",
-            NAMESPACE,
-            "--type=json",
-            "-p",
-            json.dumps(patch, separators=(",", ":")),
-        ],
-        lease_lost_event,
-    )
+    try:
+        _run(
+            runner,
+            source_kubeconfig,
+            [
+                "patch",
+                "secret",
+                OPTIONAL_TARGET_KUBECONFIG_SECRET,
+                "--namespace",
+                NAMESPACE,
+                "--type=json",
+                "-p",
+                json.dumps(patch, separators=(",", ":")),
+            ],
+            lease_lost_event,
+        )
+    except CleanupScopeError as exc:
+        exc.side_effects = True
+        raise
     return True
 
 
@@ -385,15 +389,14 @@ def attest_cleanup_scope(
         raise CleanupScopeError("EPH_CLEANUP_SCOPE_SOURCE_UID_REQUIRED")
     mutated = 0
     try:
-        mutated += int(
-            _mark_optional_target_kubeconfig(
-                runner,
-                source_kubeconfig,
-                deployment_id,
-                source_cluster_uid,
-                lease_lost_event,
-            )
+        optional_target_kubeconfig_marked = _mark_optional_target_kubeconfig(
+            runner,
+            source_kubeconfig,
+            deployment_id,
+            source_cluster_uid,
+            lease_lost_event,
         )
+        mutated += int(optional_target_kubeconfig_marked)
         selector = (
             f"{MANAGED_BY_LABEL}=ai-agent-stack,"
             f"{CLEANUP_LABEL}=true,"
@@ -507,6 +510,6 @@ def attest_cleanup_scope(
         "cleanup_scope_attested": True,
         "source_cleanup_resource_count": source_resource_count,
         "target_observer_secret_source_uid_attested": True,
-        "optional_target_kubeconfig_marked": True,
+        "optional_target_kubeconfig_marked": optional_target_kubeconfig_marked,
         "mutated_resource_count": mutated,
     }
