@@ -320,13 +320,22 @@ def attest_cleanup_scope(
             observed[resource] = items
         required = {
             "deployments.apps": {"eph-agent"},
-            "serviceaccounts": {"eph-agent"},
-            "clusterroles.rbac.authorization.k8s.io": {"eph-agent-preflight"},
-            "clusterrolebindings.rbac.authorization.k8s.io": {"eph-agent-preflight"},
+            "serviceaccounts": {"eph-agent", "target-agent-source-operator"},
+            "clusterroles.rbac.authorization.k8s.io": {
+                "eph-agent-preflight",
+                "target-agent-source-operator",
+            },
+            "clusterrolebindings.rbac.authorization.k8s.io": {
+                "eph-agent-preflight",
+                "target-agent-source-operator",
+            },
+            "roles.rbac.authorization.k8s.io": {"target-agent-source-cleanup"},
+            "rolebindings.rbac.authorization.k8s.io": {"target-agent-source-cleanup"},
             "secrets": {
                 "eph-agent-credentials",
                 "agent-control-plane-mtls",
                 "capi-pivot-source-kubeconfig",
+                "target-agent-source-operator-token",
             },
         }
         for resource, expected_names in required.items():
@@ -351,6 +360,7 @@ def attest_cleanup_scope(
                         side_effects=mutated > 0,
                     )
                 source_resource_count += 1
+                metal3_rbac_names[resource].add(name)
                 if _patch_source_uid(
                     runner,
                     source_kubeconfig,
@@ -363,6 +373,10 @@ def attest_cleanup_scope(
                     lease_lost_event,
                 ):
                     mutated += 1
+        metal3_rbac_names = {
+            "roles.rbac.authorization.k8s.io": set(),
+            "rolebindings.rbac.authorization.k8s.io": set(),
+        }
         for resource in (
             "roles.rbac.authorization.k8s.io",
             "rolebindings.rbac.authorization.k8s.io",
@@ -418,6 +432,24 @@ def attest_cleanup_scope(
                     "metal3",
                 ):
                     mutated += 1
+        required_metal3_rbac = {
+            "roles.rbac.authorization.k8s.io": {
+                "eph-agent-metal3-deployer",
+                "target-agent-source-capi",
+            },
+            "rolebindings.rbac.authorization.k8s.io": {
+                "eph-agent-metal3-deployer",
+                "target-agent-source-capi",
+            },
+        }
+        if any(
+            not expected.issubset(metal3_rbac_names[resource])
+            for resource, expected in required_metal3_rbac.items()
+        ):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_REQUIRED_METAL3_RBAC_MISSING",
+                side_effects=mutated > 0,
+            )
         if source_resource_count == 0:
             raise CleanupScopeError(
                 "EPH_CLEANUP_SCOPE_SOURCE_RESOURCES_EMPTY",
