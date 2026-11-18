@@ -69,7 +69,7 @@ def _runner_factory():
                 "stderr": "",
             }
         if arguments[0] == "get":
-            kind = arguments[1]
+            kind = {"secret": "secrets"}.get(arguments[1], arguments[1])
             name = arguments[2]
             item = next(
                 (item for item in resources[kind] if item["metadata"]["name"] == name),
