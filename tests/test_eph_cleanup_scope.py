@@ -292,3 +292,28 @@ def test_cleanup_scope_rejects_unrelated_optional_target_kubeconfig_secret(tmp_p
         raise AssertionError("An unrelated secret must not be adopted for EPH cleanup")
 
     assert not any(call[3] == "patch" for call in calls)
+
+
+
+def test_cleanup_scope_rejects_observer_secret_with_unrelated_source_kubeconfig(tmp_path):
+    runner, _source, target, calls = _runner_factory()
+    target["secrets"][0]["data"] = {
+        "kubeconfig": base64.b64encode(b"another source kubeconfig").decode("ascii"),
+    }
+    try:
+        attest_cleanup_scope(
+            _source_kubeconfig(tmp_path),
+            _target_kubeconfig(tmp_path),
+            DEPLOYMENT_ID,
+            SOURCE_UID,
+            runner,
+        )
+    except CleanupScopeError as exc:
+        assert str(exc) == "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_IDENTITY_MISMATCH"
+    else:
+        raise AssertionError("Target observer Secret must contain the attested source kubeconfig")
+    assert not any(
+        call[3] == "patch" and call[4] == "secret"
+        for call in calls
+        if len(call) > 4
+    )
