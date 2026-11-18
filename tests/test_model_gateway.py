@@ -180,6 +180,7 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
         {"prompt_tokens": True, "completion_tokens": 1},
         {"prompt_tokens": 1, "completion_tokens": False},
         {"prompt_tokens": 1, "completion_tokens": 201},
+        {"prompt_tokens": 100000, "completion_tokens": 1},
         {"prompt_tokens": "12", "completion_tokens": 1},
     ],
 )
