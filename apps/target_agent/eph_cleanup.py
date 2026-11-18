@@ -28,8 +28,10 @@ class EphCleanupError(ValueError):
 
 
 def _valid_name(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(
-        r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value
+    if (
+        not isinstance(value, str)
+        or len(value) > 63
+        or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", value)
     ):
         raise EphCleanupError(f"EPH_CLEANUP_{field}_INVALID")
     return value
@@ -185,6 +187,7 @@ def execute_eph_cleanup(
             namespace,
             "--wait=true",
             "--timeout=120s",
+            "--ignore-not-found=true",
         ]
         current_result = runner(
             [
