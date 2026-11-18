@@ -47,18 +47,6 @@ def _validate_action_role(role: str, action: str) -> None:
         raise ControlApiError("COMMAND_ACTION_NOT_ALLOWED_FOR_AGENT_ROLE")
 
 
-def _validate_optional_approval_digest(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or len(value) != 64:
-        raise ControlApiError("APPROVAL_DIGEST_INVALID")
-    try:
-        int(value, 16)
-    except ValueError as exc:
-        raise ControlApiError("APPROVAL_DIGEST_INVALID") from exc
-    return value
-
-
 def _validate_reported_capabilities(role: str, capabilities: Any) -> list[str]:
     if (
         not isinstance(capabilities, list)
@@ -491,8 +479,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT command_id, deployment_id, target_agent_id, required_role,
-                           action, status, result, lease_expires_at, deadline,
-                           approval_digest, created_at, updated_at
+                           action, status, result, lease_expires_at, deadline , created_at, updated_at
                     FROM agent_control_commands
                     WHERE command_id = %s
                     """,
@@ -528,9 +515,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             action = document.get("action")
             idempotency_key = document.get("idempotency_key")
             payload = document.get("payload", {})
-            approval_digest = _validate_optional_approval_digest(
-                document.get("approval_digest")
-            )
             if role not in ("eph", "target"):
                 raise ControlApiError("COMMAND_ROLE_INVALID")
             if not isinstance(action, str) or not action or len(action) > 128:
@@ -569,21 +553,21 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     """
                     INSERT INTO agent_control_commands (
                         command_id, deployment_id, target_agent_id, required_role,
-                        action, idempotency_key, payload, status, approval_digest
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s)
+                        action, idempotency_key, payload, status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued')
                     ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING command_id
                     """,
                     (
                         command_id, deployment_id, target_agent_id, role, action,
-                        idempotency_key, Jsonb(payload), approval_digest,
+                        idempotency_key, Jsonb(payload),
                     ),
                 ).fetchone()
                 if inserted is None:
                     existing = connection.execute(
                         """
                         SELECT command_id, deployment_id, target_agent_id, required_role,
-                               action, payload, approval_digest, status
+                               action, payload, status
                         FROM agent_control_commands WHERE idempotency_key = %s
                         """,
                         (idempotency_key,),
@@ -595,7 +579,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         or existing["required_role"] != role
                         or existing["action"] != action
                         or existing["payload"] != payload
-                        or existing["approval_digest"] != approval_digest
                     ):
                         raise ControlApiError("IDEMPOTENCY_KEY_CONFLICT")
                     command_id = existing["command_id"]
@@ -648,7 +631,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         SELECT c.command_id, c.deployment_id, c.target_agent_id,
                                c.required_role, c.action, c.idempotency_key,
-                               c.payload, c.approval_digest, c.created_at, c.deadline,
+                               c.payload, c.created_at, c.deadline,
                                d.phase AS deployment_phase,
                                d.sequence AS checkpoint_sequence,
                                d.state AS checkpoint_state,
@@ -693,7 +676,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "required_role": row["required_role"],
                     "action": row["action"],
                     "payload": row["payload"],
-                    "approval_digest": row["approval_digest"],
                     "deployment_checkpoint": {
                         "phase": row["deployment_phase"],
                         "sequence": row["checkpoint_sequence"],
