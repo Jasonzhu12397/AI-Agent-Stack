@@ -56,8 +56,8 @@ def _run(
     return result
 
 
-def _namespace_args(namespaced: bool) -> list[str]:
-    return ["--namespace", NAMESPACE] if namespaced else []
+def _namespace_args(namespaced: bool, namespace: str = NAMESPACE) -> list[str]:
+    return ["--namespace", namespace] if namespaced else []
 
 
 def _get(
@@ -67,11 +67,12 @@ def _get(
     name: str,
     namespaced: bool,
     lease_lost_event: Any = None,
+    namespace: str = NAMESPACE,
 ) -> dict[str, Any]:
     result = _run(
         runner,
         kubeconfig,
-        ["get", resource, name, *_namespace_args(namespaced), "-o", "json"],
+        ["get", resource, name, *_namespace_args(namespaced, namespace), "-o", "json"],
         lease_lost_event,
     )
     try:
@@ -178,6 +179,7 @@ def _patch_source_uid(
     deployment_id: str,
     source_cluster_uid: str,
     lease_lost_event: Any = None,
+    namespace: str = NAMESPACE,
 ) -> bool:
     metadata = document.get("metadata", {})
     labels = metadata.get("labels", {})
@@ -227,7 +229,7 @@ def _patch_source_uid(
                 "patch",
                 resource,
                 name,
-                *_namespace_args(namespaced),
+                *_namespace_args(namespaced, namespace),
                 "--type=json",
                 "-p",
                 json.dumps(patch, separators=(",", ":")),
@@ -244,6 +246,7 @@ def _patch_source_uid(
         name,
         namespaced,
         lease_lost_event,
+        namespace,
     )
     verified_annotations = verified.get("metadata", {}).get("annotations", {})
     if verified_annotations.get(SOURCE_UID_ANNOTATION) != source_cluster_uid:
@@ -357,6 +360,61 @@ def attest_cleanup_scope(
                     deployment_id,
                     source_cluster_uid,
                     lease_lost_event,
+                ):
+                    mutated += 1
+        for resource in (
+            "roles.rbac.authorization.k8s.io",
+            "rolebindings.rbac.authorization.k8s.io",
+        ):
+            result = _run(
+                runner,
+                source_kubeconfig,
+                [
+                    "get",
+                    resource,
+                    "--namespace",
+                    "metal3",
+                    "--selector",
+                    selector,
+                    "-o",
+                    "json",
+                ],
+                lease_lost_event,
+                timeout_seconds=60,
+            )
+            try:
+                document = json.loads(result.get("stdout", ""))
+            except (TypeError, ValueError) as exc:
+                raise CleanupScopeError(
+                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_JSON_INVALID",
+                    side_effects=mutated > 0,
+                ) from exc
+            items = document.get("items")
+            if not isinstance(items, list):
+                raise CleanupScopeError(
+                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_INVALID",
+                    side_effects=mutated > 0,
+                )
+            for item in items:
+                metadata = item.get("metadata", {})
+                name = metadata.get("name")
+                if not isinstance(name, str) or not name:
+                    raise CleanupScopeError(
+                        "EPH_CLEANUP_SCOPE_METAL3_RBAC_RESOURCE_NAME_MISSING",
+                        side_effects=mutated > 0,
+                    )
+                source_resource_count += 1
+                if _patch_source_uid(
+                    runner,
+                    source_kubeconfig,
+                    resource,
+                    name,
+                    True,
+                    item,
+                    deployment_id,
+                    source_cluster_uid,
+                    lease_lost_event,
+                    "metal3",
                 ):
                     mutated += 1
         if source_resource_count == 0:
