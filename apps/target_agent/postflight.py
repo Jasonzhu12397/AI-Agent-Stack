@@ -547,13 +547,24 @@ def verify_target_postflight(
     if not ovs_nads:
         raise PostflightError("POSTFLIGHT_OVS_DATA_PLANE_NAD_MISSING")
 
+    worker_allocatable = {}
+    for node in ready_workers:
+        node_status = node.get("status", {})
+        if not isinstance(node_status, dict):
+            raise PostflightError("POSTFLIGHT_NODE_STATUS_INVALID")
+        allocatable = node_status.get("allocatable", {})
+        if not isinstance(allocatable, dict):
+            raise PostflightError("POSTFLIGHT_NODE_ALLOCATABLE_INVALID")
+        worker_allocatable[node["metadata"]["name"]] = allocatable
     dpdk_resources_by_worker = [
         {
             name
-            for name, quantity in node.get("status", {}).get("allocatable", {}).items()
-            if "dpdk" in name.lower() and _quantity_is_positive(quantity)
+            for name, quantity in allocatable.items()
+            if isinstance(name, str)
+            and "dpdk" in name.lower()
+            and _quantity_is_positive(quantity)
         }
-        for node in ready_workers
+        for allocatable in worker_allocatable.values()
     ]
     dpdk_resource_names = (
         set.intersection(*dpdk_resources_by_worker)
@@ -563,12 +574,7 @@ def verify_target_postflight(
     if not dpdk_resource_names:
         raise PostflightError("POSTFLIGHT_DPDK_DEVICE_RESOURCE_MISSING")
     for node in ready_workers:
-        node_status = node.get("status", {})
-        if not isinstance(node_status, dict):
-            raise PostflightError("POSTFLIGHT_NODE_STATUS_INVALID")
-        allocatable = node_status.get("allocatable", {})
-        if not isinstance(allocatable, dict):
-            raise PostflightError("POSTFLIGHT_NODE_ALLOCATABLE_INVALID")
+        allocatable = worker_allocatable[node["metadata"]["name"]]
         if not all(
             _quantity_is_positive(allocatable.get(name))
             for name in sriov_resource_names
