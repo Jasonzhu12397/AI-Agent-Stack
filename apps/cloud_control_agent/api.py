@@ -47,6 +47,18 @@ def _validate_action_role(role: str, action: str) -> None:
         raise ControlApiError("COMMAND_ACTION_NOT_ALLOWED_FOR_AGENT_ROLE")
 
 
+def _validate_optional_approval_digest(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) != 64:
+        raise ControlApiError("APPROVAL_DIGEST_INVALID")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ControlApiError("APPROVAL_DIGEST_INVALID") from exc
+    return value
+
+
 def _validate_reported_capabilities(role: str, capabilities: Any) -> list[str]:
     if (
         not isinstance(capabilities, list)
@@ -516,7 +528,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             action = document.get("action")
             idempotency_key = document.get("idempotency_key")
             payload = document.get("payload", {})
-            approval_digest = document.get("approval_digest")
+            approval_digest = _validate_optional_approval_digest(
+                document.get("approval_digest")
+            )
             if role not in ("eph", "target"):
                 raise ControlApiError("COMMAND_ROLE_INVALID")
             if not isinstance(action, str) or not action or len(action) > 128:
@@ -530,12 +544,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 raise ControlApiError("IDEMPOTENCY_KEY_INVALID")
             if not isinstance(payload, dict) or len(_json_bytes(payload)) > MAX_BODY_BYTES:
                 raise ControlApiError("COMMAND_PAYLOAD_INVALID")
-            if not isinstance(approval_digest, str) or len(approval_digest) != 64:
-                raise ControlApiError("APPROVAL_DIGEST_REQUIRED")
-            try:
-                int(approval_digest, 16)
-            except ValueError as exc:
-                raise ControlApiError("APPROVAL_DIGEST_INVALID") from exc
             command_id = uuid4()
             command_status = "queued"
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
