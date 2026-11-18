@@ -81,7 +81,6 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             lease_id UUID,
             lease_token_hash TEXT,
             lease_expires_at TIMESTAMPTZ,
-            approval_digest TEXT,
             issued_at TIMESTAMPTZ,
             deadline TIMESTAMPTZ,
             result JSONB,
@@ -102,7 +101,6 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
         "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ"
     )
     connection.execute(
-        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS approval_digest TEXT"
     )
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_commands_claim_idx
