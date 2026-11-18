@@ -1067,9 +1067,9 @@ def execute(
                 "side_effects": getattr(exc, "side_effects", False),
             }
     if action == "target.handoff.evaluate":
-        payload = _command_payload(command)
         checkpoint = command.get("deployment_checkpoint")
         try:
+            payload = _command_payload(command)
             if not isinstance(checkpoint, dict):
                 raise HandoffError("HANDOFF_CHECKPOINT_MISSING")
             current_phase = checkpoint.get("phase")
