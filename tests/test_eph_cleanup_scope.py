@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import base64
 import copy
 import json
 
@@ -29,6 +30,10 @@ def _resource(kind, name, namespaced=True, source_uid=None):
     if source_uid:
         metadata["annotations"]["ai-agent-stack.io/source-cluster-uid"] = source_uid
     document = {"kind": kind, "metadata": metadata}
+    if kind == "Secret" and name == "capi-pivot-target-kubeconfig":
+        document["data"] = {
+            "kubeconfig": base64.b64encode(b"target kubeconfig").decode("ascii"),
+        }
     if kind == "Deployment":
         document["spec"] = {
             "template": {
@@ -176,9 +181,11 @@ def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret(tmp_path
     runner, _source, _target, _calls = _runner_factory(
         include_optional_target_kubeconfig=False
     )
+    target_kubeconfig = tmp_path / "target.kubeconfig"
+    target_kubeconfig.write_bytes(b"target kubeconfig")
     result = attest_cleanup_scope(
         "source.kubeconfig",
-        "target.kubeconfig",
+        str(target_kubeconfig),
         DEPLOYMENT_ID,
         SOURCE_UID,
         runner,
@@ -193,9 +200,11 @@ def test_cleanup_scope_rejects_source_uid_conflict_without_overwriting_it(tmp_pa
         "ai-agent-stack.io/source-cluster-uid"
     ] = "different-source-uid"
     try:
+        target_kubeconfig = tmp_path / "target.kubeconfig"
+        target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
             "source.kubeconfig",
-            "target.kubeconfig",
+            str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
             runner,
@@ -212,9 +221,11 @@ def test_cleanup_scope_rejects_target_observer_secret_from_another_deployment(tm
         "ai-agent-stack.io/deployment-id"
     ] = "other-deployment"
     try:
+        target_kubeconfig = tmp_path / "target.kubeconfig"
+        target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
             "source.kubeconfig",
-            "target.kubeconfig",
+            str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
             runner,
@@ -238,9 +249,11 @@ def test_cleanup_scope_reports_partial_mutation_when_patch_fails(tmp_path):
         return runner(command, kubeconfig, **kwargs)
 
     try:
+        target_kubeconfig = tmp_path / "target.kubeconfig"
+        target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
             "source.kubeconfig",
-            "target.kubeconfig",
+            str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
             fail_after_first_patch,
