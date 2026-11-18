@@ -407,6 +407,44 @@ def _verify_existing_ownership(
     return existing_resources
 
 
+def _available_bmh_count(
+    runner: Callable[..., dict[str, Any]],
+    namespace: str,
+) -> int:
+    result = _run(
+        runner,
+        [
+            "get",
+            "baremetalhosts.metal3.io",
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+    )
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_BMH_INVENTORY_INVALID") from exc
+    hosts = document.get("items")
+    if not isinstance(hosts, list):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_BMH_INVENTORY_INVALID")
+    available = 0
+    for host in hosts:
+        spec = host.get("spec", {})
+        status = host.get("status", {})
+        provisioning = status.get("provisioning", {})
+        if (
+            spec.get("online") is not False
+            and spec.get("consumerRef") is None
+            and provisioning.get("state") in ("ready", "available")
+            and status.get("operationalStatus") == "OK"
+            and not status.get("errorMessage")
+        ):
+            available += 1
+    return available
+
+
 def execute_worker_provisioning(
     payload: dict[str, Any],
     deployment_context: dict[str, Any] | None,
