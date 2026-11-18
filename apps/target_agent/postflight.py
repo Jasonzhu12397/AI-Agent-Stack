@@ -237,6 +237,8 @@ def verify_target_postflight(
     ):
         raise PostflightError("POSTFLIGHT_CAPI_CLUSTER_NOT_READY")
     control_plane_ref = cluster_spec.get("controlPlaneRef", {})
+    if not isinstance(control_plane_ref, dict):
+        raise PostflightError("POSTFLIGHT_KUBEADM_CONTROL_PLANE_REFERENCE_INVALID")
     if (
         control_plane_ref.get("apiGroup") != "controlplane.cluster.x-k8s.io"
         or control_plane_ref.get("kind") != "KubeadmControlPlane"
@@ -281,6 +283,8 @@ def verify_target_postflight(
         "worker-machine-deployment",
     )
     md_metadata = machine_deployment.get("metadata", {})
+    if not isinstance(md_metadata, dict):
+        raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_METADATA_INVALID")
     md_labels = md_metadata.get("labels", {})
     md_annotations = md_metadata.get("annotations", {})
     md_spec = machine_deployment.get("spec", {})
@@ -302,12 +306,23 @@ def verify_target_postflight(
     ):
         raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_OWNERSHIP_MISMATCH")
     generation = md_metadata.get("generation", 0)
+    replica_counts = (
+        md_spec.get("replicas"),
+        md_status.get("readyReplicas"),
+        md_status.get("updatedReplicas"),
+        md_status.get("availableReplicas"),
+    )
+    observed_generation = md_status.get("observedGeneration", 0)
     if (
-        md_spec.get("replicas") != desired_worker_count
+        any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (*replica_counts, generation, observed_generation)
+        )
+        or md_spec.get("replicas") != desired_worker_count
         or md_status.get("readyReplicas") != desired_worker_count
         or md_status.get("updatedReplicas") != desired_worker_count
         or md_status.get("availableReplicas") != desired_worker_count
-        or md_status.get("observedGeneration", 0) < generation
+        or observed_generation < generation
     ):
         raise PostflightError("POSTFLIGHT_WORKER_MACHINE_DEPLOYMENT_NOT_READY")
 
@@ -373,6 +388,9 @@ def verify_target_postflight(
         node_name = metadata.get("name")
         if not isinstance(node_name, str) or not node_name or node_name in nodes_by_name:
             raise PostflightError("POSTFLIGHT_NODE_IDENTITY_INVALID")
+        node_status = node.get("status", {})
+        if not isinstance(node_status, dict):
+            raise PostflightError("POSTFLIGHT_NODE_STATUS_INVALID")
         nodes_by_name[node_name] = node
     control_plane_nodes = [
         node for node in nodes_by_name.values() if _control_plane_node(node)
