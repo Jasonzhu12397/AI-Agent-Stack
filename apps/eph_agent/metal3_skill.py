@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -284,6 +285,70 @@ def observe_baremetalhosts(
             for host in hosts
         ),
         "hosts": hosts,
+        "side_effects": False,
+    }
+
+
+def wait_for_baremetalhosts_ready(
+    payload: dict[str, Any],
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    namespace = _namespace(payload.get("namespace", "metal3"))
+    host_names = payload.get("host_names")
+    timeout_seconds = payload.get("timeout_seconds", 1800)
+    if (
+        not isinstance(host_names, list)
+        or not 1 <= len(host_names) <= 2500
+        or any(
+            not isinstance(name, str)
+            or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", name)
+            for name in host_names
+        )
+        or len(host_names) != len(set(host_names))
+    ):
+        raise Metal3SkillError("METAL3_BMH_WAIT_HOST_LIST_INVALID")
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or not 30 <= timeout_seconds <= 3600
+    ):
+        raise Metal3SkillError("METAL3_BMH_WAIT_TIMEOUT_INVALID")
+    deadline = monotonic() + timeout_seconds
+    pending = set(host_names)
+    delay = 3.0
+    observed = {}
+    while pending and monotonic() < deadline:
+        if lease_lost_event is not None and lease_lost_event.is_set():
+            raise Metal3SkillError("COMMAND_LEASE_LOST_DURING_METAL3_WAIT")
+        inventory = observe_baremetalhosts({"namespace": namespace}, runner)
+        by_name = {host["name"]: host for host in inventory["hosts"]}
+        missing = pending - set(by_name)
+        if missing:
+            raise Metal3SkillError("METAL3_BMH_NOT_FOUND:" + ",".join(sorted(missing)))
+        for name in tuple(pending):
+            host = by_name[name]
+            if host.get("error_message") or host.get("error_type"):
+                raise Metal3SkillError("METAL3_BMH_PROVISIONING_FAILED:" + name)
+            if (
+                host.get("provisioning_state") in {"available", "provisioned", "ready"}
+                and host.get("operational_status") == "OK"
+            ):
+                pending.remove(name)
+                observed[name] = host
+        if pending:
+            remaining = max(0.0, deadline - monotonic())
+            sleep(min(delay, remaining))
+            delay = min(delay * 1.5, 30.0)
+    if pending:
+        raise Metal3SkillError("METAL3_BMH_READY_TIMEOUT:" + ",".join(sorted(pending)))
+    return {
+        "namespace": namespace,
+        "ready_host_names": sorted(observed),
+        "ready_host_count": len(observed),
+        "host_evidence": observed,
         "side_effects": False,
     }
 
