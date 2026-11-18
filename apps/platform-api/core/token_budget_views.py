@@ -12,8 +12,8 @@ from core.token_budget import _period_usage
 
 
 class TenantTokenBudgetUpdateSerializer(serializers.Serializer):
-    daily_limit = serializers.IntegerField(min_value=1, required=False)
-    monthly_limit = serializers.IntegerField(min_value=1, required=False)
+    daily_limit = serializers.IntegerField(min_value=1)
+    monthly_limit = serializers.IntegerField(min_value=1)
 
     def validate(self, attrs):
         if not attrs:
@@ -68,7 +68,10 @@ class TenantTokenBudgetView(APIView):
 
     def _update(self, request, tenant_id):
         tenant = self.get_tenant()
-        serializer = TenantTokenBudgetUpdateSerializer(data=request.data)
+        serializer = TenantTokenBudgetUpdateSerializer(
+            data=request.data,
+            partial=request.method == "PATCH",
+        )
         serializer.is_valid(raise_exception=True)
         budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
             tenant=tenant
