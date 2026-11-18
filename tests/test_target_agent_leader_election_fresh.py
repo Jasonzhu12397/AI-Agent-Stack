@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 from apps.target_agent.leader_election import KubernetesLeaseElector, LeaderLeaseGuard
@@ -15,7 +16,6 @@ def test_parse_time_rejects_invalid_value():
 def test_expiry_boundary_is_timezone_aware():
     renewed = datetime.now(UTC) - timedelta(seconds=31)
     assert renewed + timedelta(seconds=30) < datetime.now(UTC)
-
 
 
 def test_leader_guard_marks_lost_when_another_replica_holds_lease():
@@ -36,6 +36,20 @@ def test_leader_guard_marks_lost_when_kubernetes_api_fails():
     guard = LeaderLeaseGuard(FakeElector())
     assert guard.renew_once() is False
     assert guard.lost.is_set()
+
+
+def test_leader_guard_logs_lease_renewal_failure(caplog):
+    class FakeElector:
+        def try_acquire_or_renew(self):
+            raise RuntimeError("api unavailable")
+
+    guard = LeaderLeaseGuard(FakeElector())
+    with caplog.at_level(logging.ERROR, logger="apps.target_agent.leader_election"):
+        assert guard.renew_once() is False
+    assert guard.lost.is_set()
+    assert any(
+        "Leader lease renewal failed" in record.message for record in caplog.records
+    )
 
 
 def test_leader_guard_keeps_leadership_when_lease_renewal_succeeds():

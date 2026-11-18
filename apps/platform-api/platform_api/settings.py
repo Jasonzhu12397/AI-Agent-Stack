@@ -4,6 +4,19 @@ from pathlib import Path
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parents[3]
+
+
+def _positive_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a numeric value, got {raw!r}") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than 0, got {value}")
+    return value
+
+
 SECRET_KEY = os.getenv("SECRET_KEY", "local-only-change-before-production")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "development")
@@ -138,4 +151,4 @@ BMC_VAULT_JWT_TENANT_CLAIM = os.getenv("BMC_VAULT_JWT_TENANT_CLAIM", "tenant_id"
 BMC_VAULT_JWT_PROJECT_CLAIM = os.getenv("BMC_VAULT_JWT_PROJECT_CLAIM", "project_id").strip()
 BMC_VAULT_NAMESPACE = os.getenv("BMC_VAULT_NAMESPACE", "").strip()
 BMC_VAULT_CA_BUNDLE = os.getenv("BMC_VAULT_CA_BUNDLE", "").strip()
-BMC_VAULT_TIMEOUT_SECONDS = float(os.getenv("BMC_VAULT_TIMEOUT_SECONDS", "5"))
+BMC_VAULT_TIMEOUT_SECONDS = _positive_float_env("BMC_VAULT_TIMEOUT_SECONDS", "5")

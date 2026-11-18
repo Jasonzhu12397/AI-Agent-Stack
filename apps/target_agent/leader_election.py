@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import ssl
 import threading
@@ -9,6 +10,8 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 
 class LeaseElectionError(RuntimeError):
@@ -147,7 +150,6 @@ class KubernetesLeaseElector:
         return updated == 200
 
 
-
 class LeaderLeaseGuard:
     def __init__(
         self,
@@ -169,7 +171,8 @@ class LeaderLeaseGuard:
     def renew_once(self) -> bool:
         try:
             renewed = self.elector.try_acquire_or_renew()
-        except Exception:
+        except Exception as exc:
+            LOG.error("Leader lease renewal failed: %s", type(exc).__name__, exc_info=exc)
             self.lost.set()
             return False
         if not renewed:
