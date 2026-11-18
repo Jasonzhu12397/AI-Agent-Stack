@@ -464,3 +464,23 @@ def test_worker_provisioning_rejects_one_interface_bound_to_multiple_networks():
         raise AssertionError("An interface must not be attached to multiple network definitions")
 
     assert not any(call[0] == "apply" for call in calls)
+
+
+
+def test_worker_provisioning_requires_trusted_eph_cleanup_scope_proof(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Metal3 observation must not run without cleanup proof")
+        ),
+    )
+    try:
+        target_main._execute_worker_provisioning(
+            _payload(),
+            {"eph_pivot_attestation": _proof()["eph_pivot_attestation"]},
+        )
+    except target_main.HandoffError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_CLEANUP_SCOPE_ATTESTATION_REQUIRED"
+    else:
+        raise AssertionError("Worker provisioning must require trusted cleanup scope proof")
