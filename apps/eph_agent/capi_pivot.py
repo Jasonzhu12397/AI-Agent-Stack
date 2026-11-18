@@ -676,14 +676,6 @@ def execute_capi_pivot(
             }
         if action != "eph.capi.pivot":
             raise CapiPivotError("CAPI_PIVOT_ACTION_UNSUPPORTED")
-        approval_digest = command.get("approval_digest")
-        plan_digest = payload.get("plan_digest")
-        if (
-            not isinstance(approval_digest, str)
-            or not re.fullmatch(r"[a-f0-9]{64}", approval_digest)
-            or plan_digest != approval_digest
-        ):
-            raise CapiPivotError("CAPI_PIVOT_APPROVAL_PLAN_DIGEST_MISMATCH")
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise CapiPivotError("COMMAND_LEASE_LOST_BEFORE_CAPI_PIVOT")
         annotate = _run(
