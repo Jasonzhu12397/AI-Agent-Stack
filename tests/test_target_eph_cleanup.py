@@ -229,23 +229,27 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
         "target_cluster_uid": "target-uid",
     }}
     calls = {}
-    monkeypatch.setattr(
-        target_main,
-        "_observe_target_metal3_ownership",
-        lambda payload, _context: calls.setdefault("ownership_payload", payload)
-        or {"target_ironic_inventory_verified": True, "target_bmh_identities": []},
-    )
-    monkeypatch.setattr(
-        target_main,
-        "execute_eph_cleanup",
-        lambda payload, _context, _runner, _lease: calls.setdefault(
-            "cleanup_payload", payload
-        ) or {
+    def observe_ownership(payload, _context):
+        calls["ownership_payload"] = payload
+        return {
+            "target_ironic_inventory_verified": True,
+            "target_bmh_identities": [],
+        }
+
+    def cleanup_executor(payload, _context, _runner, _lease):
+        calls["cleanup_payload"] = payload
+        return {
             "eph_credentials_revoked": True,
             "revoked_credential_count": 2,
             "side_effects": True,
-        },
+        }
+
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        observe_ownership,
     )
+    monkeypatch.setattr(target_main, "execute_eph_cleanup", cleanup_executor)
     monkeypatch.setattr(
         target_main,
         "_revoke_source_observer_secret",
