@@ -312,3 +312,32 @@ def test_eph_cleanup_handoff_phase_does_not_delete_before_bmh_checkpoint(monkeyp
     })
     assert outcome["status"] == "blocked"
     assert outcome["error_code"] == "EPH_CLEANUP_BMH_HANDOFF_CHECKPOINT_REQUIRED"
+
+
+
+def test_eph_cleanup_is_idempotent_after_resources_were_removed(tmp_path):
+    kubeconfig = tmp_path / "source.kubeconfig"
+    kubeconfig.write_text("source credentials", encoding="utf-8")
+    runner, _resources, _calls = _runner_factory()
+    payload = {
+        "namespace": "eph-system",
+        "deployment_id": "deployment-1",
+        "confirm_source_cluster_uid": "source-uid",
+        "confirm_target_cluster_uid": "target-uid",
+    }
+    first = execute_eph_cleanup(
+        payload,
+        _proof(),
+        runner,
+        environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+    )
+    second = execute_eph_cleanup(
+        payload,
+        _proof(),
+        runner,
+        environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
+    )
+    assert first["deleted_resource_count"] == 3
+    assert second["deleted_resource_count"] == 0
+    assert second["eph_workloads_absent"] is True
+    assert second["eph_credentials_revoked"] is True
