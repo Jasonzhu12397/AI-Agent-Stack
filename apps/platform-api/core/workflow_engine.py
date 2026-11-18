@@ -567,6 +567,13 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if len(serialized_messages) > MAX_WORKFLOW_RUN_INPUT_BYTES:
             raise WorkflowValidationError("WORKFLOW_LLM_INPUT_BUDGET_EXCEEDED")
         estimated_input_tokens = (len(serialized_messages) + 1) // 2
+        reservation_input_token_ceiling = len(
+            json.dumps(
+                {"messages": messages, "tools": []},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
         usage = state.get("_token_usage", {})
         if not isinstance(usage, dict):
             raise WorkflowValidationError("WORKFLOW_TOKEN_USAGE_STATE_INVALID")
@@ -596,7 +603,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                     task=task,
                     workflow_run=workflow_run,
                     idempotency_key=reservation_key,
-                    requested_tokens=estimated_input_tokens + allowed_output_tokens,
+                    requested_tokens=reservation_input_token_ceiling + allowed_output_tokens,
                 )
             except TenantTokenBudgetExceeded as exc:
                 raise WorkflowValidationError(
