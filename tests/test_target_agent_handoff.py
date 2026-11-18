@@ -241,7 +241,7 @@ def test_handoff_accepts_worker_provisioning_only_after_server_dry_run_and_contr
             "worker_provisioning_server_dry_run_passed": True,
             "worker_provisioning_controller_observed": True,
             "worker_network_contract_validated": True,
-            "new_worker_capacity_verified": True,
+            "preprovision_bmh_capacity_verified": True,
             "desired_worker_count": 10,
         },
     )
