@@ -562,7 +562,10 @@ def test_worker_provisioning_applies_sriov_configmap_from_selected_pci_resources
     )
     configmap = applied["sriov-dp-configmap"]
     assert configmap["kind"] == "ConfigMap"
-    assert configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"] == "target-uid"
+    assert (
+        configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"]
+        == "target-uid"
+    )
     config = json.loads(configmap["data"]["config.json"])
     assert config["resourceList"][0]["selectors"]["rootDevices"] == [
         "0000:2f:00.0",
