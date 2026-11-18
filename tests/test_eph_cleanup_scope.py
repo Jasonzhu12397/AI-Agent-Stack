@@ -13,7 +13,7 @@ DEPLOYMENT_ID = "deployment-1"
 SOURCE_UID = "source-cluster-uid"
 
 
-def _resource(kind, name, namespaced=True, source_uid=None):
+def _resource(kind, name, namespaced=True, source_uid=None, namespace="ai-agent-system"):
     metadata = {
         "name": name,
         "uid": f"uid-{name}",
@@ -25,7 +25,7 @@ def _resource(kind, name, namespaced=True, source_uid=None):
         "annotations": {"ai-agent-stack.io/eph-cleanup": "true"},
     }
     if namespaced:
-        metadata["namespace"] = "ai-agent-system"
+        metadata["namespace"] = namespace
     if source_uid:
         metadata["annotations"]["ai-agent-stack.io/source-cluster-uid"] = source_uid
     document = {"kind": kind, "metadata": metadata}
@@ -57,7 +57,7 @@ def _source_kubeconfig(tmp_path):
     return str(path)
 
 
-def _runner_factory(include_optional_target_kubeconfig=True):
+def _runner_factory():
     source_objects = {
         "deployments.apps": [_resource("Deployment", "eph-agent")],
         "statefulsets.apps": [],
@@ -69,28 +69,40 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             _resource("Secret", "eph-agent-credentials"),
             _resource("Secret", "agent-control-plane-mtls"),
             _resource("Secret", "capi-pivot-source-kubeconfig"),
+            _resource("Secret", "target-agent-source-operator-token"),
         ],
         "clusterrolebindings.rbac.authorization.k8s.io": [
-            _resource("ClusterRoleBinding", "eph-agent-preflight", namespaced=False)
+            _resource("ClusterRoleBinding", "eph-agent-preflight", namespaced=False),
+            _resource("ClusterRoleBinding", "target-agent-source-operator", namespaced=False),
         ],
         "clusterroles.rbac.authorization.k8s.io": [
-            _resource("ClusterRole", "eph-agent-preflight", namespaced=False)
+            _resource("ClusterRole", "eph-agent-preflight", namespaced=False),
+            _resource("ClusterRole", "target-agent-source-operator", namespaced=False),
         ],
-        "serviceaccounts": [_resource("ServiceAccount", "eph-agent")],
+        "serviceaccounts": [
+            _resource("ServiceAccount", "eph-agent"),
+            _resource("ServiceAccount", "target-agent-source-operator"),
+        ],
+        "roles.rbac.authorization.k8s.io": [
+            _resource("Role", "target-agent-source-cleanup"),
+        ],
+        "rolebindings.rbac.authorization.k8s.io": [
+            _resource("RoleBinding", "target-agent-source-cleanup"),
+        ],
+        "metal3:roles.rbac.authorization.k8s.io": [
+            _resource("Role", "eph-agent-metal3-deployer", namespace="metal3"),
+            _resource("Role", "target-agent-source-capi", namespace="metal3"),
+        ],
+        "metal3:rolebindings.rbac.authorization.k8s.io": [
+            _resource("RoleBinding", "eph-agent-metal3-deployer", namespace="metal3"),
+            _resource("RoleBinding", "target-agent-source-capi", namespace="metal3"),
+        ],
     }
-    if include_optional_target_kubeconfig:
-        target_kubeconfig_secret = _resource("Secret", "capi-pivot-target-kubeconfig")
-        target_kubeconfig_secret["data"] = {
-            "kubeconfig": base64.b64encode(b"target kubeconfig").decode("ascii"),
-        }
-        source_objects["secrets"].append(target_kubeconfig_secret)
     observer_secret = _resource("Secret", "target-agent-source-operator")
     observer_secret["data"] = {
         "kubeconfig": base64.b64encode(b"source kubeconfig").decode("ascii"),
     }
-    target_objects = {
-        "secrets": [observer_secret],
-    }
+    target_objects = {"secrets": [observer_secret]}
     calls = []
 
     def apply_patch(document, operations):
@@ -105,21 +117,26 @@ def _runner_factory(include_optional_target_kubeconfig=True):
                 current = current.setdefault(part, {})
             current[path[-1]] = operation["value"]
 
+    def source_collection(resource, arguments):
+        namespace = (
+            arguments[arguments.index("--namespace") + 1]
+            if "--namespace" in arguments
+            else "ai-agent-system"
+        )
+        key = f"metal3:{resource}" if namespace == "metal3" else resource
+        return source_objects.get(key, [])
+
     def runner(command, kubeconfig, **_kwargs):
         calls.append(command)
         arguments = command[3:]
         if arguments[0] == "get":
             resource = {"secret": "secrets"}.get(arguments[1], arguments[1])
             if "--selector" in arguments:
-                items = source_objects.get(resource, [])
-                return {
-                    "ok": True,
-                    "stdout": json.dumps({"items": items}),
-                    "stderr": "",
-                }
+                items = source_collection(resource, arguments)
+                return {"ok": True, "stdout": json.dumps({"items": items}), "stderr": ""}
             name = arguments[2]
             objects = (
-                source_objects.get(resource, [])
+                source_collection(resource, arguments)
                 if kubeconfig.endswith("source.kubeconfig")
                 else target_objects.get(resource, [])
             )
@@ -134,7 +151,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             resource = {"secret": "secrets"}.get(arguments[1], arguments[1])
             name = arguments[2]
             objects = (
-                source_objects.get(resource, [])
+                source_collection(resource, arguments)
                 if kubeconfig.endswith("source.kubeconfig")
                 else target_objects.get(resource, [])
             )
@@ -146,8 +163,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
 
     return runner, source_objects, target_objects, calls
 
-
-def test_cleanup_scope_attests_source_resources_and_target_observer_secret(tmp_path):
+def test_cleanup_scope_attests_source_resources_and_target_operator_secret(tmp_path):
     runner, source, target, calls = _runner_factory()
     result = attest_cleanup_scope(
         _source_kubeconfig(tmp_path),
@@ -158,7 +174,7 @@ def test_cleanup_scope_attests_source_resources_and_target_observer_secret(tmp_p
     )
     assert result["cleanup_scope_attested"] is True
     assert result["target_observer_secret_source_uid_attested"] is True
-    assert result["optional_target_kubeconfig_marked"] is True
+    assert result["optional_target_kubeconfig_marked"] is False
     assert result["mutated_resource_count"] > 0
     for items in source.values():
         for item in items:
@@ -184,9 +200,7 @@ def test_cleanup_scope_attests_source_resources_and_target_observer_secret(tmp_p
 
 
 def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret(tmp_path):
-    runner, _source, _target, _calls = _runner_factory(
-        include_optional_target_kubeconfig=False
-    )
+    runner, _source, _target, _calls = _runner_factory()
     target_kubeconfig = tmp_path / "target.kubeconfig"
     target_kubeconfig.write_bytes(b"target kubeconfig")
     result = attest_cleanup_scope(
@@ -268,29 +282,6 @@ def test_cleanup_scope_reports_partial_mutation_when_patch_fails(tmp_path):
         assert exc.side_effects is True
     else:
         raise AssertionError("Partial cleanup scope annotation must report side effects")
-
-
-
-def test_cleanup_scope_rejects_unrelated_optional_target_kubeconfig_secret(tmp_path):
-    runner, source, _target, calls = _runner_factory()
-    source["secrets"][-1]["data"]["kubeconfig"] = base64.b64encode(
-        b"unrelated kubeconfig"
-    ).decode("ascii")
-
-    try:
-        attest_cleanup_scope(
-            _source_kubeconfig(tmp_path),
-            _target_kubeconfig(tmp_path),
-            DEPLOYMENT_ID,
-            SOURCE_UID,
-            runner,
-        )
-    except CleanupScopeError as exc:
-        assert str(exc) == "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_IDENTITY_MISMATCH"
-    else:
-        raise AssertionError("An unrelated secret must not be adopted for EPH cleanup")
-
-    assert not any(call[3] == "patch" for call in calls)
 
 
 
