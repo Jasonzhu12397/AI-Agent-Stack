@@ -75,6 +75,22 @@ def test_tenant_admin_can_register_external_agent_plugin(agent_plugin_workspace)
     assert response.data["auth_required"] is True
 
 
+@pytest.mark.django_db
+def test_agent_plugin_duplicate_version_returns_conflict(agent_plugin_workspace):
+    _, tenant, _, client = agent_plugin_workspace
+    url = f"/api/v1/tenants/{tenant.id}/agent-plugins/"
+    first = client.post(url, _agent_plugin_payload(), format="json")
+    duplicate = client.post(url, _agent_plugin_payload(), format="json")
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert AgentPluginDefinition.objects.filter(
+        tenant=tenant,
+        plugin_key="research-agent",
+        version="1.0.0",
+    ).count() == 1
+
+
 @pytest.mark.parametrize(
     "endpoint_url",
     [
