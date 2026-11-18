@@ -6,12 +6,12 @@ from apps.target_agent.ntp_attestation import (
 )
 
 
-def _machine_and_config(index, approved_source, worker_network):
+def _machine_and_config(index, approved_source, worker_network, install_command=None):
     machine_name = f"control-plane-{index}"
     machine_uid = f"machine-uid-{index}"
     config_name = f"control-plane-{index}-bootstrap"
     script = "\n".join((
-        "apt-get install -y chrony iproute2",
+        install_command or "apt-get install -y chrony iproute2",
         "server " + approved_source + " iburst",
         "allow " + worker_network,
         "chronyc -n sources",
@@ -114,6 +114,60 @@ def test_control_plane_ntp_attestation_rejects_unapproved_configured_source():
         machines.append(machine)
         configs.append(config)
     with pytest.raises(NtpAttestationError, match="NOT_APPROVED"):
+        verify_control_plane_ntp_bootstrap(
+            {"items": machines},
+            {"items": configs},
+            ["192.0.2.10"],
+            ["10.130.60.80/28"],
+            "target-cluster",
+        )
+
+@pytest.mark.parametrize(
+    "install_command",
+    [
+        "apt-get install -y chrony iproute2",
+        "dnf install -y chrony iproute",
+        "yum install -y chrony iproute",
+        "zypper --non-interactive install chrony iproute2",
+    ],
+)
+def test_control_plane_ntp_attestation_accepts_supported_chrony_package_managers(
+    install_command,
+):
+    machines = []
+    configs = []
+    for index in range(1, 4):
+        machine, config = _machine_and_config(
+            index,
+            "192.0.2.10",
+            "10.130.60.80/28",
+            install_command=install_command,
+        )
+        machines.append(machine)
+        configs.append(config)
+    result = verify_control_plane_ntp_bootstrap(
+        {"items": machines},
+        {"items": configs},
+        ["192.0.2.10"],
+        ["10.130.60.80/28"],
+        "target-cluster",
+    )
+    assert result["target_control_plane_ntp_bootstrap_sync_gate_verified"] is True
+
+
+def test_control_plane_ntp_attestation_rejects_chrony_without_package_install():
+    machines = []
+    configs = []
+    for index in range(1, 4):
+        machine, config = _machine_and_config(
+            index,
+            "192.0.2.10",
+            "10.130.60.80/28",
+            install_command="echo chrony is expected to be preinstalled",
+        )
+        machines.append(machine)
+        configs.append(config)
+    with pytest.raises(NtpAttestationError, match="BOOTSTRAP_VERIFICATION_MISSING"):
         verify_control_plane_ntp_bootstrap(
             {"items": machines},
             {"items": configs},
