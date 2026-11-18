@@ -143,6 +143,8 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
     elif phase is HandoffPhase.COMPLETED:
         _require(evidence, "target_postflight_passed")
         _require(evidence, "worker_network_postflight_passed")
+        _require(evidence, "worker_chronyd_bootstrap_sync_verified")
+        _require(evidence, "data_plane_pod_packet_path_verified")
         _require(evidence, "deployment_checkpoint_durable")
     return normalized
 
