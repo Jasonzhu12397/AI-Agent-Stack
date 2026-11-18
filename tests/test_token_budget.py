@@ -1,4 +1,6 @@
 import pytest
+from datetime import datetime, timedelta, timezone as dt_timezone
+from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
@@ -132,3 +134,36 @@ def test_workflow_model_calls_use_the_same_tenant_budget_ledger():
     settle_tenant_tokens(usage=reservation, consumed_tokens=22)
     reservation.refresh_from_db()
     assert reservation.consumed_tokens == 22
+
+
+@pytest.mark.django_db
+def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_budget_run):
+    task, run, _ = token_budget_run
+    reserved_at = datetime(2026, 11, 17, 23, 59, tzinfo=dt_timezone.utc)
+    settled_at = reserved_at + timedelta(minutes=2)
+    with (
+        patch("core.token_budget.timezone.now", side_effect=[reserved_at, settled_at]),
+        patch("core.token_budget.timezone.localtime", side_effect=lambda value: value),
+    ):
+        reservation = reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="cross-midnight-call",
+            requested_tokens=80,
+        )
+        settle_tenant_tokens(usage=reservation, consumed_tokens=35)
+
+    reservation.refresh_from_db()
+    assert reservation.settled_at == settled_at
+
+    with (
+        patch("core.token_budget.timezone.now", return_value=settled_at + timedelta(minutes=1)),
+        patch("core.token_budget.timezone.localtime", side_effect=lambda value: value),
+        pytest.raises(TenantTokenBudgetExceeded, match="daily"),
+    ):
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="next-day-call",
+            requested_tokens=66,
+        )
