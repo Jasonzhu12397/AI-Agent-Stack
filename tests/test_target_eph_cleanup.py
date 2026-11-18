@@ -256,6 +256,7 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
         "target_cluster_uid": "target-uid",
     }}
     calls = {}
+
     def observe_ownership(payload, _context):
         calls["ownership_payload"] = payload
         return {
