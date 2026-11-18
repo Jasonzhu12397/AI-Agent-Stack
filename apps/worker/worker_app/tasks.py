@@ -319,6 +319,23 @@ def _compact_agent_messages(messages):
     return compacted
 
 
+def _allowed_agent_output_tokens(
+    configured_max_tokens,
+    model_max_tokens,
+    input_tokens,
+    output_tokens,
+    estimated_input_tokens,
+):
+    remaining_total = MAX_AGENT_RUN_TOTAL_TOKENS - input_tokens - output_tokens
+    remaining_output = MAX_AGENT_RUN_OUTPUT_TOKENS - output_tokens
+    return min(
+        configured_max_tokens,
+        model_max_tokens,
+        remaining_output,
+        remaining_total - estimated_input_tokens,
+    )
+
+
 def _serialize_agent_tool_result(result):
     try:
         serialized = json.dumps(
@@ -622,15 +639,12 @@ def execute_agent_run(task):
             try:
                 messages = _compact_agent_messages(messages)
                 estimated_input_tokens = _estimate_message_tokens(messages)
-                remaining_total = (
-                    MAX_AGENT_RUN_TOTAL_TOKENS - input_tokens - output_tokens
-                )
-                remaining_output = MAX_AGENT_RUN_OUTPUT_TOKENS - output_tokens
-                allowed_output_tokens = min(
+                allowed_output_tokens = _allowed_agent_output_tokens(
                     config["max_tokens"],
                     model_config.max_output_tokens,
-                    remaining_output,
-                    remaining_total - estimated_input_tokens,
+                    input_tokens,
+                    output_tokens,
+                    estimated_input_tokens,
                 )
                 if allowed_output_tokens < 1:
                     raise PermanentTaskError("Agent run reached its cumulative token budget")
@@ -657,7 +671,8 @@ def execute_agent_run(task):
             )
             if (
                 actual_input_tokens + actual_output_tokens
-                > remaining_total
+                > MAX_AGENT_RUN_TOTAL_TOKENS - input_tokens - output_tokens
+                or actual_output_tokens > allowed_output_tokens
             ):
                 raise PermanentTaskError(
                     "Provider usage exceeded the remaining agent token budget"
