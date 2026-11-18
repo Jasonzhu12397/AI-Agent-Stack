@@ -25,8 +25,8 @@ from core.http_connector import register_http_tool
 from core.tool_router import ToolExecutionError, ToolRouter
 from core.token_budget import (
     TenantTokenBudgetExceeded,
-    resolve_provider_token_usage,
     reserve_tenant_tokens,
+    resolve_provider_token_usage,
     settle_tenant_tokens,
 )
 
