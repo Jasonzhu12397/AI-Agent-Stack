@@ -2,7 +2,7 @@ from threading import Event
 
 import pytest
 
-from apps.eph_agent import capi_pivot
+from apps.target_agent import capi_pivot
 
 
 def test_provider_version_parser_rejects_unversioned_image():
@@ -67,7 +67,7 @@ def test_capi_pivot_dry_run_never_marks_side_effects(monkeypatch, tmp_path):
         calls.append(command) or {"ok": True, "stdout": "dry run output", "returncode": 0}
     ))
     result = capi_pivot.execute_capi_pivot({
-        "action": "eph.capi.pivot.dry_run",
+        "action": "target.capi.pivot.dry_run",
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
@@ -223,7 +223,7 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
         return {"ok": True, "stdout": "completed", "returncode": 0}
     monkeypatch.setattr(capi_pivot, "_run", run)
     result = capi_pivot.execute_capi_pivot({
-        "action": "eph.capi.pivot",
+        "action": "target.capi.pivot",
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
