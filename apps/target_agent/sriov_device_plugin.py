@@ -22,6 +22,7 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
     seen_configmaps: dict[str, dict[str, Any]] = {}
     devices_by_configmap: dict[str, set[str]] = {}
     device_configmap: dict[str, str] = {}
+    pool_assignments: list[tuple[str, dict[str, str]]] = []
 
     for pool_name, pool in value.items():
         if not isinstance(pool_name, str) or not re.fullmatch(r"pool[0-9]+", pool_name):
@@ -147,6 +148,16 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
                 "operator": operator,
                 **({"value": toleration_value} if operator == "Equal" else {}),
             })
+        for previous_configmap, previous_selectors in pool_assignments:
+            selectors_overlap = not any(
+                key in previous_selectors and previous_selectors[key] != selector_value
+                for key, selector_value in selectors.items()
+            )
+            if previous_configmap != configmap_name and selectors_overlap:
+                raise SriovDevicePluginConfigError(
+                    "SRIOV_DEVICE_PLUGIN_POOL_NODE_SELECTORS_OVERLAP"
+                )
+        pool_assignments.append((configmap_name, dict(selectors)))
         normalized_config = {"resourceList": normalized_resources}
         previous_config = seen_configmaps.get(configmap_name)
         if previous_config is not None and previous_config != normalized_config:
