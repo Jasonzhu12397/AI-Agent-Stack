@@ -69,6 +69,7 @@ EPH_ACTIONS: frozenset[str] = frozenset(
     {
         "eph.preflight",
         "eph.source.observe",
+        "eph.controlstack.apply",
         "eph.metal3.bmh.apply",
         "eph.metal3.bmh.observe",
         "eph.metal3.bmh.wait_ready",
@@ -94,6 +95,7 @@ TARGET_ACTIONS: frozenset[str] = frozenset(
         "target.handoff.evaluate",
         "target.eph.cleanup",
         "target.worker.provision",
+        "target.network.apply",
     }
 )
 
