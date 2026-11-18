@@ -69,6 +69,8 @@ def _validate_reported_capabilities(role: str, capabilities: Any) -> list[str]:
 
 CHECKPOINT_PHASES = (
     "eph_single_node_ready",
+    "bmh_registered",
+    "bmh_ready",
     "target_control_plane_ready",
     "target_agent_ready",
     "capi_pivot_verified",
@@ -97,12 +99,12 @@ def _validate_checkpoint_actor_transition(
     except ValueError as exc:
         raise ControlApiError("CHECKPOINT_PHASE_INVALID") from exc
     if role == "eph":
-        if current_index != -1 or next_index != 0:
+        if next_index > 2 or next_index != current_index + 1:
             raise ControlApiError("EPH_CHECKPOINT_PHASE_NOT_ALLOWED")
         return
     if role != "target":
         raise ControlApiError("CHECKPOINT_AGENT_ROLE_INVALID")
-    if next_index < 1 or next_index != current_index + 1:
+    if next_index < 3 or next_index != current_index + 1:
         raise ControlApiError("TARGET_CHECKPOINT_TRANSITION_INVALID")
 
 
