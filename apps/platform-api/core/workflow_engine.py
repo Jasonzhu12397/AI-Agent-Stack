@@ -589,7 +589,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             model.max_output_tokens,
             input_tokens,
             output_tokens,
-            estimated_input_tokens,
+            reservation_input_token_ceiling,
         )
         if allowed_output_tokens < 1:
             raise WorkflowValidationError("WORKFLOW_RUN_TOKEN_BUDGET_EXHAUSTED")
