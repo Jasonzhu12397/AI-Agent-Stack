@@ -1,7 +1,9 @@
 # ADR 0003: Remote EPH and Target Cluster Agent Control
 
-- Status: Accepted
+- Status: Superseded by [ADR 0005](0005-three-agent-fresh-runtime.md)
 - Date: 2026-11-02
+
+> Historical record only. The two-node-agent model (EPH Node Agent + Target Cluster Agent) recorded here has been replaced by the three-Agent runtime in ADR 0005 (Cloud Control / EPH / Target). Do not use this ADR as an implementation guide.
 
 ## Context
 

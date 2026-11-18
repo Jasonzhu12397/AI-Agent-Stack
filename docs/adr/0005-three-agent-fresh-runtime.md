@@ -14,8 +14,8 @@ The user has explicitly rejected continued use of the old Agent implementation. 
 Implement exactly three Agent roles from new code:
 
 1. **Cloud Control Agent** — deployed in Alibaba Cloud or Tencent Cloud. Owns global scheduling, durable orchestration state, tenant/project scope, task dispatch, status aggregation and failure coordination. It does not approve, review or gate Target takeover.
-2. **EPH Agent** — runs as a Kubernetes Pod inside the temporary, RAM-booted, single-node EPH Kubernetes cluster. Owns source-side preflight, temporary bootstrap checks and the source-side CAPI Pivot operation.
-3. **Target Agent** — one logical cluster-scoped service, deployed as three replicas across the three target Kubernetes Control Plane master nodes with anti-affinity, leader election and disruption protection. Owns target adoption, CAPI/Metal3/Ironic coordination, target cluster lifecycle, Worker provisioning and postflight.
+2. **EPH Agent** — runs as a Kubernetes Pod inside the temporary, RAM-booted, single-node EPH Kubernetes cluster. Owns source-side preflight, temporary bootstrap checks and the source-side Cluster/BMH identity and digest evidence used for takeover verification. It does not perform the CAPI Pivot or the Target takeover.
+3. **Target Agent** — one logical cluster-scoped service, deployed as three replicas across the three target Kubernetes Control Plane master nodes with anti-affinity, leader election and disruption protection. Owns target adoption, the CAPI Pivot (`clusterctl move`), CAPI/Metal3/Ironic coordination, target cluster lifecycle, Worker provisioning and postflight.
 
 There is no Node Agent role, no per-Worker resident Agent, and no network-inventory Agent DaemonSet. Target Worker facts must be obtained from Kubernetes, CAPI, Metal3 and explicitly approved infrastructure APIs. Facts unavailable from those sources must be reported as unavailable, never fabricated.
 

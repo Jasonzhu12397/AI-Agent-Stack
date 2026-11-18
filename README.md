@@ -6,6 +6,8 @@ An extensible, policy-governed AI Agent platform with a Vue operator workspace, 
 
 The long-term infrastructure product scope is documented in [Omni-Inspired Infrastructure Platform Roadmap](docs/omni-parity-roadmap.md). The bare-metal delivery path uses Cluster API (CAPI), Metal3 and Ironic. The authoritative Agent architecture is [ADR 0005: Fresh Three-Agent Runtime](docs/adr/0005-three-agent-fresh-runtime.md).
 
+A code-backed architecture inventory, with each capability marked as baseline / pending validation / to develop, is available in bilingual form: [English](docs/architecture-inventory.en.md) · [中文](docs/architecture-inventory.zh-CN.md).
+
 ## Current application architecture
 
 - **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
@@ -19,9 +21,9 @@ The long-term infrastructure product scope is documented in [Omni-Inspired Infra
 
 1. **Cloud Control Agent** — runs in the Alibaba Cloud or Tencent Cloud management environment. Owns durable deployment/command state, approvals, global scheduling, task dispatch, status aggregation and failure coordination.
 
-2. **EPH Agent** — runs as one Pod inside the temporary EPH Live OS / temporary single-node Kubernetes cluster. Owns source-side preflight and the source-side CAPI Pivot operation. EPH has exactly one temporary Kubernetes node and no Worker pool.
+2. **EPH Agent** — runs as one Pod inside the temporary EPH Live OS / temporary single-node Kubernetes cluster. Owns source-side preflight, bootstrap checks and the source-side Cluster/BMH identity and digest evidence used for takeover verification. EPH has exactly one temporary Kubernetes node and no Worker pool; it does not perform the CAPI Pivot or the Target takeover.
 
-3. **Target Agent** — runs in the target Kubernetes cluster on Control Plane Master nodes as three replicas, spread across the masters. Kubernetes Lease leader election ensures only one replica claims and executes commands. Target Agent owns target adoption, CAPI/Metal3/Ironic coordination, BMH migration, EPH handoff/cleanup and Target Worker provisioning.
+3. **Target Agent** — runs in the target Kubernetes cluster on Control Plane Master nodes as three replicas, spread across the masters. Kubernetes Lease leader election ensures only one replica claims and executes commands. Target Agent owns target adoption, the CAPI Pivot (`clusterctl move`), CAPI/Metal3/Ironic coordination, BMH migration, EPH handoff/cleanup and Target Worker provisioning.
 
 There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker facts are collected through Kubernetes, CAPI, Metal3 and approved infrastructure APIs.
 
@@ -37,7 +39,7 @@ The new branch contains:
 - An ordered, fail-closed Target handoff state machine with exact BMH identity-set checks and durable compare-and-swap checkpoints.
 - Control Plane chrony profile and pre-kubeadm command generation from approved external sources, plus Worker chrony configuration and pre-kubeadm command generation. Workers must use exactly the Ironic internal IP/VIP as their NTP source; no external pool or fallback is allowed. The generated host commands are not yet injected into CAPI bootstrap templates or executed on physical hosts.
 
-**Not yet production-complete:** a new EPH CAPI Pivot adapter now supports dry-run and approval-digest-gated `clusterctl move`, including provider-version checks, Target Control Plane controller placement checks, source UID annotation and postflight identity verification. It has not yet been run against the selected live CAPI/Metal3/Ironic provider matrix. Autonomous EPH cleanup, Worker provisioning, applying the generated chrony command to actual hosts, full platform API/UI integration and physical BMC/Ironic acceptance remain outstanding. The new Ironic adapter is unit-tested against mocked HTTP responses; live Ironic credentials, CA trust, API microversion and physical BMC acceptance have not yet been verified. Other mutating actions fail closed. Unit tests or QEMU boot tests do not prove physical bare-metal provisioning.
+**Not yet production-complete:** the Target Agent CAPI Pivot adapter (`apps/target_agent/capi_pivot.py`) supports dry-run and approval-digest-gated `clusterctl move`, including provider-version checks, Target Control Plane controller placement checks, source UID annotation and postflight identity verification. It has not yet been run against the selected live CAPI/Metal3/Ironic provider matrix. Autonomous EPH cleanup, Worker provisioning, applying the generated chrony command to actual hosts, full platform API/UI integration and physical BMC/Ironic acceptance remain outstanding. The new Ironic adapter is unit-tested against mocked HTTP responses; live Ironic credentials, CA trust, API microversion and physical BMC acceptance have not yet been verified. Other mutating actions fail closed. Unit tests or QEMU boot tests do not prove physical bare-metal provisioning.
 
 The legacy `apps/node_agent` package and its shared runtime have been removed from this branch. The Cloud Control, EPH and Target Agents have independent source packages, entrypoints, images, credentials and command allowlists. No compatibility shim or fallback to the old Node Agent is permitted.
 
@@ -66,7 +68,7 @@ Docker Compose is for the local application/control-plane development stack. It 
 
 ## Build and deploy the three infrastructure Agents
 
-See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks. See the [EPH CAPI Pivot contract](docs/capi-pivot-contract.md) for approval, provider compatibility, controller placement and postflight gates.
+See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks. See the [Target CAPI Pivot contract](docs/capi-pivot-contract.md) for approval, provider compatibility, controller placement and postflight gates.
 
 Deployment requires three distinct Kubernetes contexts:
 

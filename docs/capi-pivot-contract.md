@@ -1,11 +1,11 @@
-# EPH CAPI Pivot contract
+# Target CAPI Pivot contract
 
-This contract is implemented by the new `apps/eph_agent/capi_pivot.py` adapter. It does not import or reuse the deprecated Node Agent package.
+This contract is implemented by the `apps/target_agent/capi_pivot.py` adapter in the Target Agent. It does not import or reuse the deprecated Node Agent package.
 
 ## Actions
 
-- `eph.capi.pivot.dry_run`: performs read-only source/target checks and invokes `clusterctl move --dry-run`.
-- `eph.capi.pivot`: performs the same preflight, requires an approval digest bound to the exact plan, annotates the source Cluster identity, runs `clusterctl move`, and verifies postconditions.
+- `target.capi.pivot.dry_run`: performs read-only source/target checks and invokes `clusterctl move --dry-run`.
+- `target.capi.pivot`: performs the same preflight, requires an approval digest bound to the exact plan, annotates the source Cluster identity, runs `clusterctl move`, and verifies postconditions.
 
 The actual move is permitted only when the command's `approval_digest` equals `payload.plan_digest`. The platform API must compute the digest over the complete approved plan, including the source Cluster UID, stable logical cluster identity, exact BMH identity set, provider deployment references/versions, Target controller deployment references, namespace and timeout. The Cloud Control API only records the trusted platform API's digest; it does not independently authenticate the human approver.
 
@@ -20,7 +20,7 @@ The actual move is permitted only when the command's `approval_digest` equals `p
 - `plan_digest`: must exactly match the command's approval digest for the mutating action.
 - `move_timeout_seconds`: optional integer from 60 through 3600; defaults to 1800.
 
-The EPH Agent uses separate source and Target kubeconfig files mounted as read-only Secrets. The Target kubeconfig Secret is optional during initial EPH bootstrap and must be provisioned only after the Target API is ready.
+The Target Agent adapter uses separate source and Target kubeconfig files mounted as read-only Secrets. The Target kubeconfig Secret is provisioned after the Target API is ready; the source kubeconfig provides read-only source inventory observation.
 
 ## Safety and postflight
 
@@ -31,7 +31,7 @@ Before the move, it writes these annotations to the source CAPI Cluster:
 - `ai-agent-stack.io/source-cluster-uid`
 - `ai-agent-stack.io/stable-cluster-identity`
 
-The Target Kubernetes API assigns a new metadata UID to the recreated object. The source and Target UIDs are recorded separately; equality is not expected. The source UID annotation and stable logical identity must survive the move.
+The Target Kubernetes API assigns a new metadata UID to the recreated object. The source and Target UIDs are recorded separately; equality is expected not. The source UID annotation and stable logical identity must survive the move.
 
 After `clusterctl move`, the adapter verifies source Cluster absence, Target Cluster presence, identity annotations, Target controller readiness and exact equality of source/Target BMH hardware-identity sets. It waits for Target BMH hardware identity reconciliation for up to five minutes. Any mismatch blocks EPH cleanup.
 
