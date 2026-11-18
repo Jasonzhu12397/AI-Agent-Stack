@@ -678,6 +678,28 @@ def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _execute_attested_eph_cleanup(
+    payload: dict[str, Any],
+    deployment_context: dict[str, Any] | None,
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
+    ownership = _observe_target_metal3_ownership(payload, deployment_context)
+    cleanup = execute_eph_cleanup(
+        payload,
+        deployment_context,
+        _kubectl,
+        lease_lost_event,
+    )
+    return {
+        **cleanup,
+        "target_metal3_ownership_verified": True,
+        "target_ironic_inventory_verified": ownership.get(
+            "target_ironic_inventory_verified"
+        ) is True,
+        "target_bmh_identity_count": ownership.get("target_bmh_identity_count"),
+    }
+
+
 def execute(
     command: dict[str, Any],
     lease_lost_event: Any = None,
@@ -740,10 +762,9 @@ def execute(
         }
     if action == "target.eph.cleanup":
         try:
-            evidence = execute_eph_cleanup(
+            evidence = _execute_attested_eph_cleanup(
                 command.get("payload", {}),
                 command.get("deployment_context"),
-                _kubectl,
                 lease_lost_event,
             )
             return {
@@ -809,10 +830,9 @@ def execute(
                     "ironic_internal_ntp_ip": configured_ntp_ip,
                 }
             if next_phase == HandoffPhase.EPH_CLEANUP_VERIFIED.value:
-                cleanup_evidence = execute_eph_cleanup(
+                cleanup_evidence = _execute_attested_eph_cleanup(
                     payload,
                     command.get("deployment_context"),
-                    _kubectl,
                     lease_lost_event,
                 )
                 evidence = {**evidence, **cleanup_evidence}
