@@ -38,11 +38,15 @@ mark_eph_cleanup_resources() {
     local context="$1"
     local kind="$2"
     local name="$3"
-    kubectl --context "$context" --namespace ai-agent-system label "$kind" "$name" \
+    local scope_args=()
+    if [[ "$kind" != "clusterrole" && "$kind" != "clusterrolebinding" ]]; then
+        scope_args=(--namespace ai-agent-system)
+    fi
+    kubectl --context "$context" "${scope_args[@]}" label "$kind" "$name" \
         app.kubernetes.io/managed-by=ai-agent-stack \
         ai-agent-stack.io/eph-cleanup=true \
         "ai-agent-stack.io/deployment-id=$DEPLOYMENT_ID" --overwrite
-    kubectl --context "$context" --namespace ai-agent-system annotate "$kind" "$name" \
+    kubectl --context "$context" "${scope_args[@]}" annotate "$kind" "$name" \
         ai-agent-stack.io/eph-cleanup=true --overwrite
 }
 
@@ -106,6 +110,9 @@ rendered_apply "$TARGET_CONTEXT" "$SCRIPT_DIR/target-cluster-agent.yaml" "$TARGE
 
 mark_eph_cleanup_resources "$EPH_CONTEXT" deployment eph-agent
 mark_eph_agent_pod_template
+mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent
+mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight
+mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding eph-agent-preflight
 for secret in eph-agent-credentials agent-control-plane-mtls capi-pivot-source-kubeconfig; do
     mark_eph_cleanup_resources "$EPH_CONTEXT" secret "$secret"
     kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret "$secret" \
