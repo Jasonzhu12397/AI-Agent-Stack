@@ -117,3 +117,40 @@ def test_validate_sriov_config_allows_disjoint_node_selector_pools():
     right["node_selectors"] = {"type": "low-latency"}
     normalized = validate_sriov_device_plugin_config({"pool4": left, "pool5": right})
     assert set(normalized) == {"pool4", "pool5"}
+
+
+def test_validate_sriov_config_accepts_yaml_block_scalar_tolerations():
+    pool = _pool(["0000:2f:00.0"])
+    pool["tolerations"] = [
+        """
+        {
+          effect: NoSchedule,
+          key: high-throughput,
+          operator: Equal,
+          value: "true"
+        }
+        """
+    ]
+    normalized = validate_sriov_device_plugin_config({"pool4": pool})
+    assert normalized["pool4"]["node_selectors"] == {"type": "high-throughput"}
+    assert normalized["pool4"]["tolerations"] == [
+        {
+            "effect": "NoSchedule",
+            "key": "high-throughput",
+            "operator": "Equal",
+            "value": "true",
+        }
+    ]
+
+
+def test_validate_sriov_config_accepts_yaml_string_for_device_plugin_config():
+    import json
+
+    pool = _pool(["0000:2f:00.0"])
+    pool["sriov_network_device_plugin_configmap_data"] = json.dumps(
+        pool["sriov_network_device_plugin_configmap_data"]
+    )
+    normalized = validate_sriov_device_plugin_config({"pool4": pool})
+    assert normalized["pool4"]["sriov_network_device_plugin_configmap_data"][
+        "resourceList"
+    ][0]["selectors"]["rootDevices"] == ["0000:2f:00.0"]
