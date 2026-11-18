@@ -521,6 +521,47 @@ def attest_cleanup_scope(
             True,
             lease_lost_event,
         )
+        target_metadata = target_secret.get("metadata", {})
+        target_data = target_secret.get("data", {})
+        if (
+            target_metadata.get("name") != TARGET_OBSERVER_SECRET
+            or target_metadata.get("namespace") != NAMESPACE
+            or not isinstance(target_data, dict)
+        ):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_IDENTITY_MISMATCH",
+                side_effects=mutated > 0,
+            )
+        encoded_source_kubeconfig = target_data.get("kubeconfig")
+        if not isinstance(encoded_source_kubeconfig, str) or not encoded_source_kubeconfig:
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_DATA_MISSING",
+                side_effects=mutated > 0,
+            )
+        if not Path(source_kubeconfig).is_file():
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_SOURCE_KUBECONFIG_FILE_UNAVAILABLE",
+                side_effects=mutated > 0,
+            )
+        try:
+            secret_source_kubeconfig = base64.b64decode(
+                encoded_source_kubeconfig,
+                validate=True,
+            )
+            mounted_source_kubeconfig = Path(source_kubeconfig).read_bytes()
+        except (OSError, ValueError) as exc:
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_DATA_INVALID",
+                side_effects=mutated > 0,
+            ) from exc
+        if (
+            not secret_source_kubeconfig
+            or secret_source_kubeconfig != mounted_source_kubeconfig
+        ):
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_TARGET_OBSERVER_SECRET_IDENTITY_MISMATCH",
+                side_effects=mutated > 0,
+            )
         target_mutated = _patch_source_uid(
             runner,
             target_kubeconfig,
