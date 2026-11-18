@@ -891,7 +891,7 @@ def execute(
                 "output": evidence,
                 "side_effects": evidence.get("side_effects", False),
             }
-        except (EphCleanupError, TypeError, AttributeError) as exc:
+        except (EphCleanupError, HandoffError, Metal3OwnershipError, TypeError, AttributeError) as exc:
             return {
                 "status": "blocked",
                 "error_code": str(exc) or "EPH_CLEANUP_FAILED",
