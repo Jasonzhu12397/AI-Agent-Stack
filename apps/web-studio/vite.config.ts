@@ -6,11 +6,11 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: /^dayjs\\/plugin\\/(.+)\\.js$/,
+        find: /^dayjs\/plugin\/(.+)\.js$/,
         replacement: "dayjs/esm/plugin/$1/index.js",
       },
       {
-        find: /^dayjs\\/plugin\\/(.+)$/,
+        find: /^dayjs\/plugin\/(.+)$/,
         replacement: "dayjs/esm/plugin/$1/index.js",
       },
       {
@@ -22,12 +22,12 @@ export default defineConfig({
   build: {
     commonjsOptions: {
       exclude: [
-        /node_modules\\/dayjs\\/esm\\//,
-        /node_modules\\/lodash-es\\//,
-        /node_modules\\/vue\\//,
-        /node_modules\\/@vue\\//,
-        /node_modules\\/@vueuse\\//,
-        /node_modules\\/@element-plus\\/icons-vue\\//,
+        /node_modules\/dayjs\/esm\//,
+        /node_modules\/lodash-es\//,
+        /node_modules\/vue\//,
+        /node_modules\/@vue\//,
+        /node_modules\/@vueuse\//,
+        /node_modules\/@element-plus\/icons-vue\//,
       ],
     },
   },
