@@ -120,7 +120,24 @@ def test_capi_renderer_uses_current_capi_and_capm3_v1beta2_contracts():
         "control_plane_endpoint": "192.0.2.20",
         "control_plane_count": 1,
         "image_url": "https://images.example.test/ubuntu.qcow2",
-        "worker_pools": [{"name": "workers", "count": 2}],
+        "control_plane_data_template": {
+            "meta_data": {"objectNames": [{"key": "hostname", "object": "machine"}]},
+            "network_data": {
+                "links": {"ethernets": [{"type": "phy", "id": "control"}]},
+                "networks": {"ipv4DHCP": [{"id": "control", "link": "control"}]},
+            },
+        },
+        "worker_pools": [{
+            "name": "workers",
+            "count": 2,
+            "data_template": {
+                "meta_data": {"objectNames": [{"key": "hostname", "object": "machine"}]},
+                "network_data": {
+                    "links": {"ethernets": [{"type": "phy", "id": "data"}]},
+                    "networks": {"ipv4DHCP": [{"id": "data", "link": "data"}]},
+                },
+            },
+        }],
     })
 
     api_versions = {item["kind"]: item["apiVersion"] for item in manifests}
@@ -161,6 +178,13 @@ def test_capi_renderer_rejects_invalid_kubernetes_version_and_worker_pool_duplic
         "name": "target-01",
         "control_plane_endpoint": "192.0.2.20",
         "image_url": "https://images.example.test/image.qcow2",
+        "control_plane_data_template": {
+            "meta_data": {"objectNames": [{"key": "hostname", "object": "machine"}]},
+            "network_data": {
+                "links": {"ethernets": [{"type": "phy", "id": "control"}]},
+                "networks": {"ipv4DHCP": [{"id": "control", "link": "control"}]},
+            },
+        },
         "worker_pools": [],
     }
 
@@ -171,7 +195,27 @@ def test_capi_renderer_rejects_invalid_kubernetes_version_and_worker_pool_duplic
         render_capi_metal3_manifests({
             **base,
             "worker_pools": [
-                {"name": "workers", "count": 1},
-                {"name": "workers", "count": 2},
+                {
+                    "name": "workers",
+                    "count": 1,
+                    "data_template": {
+                        "meta_data": {"objectNames": [{"key": "hostname", "object": "machine"}]},
+                        "network_data": {
+                            "links": {"ethernets": [{"type": "phy", "id": "data"}]},
+                            "networks": {"ipv4DHCP": [{"id": "data", "link": "data"}]},
+                        },
+                    },
+                },
+                {
+                    "name": "workers",
+                    "count": 2,
+                    "data_template": {
+                        "meta_data": {"objectNames": [{"key": "hostname", "object": "machine"}]},
+                        "network_data": {
+                            "links": {"ethernets": [{"type": "phy", "id": "data"}]},
+                            "networks": {"ipv4DHCP": [{"id": "data", "link": "data"}]},
+                        },
+                    },
+                },
             ],
         })
