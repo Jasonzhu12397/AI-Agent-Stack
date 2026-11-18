@@ -1,0 +1,396 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from typing import Any
+
+CLEANUP_LABEL = "ai-agent-stack.io/eph-cleanup"
+CLEANUP_ANNOTATION = "ai-agent-stack.io/eph-cleanup"
+DEPLOYMENT_ID_LABEL = "ai-agent-stack.io/deployment-id"
+MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
+SOURCE_UID_ANNOTATION = "ai-agent-stack.io/source-cluster-uid"
+CREDENTIAL_SCOPE_ANNOTATION = "ai-agent-stack.io/credential-scope"
+TARGET_OBSERVER_SECRET = "target-agent-source-observer"
+OPTIONAL_TARGET_KUBECONFIG_SECRET = "capi-pivot-target-kubeconfig"
+NAMESPACE = "ai-agent-system"
+RESOURCE_SCOPES = (
+    ("deployments.apps", True),
+    ("statefulsets.apps", True),
+    ("daemonsets.apps", True),
+    ("jobs.batch", True),
+    ("pods", True),
+    ("configmaps", True),
+    ("secrets", True),
+    ("clusterrolebindings.rbac.authorization.k8s.io", False),
+    ("clusterroles.rbac.authorization.k8s.io", False),
+    ("serviceaccounts", True),
+)
+
+
+class CleanupScopeError(ValueError):
+    def __init__(self, message: str, side_effects: bool = False) -> None:
+        super().__init__(message)
+        self.side_effects = side_effects
+
+
+def _run(
+    runner: Callable[..., dict[str, Any]],
+    kubeconfig: str,
+    arguments: list[str],
+    lease_lost_event: Any = None,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_COMMAND_LEASE_LOST")
+    result = runner(
+        ["kubectl", "--kubeconfig", kubeconfig, *arguments],
+        kubeconfig,
+        timeout_seconds=timeout_seconds,
+        lease_lost_event=lease_lost_event,
+        max_output_bytes=8 * 1024 * 1024,
+    )
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_KUBERNETES_API_FAILED")
+    return result
+
+
+def _namespace_args(namespaced: bool) -> list[str]:
+    return ["--namespace", NAMESPACE] if namespaced else []
+
+
+def _get(
+    runner: Callable[..., dict[str, Any]],
+    kubeconfig: str,
+    resource: str,
+    name: str,
+    namespaced: bool,
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
+    result = _run(
+        runner,
+        kubeconfig,
+        ["get", resource, name, *_namespace_args(namespaced), "-o", "json"],
+        lease_lost_event,
+    )
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_JSON_INVALID") from exc
+    if not isinstance(document, dict):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_JSON_INVALID")
+    return document
+
+
+def _patch_source_uid(
+    runner: Callable[..., dict[str, Any]],
+    kubeconfig: str,
+    resource: str,
+    name: str,
+    namespaced: bool,
+    document: dict[str, Any],
+    deployment_id: str,
+    source_cluster_uid: str,
+    lease_lost_event: Any = None,
+) -> bool:
+    metadata = document.get("metadata", {})
+    labels = metadata.get("labels", {})
+    annotations = metadata.get("annotations", {})
+    if not isinstance(metadata, dict) or not isinstance(labels, dict) or not isinstance(
+        annotations,
+        dict,
+    ):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_METADATA_INVALID")
+    if (
+        labels.get(MANAGED_BY_LABEL) != "ai-agent-stack"
+        or labels.get(CLEANUP_LABEL) != "true"
+        or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
+        or annotations.get(CLEANUP_ANNOTATION) != "true"
+    ):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_OWNERSHIP_MISMATCH")
+    current_source_uid = annotations.get(SOURCE_UID_ANNOTATION)
+    if current_source_uid not in (None, source_cluster_uid):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_SOURCE_UID_MISMATCH")
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_UID_MISSING")
+    if current_source_uid == source_cluster_uid:
+        return False
+    patch = [
+        {"op": "test", "path": "/metadata/uid", "value": uid},
+        {
+            "op": "add",
+            "path": "/metadata/annotations/ai-agent-stack.io~1source-cluster-uid",
+            "value": source_cluster_uid,
+        },
+    ]
+    _run(
+        runner,
+        kubeconfig,
+        [
+            "patch",
+            resource,
+            name,
+            *_namespace_args(namespaced),
+            "--type=json",
+            "-p",
+            json.dumps(patch, separators=(",", ":")),
+        ],
+        lease_lost_event,
+    )
+    verified = _get(
+        runner,
+        kubeconfig,
+        resource,
+        name,
+        namespaced,
+        lease_lost_event,
+    )
+    verified_annotations = verified.get("metadata", {}).get("annotations", {})
+    if verified_annotations.get(SOURCE_UID_ANNOTATION) != source_cluster_uid:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_SOURCE_UID_VERIFICATION_FAILED",
+            side_effects=True,
+        )
+    return True
+
+
+def _mark_optional_target_kubeconfig(
+    runner: Callable[..., dict[str, Any]],
+    source_kubeconfig: str,
+    deployment_id: str,
+    source_cluster_uid: str,
+    lease_lost_event: Any = None,
+) -> bool:
+    result = _run(
+        runner,
+        source_kubeconfig,
+        [
+            "get",
+            "secret",
+            OPTIONAL_TARGET_KUBECONFIG_SECRET,
+            "--namespace",
+            NAMESPACE,
+            "-o",
+            "json",
+        ],
+        lease_lost_event,
+    )
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_JSON_INVALID"
+        ) from exc
+    metadata = document.get("metadata", {})
+    labels = metadata.get("labels", {})
+    annotations = metadata.get("annotations", {})
+    if not isinstance(metadata, dict) or not isinstance(labels, dict) or not isinstance(
+        annotations,
+        dict,
+    ):
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_METADATA_INVALID"
+        )
+    if metadata.get("namespace") != NAMESPACE:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_NAMESPACE_MISMATCH"
+        )
+    if (
+        labels.get(MANAGED_BY_LABEL) not in (None, "ai-agent-stack")
+        or labels.get(CLEANUP_LABEL) not in (None, "true")
+        or labels.get(DEPLOYMENT_ID_LABEL) not in (None, deployment_id)
+        or annotations.get(CLEANUP_ANNOTATION) not in (None, "true")
+        or annotations.get(CREDENTIAL_SCOPE_ANNOTATION) not in (None, "eph-agent")
+        or annotations.get(SOURCE_UID_ANNOTATION) not in (None, source_cluster_uid)
+    ):
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_OWNERSHIP_MISMATCH"
+        )
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_TARGET_KUBECONFIG_SECRET_UID_MISSING"
+        )
+    if (
+        labels.get(MANAGED_BY_LABEL) == "ai-agent-stack"
+        and labels.get(CLEANUP_LABEL) == "true"
+        and labels.get(DEPLOYMENT_ID_LABEL) == deployment_id
+        and annotations.get(CLEANUP_ANNOTATION) == "true"
+        and annotations.get(CREDENTIAL_SCOPE_ANNOTATION) == "eph-agent"
+        and annotations.get(SOURCE_UID_ANNOTATION) == source_cluster_uid
+    ):
+        return False
+    patched_labels = {
+        **labels,
+        MANAGED_BY_LABEL: "ai-agent-stack",
+        CLEANUP_LABEL: "true",
+        DEPLOYMENT_ID_LABEL: deployment_id,
+    }
+    patched_annotations = {
+        **annotations,
+        CLEANUP_ANNOTATION: "true",
+        CREDENTIAL_SCOPE_ANNOTATION: "eph-agent",
+        SOURCE_UID_ANNOTATION: source_cluster_uid,
+    }
+    patch = [
+        {"op": "test", "path": "/metadata/uid", "value": uid},
+        {"op": "add", "path": "/metadata/labels", "value": patched_labels},
+        {"op": "add", "path": "/metadata/annotations", "value": patched_annotations},
+    ]
+    _run(
+        runner,
+        source_kubeconfig,
+        [
+            "patch",
+            "secret",
+            OPTIONAL_TARGET_KUBECONFIG_SECRET,
+            "--namespace",
+            NAMESPACE,
+            "--type=json",
+            "-p",
+            json.dumps(patch, separators=(",", ":")),
+        ],
+        lease_lost_event,
+    )
+    return True
+
+
+def attest_cleanup_scope(
+    source_kubeconfig: str,
+    target_kubeconfig: str,
+    deployment_id: str,
+    source_cluster_uid: str,
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+) -> dict[str, Any]:
+    if not isinstance(deployment_id, str) or not deployment_id:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_DEPLOYMENT_ID_REQUIRED")
+    if not isinstance(source_cluster_uid, str) or not source_cluster_uid:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_SOURCE_UID_REQUIRED")
+    mutated = 0
+    try:
+        mutated += int(
+            _mark_optional_target_kubeconfig(
+                runner,
+                source_kubeconfig,
+                deployment_id,
+                source_cluster_uid,
+                lease_lost_event,
+            )
+        )
+        selector = (
+            f"{MANAGED_BY_LABEL}=ai-agent-stack,"
+            f"{CLEANUP_LABEL}=true,"
+            f"{DEPLOYMENT_ID_LABEL}={deployment_id}"
+        )
+        observed = {}
+        for resource, namespaced in RESOURCE_SCOPES:
+            result = _run(
+                runner,
+                source_kubeconfig,
+                [
+                    "get",
+                    resource,
+                    *_namespace_args(namespaced),
+                    "--selector",
+                    selector,
+                    "-o",
+                    "json",
+                ],
+                lease_lost_event,
+                timeout_seconds=60,
+            )
+            try:
+                document = json.loads(result.get("stdout", ""))
+            except (TypeError, ValueError) as exc:
+                raise CleanupScopeError(
+                    "EPH_CLEANUP_SCOPE_INVENTORY_JSON_INVALID",
+                    side_effects=mutated > 0,
+                ) from exc
+            items = document.get("items")
+            if not isinstance(items, list):
+                raise CleanupScopeError(
+                    "EPH_CLEANUP_SCOPE_INVENTORY_INVALID",
+                    side_effects=mutated > 0,
+                )
+            observed[resource] = items
+        required = {
+            "deployments.apps": {"eph-agent"},
+            "serviceaccounts": {"eph-agent"},
+            "clusterroles.rbac.authorization.k8s.io": {"eph-agent-preflight"},
+            "clusterrolebindings.rbac.authorization.k8s.io": {"eph-agent-preflight"},
+            "secrets": {
+                "eph-agent-credentials",
+                "agent-control-plane-mtls",
+                "capi-pivot-source-kubeconfig",
+            },
+        }
+        for resource, expected_names in required.items():
+            actual_names = {
+                item.get("metadata", {}).get("name")
+                for item in observed.get(resource, [])
+                if isinstance(item, dict)
+            }
+            if not expected_names.issubset(actual_names):
+                raise CleanupScopeError(
+                    f"EPH_CLEANUP_SCOPE_REQUIRED_RESOURCE_MISSING:{resource}",
+                    side_effects=mutated > 0,
+                )
+        source_resource_count = 0
+        for resource, namespaced in RESOURCE_SCOPES:
+            for item in observed[resource]:
+                metadata = item.get("metadata", {})
+                name = metadata.get("name")
+                if not isinstance(name, str) or not name:
+                    raise CleanupScopeError(
+                        "EPH_CLEANUP_SCOPE_RESOURCE_NAME_MISSING",
+                        side_effects=mutated > 0,
+                    )
+                source_resource_count += 1
+                if _patch_source_uid(
+                    runner,
+                    source_kubeconfig,
+                    resource,
+                    name,
+                    namespaced,
+                    item,
+                    deployment_id,
+                    source_cluster_uid,
+                    lease_lost_event,
+                ):
+                    mutated += 1
+        if source_resource_count == 0:
+            raise CleanupScopeError(
+                "EPH_CLEANUP_SCOPE_SOURCE_RESOURCES_EMPTY",
+                side_effects=mutated > 0,
+            )
+        target_secret = _get(
+            runner,
+            target_kubeconfig,
+            "secret",
+            TARGET_OBSERVER_SECRET,
+            True,
+            lease_lost_event,
+        )
+        target_mutated = _patch_source_uid(
+            runner,
+            target_kubeconfig,
+            "secret",
+            TARGET_OBSERVER_SECRET,
+            True,
+            target_secret,
+            deployment_id,
+            source_cluster_uid,
+            lease_lost_event,
+        )
+        mutated += int(target_mutated)
+    except CleanupScopeError as exc:
+        exc.side_effects = exc.side_effects or mutated > 0
+        raise
+    return {
+        "cleanup_scope_attested": True,
+        "source_cleanup_resource_count": source_resource_count,
+        "target_observer_secret_source_uid_attested": True,
+        "optional_target_kubeconfig_marked": True,
+        "mutated_resource_count": mutated,
+    }
