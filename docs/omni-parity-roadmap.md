@@ -1,107 +1,77 @@
-# Omni-Inspired Infrastructure Platform Roadmap
+# Omni-Inspired Bare-Metal Kubernetes Lifecycle Roadmap
 
-## Product target
+## Architecture boundary
 
-AI Agent Studio should provide an end-to-end infrastructure management experience comparable in breadth to Sidero Omni, while retaining the platform's AI-native workflow engine and the project's required CAPI + Metal3 + Ironic bare-metal architecture.
+The product uses an Omni-inspired cluster lifecycle and fleet-management model, but its current infrastructure execution plane is **Cluster API (CAPI) + Metal3 + Ironic**. There is no direct Sidero Omni API client in this repository. Do not describe the current implementation as an Omni integration.
 
-This is a capability and product-scope reference, not a plan to copy Omni source code or adopt Talos-specific implementation details. Omni is built around Talos Linux; this project must support the selected Linux/RAM-boot EPH environment, Kubernetes distributions and the user's bare-metal network design.
+The supported runtime architecture is three agents:
 
-## Product principles
+- **Cloud Control Agent** runs in the cloud and manages deployment intent, orchestration, policy, budgets, and status.
+- **EPH Agent** runs temporarily in a single-node EPH Kubernetes bootstrap cluster. It is not deployed once per physical server.
+- **Target Agent** runs on the target Kubernetes control-plane/master nodes. It owns CAPI pivot, target-side BMH handoff, EPH runtime cleanup, and worker provisioning.
 
-- One control plane for machine inventory, cluster lifecycle, operations, policy, audit and AI-assisted automation.
-- Machines are first-class resources with identity, hardware/network inventory, lifecycle state, ownership, maintenance state and cluster assignment.
-- Cluster desired state and observed state are separate. A plan, approval or dry-run must never be displayed as a successful deployment.
-- All infrastructure mutations are typed, scoped, idempotent, approved where required, leased, audited and recoverable.
-- The cloud Supervisor is durable. EPH memory, local etcd, Agent process memory and temporary credentials are disposable.
-- Keep Control Plane and Data Plane networks distinct. Workload data traffic follows the declared Data Plane profile; management and Agent control traffic remain reachable over the Control Plane network.
-- Provider-specific writes remain disabled until compatibility and destructive-operation tests pass against the exact versions and hardware.
+There is no active Node Agent runtime. Target takeover is an automatic Target Agent responsibility after target control-plane readiness and evidence checks; Cloud Control does not approve or review the takeover.
 
-## Capability parity map
+## Intended deployment sequence
 
-| Capability area | Expected platform behavior | Project implementation direction |
-| --- | --- | --- |
-| Fleet / machine inventory | Discover, enroll, label, filter and inspect machines; show health and lifecycle | Machine inventory API and UI backed by EPH/Target Agent hardware, BMC, NIC, PCI, NUMA and Kubernetes observations |
-| Machine lifecycle | Allocate, reserve, assign, drain, maintain, reprovision and safely reclaim | Explicit machine state machine; CAPI + Metal3 BareMetalHost + Ironic/IPA adapters; guarded EPH reclamation |
-| Cluster lifecycle | Create, import, scale, upgrade, recover and delete clusters | ClusterDeployment desired state, CAPI Cluster/KCP/MachineDeployment reconciliation and observed-state tracking |
-| Cluster templates | Reusable, versioned cluster configuration with validation and diff | Versioned deployment profiles for Kubernetes, CAPI/Metal3 providers, OS image, storage and network |
-| Machine configuration | Inspect configuration, apply safe changes and report drift | Versioned machine configuration profiles, policy validation, staged rollout and rollback |
-| Health and operations | Cluster/machine health, events, logs, diagnostics and metrics | Unified observability API, event timeline, node diagnostics and audit correlation |
-| Upgrades | Plan, pre-check, roll out and verify upgrades | Compatibility gates, control-plane-first rollout, worker batches, disruption budgets and postflight |
-| Access and security | Enterprise identity, role-based access and secure remote connectivity | OIDC/SAML, tenant/project RBAC, mTLS Agent identity, short-lived credentials, approval separation and audit |
-| High availability | Durable management service and resilient Kubernetes API access | Cloud-hosted Supervisor HA, PostgreSQL HA, Redis as non-authoritative cache, backup/restore and API endpoint strategy |
-| Edge / disconnected operations | Secure management across firewalls and constrained networks | Agent-initiated outbound TLS, reconnect-safe command leases, bounded offline queue and explicit stale-state display |
-| Integrations | Infrastructure provider and ecosystem integration | CAPI, CAPM3, Metal3, Ironic, BMC vendors, CSI, CNI, registry, monitoring and ticketing connectors |
-| AI operations | Not the core Omni differentiator; this project adds it | LLM-assisted intent-to-plan, policy checks, approval, typed execution, progress summaries and knowledge-backed runbooks |
+1. Cloud Control creates a deployment intent and starts the EPH bootstrap workflow.
+2. EPH Agent operates the single-node EPH cluster and uses CAPI, Metal3, and Ironic to provision the target Kubernetes control plane.
+3. Target Agent starts on the target control-plane nodes after the target control plane is ready. It obtains target-cluster credentials from its in-cluster ServiceAccount and reads the source-cluster operator kubeconfig from its dedicated Secret.
+4. Target Agent verifies source/target identity, CAPI provider readiness, and BMH ownership evidence, then performs the CAPI move.
+5. Before changing source inventory, Target Agent validates the target observer Secret identity, deployment ownership, credential scope, source UID, and kubeconfig bytes. It then attests the cleanup inventory and performs the source-side ownership updates.
+6. Target Agent cleans up the temporary EPH runtime and manages the BMH registration/ownership handoff in the target cluster.
+7. Target Agent provisions worker MachineDeployments through CAPI/Metal3. Workers use the internal IP of the target control-plane Ironic endpoint for NTP; control-plane nodes use the configured external NTP sources.
 
-## Required product navigation
+## Implemented in the current codebase
 
-The operator experience should grow into these connected areas:
+The following are implemented in code and covered by the current CI suite:
 
-1. **Dashboard** — fleet capacity, cluster health, active operations, failed tasks and policy alerts.
-2. **Infrastructure / Machines** — all discovered machines, hardware details, BMC and network identity, labels, pool membership, lifecycle and maintenance actions.
-3. **Clusters** — cluster list, topology, control-plane and worker pools, Kubernetes/provider versions, health, events and lifecycle actions.
-4. **Cluster Templates** — reusable desired-state profiles, validation, version history and rendered diff.
-5. **Operations** — deployment, scale, upgrade, repair, drain, reprovision, pivot and reclaim workflows with approvals and live step status.
-6. **Network** — Control Plane/Data Plane profiles, NIC/PCI/VF inventory, Multus attachments, SR-IOV resources, OVS/Calico status and MTU/route validation.
-7. **Storage** — CSI capabilities, storage classes and volume health.
-8. **Observability** — machine/cluster events, logs, metrics, diagnostics and audit timeline.
-9. **Identity & Governance** — OIDC/SAML, tenant/project roles, policies, approvals, credentials and audit.
-10. **AI Agent Studio** — model routing, Agents, workflows, knowledge, integrations and natural-language operations.
+- EPH CAPI/Metal3 rendering and guarded server-side dry-run/apply paths.
+- Target-side CAPI pivot with source and target kubeconfig handling, provider readiness checks, and ownership evidence.
+- EPH cleanup inventory validation, including Metal3 namespace Role/RoleBinding resources and target observer Secret checks before mutation.
+- Target Agent worker provisioning using CAPI/Metal3 resources, Ironic capacity checks, and the internal Ironic NTP endpoint.
+- Worker network-contract validation for control/data-plane separation, Multus NetworkAttachmentDefinitions, OVS/SR-IOV CNI types, and SR-IOV resource-name alignment.
+- SR-IOV Device Plugin ConfigMap ownership and resource validation, plus checks that the existing Device Plugin DaemonSet mounts the expected ConfigMap and matches the configured pool node selectors and tolerations.
+- A separately configurable SR-IOV Device Plugin namespace with scoped ConfigMap RBAC.
+- Tenant token reservation, idempotency, expiry, daily/monthly budget enforcement, and bounded model/tool outputs.
+- Three-agent deployment manifests, Agent mTLS ingress validation, Vue production build, Compose startup, and API/UI smoke tests.
 
-Existing Vue navigation should be evolved rather than replaced. Every operational screen must be backed by real APIs and meaningful loading, empty, error, permission-denied and stale-data states; no static mock dashboard should imply live infrastructure.
+The current main-branch CI run is the automated verification baseline. CI does not replace a physical bare-metal acceptance test.
 
-## Delivery phases and acceptance gates
+## Remaining implementation work
 
-### Phase A — Fleet foundation
+### 1. Network add-on lifecycle
 
-- Introduce durable machine inventory and lifecycle resources, with stable hardware identity and tenant/project scope.
-- Correlate Agent identity, BMC identity, system UUID/serial, NIC MAC/PCI identity and BareMetalHost identity without treating any single mutable field as sufficient proof.
-- Add inventory APIs, filters, detail view, labels, pool membership and observation timestamps.
-- Acceptance: tests for duplicate identity, tenant isolation, stale heartbeat, identity conflict, revoked Agent and incomplete hardware inventory.
+Worker provisioning currently **verifies** that the required NetworkAttachmentDefinitions and SR-IOV Device Plugin DaemonSet already exist and match the requested resource, node-selector, and toleration contract. It does not yet install or upgrade the full network stack.
 
-### Phase B — Cluster operations
+The next implementation must add a versioned network-addon release adapter for:
 
-- Persist desired cluster specification separately from observed cluster state.
-- Add create/import, topology, control-plane and worker-pool views, reconciliation status and operation history.
-- Add safe scale and maintenance workflows with preflight, approval, bounded rollout and postflight.
-- Acceptance: API and UI integration tests prove that plans and dry-runs cannot become successful deployments; incomplete or unready replicas block progression.
+- Multus CNI
+- OVS CNI and OVS datapath configuration
+- Calico control-plane/pod networking
+- SR-IOV CNI
+- SR-IOV Network Device Plugin and its per-pool scheduling policies
+- DPDK/VF binding and resource exposure
 
-### Phase C — Real bare-metal provisioning
+The adapter must pin images/charts, validate rendered manifests, use server-side dry-run before apply, record ownership, and support rollback. It must not silently continue when a required NAD, resource name, DaemonSet, or VF is missing.
 
-- Implement version-pinned CAPI/CAPM3/Metal3/Ironic adapters, starting with read-only discovery and server-side dry-run.
-- Add narrowly scoped create/update operations for Cluster, KubeadmControlPlane, MachineDeployment, BareMetalHost and required templates.
-- Add BMC/IPA power, boot, inspection and provisioning actions behind separate approval and capability gates.
-- Acceptance: isolated hardware lab tests verify provisioning, failure recovery, idempotency, audit, credential redaction and no cross-tenant effects. No production enablement based on mocks alone.
+### 2. Day-2 lifecycle
 
-### Phase D — Day-2 lifecycle
+The current worker path fails closed on unsafe scale-down. A drain executor and disruption-aware workflow are still required before enabling scale-down. Upgrade, repair, replacement, and rollback workflows also need complete state machines and end-to-end tests.
 
-- Control-plane and worker upgrades, rolling maintenance, drain/uncordon, replacement, cluster repair and deletion.
-- Machine pool capacity, scheduling/placement constraints, GPU/NUMA/SR-IOV-aware inventory and workload readiness.
-- Acceptance: fault-injection tests, rollback/retry tests, quorum and PodDisruptionBudget checks, and post-operation health verification.
+### 3. Physical infrastructure acceptance
 
-### Phase E — EPH handoff and safe reclamation
+Run acceptance tests against actual BMC/Redfish or IPMI endpoints, Ironic inspection and deployment, IPA boot media lifecycle, CAPI pivot, BMH ownership transfer, EPH cleanup, chrony reachability, SR-IOV VF allocation, and DPDK dataplane traffic. Unit tests and Compose smoke tests cannot prove these hardware/network behaviors.
 
-- Provision the first target Control Plane, deploy Target Agent there, resume durable task state, pivot CAPI state, verify reconciliation, then provision remaining Control Plane and Data Plane workers.
-- Reclaim the original EPH host only after identity re-verification, CAPI pivot verification, target worker readiness and all configured security/reset steps.
-- Acceptance: physical-lab end-to-end tests prove the complete lifecycle. Until then, reclamation stays fail-closed.
+### 4. Omni-style product capabilities
 
-### Phase F — Enterprise operations
+The product still needs complete fleet inventory, cluster lifecycle views, day-2 operations, multi-provider addon management, and full GUI/backend parity. If direct integration with an external Omni service is required, implement it as a separate provider adapter; it is not part of the current CAPI/Metal3 execution path.
 
-- OIDC/SAML, fine-grained RBAC, HA deployment, backup/restore, multi-site fleet views, audit export, policy packs and secure disconnected-site operation.
-- Acceptance: security tests, restore drills, HA failover tests and documented operational SLOs.
+## Safety invariants
 
-## Architecture boundaries
-
-- **Cloud Supervisor:** API, authentication, policy, LLM orchestration, durable workflows, approval, audit, inventory and command dispatch.
-- **EPH Agent:** temporary bootstrap-cluster inspection and explicitly authorized bootstrap operations.
-- **Target Agent:** target-cluster reconciliation, health, day-2 operations and worker readiness.
-- **CAPI / CAPM3 / Metal3 / Ironic / IPA:** infrastructure provisioning control chain; adapters are version-aware and independently testable.
-- **PostgreSQL:** authoritative desired state, observed snapshots, commands, checkpoints, approvals and audit.
-- **Redis:** cache and ephemeral coordination only; never the sole source of deployment state.
-- **Network:** management/control traffic on the ordinary Control Plane network; workload traffic on the declared Data Plane network using Multus and SR-IOV/DPDK where required.
-
-## Current known gaps
-
-At the time this roadmap was added, the repository has dual-Agent enrollment and command leasing, persisted cluster planning/checkpoints, read-only CAPI/Metal3 observation, network inventory, approval primitives and a Vue operator workspace. The actual CAPI/Metal3/Ironic provisioning write adapter is not enabled. Machine inventory is not yet a complete first-class fleet lifecycle service. Full cluster upgrade/scale/repair operations, production OIDC/SAML and management-plane HA are not complete. The EPH reclaim executor must remain fail-closed.
-
-The GitHub CI suite validates code, tests, frontend build and Compose smoke behavior; it does not substitute for physical bare-metal provisioning, BMC/IPA tests, CAPI pivot tests or network dataplane performance tests.
+- Never reintroduce the deprecated Node Agent runtime.
+- Never allow Cloud Control to approve or gate Target Agent takeover.
+- Never mutate source inventory before validating target identity and cleanup ownership.
+- Never provision workers when required Ironic capacity, internal NTP, NADs, SR-IOV resources, or Device Plugin scheduling policy is missing.
+- Never enable scale-down until a drain executor and disruption checks are present.
+- Never treat CI success as proof of physical bare-metal or DPDK dataplane acceptance.
