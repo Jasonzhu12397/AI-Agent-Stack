@@ -25,6 +25,7 @@ from core.token_budget import (
     TenantTokenBudgetExceeded,
     reserve_tenant_tokens,
     settle_tenant_tokens,
+    resolve_provider_token_usage,
 )
 from core.tool_approvals import (
     consume_approved_tool_call,
@@ -792,21 +793,12 @@ def execute_agent_run(task):
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_UNEXPECTEDLY"
                 ) from exc
-            actual_input_tokens = response.input_tokens or (
-                0 if model_config.provider.provider_type == "fake"
-                else estimated_input_tokens
-            )
-            output_payload = json.dumps(
-                {
-                    "content": response.content,
-                    "tool_calls": response.tool_calls,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            actual_output_tokens = response.output_tokens or (
-                0 if model_config.provider.provider_type == "fake"
-                else (len(output_payload) + 1) // 2
+            actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
+                provider_type=model_config.provider.provider_type,
+                reported_input_tokens=response.input_tokens,
+                reported_output_tokens=response.output_tokens,
+                input_token_ceiling=input_token_ceiling,
+                output_token_ceiling=allowed_output_tokens,
             )
             settle_tenant_tokens(
                 usage=token_reservation,
