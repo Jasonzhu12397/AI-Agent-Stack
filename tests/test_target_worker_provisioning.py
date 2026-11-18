@@ -168,7 +168,7 @@ def _proof():
     }
 
 
-def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
+def _runner_factory(available_bmhs=2, existing_machine_deployment=None, updated_replicas=2):
     calls = []
     applied = {}
     cluster = {
@@ -270,7 +270,11 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
                 for doc in docs:
                     if doc["kind"] == "MachineDeployment":
                         doc["metadata"]["generation"] = 1
-                        doc["status"] = {"observedGeneration": 1}
+                        doc["status"] = {
+                            "observedGeneration": 1,
+                            "replicas": 2,
+                            "updatedReplicas": updated_replicas,
+                        }
                     applied[doc["metadata"]["name"]] = doc
             return {"available": True, "stdout": "applied", "stderr": ""}
         raise AssertionError(arguments)
@@ -300,7 +304,9 @@ def test_worker_provisioning_discovers_crds_dry_runs_and_applies_all_resources()
     assert result["worker_provisioning_server_dry_run_passed"] is True
     assert result["worker_provisioning_controller_observed"] is True
     assert result["desired_worker_count"] == 2
-    assert result["new_worker_capacity_verified"] is True
+    assert result["preprovision_bmh_capacity_verified"] is True
+    assert result["preprovision_available_bmh_count"] == 2
+    assert result["controller_updated_replicas"] == 2
     assert result["worker_ip_pools_verified"] == ["workers-data"]
     assert set(applied) == {
         "workers",
@@ -313,6 +319,27 @@ def test_worker_provisioning_discovers_crds_dry_runs_and_applies_all_resources()
     assert "server 10.0.0.10 iburst prefer" in script
     assert "pool " not in script
     assert sum(1 for call in calls if call[0] == "apply") == 5
+
+
+def test_worker_provisioning_does_not_treat_observed_generation_as_reconciled_replicas(
+    monkeypatch,
+):
+    monkeypatch.setattr("apps.target_agent.worker_provisioning.time.sleep", lambda _seconds: None)
+    runner, _calls, _applied = _runner_factory(updated_replicas=0)
+    try:
+        execute_worker_provisioning(
+            _payload(),
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_REPLICAS_NOT_RECONCILED"
+        assert exc.side_effects is True
+    else:
+        raise AssertionError(
+            "Observed generation without updated replicas must not report provisioning"
+        )
 
 
 def test_worker_provisioning_blocks_when_free_bmh_capacity_is_insufficient():
