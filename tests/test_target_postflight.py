@@ -49,7 +49,7 @@ def _fixtures():
             "status": {"infrastructureReady": True, "controlPlaneReady": True},
         },
         "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io": {
-            "spec": {"replicas": 3},
+            "spec": {"replicas": 3, "version": "v1.37.0"},
             "status": {"readyReplicas": 3, "initialized": True},
         },
         "machinedeployments.cluster.x-k8s.io": {
@@ -65,7 +65,11 @@ def _fixtures():
                     "ai-agent-stack.io/target-cluster-uid": "target-cluster-uid",
                 },
             },
-            "spec": {"replicas": 2},
+            "spec": {
+                "replicas": 2,
+                "clusterName": "target",
+                "template": {"spec": {"version": "v1.37.0"}},
+            },
             "status": {
                 "readyReplicas": 2,
                 "updatedReplicas": 2,
