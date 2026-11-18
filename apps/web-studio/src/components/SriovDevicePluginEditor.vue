@@ -77,6 +77,14 @@ function updateRootDevices(index: number, value: string[]): void {
   const name = selectedPool.value;
   update((draft) => { draft[name].sriov_network_device_plugin_configmap_data.resourceList[index].selectors.rootDevices = value; });
 }
+function setRdma(index: number, value: boolean): void {
+  const name = selectedPool.value;
+  update((draft) => {
+    const resource = draft[name].sriov_network_device_plugin_configmap_data.resourceList[index];
+    resource.isRdma = value;
+    resource.selectors.isRdma = value;
+  });
+}
 function updateList(index: number, field: "vendors" | "drivers", value: string): void {
   const name = selectedPool.value;
   update((draft) => {
@@ -227,7 +235,7 @@ defineExpose({ validate });
               <el-option v-for="address in props.pciAddresses ?? []" :key="address" :label="address" :value="address" />
             </el-select>
           </el-form-item>
-          <el-checkbox v-model="resource.isRdma">RDMA enabled</el-checkbox>
+          <el-checkbox :model-value="resource.isRdma" @change="(value: string | number | boolean) => setRdma(index, Boolean(value))">RDMA enabled</el-checkbox>
         </article>
       </div>
     </div>
