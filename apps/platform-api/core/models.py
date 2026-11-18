@@ -287,6 +287,7 @@ class AgentRun(models.Model):
     provider_name = models.CharField(max_length=120, blank=True)
     model_name = models.CharField(max_length=160, blank=True)
     latency_ms = models.PositiveIntegerField(default=0)
+    execution_state = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
