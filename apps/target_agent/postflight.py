@@ -386,17 +386,24 @@ def verify_target_postflight(
     if not ovs_nads:
         raise PostflightError("POSTFLIGHT_OVS_DATA_PLANE_NAD_MISSING")
 
-    dpdk_resource_names = {
-        name
+    dpdk_resources_by_worker = [
+        {
+            name
+            for name, quantity in node.get("status", {}).get("allocatable", {}).items()
+            if "dpdk" in name.lower() and _quantity_is_positive(quantity)
+        }
         for node in ready_workers
-        for name, quantity in node.get("status", {}).get("allocatable", {}).items()
-        if "dpdk" in name.lower() and _quantity_is_positive(quantity)
-    }
+    ]
+    dpdk_resource_names = (
+        set.intersection(*dpdk_resources_by_worker)
+        if dpdk_resources_by_worker
+        else set()
+    )
     if not dpdk_resource_names:
         raise PostflightError("POSTFLIGHT_DPDK_DEVICE_RESOURCE_MISSING")
     for node in ready_workers:
         allocatable = node.get("status", {}).get("allocatable", {})
-        if not any(
+        if not all(
             _quantity_is_positive(allocatable.get(name))
             for name in sriov_resource_names
         ):
