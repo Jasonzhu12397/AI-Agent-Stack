@@ -197,6 +197,7 @@ def finish_task(task_id, lease_token, result):
                         "provider_name": result["provider"],
                         "model_name": result["model"],
                         "latency_ms": result["latency_ms"],
+                        "execution_state": {},
                     }
                 )
             AgentRun.objects.filter(task=task).update(**run_update)
