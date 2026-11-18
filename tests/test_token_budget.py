@@ -336,3 +336,70 @@ def test_provider_token_usage_rejects_invalid_counts(invalid):
             input_token_ceiling=1200,
             output_token_ceiling=800,
         )
+
+
+
+@pytest.mark.django_db
+def test_token_reservation_rejects_agent_run_from_another_task(token_budget_run):
+    task, run, _ = token_budget_run
+    other_task = Task.objects.create(
+        tenant=task.tenant,
+        project=task.project,
+        created_by=task.created_by,
+        task_type="agent.run",
+        idempotency_key="other-token-budget-task",
+        available_at=timezone.now(),
+    )
+
+    with pytest.raises(ValueError, match="outside the token reservation task scope"):
+        reserve_tenant_tokens(
+            task=other_task,
+            agent_run=run,
+            idempotency_key="cross-task-agent-run",
+            requested_tokens=10,
+        )
+
+
+@pytest.mark.django_db
+def test_token_reservation_rejects_workflow_run_from_another_task():
+    user = get_user_model().objects.create_user(username="workflow-scope-user")
+    tenant = Tenant.objects.create(name="Workflow scope tenant", slug="workflow-scope-tenant")
+    project = Project.objects.create(tenant=tenant, name="Workflow scope", slug="workflow-scope")
+    task = Task.objects.create(
+        tenant=tenant, project=project, created_by=user, task_type="workflow.run",
+        idempotency_key="workflow-scope-task", available_at=timezone.now(),
+    )
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant, project=project, created_by=user, name="Scope workflow",
+        slug="scope-workflow",
+    )
+    version = WorkflowVersion.objects.create(
+        workflow=workflow, version=1, definition_snapshot={}, created_by=user,
+    )
+    workflow_run = WorkflowRun.objects.create(task=task, workflow_version=version)
+    other_task = Task.objects.create(
+        tenant=tenant, project=project, created_by=user, task_type="workflow.run",
+        idempotency_key="other-workflow-scope-task", available_at=timezone.now(),
+    )
+    TenantTokenBudget.objects.create(tenant=tenant, daily_limit=100, monthly_limit=100)
+
+    with pytest.raises(ValueError, match="outside the token reservation task scope"):
+        reserve_tenant_tokens(
+            task=other_task,
+            workflow_run=workflow_run,
+            idempotency_key="cross-task-workflow-run",
+            requested_tokens=10,
+        )
+
+
+@pytest.mark.parametrize("key", ["", "   ", "x" * 161, None])
+@pytest.mark.django_db
+def test_token_reservation_rejects_invalid_idempotency_keys(token_budget_run, key):
+    task, run, _ = token_budget_run
+    with pytest.raises(ValueError, match="idempotency key"):
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key=key,
+            requested_tokens=10,
+        )
