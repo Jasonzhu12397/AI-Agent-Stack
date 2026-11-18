@@ -459,6 +459,7 @@ def verify_target_postflight(
             or not required_namespace
             or not isinstance(required_name, str)
             or not required_name
+            or not isinstance(expected_type, str)
             or expected_type not in {"sriov", "ovs"}
             or (expected_type == "sriov" and (not isinstance(expected_resource, str) or not expected_resource))
             or (expected_type == "ovs" and expected_resource is not None)
