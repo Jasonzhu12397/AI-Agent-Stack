@@ -769,7 +769,7 @@ def execute_agent_run(task):
                     "Provider usage exceeded the remaining agent token budget"
                 )
             if not response.tool_calls:
-                return {
+                final_result = {
                     "content": response.content,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -778,6 +778,17 @@ def execute_agent_run(task):
                     "latency_ms": latency_ms,
                     "tool_calls": total_tool_calls,
                 }
+                _persist_agent_execution_state(
+                    agent_run,
+                    messages,
+                    iteration,
+                    input_tokens,
+                    output_tokens,
+                    latency_ms,
+                    total_tool_calls,
+                    final_result=final_result,
+                )
+                return final_result
             if not offered_tools:
                 raise PermanentTaskError("Model returned tool calls but no tools were authorized")
             try:
@@ -798,6 +809,17 @@ def execute_agent_run(task):
                     "content": response.content or None,
                     "tool_calls": response.tool_calls,
                 }
+            )
+            _persist_agent_execution_state(
+                agent_run,
+                messages,
+                iteration,
+                input_tokens,
+                output_tokens,
+                latency_ms,
+                total_tool_calls,
+                pending_raw_tool_calls=current_raw_tool_calls,
+                next_call_index=0,
             )
         for call_index, call in enumerate(calls):
             absolute_call_index = current_call_offset + call_index
@@ -820,6 +842,17 @@ def execute_agent_run(task):
                     "max_iterations": max_iterations,
                     "model_config_id": str(model_config.id),
                 }
+                _persist_agent_execution_state(
+                    agent_run,
+                    messages,
+                    iteration,
+                    input_tokens,
+                    output_tokens,
+                    latency_ms,
+                    total_tool_calls,
+                    pending_raw_tool_calls=current_raw_tool_calls,
+                    next_call_index=absolute_call_index,
+                )
                 try:
                     create_pending_tool_approval(
                         task_id=task.id,
@@ -849,6 +882,26 @@ def execute_agent_run(task):
             )
             if call["id"] == approved_call_id:
                 approved_call_id = None
+            _persist_agent_execution_state(
+                agent_run,
+                messages,
+                iteration,
+                input_tokens,
+                output_tokens,
+                latency_ms,
+                total_tool_calls,
+                pending_raw_tool_calls=current_raw_tool_calls,
+                next_call_index=absolute_call_index + 1,
+            )
+        _persist_agent_execution_state(
+            agent_run,
+            messages,
+            iteration + 1,
+            input_tokens,
+            output_tokens,
+            latency_ms,
+            total_tool_calls,
+        )
     raise PermanentTaskError("Agent reached max_iterations before producing a final answer")
 
 
