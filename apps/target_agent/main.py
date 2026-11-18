@@ -681,6 +681,7 @@ def _observe_worker_readiness(payload: dict[str, Any]) -> dict[str, Any]:
 def _revoke_source_observer_secret(
     deployment_id: str,
     source_cluster_uid: str,
+    lease_lost_event: Any = None,
 ) -> bool:
     namespace = os.environ.get("AGENT_LEASE_NAMESPACE", "ai-agent-system")
     secret_name = "target-agent-source-observer"
@@ -716,6 +717,8 @@ def _revoke_source_observer_secret(
     uid = metadata.get("uid")
     if not isinstance(uid, str) or not uid:
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_UID_MISSING")
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise HandoffError("EPH_CLEANUP_COMMAND_LEASE_LOST")
     deleted = _kubectl([
         "delete",
         "secret",
@@ -728,6 +731,8 @@ def _revoke_source_observer_secret(
     ], timeout=150)
     if not deleted.get("available"):
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_REVOCATION_FAILED")
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise HandoffError("EPH_CLEANUP_COMMAND_LEASE_LOST")
     verification = _kubectl([
         "get",
         "secret",
@@ -767,6 +772,7 @@ def _execute_attested_eph_cleanup(
     observer_revoked = _revoke_source_observer_secret(
         payload.get("deployment_id", ""),
         proof.get("source_cluster_uid", ""),
+        lease_lost_event,
     )
     source_credentials_revoked = cleanup.get("eph_credentials_revoked") is True
     return {
