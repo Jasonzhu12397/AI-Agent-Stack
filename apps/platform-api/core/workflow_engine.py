@@ -27,6 +27,7 @@ from core.token_budget import (
     TenantTokenBudgetExceeded,
     reserve_tenant_tokens,
     settle_tenant_tokens,
+    resolve_provider_token_usage,
 )
 
 
@@ -634,12 +635,12 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             raise WorkflowValidationError(
                 "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
             ) from exc
-        actual_input_tokens = response.input_tokens or (
-            0 if model.provider.provider_type == "fake" else estimated_input_tokens
-        )
-        output_bytes = len(response.content.encode("utf-8"))
-        actual_output_tokens = response.output_tokens or (
-            0 if model.provider.provider_type == "fake" else (output_bytes + 1) // 2
+        actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
+            provider_type=model.provider.provider_type,
+            reported_input_tokens=response.input_tokens,
+            reported_output_tokens=response.output_tokens,
+            input_token_ceiling=reservation_input_token_ceiling,
+            output_token_ceiling=allowed_output_tokens,
         )
         if token_reservation is not None:
             settle_tenant_tokens(
