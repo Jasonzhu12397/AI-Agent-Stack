@@ -737,7 +737,6 @@ def execute_agent_run(task):
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
                 ) from exc
-            _renew_agent_lease(task)
             actual_input_tokens = response.input_tokens or (
                 0 if model_config.provider.provider_type == "fake"
                 else estimated_input_tokens
@@ -789,6 +788,7 @@ def execute_agent_run(task):
                     total_tool_calls,
                     final_result=final_result,
                 )
+                _renew_agent_lease(task)
                 return final_result
             if not offered_tools:
                 raise PermanentTaskError("Model returned tool calls but no tools were authorized")
@@ -822,6 +822,7 @@ def execute_agent_run(task):
                 pending_raw_tool_calls=current_raw_tool_calls,
                 next_call_index=0,
             )
+            _renew_agent_lease(task)
         for call_index, call in enumerate(calls):
             absolute_call_index = current_call_offset + call_index
             tool = tools_by_name[call["name"]]
@@ -873,7 +874,6 @@ def execute_agent_run(task):
                 ) from exc
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
-            _renew_agent_lease(task)
             messages.append(
                 {
                     "role": "tool",
@@ -894,6 +894,7 @@ def execute_agent_run(task):
                 pending_raw_tool_calls=current_raw_tool_calls,
                 next_call_index=absolute_call_index + 1,
             )
+            _renew_agent_lease(task)
         _persist_agent_execution_state(
             agent_run,
             messages,
