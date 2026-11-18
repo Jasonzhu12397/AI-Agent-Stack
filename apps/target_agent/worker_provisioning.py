@@ -262,14 +262,18 @@ def _network_contract(
             raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_INVALID")
         key = (attachment_namespace, attachment_name)
         if key in attachment_keys:
-            raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_DUPLICATE")
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_DUPLICATE"
+            )
         attachment_keys.add(key)
         if cni_type == "sriov":
             required_sriov_resources.add(resource_name)
         else:
             required_ovs_count += 1
     if not required_sriov_resources or required_ovs_count < 1:
-        raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_TYPES_INCOMPLETE")
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_TYPES_INCOMPLETE"
+        )
 
     network_data = data_template.get("spec", {}).get("networkData")
     if not isinstance(network_data, dict):
