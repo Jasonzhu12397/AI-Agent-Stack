@@ -148,3 +148,30 @@ def release_tenant_tokens(*, usage):
     locked.reserved_tokens = 0
     locked.save(update_fields=["status", "reserved_tokens", "updated_at"])
     return locked
+
+
+def resolve_provider_token_usage(
+    *,
+    provider_type: str,
+    reported_input_tokens: int,
+    reported_output_tokens: int,
+    input_token_ceiling: int,
+    output_token_ceiling: int,
+) -> tuple[int, int]:
+    values = (
+        reported_input_tokens,
+        reported_output_tokens,
+        input_token_ceiling,
+        output_token_ceiling,
+    )
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in values
+    ):
+        raise ValueError("Provider token usage and ceilings must be non-negative integers")
+    if provider_type == "fake":
+        return 0, 0
+    return (
+        reported_input_tokens or input_token_ceiling,
+        reported_output_tokens or output_token_ceiling,
+    )
