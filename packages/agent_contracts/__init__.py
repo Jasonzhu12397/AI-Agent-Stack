@@ -9,6 +9,18 @@ from .models import (
     CommandResult,
     DeploymentCheckpoint,
 )
+from .orchestration import (
+    DeploymentPhase,
+    OrchestrationError,
+    StepPlan,
+    build_idempotency_key,
+    build_payload,
+    is_terminal,
+    next_phase_after,
+    phase_index,
+    plan_next_step,
+    role_for_action,
+)
 
 __all__ = [
     "AgentHeartbeat",
@@ -18,4 +30,14 @@ __all__ = [
     "CommandLease",
     "CommandResult",
     "DeploymentCheckpoint",
+    "DeploymentPhase",
+    "OrchestrationError",
+    "StepPlan",
+    "build_idempotency_key",
+    "build_payload",
+    "is_terminal",
+    "next_phase_after",
+    "phase_index",
+    "plan_next_step",
+    "role_for_action",
 ]

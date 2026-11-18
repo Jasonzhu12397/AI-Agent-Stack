@@ -10,6 +10,7 @@ dist/
 build/
 *.egg-info/
 node_modules/
+*.tsbuildinfo
 .DS_Store
 
 .env.cloud
