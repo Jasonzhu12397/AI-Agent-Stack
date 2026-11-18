@@ -104,4 +104,36 @@ class Migration(migrations.Migration):
                 name="tenant_token_usage_period_idx",
             ),
         ),
+        migrations.AlterField(
+            model_name="tenanttokenusage",
+            name="agent_run",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="token_usage",
+                to="core.agentrun",
+            ),
+        ),
+        migrations.AddField(
+            model_name="tenanttokenusage",
+            name="workflow_run",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="token_usage",
+                to="core.workflowrun",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="tenanttokenusage",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(agent_run__isnull=False, workflow_run__isnull=True)
+                    | models.Q(agent_run__isnull=True, workflow_run__isnull=False)
+                ),
+                name="tenant_token_usage_exactly_one_run",
+            ),
+        ),
     ]
