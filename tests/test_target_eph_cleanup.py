@@ -581,3 +581,32 @@ def test_target_agent_treats_missing_observer_secret_as_idempotent_noop(monkeypa
     assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is False
     assert len(calls) == 1
     assert not any(call[0] == "delete" for call in calls)
+
+
+
+def test_target_cleanup_requires_trusted_cleanup_scope_attestation(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ownership observation must not run without trusted cleanup proof")
+        ),
+    )
+    outcome = target_main.execute({
+        "action": "target.eph.cleanup",
+        "payload": {
+            "deployment_id": "deployment-1",
+            "target_namespace": "metal3",
+            "target_cluster_name": "target",
+            "eph_namespace": "ai-agent-system",
+        },
+        "deployment_context": {
+            "eph_pivot_attestation": {
+                "source_cluster_uid": "source-uid",
+                "target_cluster_uid": "target-uid",
+            },
+        },
+        "deployment_checkpoint": {"phase": "bmh_registry_migrated"},
+    })
+    assert outcome["status"] == "blocked"
+    assert outcome["error_code"] == "EPH_CLEANUP_SCOPE_ATTESTATION_REQUIRED"
