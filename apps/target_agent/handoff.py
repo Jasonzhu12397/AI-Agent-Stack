@@ -14,6 +14,8 @@ class HandoffError(ValueError):
 
 class HandoffPhase(StrEnum):
     EPH_SINGLE_NODE_READY = "eph_single_node_ready"
+    BMH_REGISTERED = "bmh_registered"
+    BMH_READY = "bmh_ready"
     TARGET_CONTROL_PLANE_READY = "target_control_plane_ready"
     TARGET_AGENT_READY = "target_agent_ready"
     CAPI_PIVOT_VERIFIED = "capi_pivot_verified"
@@ -70,6 +72,25 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         if evidence.get("eph_node_count") != 1:
             raise HandoffError("HANDOFF_EPH_MUST_BE_SINGLE_NODE")
         _require(evidence, "eph_source_preflight_passed")
+    elif phase is HandoffPhase.BMH_REGISTERED:
+        _require(evidence, "bmh_registration_applied")
+        _require(evidence, "bmh_secret_refs_verified")
+        count = evidence.get("bmh_count")
+        inventory_count = evidence.get("bmh_inventory_count")
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 1
+            or inventory_count != count
+        ):
+            raise HandoffError("HANDOFF_BMH_REGISTRATION_INVENTORY_INCOMPLETE")
+    elif phase is HandoffPhase.BMH_READY:
+        expected = evidence.get("expected_bmh_count")
+        ready = evidence.get("bmh_ready_count")
+        if not isinstance(expected, int) or expected < 1 or ready != expected:
+            raise HandoffError("HANDOFF_BMH_READINESS_INCOMPLETE")
+        _require(evidence, "bmh_all_operational")
+        _require(evidence, "ironic_inventory_verified")
     elif phase is HandoffPhase.TARGET_CONTROL_PLANE_READY:
         _require(evidence, "target_control_plane_ready")
         if evidence.get("ready_master_count", 0) < 3:
