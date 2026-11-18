@@ -19,7 +19,14 @@ RESOURCE_ORDER = (
     "pods",
     "configmaps",
     "secrets",
+    "clusterrolebindings.rbac.authorization.k8s.io",
+    "clusterroles.rbac.authorization.k8s.io",
+    "serviceaccounts",
 )
+CLUSTER_SCOPED_RESOURCES = {
+    "clusterrolebindings.rbac.authorization.k8s.io",
+    "clusterroles.rbac.authorization.k8s.io",
+}
 MAX_INVENTORY_BYTES = 8 * 1024 * 1024
 
 
@@ -63,6 +70,12 @@ def _attestation(context: Any) -> dict[str, Any]:
     if proof["source_cluster_uid"] == proof["target_cluster_uid"]:
         raise EphCleanupError("EPH_CLEANUP_CLUSTER_UIDS_NOT_DISTINCT")
     return proof
+
+
+def _namespace_args(resource: str, namespace: str) -> list[str]:
+    if resource in CLUSTER_SCOPED_RESOURCES:
+        return []
+    return ["--namespace", namespace]
 
 
 def _run(
