@@ -99,7 +99,7 @@ require_secret_keys "$EPH_CONTEXT" eph-agent-credentials control-url agent-id in
 require_secret_keys "$EPH_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 require_secret_keys "$EPH_CONTEXT" capi-pivot-source-kubeconfig kubeconfig
 require_secret_keys "$TARGET_CONTEXT" target-agent-credentials control-url agent-id installation-id cluster-id ironic-api-url ironic-api-token ironic-internal-ntp-ip
-require_secret_keys "$TARGET_CONTEXT" target-agent-source-observer kubeconfig
+require_secret_keys "$TARGET_CONTEXT" target-agent-source-operator kubeconfig
 require_secret_keys "$TARGET_CONTEXT" agent-control-plane-mtls ca.crt tls.crt tls.key
 
 rendered_apply "$CLOUD_CONTEXT" "$SCRIPT_DIR/cloud-control-agent.yaml" "$CLOUD_CONTROL_IMAGE" "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION" dry-run
@@ -126,7 +126,7 @@ if kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system get secret \
     kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system annotate secret \
         capi-pivot-target-kubeconfig ai-agent-stack.io/credential-scope=eph-agent --overwrite
 fi
-mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-observer
+mark_eph_cleanup_resources "$TARGET_CONTEXT" secret target-agent-source-operator
 
 kubectl --context "$CLOUD_CONTEXT" --namespace ai-agent-system rollout status deployment/cloud-control-agent --timeout="$ROLLOUT_TIMEOUT"
 kubectl --context "$EPH_CONTEXT" --namespace ai-agent-system rollout status deployment/eph-agent --timeout="$ROLLOUT_TIMEOUT"
