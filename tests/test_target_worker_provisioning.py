@@ -173,6 +173,7 @@ def _runner_factory(
     existing_machine_deployment=None,
     updated_replicas=2,
     missing_attachments=None,
+    sriov_resource_name="intel.com/sriov_dpdk",
 ):
     calls = []
     applied = {}
@@ -255,7 +256,7 @@ def _runner_factory(
                     "cniVersion": "0.3.1",
                     "name": "data-sriov",
                     "type": "sriov",
-                    "resourceName": "intel.com/sriov_dpdk",
+                    "resourceName": sriov_resource_name,
                 },
                 "data-ovs": {
                     "cniVersion": "0.3.1",
@@ -655,8 +656,13 @@ def test_lifecycle_command_payload_binds_cloud_deployment_identity():
 
 
 def test_worker_provisioning_applies_sriov_configmap_from_selected_pci_resources():
-    runner, calls, applied = _runner_factory()
+    runner, calls, applied = _runner_factory(
+        sriov_resource_name="mellanox.com/mlnx_dpdk_left",
+    )
     payload = _payload()
+    payload["worker_network_contract"]["required_network_attachments"][0][
+        "resource_name"
+    ] = "mellanox.com/mlnx_dpdk_left"
     pool = {
         "node_selectors": {"type": "high-throughput"},
         "tolerations": [
