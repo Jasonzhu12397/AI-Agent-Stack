@@ -1,3 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-sriov-configmaps
+  namespace: REPLACE_WITH_TARGET_CAPI_NAMESPACE
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-sriov-configmaps
+  namespace: REPLACE_WITH_TARGET_CAPI_NAMESPACE
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-sriov-configmaps
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -209,6 +233,8 @@ spec:
                 secretKeyRef:
                   name: target-agent-credentials
                   key: required-controller-deployments
+            - name: TARGET_CAPI_NAMESPACE
+              value: REPLACE_WITH_TARGET_CAPI_NAMESPACE
             - name: CAPI_PIVOT_SOURCE_KUBECONFIG
               value: /var/run/secrets/ai-agent/source-observer/config
             - name: AGENT_INSTANCE_ID
