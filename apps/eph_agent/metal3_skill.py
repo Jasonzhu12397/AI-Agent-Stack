@@ -114,10 +114,7 @@ def _invoke(
     arguments: list[str],
     timeout: int,
 ) -> dict[str, Any]:
-    try:
-        result = runner(arguments, timeout=timeout, max_output_bytes=MAX_MANIFEST_BYTES)
-    except TypeError:
-        result = runner(arguments, timeout=timeout)
+    result = runner(arguments, timeout=timeout, max_output_bytes=MAX_MANIFEST_BYTES)
     if not isinstance(result, dict) or result.get("available") is not True:
         raise Metal3SkillError("METAL3_KUBERNETES_API_UNAVAILABLE")
     if result.get("returncode") != 0:
@@ -139,6 +136,21 @@ def apply_baremetalhosts(
     )
     for manifest in manifests:
         _validate_bmh(manifest)
+    secret_names = sorted({
+        manifest["spec"]["bmc"]["credentialsName"]
+        for manifest in manifests
+    })
+    for secret_name in secret_names:
+        try:
+            _invoke(
+                runner,
+                ["get", "secret", secret_name, "--namespace", namespace, "-o", "name"],
+                30,
+            )
+        except Metal3SkillError as exc:
+            raise Metal3SkillError(
+                "METAL3_BMC_CREDENTIAL_SECRET_MISSING"
+            ) from exc
     return _apply_bundle(manifests, runner, lease_lost_event, "METAL3_BMH")
 
 
