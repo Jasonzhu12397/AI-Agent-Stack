@@ -40,7 +40,10 @@ def _ready_condition(conditions: Any) -> bool:
 
 
 def _control_plane_node(node: dict[str, Any]) -> bool:
-    labels = node.get("metadata", {}).get("labels", {})
+    metadata = node.get("metadata", {})
+    labels = metadata.get("labels", {})
+    if not isinstance(labels, dict):
+        raise PostflightError("POSTFLIGHT_NODE_LABELS_INVALID")
     return (
         "node-role.kubernetes.io/control-plane" in labels
         or "node-role.kubernetes.io/master" in labels
@@ -306,28 +309,52 @@ def verify_target_postflight(
             "cluster.x-k8s.io/cluster-name"
         ) == cluster_name
     ]
-    if len(worker_machines) != desired_worker_count or any(
-        machine.get("status", {}).get("phase") != "Running"
-        or machine.get("status", {}).get("infrastructureReady") is not True
-        or machine.get("status", {}).get("bootstrapReady") is not True
-        for machine in worker_machines
-    ):
+    if not isinstance(worker_machines, list) or len(worker_machines) != desired_worker_count:
         raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINES_NOT_READY")
+    worker_node_names = []
+    for machine in worker_machines:
+        if not isinstance(machine, dict):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINE_INVALID")
+        status = machine.get("status", {})
+        node_ref = status.get("nodeRef", {})
+        node_name = node_ref.get("name") if isinstance(node_ref, dict) else None
+        if (
+            status.get("phase") != "Running"
+            or status.get("infrastructureReady") is not True
+            or status.get("bootstrapReady") is not True
+            or not isinstance(node_name, str)
+            or not node_name
+        ):
+            raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINES_NOT_READY")
+        worker_node_names.append(node_name)
+    if len(set(worker_node_names)) != desired_worker_count:
+        raise PostflightError("POSTFLIGHT_CAPI_WORKER_NODE_REFERENCE_DUPLICATE")
+    if set(worker_ntp_bootstrap_sources) != set(worker_node_names):
+        raise PostflightError("POSTFLIGHT_WORKER_NTP_NODE_SET_MISMATCH")
 
     nodes_document = _query_json(runner, ["get", "nodes", "-o", "json"], "nodes")
     nodes = nodes_document.get("items")
     if not isinstance(nodes, list):
         raise PostflightError("POSTFLIGHT_NODE_INVENTORY_INVALID")
-    worker_nodes = [
-        node for node in nodes
-        if isinstance(node, dict) and not _control_plane_node(node)
-    ]
-    ready_workers = [
-        node for node in worker_nodes
-        if _ready_condition(node.get("status", {}).get("conditions"))
-    ]
-    if len(ready_workers) != desired_worker_count:
-        raise PostflightError("POSTFLIGHT_READY_WORKER_NODE_COUNT_MISMATCH")
+    nodes_by_name = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise PostflightError("POSTFLIGHT_NODE_DOCUMENT_INVALID")
+        metadata = node.get("metadata", {})
+        node_name = metadata.get("name")
+        if not isinstance(node_name, str) or not node_name or node_name in nodes_by_name:
+            raise PostflightError("POSTFLIGHT_NODE_IDENTITY_INVALID")
+        nodes_by_name[node_name] = node
+    ready_workers = []
+    for node_name in worker_node_names:
+        node = nodes_by_name.get(node_name)
+        if (
+            node is None
+            or _control_plane_node(node)
+            or not _ready_condition(node.get("status", {}).get("conditions"))
+        ):
+            raise PostflightError(f"POSTFLIGHT_WORKER_NODE_NOT_READY:{node_name}")
+        ready_workers.append(node)
 
     daemonset_document = _query_json(
         runner,
@@ -343,6 +370,9 @@ def verify_target_postflight(
         raise PostflightError("POSTFLIGHT_CALICO_DAEMONSET_NOT_READY")
     if not multus:
         raise PostflightError("POSTFLIGHT_MULTUS_DAEMONSET_NOT_READY")
+    ovs_daemonset = _find_ready_daemonset(daemonsets, ("ovs", "openvswitch"))
+    if not ovs_daemonset:
+        raise PostflightError("POSTFLIGHT_OVS_DAEMONSET_NOT_READY")
     sriov_daemonset = _find_ready_daemonset(
         daemonsets,
         ("sriov-cni", "sriov-network", "sriov-config-daemon"),
@@ -431,6 +461,7 @@ def verify_target_postflight(
         "calico_daemonset": calico,
         "multus_daemonset": multus,
         "sriov_daemonset": sriov_daemonset,
+        "ovs_daemonset": ovs_daemonset,
         "sriov_nad_count": len(sriov_nads),
         "ovs_nad_count": len(ovs_nads),
         "sriov_resource_names": sorted(sriov_resource_names),
