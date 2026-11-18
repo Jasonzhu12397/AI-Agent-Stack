@@ -94,7 +94,7 @@ function addPool(): void {
     draft[name] = {
       node_selectors: { type: "high-throughput" },
       tolerations: [{ effect: "NoSchedule", key: "high-throughput", operator: "Equal", value: "true" }],
-      sriov_network_device_plugin_configmap_name: "sriov-dp-configmap",
+      sriov_network_device_plugin_configmap_name: "sriov-dp-configmap-" + name,
       sriov_network_device_plugin_configmap_data: { resourceList: [] },
     };
   });
@@ -117,8 +117,12 @@ function addResource(): void {
   const name = selectedPool.value;
   if (!name) return;
   update((draft) => {
-    draft[name].sriov_network_device_plugin_configmap_data.resourceList.push({
-      resourceName: "mlnx_dpdk_" + (draft[name].sriov_network_device_plugin_configmap_data.resourceList.length ? "right" : "left"),
+    const resources = draft[name].sriov_network_device_plugin_configmap_data.resourceList;
+    const existingNames = new Set(resources.map((resource) => resource.resourceName));
+    let suffix = 1;
+    while (existingNames.has("mlnx_dpdk_" + suffix)) suffix += 1;
+    resources.push({
+      resourceName: "mlnx_dpdk_" + suffix,
       resourcePrefix: "mellanox.com",
       isRdma: true,
       selectors: { vendors: ["15b3"], drivers: ["mlx5_core"], rootDevices: [], isRdma: true },
