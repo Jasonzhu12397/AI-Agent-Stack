@@ -669,14 +669,6 @@ def execute_agent_run(task):
                 0 if model_config.provider.provider_type == "fake"
                 else (len(response.content.encode("utf-8")) + 1) // 2
             )
-            if (
-                actual_input_tokens + actual_output_tokens
-                > MAX_AGENT_RUN_TOTAL_TOKENS - input_tokens - output_tokens
-                or actual_output_tokens > allowed_output_tokens
-            ):
-                raise PermanentTaskError(
-                    "Provider usage exceeded the remaining agent token budget"
-                )
             input_tokens += actual_input_tokens
             output_tokens += actual_output_tokens
             latency_ms += response.latency_ms
@@ -685,6 +677,13 @@ def execute_agent_run(task):
                 output_tokens=output_tokens,
                 latency_ms=latency_ms,
             )
+            if (
+                input_tokens + output_tokens > MAX_AGENT_RUN_TOTAL_TOKENS
+                or actual_output_tokens > allowed_output_tokens
+            ):
+                raise PermanentTaskError(
+                    "Provider usage exceeded the remaining agent token budget"
+                )
             if not response.tool_calls:
                 return {
                     "content": response.content,
