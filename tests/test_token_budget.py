@@ -1,6 +1,7 @@
-import pytest
 from datetime import datetime, timedelta, timezone as dt_timezone
 from unittest.mock import patch
+
+import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
