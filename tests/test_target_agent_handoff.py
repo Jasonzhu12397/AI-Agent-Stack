@@ -1,6 +1,11 @@
 import pytest
 
-from apps.target_agent.handoff import HandoffError, evaluate_transition
+from apps.target_agent.handoff import (
+    HandoffError,
+    HandoffPhase,
+    evaluate_transition,
+    validate_phase_evidence,
+)
 
 
 def test_handoff_rejects_skipped_phase():
