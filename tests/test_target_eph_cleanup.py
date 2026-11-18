@@ -259,8 +259,8 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
     )
     result = target_main._execute_attested_eph_cleanup(
         {
-            "namespace": "metal3-system",
-            "cluster_name": "target-cluster",
+            "target_namespace": "metal3-system",
+            "target_cluster_name": "target-cluster",
             "deployment_id": "deployment-1",
         },
         context,
