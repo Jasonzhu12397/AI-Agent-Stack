@@ -585,6 +585,12 @@ def execute_worker_provisioning(
     )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
+    ip_pool_references = _verify_ip_pools(
+        runner,
+        namespace,
+        cluster_name,
+        _data,
+    )
     existing_resources = _verify_existing_ownership(
         runner,
         ordered,
@@ -735,6 +741,7 @@ def execute_worker_provisioning(
         ],
         "ironic_internal_ntp_ip": ironic_ntp_ip,
         "worker_network_contract_validated": True,
+        "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,
         "applied_stdout": "\n".join(applied_output)[-4000:],
         "dry_run_stdout": dry_run.get("stdout", "")[-4000:],
