@@ -199,7 +199,7 @@ def test_agent_plugin_installation_can_be_disabled_and_reenabled(agent_plugin_wo
 
 @pytest.mark.django_db
 def test_project_member_cannot_register_tenant_agent_plugin(agent_plugin_workspace):
-    user, tenant, _, _ = agent_plugin_workspace
+    _, tenant, _, _ = agent_plugin_workspace
     member = get_user_model().objects.create_user(
         username="agent-plugin-member",
         password="test-password",
