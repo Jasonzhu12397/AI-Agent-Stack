@@ -678,7 +678,12 @@ def _verify_sriov_configmap_ownership(
             max_output_bytes=4 * 1024 * 1024,
         )
         if not result.get("available"):
-            if "not found" in result.get("stderr", "").lower():
+            error_text = result.get("stderr", "")
+            if isinstance(error_text, str) and re.search(
+                r"\\bnot\\s*found\\b|\\bnotfound\\b",
+                error_text,
+                flags=re.IGNORECASE,
+            ):
                 continue
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_LOOKUP_FAILED")
         try:
