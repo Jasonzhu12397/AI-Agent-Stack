@@ -25,8 +25,10 @@ EPH_ACTIONS = frozenset({
     "eph.source.observe",
     "eph.metal3.bmh.apply",
     "eph.metal3.bmh.observe",
+    "eph.metal3.bmh.wait_ready",
     "eph.capi.cluster.apply",
     "eph.capi.cluster.observe",
+    "eph.capi.cluster.wait_ready",
     "eph.capi.pivot.dry_run",
     "eph.capi.pivot",
 })
