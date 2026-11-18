@@ -21,6 +21,7 @@ from core.models import (
 from core.workflow_engine import (
     WorkflowValidationError,
     _execute_node,
+    _workflow_output_budget,
     validate_model_references,
     validate_workflow_definition,
 )
@@ -942,3 +943,46 @@ def test_workflow_tool_arguments_must_reference_an_earlier_node():
     }
     with pytest.raises(WorkflowValidationError, match="earlier node"):
         validate_workflow_definition(definition)
+
+
+def test_workflow_llm_output_is_capped_by_cumulative_run_budget():
+    allowed = _workflow_output_budget(
+        configured_max_tokens=4096,
+        model_max_tokens=8192,
+        input_tokens=2000,
+        output_tokens=100,
+        estimated_input_tokens=3000,
+    )
+
+    assert allowed == 1024
+
+
+def test_workflow_llm_budget_blocks_before_provider_call(workflow_workspace):
+    _, tenant, project, model = workflow_workspace
+    node = {
+        "type": "llm",
+        "config": {
+            "model_config_id": str(model.id),
+            "prompt_template": "Answer {{input}}",
+            "max_tokens": 256,
+            "timeout_seconds": 20,
+        },
+    }
+    state = {
+        "input": "question",
+        "_token_usage": {"input_tokens": 16000, "output_tokens": 0},
+    }
+    task = SimpleNamespace(id="00000000-0000-0000-0000-000000000099")
+
+    with patch("core.workflow_engine.ModelGateway.complete") as complete:
+        with pytest.raises(WorkflowValidationError, match="TOKEN_BUDGET_EXHAUSTED"):
+            _execute_node(
+                node,
+                state,
+                {"question": "question"},
+                tenant,
+                project,
+                task,
+            )
+
+    complete.assert_not_called()
