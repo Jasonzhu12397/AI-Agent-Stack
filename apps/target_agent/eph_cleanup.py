@@ -140,6 +140,7 @@ def execute_eph_cleanup(
                 not isinstance(annotations, dict)
                 or not isinstance(labels, dict)
                 or annotations.get(CLEANUP_ANNOTATION) != "true"
+                or labels.get(CLEANUP_ANNOTATION) != "true"
                 or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
                 or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
                 or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
