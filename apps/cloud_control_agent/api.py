@@ -29,12 +29,12 @@ EPH_ACTIONS = frozenset({
     "eph.capi.cluster.apply",
     "eph.capi.cluster.observe",
     "eph.capi.cluster.wait_ready",
-    "eph.capi.pivot.dry_run",
-    "eph.capi.pivot",
 })
 TARGET_ACTIONS = frozenset({
     "target.cluster.observe",
     "target.capi.observe",
+    "target.capi.pivot.dry_run",
+    "target.capi.pivot",
     "target.metal3.observe",
     "target.metal3.verify_ownership",
     "target.worker.ntp.validate",
