@@ -70,6 +70,7 @@ from core.tool_approval_views import (
     ToolApprovalRejectView,
 )
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
+from core.token_budget_views import TenantTokenBudgetView
 from core.views import TenantListView, TenantProjectListView, liveness, readiness
 from core.workflow_views import (
     WorkflowDetailView,
@@ -82,6 +83,11 @@ from core.workflow_views import (
 
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/token-budget/",
+        TenantTokenBudgetView.as_view(),
+        name="tenant-token-budget",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/audit-events/verify/",
         AuditEventVerifyView.as_view(),
