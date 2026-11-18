@@ -711,9 +711,25 @@ def test_target_agent_rejects_worker_ntp_ip_not_pinned_in_target_secret(monkeypa
 
 def test_target_agent_rejects_unpinned_ntp_ip_during_worker_handoff(monkeypatch):
     monkeypatch.setenv("IRONIC_INTERNAL_NTP_IP", "10.130.60.84")
+    monkeypatch.setattr(
+        target_main,
+        "_observe_target_metal3_ownership",
+        lambda *_args: {
+            "target_ironic_inventory_verified": True,
+            "target_metal3_reconciliation_healthy": True,
+            "target_bmh_identities": [],
+        },
+    )
     result = execute_target({
         "action": "target.handoff.evaluate",
         "deployment_id": "deployment-1",
+        "deployment_context": {
+            "eph_pivot_attestation": {
+                "cleanup_scope_attested": True,
+                "target_observer_secret_source_uid_attested": True,
+                "source_cleanup_resource_count": 7,
+            },
+        },
         "deployment_checkpoint": {
             "phase": "eph_cleanup_verified",
             "sequence": 6,
