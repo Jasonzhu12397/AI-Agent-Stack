@@ -6,7 +6,11 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: /^dayjs\/plugin\/(.*)$/,
+        find: /^dayjs\/plugin\/(.+)\.js$/,
+        replacement: "dayjs/esm/plugin/$1/index.js",
+      },
+      {
+        find: /^dayjs\/plugin\/(.+)$/,
         replacement: "dayjs/esm/plugin/$1/index.js",
       },
       {
@@ -22,6 +26,7 @@ export default defineConfig({
         /node_modules\/lodash-es\//,
         /node_modules\/vue\//,
         /node_modules\/@vue\//,
+        /node_modules\/@vueuse\//,
       ],
     },
   },
