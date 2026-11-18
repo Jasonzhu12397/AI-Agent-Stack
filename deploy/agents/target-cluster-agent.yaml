@@ -267,7 +267,7 @@ spec:
             - name: TARGET_CAPI_NAMESPACE
               value: REPLACE_WITH_TARGET_CAPI_NAMESPACE
             - name: CAPI_PIVOT_SOURCE_KUBECONFIG
-              value: /var/run/secrets/ai-agent/source-observer/config
+              value: /var/run/secrets/ai-agent/source-operator/config
             - name: AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
@@ -305,8 +305,8 @@ spec:
           volumeMounts:
             - name: agent-tmp
               mountPath: /tmp
-            - name: source-cluster-observer
-              mountPath: /var/run/secrets/ai-agent/source-observer
+            - name: source-cluster-operator
+              mountPath: /var/run/secrets/ai-agent/source-operator
               readOnly: true
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
@@ -330,7 +330,7 @@ spec:
         - name: agent-tmp
           emptyDir:
             sizeLimit: 16Mi
-        - name: source-cluster-observer
+        - name: source-cluster-operator
           secret:
             secretName: target-agent-source-operator
             items:
