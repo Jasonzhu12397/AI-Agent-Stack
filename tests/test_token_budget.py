@@ -62,6 +62,45 @@ def test_tenant_token_budget_rejects_reservations_over_the_daily_limit(token_bud
 
 
 @pytest.mark.django_db
+def test_tenant_token_budget_enforces_monthly_limit_independently(token_budget_run):
+    task, run, budget = token_budget_run
+    budget.daily_limit = 200
+    budget.monthly_limit = 100
+    budget.save(update_fields=["daily_limit", "monthly_limit", "updated_at"])
+    reserve_tenant_tokens(
+        task=task,
+        agent_run=run,
+        idempotency_key="monthly-call-1",
+        requested_tokens=80,
+    )
+
+    with pytest.raises(TenantTokenBudgetExceeded) as error:
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="monthly-call-2",
+            requested_tokens=30,
+        )
+
+    assert error.value.period == "monthly"
+
+
+@pytest.mark.parametrize("invalid_tokens", [0, -1, True, False, "10", 1.5])
+@pytest.mark.django_db
+def test_tenant_token_budget_rejects_invalid_reservation_amounts(
+    token_budget_run, invalid_tokens
+):
+    task, run, _ = token_budget_run
+    with pytest.raises(ValueError, match="positive integer"):
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="invalid-reservation",
+            requested_tokens=invalid_tokens,
+        )
+
+
+@pytest.mark.django_db
 def test_tenant_token_budget_settlement_releases_unused_reservation(token_budget_run):
     task, run, _ = token_budget_run
     reservation = reserve_tenant_tokens(
