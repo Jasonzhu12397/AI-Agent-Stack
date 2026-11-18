@@ -7,7 +7,7 @@ export default defineConfig({
     alias: [
       {
         find: /^dayjs\/plugin\/(.*)$/,
-        replacement: "dayjs/esm/plugin/$1",
+        replacement: "dayjs/esm/plugin/$1/index.js",
       },
       {
         find: /^dayjs$/,
