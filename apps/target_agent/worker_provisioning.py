@@ -236,6 +236,39 @@ def _network_contract(
         raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_PLANE_FEATURES_INCOMPLETE")
     if contract.get("pod_traffic_network") != "data":
         raise WorkerProvisioningError("WORKER_PROVISIONING_POD_TRAFFIC_MUST_USE_DATA_PLANE")
+    required_attachments = contract.get("required_network_attachments")
+    if not isinstance(required_attachments, list) or not required_attachments:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENTS_INVALID")
+    attachment_keys = set()
+    required_sriov_resources = set()
+    required_ovs_count = 0
+    for attachment in required_attachments:
+        if not isinstance(attachment, dict):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_INVALID")
+        attachment_namespace = attachment.get("namespace")
+        attachment_name = attachment.get("name")
+        cni_type = attachment.get("cni_type")
+        resource_name = attachment.get("resource_name")
+        if (
+            not isinstance(attachment_namespace, str)
+            or not attachment_namespace
+            or not isinstance(attachment_name, str)
+            or not attachment_name
+            or cni_type not in {"sriov", "ovs"}
+            or (cni_type == "sriov" and (not isinstance(resource_name, str) or not resource_name))
+            or (cni_type == "ovs" and resource_name is not None)
+        ):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_INVALID")
+        key = (attachment_namespace, attachment_name)
+        if key in attachment_keys:
+            raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_DUPLICATE")
+        attachment_keys.add(key)
+        if cni_type == "sriov":
+            required_sriov_resources.add(resource_name)
+        else:
+            required_ovs_count += 1
+    if not required_sriov_resources or required_ovs_count < 1:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENT_TYPES_INCOMPLETE")
 
     network_data = data_template.get("spec", {}).get("networkData")
     if not isinstance(network_data, dict):
