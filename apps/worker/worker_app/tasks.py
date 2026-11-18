@@ -380,6 +380,23 @@ def _settle_provider_usage(usage, consumed_tokens):
         ) from exc
 
 
+def _resolve_and_settle_provider_usage(*, token_reservation, **usage):
+    try:
+        input_tokens, output_tokens = _resolve_provider_usage(**usage)
+    except PermanentTaskError:
+        # The provider already received the request; invalid usage cannot release its budget.
+        _settle_provider_usage(
+            usage=token_reservation,
+            consumed_tokens=token_reservation.reserved_tokens,
+        )
+        raise
+    _settle_provider_usage(
+        usage=token_reservation,
+        consumed_tokens=input_tokens + output_tokens,
+    )
+    return input_tokens, output_tokens
+
+
 def _persist_agent_execution_state(
     agent_run,
     messages,
@@ -813,16 +830,13 @@ def execute_agent_run(task):
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_UNEXPECTEDLY"
                 ) from exc
-            actual_input_tokens, actual_output_tokens = _resolve_provider_usage(
+            actual_input_tokens, actual_output_tokens = _resolve_and_settle_provider_usage(
+                token_reservation=token_reservation,
                 provider_type=model_config.provider.provider_type,
                 reported_input_tokens=response.input_tokens,
                 reported_output_tokens=response.output_tokens,
                 input_token_ceiling=input_token_ceiling,
                 output_token_ceiling=allowed_output_tokens,
-            )
-            _settle_provider_usage(
-                usage=token_reservation,
-                consumed_tokens=actual_input_tokens + actual_output_tokens,
             )
             input_tokens += actual_input_tokens
             output_tokens += actual_output_tokens
