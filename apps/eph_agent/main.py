@@ -22,6 +22,7 @@ from packages.agent_transport import (
 )
 
 from .capi_pivot import execute_capi_pivot
+from .capi_renderer import render_bmh_manifests, render_capi_metal3_manifests
 from .metal3_skill import (
     Metal3SkillError,
     apply_baremetalhosts,
@@ -151,8 +152,15 @@ def execute(
         }
     if action == "eph.metal3.bmh.apply":
         try:
+            payload = command.get("payload", {})
+            if not isinstance(payload, dict) or "hosts" not in payload:
+                raise Metal3SkillError("METAL3_BMH_HOST_PLAN_REQUIRED")
+            rendered = render_bmh_manifests(
+                payload.get("hosts"),
+                payload.get("namespace", "metal3"),
+            )
             evidence = apply_baremetalhosts(
-                command.get("payload", {}),
+                {**payload, "manifests": rendered},
                 _run_kubectl,
                 lease_lost_event,
             )
@@ -187,8 +195,15 @@ def execute(
         }
     if action == "eph.capi.cluster.apply":
         try:
+            payload = command.get("payload", {})
+            if not isinstance(payload, dict) or "cluster_spec" not in payload:
+                raise Metal3SkillError("CAPI_CLUSTER_SPEC_REQUIRED")
+            rendered = render_capi_metal3_manifests(payload.get("cluster_spec"))
             evidence = apply_capi_cluster_resources(
-                command.get("payload", {}),
+                {
+                    "namespace": payload.get("cluster_spec", {}).get("namespace", "metal3"),
+                    "manifests": rendered,
+                },
                 _run_kubectl,
                 lease_lost_event,
             )
