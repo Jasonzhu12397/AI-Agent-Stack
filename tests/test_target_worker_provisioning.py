@@ -960,3 +960,46 @@ def test_kubectl_cancels_in_flight_command_when_leadership_lease_is_lost(monkeyp
     result = target_main._kubectl(["apply", "-f", "worker.yaml"], lease_lost_event=LeaseLost())
     assert result == {"available": False, "error": "COMMAND_LEASE_LOST"}
     assert calls == []
+
+
+def test_kubectl_terminates_running_process_when_leadership_lease_is_lost(monkeypatch):
+    class LeaseEvent:
+        lost = False
+
+        def is_set(self):
+            return self.lost
+
+        def set(self):
+            self.lost = True
+
+    lease_event = LeaseEvent()
+    kill_signals = []
+
+    class RunningProcess:
+        pid = 12345
+        returncode = -15
+
+        def communicate(self, timeout=None):
+            if timeout != 5:
+                lease_event.set()
+                raise target_main.subprocess.TimeoutExpired(["kubectl"], timeout)
+            return "", ""
+
+    monkeypatch.setattr(
+        target_main.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: RunningProcess(),
+    )
+    monkeypatch.setattr(
+        target_main.os,
+        "killpg",
+        lambda _pid, signum: kill_signals.append(signum),
+    )
+
+    result = target_main._kubectl(
+        ["apply", "-f", "worker.yaml"],
+        lease_lost_event=lease_event,
+    )
+
+    assert result == {"available": False, "error": "COMMAND_LEASE_LOST"}
+    assert kill_signals == [target_main.signal.SIGTERM]
