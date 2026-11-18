@@ -354,28 +354,6 @@ def attest_cleanup_scope(
             "roles.rbac.authorization.k8s.io": set(),
             "rolebindings.rbac.authorization.k8s.io": set(),
         }
-        for resource, namespaced in RESOURCE_SCOPES:
-            for item in observed[resource]:
-                metadata = item.get("metadata", {})
-                name = metadata.get("name")
-                if not isinstance(name, str) or not name:
-                    raise CleanupScopeError(
-                        "EPH_CLEANUP_SCOPE_RESOURCE_NAME_MISSING",
-                        side_effects=mutated > 0,
-                    )
-                source_resource_count += 1
-                if _patch_source_uid(
-                    runner,
-                    source_kubeconfig,
-                    resource,
-                    name,
-                    namespaced,
-                    item,
-                    deployment_id,
-                    source_cluster_uid,
-                    lease_lost_event,
-                ):
-                    mutated += 1
         for resource in (
             "roles.rbac.authorization.k8s.io",
             "rolebindings.rbac.authorization.k8s.io",
@@ -400,38 +378,23 @@ def attest_cleanup_scope(
                 document = json.loads(result.get("stdout", ""))
             except (TypeError, ValueError) as exc:
                 raise CleanupScopeError(
-                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_JSON_INVALID",
-                    side_effects=mutated > 0,
+                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_JSON_INVALID"
                 ) from exc
             items = document.get("items")
             if not isinstance(items, list):
                 raise CleanupScopeError(
-                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_INVALID",
-                    side_effects=mutated > 0,
+                    "EPH_CLEANUP_SCOPE_METAL3_RBAC_INVENTORY_INVALID"
                 )
+            observed[f"metal3:{resource}"] = items
             for item in items:
                 metadata = item.get("metadata", {})
                 name = metadata.get("name")
                 if not isinstance(name, str) or not name:
                     raise CleanupScopeError(
-                        "EPH_CLEANUP_SCOPE_METAL3_RBAC_RESOURCE_NAME_MISSING",
-                        side_effects=mutated > 0,
+                        "EPH_CLEANUP_SCOPE_METAL3_RBAC_RESOURCE_NAME_MISSING"
                     )
-                source_resource_count += 1
                 metal3_rbac_names[resource].add(name)
-                if _patch_source_uid(
-                    runner,
-                    source_kubeconfig,
-                    resource,
-                    name,
-                    True,
-                    item,
-                    deployment_id,
-                    source_cluster_uid,
-                    lease_lost_event,
-                    "metal3",
-                ):
-                    mutated += 1
+
         required_metal3_rbac = {
             "roles.rbac.authorization.k8s.io": {
                 "eph-agent-metal3-deployer",
@@ -446,10 +409,55 @@ def attest_cleanup_scope(
             not expected.issubset(metal3_rbac_names[resource])
             for resource, expected in required_metal3_rbac.items()
         ):
-            raise CleanupScopeError(
-                "EPH_CLEANUP_SCOPE_REQUIRED_METAL3_RBAC_MISSING",
-                side_effects=mutated > 0,
-            )
+            raise CleanupScopeError("EPH_CLEANUP_SCOPE_REQUIRED_METAL3_RBAC_MISSING")
+
+        for resource, namespaced in RESOURCE_SCOPES:
+            for item in observed[resource]:
+                metadata = item.get("metadata", {})
+                name = metadata.get("name")
+                if not isinstance(name, str) or not name:
+                    raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_NAME_MISSING")
+                source_resource_count += 1
+        for resource in (
+            "roles.rbac.authorization.k8s.io",
+            "rolebindings.rbac.authorization.k8s.io",
+        ):
+            source_resource_count += len(observed[f"metal3:{resource}"])
+
+        for resource, namespaced in RESOURCE_SCOPES:
+            for item in observed[resource]:
+                name = item["metadata"]["name"]
+                if _patch_source_uid(
+                    runner,
+                    source_kubeconfig,
+                    resource,
+                    name,
+                    namespaced,
+                    item,
+                    deployment_id,
+                    source_cluster_uid,
+                    lease_lost_event,
+                ):
+                    mutated += 1
+        for resource in (
+            "roles.rbac.authorization.k8s.io",
+            "rolebindings.rbac.authorization.k8s.io",
+        ):
+            for item in observed[f"metal3:{resource}"]:
+                name = item["metadata"]["name"]
+                if _patch_source_uid(
+                    runner,
+                    source_kubeconfig,
+                    resource,
+                    name,
+                    True,
+                    item,
+                    deployment_id,
+                    source_cluster_uid,
+                    lease_lost_event,
+                    "metal3",
+                ):
+                    mutated += 1
         if source_resource_count == 0:
             raise CleanupScopeError(
                 "EPH_CLEANUP_SCOPE_SOURCE_RESOURCES_EMPTY",
