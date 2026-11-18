@@ -943,7 +943,12 @@ class PluginConnection(models.Model):
             models.UniqueConstraint(
                 fields=["installation", "name"],
                 name="uniq_plugin_connection_name",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["installation"],
+                condition=models.Q(status="healthy"),
+                name="uniq_healthy_plugin_connection",
+            ),
         ]
 
 
