@@ -50,10 +50,28 @@ def test_capi_template_renders_kubeadm_metal3_control_plane_and_worker_pool():
         "image_url": "https://images.example.test/ubuntu-24.04.qcow2",
         "pod_cidr": "10.244.0.0/16",
         "service_cidr": "10.96.0.0/12",
+        "control_plane_data_template": {
+            "meta_data": {
+                "objectNames": [{"key": "hostname", "object": "machine"}],
+            },
+            "network_data": {
+                "links": {"ethernets": [{"type": "phy", "id": "control", "macAddress": {"fromHostInterface": "eno1"}}]},
+                "networks": {"ipv4DHCP": [{"id": "control", "link": "control"}]},
+            },
+        },
         "worker_pools": [{
             "name": "high-throughput",
             "count": 4,
             "node_labels": ["node-type=high-throughput"],
+            "data_template": {
+                "meta_data": {
+                    "objectNames": [{"key": "hostname", "object": "machine"}],
+                },
+                "network_data": {
+                    "links": {"ethernets": [{"type": "phy", "id": "data", "macAddress": {"fromHostInterface": "eno2"}}]},
+                    "networks": {"ipv4DHCP": [{"id": "data", "link": "data"}]},
+                },
+            },
         }],
     })
 
@@ -61,9 +79,11 @@ def test_capi_template_renders_kubeadm_metal3_control_plane_and_worker_pool():
     assert kinds[:4] == [
         "Cluster",
         "Metal3Cluster",
-        "Metal3MachineTemplate",
-        "KubeadmControlPlane",
+        "Metal3DataTemplate",
+        "Metal3DataTemplate",
     ]
+    assert "Metal3MachineTemplate" in kinds
+    assert "KubeadmControlPlane" in kinds
     assert "KubeadmConfigTemplate" in kinds
     assert "MachineDeployment" in kinds
     cluster = manifests[0]
