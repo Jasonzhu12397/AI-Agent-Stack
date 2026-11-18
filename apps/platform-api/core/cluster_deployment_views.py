@@ -17,7 +17,7 @@ from core.agent_node_views import (
     _validate_payload,
 )
 from core.cluster_deployment_services import queue_deployment_command
-from packages.agent_contracts.sriov_device_plugin import (
+from agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     validate_sriov_device_plugin_config,
 )
