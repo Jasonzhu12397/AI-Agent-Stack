@@ -230,7 +230,10 @@ def verify_target_postflight(
     cluster_metadata = cluster.get("metadata", {})
     cluster_spec = cluster.get("spec", {})
     cluster_status = cluster.get("status", {})
-    if not all(isinstance(value, dict) for value in (cluster_metadata, cluster_spec, cluster_status)):
+    if not all(
+        isinstance(value, dict)
+        for value in (cluster_metadata, cluster_spec, cluster_status)
+    ):
         raise PostflightError("POSTFLIGHT_CAPI_CLUSTER_DOCUMENT_INVALID")
     if (
         cluster_metadata.get("name") != cluster_name
@@ -292,7 +295,10 @@ def verify_target_postflight(
     md_annotations = md_metadata.get("annotations", {})
     md_spec = machine_deployment.get("spec", {})
     md_status = machine_deployment.get("status", {})
-    if not all(isinstance(value, dict) for value in (md_metadata, md_labels, md_annotations, md_spec, md_status)):
+    if not all(
+        isinstance(value, dict)
+        for value in (md_metadata, md_labels, md_annotations, md_spec, md_status)
+    ):
         raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_DOCUMENT_INVALID")
     if (
         md_metadata.get("name") != machine_deployment_name
