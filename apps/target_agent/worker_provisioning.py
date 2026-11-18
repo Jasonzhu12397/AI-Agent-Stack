@@ -257,15 +257,27 @@ def _network_contract(
     networks = network_data.get("networks")
     if not isinstance(networks, dict) or not networks:
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_SUBNETS_REQUIRED")
-    network_links = {
-        entry.get("link")
-        for entries in networks.values()
-        if isinstance(entries, list)
-        for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("link"), str)
-    }
-    if not {control_interface, data_interface}.issubset(network_links):
+    interface_bindings: dict[str, tuple[str, dict[str, Any]]] = {}
+    for network_name, entries in networks.items():
+        if not isinstance(network_name, str) or not isinstance(entries, list):
+            raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_SUBNETS_INVALID")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_ENTRY_INVALID")
+            link = entry.get("link")
+            if not isinstance(link, str) or not link:
+                raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_LINK_INVALID")
+            if link in interface_bindings:
+                raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACE_MAPPED_MULTIPLE_TIMES")
+            interface_bindings[link] = (network_name, entry)
+    control_binding = interface_bindings.get(control_interface)
+    data_binding = interface_bindings.get(data_interface)
+    if control_binding is None or data_binding is None:
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_LINK_MAPPING_INCOMPLETE")
+    if control_binding[0] == data_binding[0]:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROL_DATA_NETWORK_NOT_SEPARATED")
+    if not isinstance(data_binding[1].get("ipAddressFromIPPool"), str):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_INTERFACE_IP_POOL_REQUIRED")
 
 
 def _ip_pool_references(value: Any) -> set[str]:
