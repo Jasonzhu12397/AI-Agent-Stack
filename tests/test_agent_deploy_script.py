@@ -18,6 +18,10 @@ def test_three_agent_deploy_requires_three_distinct_contexts_and_digest_images()
     assert "apply --dry-run=server" in script
     assert "THREE_AGENT_DEPLOYMENT_READY" in script
     assert "network-inventory-agent" not in script
+    assert "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL" in script
+    assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent' in script
+    assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight' in script
+    assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding eph-agent-preflight' in script
     assert "ai-agent-node-agent" not in script
 
 
