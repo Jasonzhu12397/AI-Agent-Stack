@@ -288,15 +288,17 @@ MAX_AGENT_RUN_OUTPUT_TOKENS = 2048
 MAX_AGENT_RUN_INPUT_BYTES = 24000
 
 
-def _estimate_message_tokens(messages):
+def _estimate_message_tokens(messages, tools=None):
     serialized = json.dumps(
-        messages,
+        {"messages": messages, "tools": tools or []},
         ensure_ascii=False,
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
     if len(serialized) > MAX_AGENT_RUN_INPUT_BYTES:
-        raise PermanentTaskError("Agent prompt exceeded the 24 KiB input budget")
+        raise PermanentTaskError(
+            "Agent prompt and tool schemas exceeded the 24 KiB input budget"
+        )
     return (len(serialized) + 1) // 2
 
 
@@ -389,7 +391,7 @@ def _serialize_agent_tool_result(result):
         return json.dumps(
             {
                 "ok": False,
-                "error": "Tool result exceeded the 32 KiB context limit and was omitted.",
+                "error": "Tool result exceeded the 8 KiB context limit and was omitted.",
             }
         )
     return serialized
@@ -715,7 +717,7 @@ def execute_agent_run(task):
         else:
             try:
                 messages = _compact_agent_messages(messages)
-                estimated_input_tokens = _estimate_message_tokens(messages)
+                estimated_input_tokens = _estimate_message_tokens(messages, offered_tools)
                 allowed_output_tokens = _allowed_agent_output_tokens(
                     config["max_tokens"],
                     model_config.max_output_tokens,
