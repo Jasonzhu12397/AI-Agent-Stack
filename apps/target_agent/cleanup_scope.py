@@ -350,6 +350,10 @@ def attest_cleanup_scope(
                     side_effects=mutated > 0,
                 )
         source_resource_count = 0
+        metal3_rbac_names = {
+            "roles.rbac.authorization.k8s.io": set(),
+            "rolebindings.rbac.authorization.k8s.io": set(),
+        }
         for resource, namespaced in RESOURCE_SCOPES:
             for item in observed[resource]:
                 metadata = item.get("metadata", {})
@@ -360,7 +364,6 @@ def attest_cleanup_scope(
                         side_effects=mutated > 0,
                     )
                 source_resource_count += 1
-                metal3_rbac_names[resource].add(name)
                 if _patch_source_uid(
                     runner,
                     source_kubeconfig,
@@ -373,10 +376,6 @@ def attest_cleanup_scope(
                     lease_lost_event,
                 ):
                     mutated += 1
-        metal3_rbac_names = {
-            "roles.rbac.authorization.k8s.io": set(),
-            "rolebindings.rbac.authorization.k8s.io": set(),
-        }
         for resource in (
             "roles.rbac.authorization.k8s.io",
             "rolebindings.rbac.authorization.k8s.io",
@@ -419,6 +418,7 @@ def attest_cleanup_scope(
                         side_effects=mutated > 0,
                     )
                 source_resource_count += 1
+                metal3_rbac_names[resource].add(name)
                 if _patch_source_uid(
                     runner,
                     source_kubeconfig,
