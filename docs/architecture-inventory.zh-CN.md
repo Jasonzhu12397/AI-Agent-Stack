@@ -171,7 +171,9 @@
 
 **代码事实**：CAPI Pivot 适配器位于 `apps/target_agent/capi_pivot.py`，由 `apps/target_agent/main.py` 第 25 行 `from .capi_pivot import execute_capi_pivot` 接线；Cloud Control 派发的动作是 `target.capi.pivot.dry_run` / `target.capi.pivot`；`apps/eph_agent/` 目录下不存在 `capi_pivot.py`。
 
-以下文档仍按旧口径写成「EPH 执行 source-side Pivot」，与代码不符，需要统一修订：
+> **状态（2026-11-18 对齐）**：下表所列旧口径已在本次文档修订中统一到 §4.2 责任边界；"冲突表述"列仅保留修订前措辞以便追溯，现行口径以"应改为"列为准。
+
+以下文档此前按旧口径写成「EPH 执行 source-side Pivot」，与代码不符，现已统一修订：
 
 | 文件 | 位置 | 冲突表述 | 应改为 |
 |---|---|---|---|
@@ -182,6 +184,7 @@
 | `docs/capi-pivot-contract.md` | 标题、第 3、7、8 行 | "EPH CAPI Pivot contract"；称由 `apps/eph_agent/capi_pivot.py` 实现，动作 `eph.capi.pivot.dry_run` / `eph.capi.pivot` | 适配器路径改为 `apps/target_agent/capi_pivot.py`；动作改为 `target.capi.pivot(.dry_run)` |
 | `docs/dual-agent-infrastructure-architecture.md` | 第 8 行 | EPH performs … approved source-side CAPI Pivot operation | 同上，统一为 Target 归属 |
 | `docs/eph-node-lifecycle.md` | 第 42、44、68 行 | EPH Pivot adapter 执行 `clusterctl move`；引用 `apps/eph_agent/capi_pivot.py` | Pivot 步骤归属 Target Agent；EPH 仅保留 Bootstrap / 清理前观察 |
+| `docs/agent-command-api.md` | 第 25 行 | "The Node Agent runs `clusterctl move --dry-run`"（Node Agent 已退役） | dry-run 模拟与只读检查归 Target Agent；Node Agent 表述移除 |
 
 > 修订原则：代码与新文档一律以 §4.2 责任边界为准；历史 ADR 如保留旧决策，应标注 superseded，避免新旧口径并存。
 

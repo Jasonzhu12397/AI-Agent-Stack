@@ -171,7 +171,9 @@ Acceptance bar: every button connects to a real API, can persist data, execute t
 
 **Code facts**: the CAPI pivot adapter lives in `apps/target_agent/capi_pivot.py`, wired by line 25 of `apps/target_agent/main.py` via `from .capi_pivot import execute_capi_pivot`; Cloud Control dispatches actions `target.capi.pivot.dry_run` / `target.capi.pivot`; `capi_pivot.py` does not exist under `apps/eph_agent/`.
 
-The following documents still follow the old wording that "the EPH performs the source-side Pivot", which does not match the code and needs to be reconciled:
+> **Status (aligned 2026-11-18)**: the old wording listed below has been reconciled to the §4.2 responsibility boundary in this documentation pass; the "Conflicting wording" column retains the previous wording for traceability only, and the "Should be" column states the current wording.
+
+The following documents previously followed the old wording that "the EPH performs the source-side Pivot", which did not match the code; they have now been reconciled:
 
 | File | Location | Conflicting wording | Should be |
 |---|---|---|---|
@@ -182,6 +184,7 @@ The following documents still follow the old wording that "the EPH performs the 
 | `docs/capi-pivot-contract.md` | Title, lines 3, 7, 8 | "EPH CAPI Pivot contract"; claims implementation by `apps/eph_agent/capi_pivot.py`, actions `eph.capi.pivot.dry_run` / `eph.capi.pivot` | Adapter path should be `apps/target_agent/capi_pivot.py`; actions should be `target.capi.pivot(.dry_run)` |
 | `docs/dual-agent-infrastructure-architecture.md` | Line 8 | EPH performs … approved source-side CAPI Pivot operation | Same as above; align to Target ownership |
 | `docs/eph-node-lifecycle.md` | Lines 42, 44, 68 | EPH Pivot adapter runs `clusterctl move`; references `apps/eph_agent/capi_pivot.py` | The pivot step belongs to the Target Agent; EPH keeps only Bootstrap / pre-cleanup observation |
+| `docs/agent-command-api.md` | Line 25 | "The Node Agent runs `clusterctl move --dry-run`" (Node Agent retired) | The dry-run simulation and read-only checks belong to the Target Agent; the Node Agent wording is removed |
 
 > Revision principle: code and new documentation follow the §4.2 responsibility boundary; historical ADRs that retain the old decision should be marked superseded so old and new wording do not coexist.
 
