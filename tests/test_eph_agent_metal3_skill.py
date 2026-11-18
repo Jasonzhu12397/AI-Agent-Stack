@@ -329,6 +329,27 @@ def test_capi_cluster_observer_rejects_stale_ready_condition():
     assert result["observed_generation"] == 4
 
 
+def test_capi_cluster_observer_rejects_missing_generation_evidence():
+    cluster = {
+        "metadata": {"name": "target-01", "uid": "cluster-uid"},
+        "status": {
+            "observedGeneration": 1,
+            "conditions": [{"type": "ControlPlaneReady", "status": "True"}],
+        },
+    }
+
+    with pytest.raises(Metal3SkillError, match="CAPI_CLUSTER_GENERATION_INVALID"):
+        observe_capi_cluster(
+            {"namespace": "metal3", "cluster_name": "target-01"},
+            lambda *_args, **_kwargs: {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(cluster),
+                "stderr": "",
+            },
+        )
+
+
 def test_bmh_wait_uses_backoff_until_all_expected_hosts_are_available():
     clock = [0.0]
     observations = iter(["registering", "available"])
