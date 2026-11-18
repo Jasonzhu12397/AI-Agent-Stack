@@ -324,6 +324,98 @@ def _network_contract(
         raise WorkerProvisioningError("WORKER_PROVISIONING_CONTROL_DATA_NETWORK_NOT_SEPARATED")
     if not isinstance(data_binding[1].get("ipAddressFromIPPool"), str):
         raise WorkerProvisioningError("WORKER_PROVISIONING_DATA_INTERFACE_IP_POOL_REQUIRED")
+    return required_sriov_resources
+
+
+def _verify_network_attachment_definitions(
+    runner: Callable[..., dict[str, Any]],
+    contract: dict[str, Any],
+) -> list[dict[str, str]]:
+    attachments = contract.get("required_network_attachments")
+    if not isinstance(attachments, list) or not attachments:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_REQUIRED_NETWORK_ATTACHMENTS_INVALID")
+    evidence = []
+    for attachment in attachments:
+        namespace = attachment["namespace"]
+        name = attachment["name"]
+        cni_type = attachment["cni_type"]
+        result = _run(
+            runner,
+            [
+                "get",
+                "network-attachment-definitions.k8s.cni.cncf.io",
+                name,
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+            timeout=60,
+            max_output_bytes=1024 * 1024,
+        )
+        if result.get("returncode", 0) != 0:
+            if _not_found(result):
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_NETWORK_ATTACHMENT_NOT_FOUND"
+                )
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_LOOKUP_FAILED"
+            )
+        try:
+            document = json.loads(result.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_JSON_INVALID"
+            ) from exc
+        metadata = document.get("metadata", {})
+        spec = document.get("spec", {})
+        if (
+            metadata.get("name") != name
+            or metadata.get("namespace") != namespace
+            or not isinstance(spec, dict)
+        ):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_IDENTITY_MISMATCH"
+            )
+        raw_config = spec.get("config")
+        try:
+            config = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_CONFIG_INVALID"
+            ) from exc
+        if not isinstance(config, dict):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_CONFIG_INVALID"
+            )
+        plugins = config.get("plugins")
+        plugin_configs = plugins if isinstance(plugins, list) else [config]
+        matching_plugins = [
+            plugin for plugin in plugin_configs
+            if isinstance(plugin, dict) and plugin.get("type") == cni_type
+        ]
+        if not matching_plugins:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_CNI_TYPE_MISMATCH"
+            )
+        if cni_type == "sriov" and not any(
+            plugin.get("resourceName") == attachment["resource_name"]
+            for plugin in matching_plugins
+        ):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_SRIOV_RESOURCE_MISMATCH"
+            )
+        evidence.append({
+            "namespace": namespace,
+            "name": name,
+            "cni_type": cni_type,
+            **(
+                {"resource_name": attachment["resource_name"]}
+                if cni_type == "sriov"
+                else {}
+            ),
+        })
+    return evidence
 
 
 def _ip_pool_references(value: Any) -> set[str]:
@@ -755,6 +847,12 @@ def execute_worker_provisioning(
     )
     if worker_version != control_plane_version:
         raise WorkerProvisioningError("WORKER_PROVISIONING_KUBERNETES_VERSION_MISMATCH")
+    worker_network_contract = payload.get("worker_network_contract")
+    required_sriov_resources = _network_contract(worker_network_contract, _data)
+    network_attachment_evidence = _verify_network_attachment_definitions(
+        runner,
+        worker_network_contract,
+    )
     ordered = _prepare_manifests(
         documents,
         namespace,
@@ -762,7 +860,7 @@ def execute_worker_provisioning(
         deployment_id,
         target_uid,
         ironic_ntp_ip,
-        payload.get("worker_network_contract"),
+        worker_network_contract,
     )
     sriov_configmaps = _prepare_sriov_device_plugin_configmaps(
         payload.get("sriov_device_plugin"),
@@ -771,6 +869,31 @@ def execute_worker_provisioning(
         cluster_name,
         target_uid,
     )
+    configured_sriov_resources = set()
+    for configmap in sriov_configmaps:
+        try:
+            config = json.loads(configmap["data"]["config.json"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_CONFIGMAP_CONTENT_INVALID"
+            ) from exc
+        resources = config.get("resourceList") if isinstance(config, dict) else None
+        if not isinstance(resources, list):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_CONFIGMAP_CONTENT_INVALID"
+            )
+        for resource in resources:
+            if not isinstance(resource, dict):
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_SRIOV_CONFIGMAP_CONTENT_INVALID"
+                )
+            configured_sriov_resources.add(
+                f"{resource.get('resourcePrefix')}/{resource.get('resourceName')}"
+            )
+    if not required_sriov_resources.issubset(configured_sriov_resources):
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_CONFIGURED"
+        )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
     ip_pool_references = _verify_ip_pools(
@@ -961,6 +1084,9 @@ def execute_worker_provisioning(
         ],
         "ironic_internal_ntp_ip": ironic_ntp_ip,
         "worker_network_contract_validated": True,
+        "verified_network_attachments": network_attachment_evidence,
+        "required_sriov_resources": sorted(required_sriov_resources),
+        "configured_sriov_resources": sorted(configured_sriov_resources),
         "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,
         "deployment_id": deployment_id,

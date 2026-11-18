@@ -168,7 +168,7 @@ def _proof():
     }
 
 
-def _runner_factory(available_bmhs=2, existing_machine_deployment=None, updated_replicas=2):
+def _runner_factory(available_bmhs=2, existing_machine_deployment=None, updated_replicas=2, missing_attachments=None):
     calls = []
     applied = {}
     cluster = {
@@ -233,6 +233,42 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None, updated_
                 }),
                 "stderr": "",
             }
+        if (
+            arguments[0] == "get"
+            and arguments[1] == "network-attachment-definitions.k8s.cni.cncf.io"
+        ):
+            name = arguments[2]
+            if name in (missing_attachments or set()):
+                return {
+                    "available": True,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "Error from server (NotFound)",
+                }
+            configs = {
+                "data-sriov": {
+                    "cniVersion": "0.3.1",
+                    "name": "data-sriov",
+                    "type": "sriov",
+                    "resourceName": "intel.com/sriov_dpdk",
+                },
+                "data-ovs": {
+                    "cniVersion": "0.3.1",
+                    "name": "data-ovs",
+                    "type": "ovs",
+                },
+            }
+            if name not in configs:
+                return {"available": True, "returncode": 1, "stdout": "", "stderr": "NotFound"}
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps({
+                    "metadata": {"name": name, "namespace": "metal3"},
+                    "spec": {"config": json.dumps(configs[name])},
+                }),
+                "stderr": "",
+            }
         if arguments[0] == "get" and arguments[1] == "configmaps":
             name = arguments[2]
             if name in applied:
@@ -288,6 +324,31 @@ def _payload():
         "deployment_id": "deployment-1",
         "worker_resources": _resources(),
         "worker_network_contract": _network_contract(),
+        "sriov_device_plugin": {
+            "pool4": {
+                "node_selectors": {"type": "high-throughput"},
+                "tolerations": [{
+                    "effect": "NoSchedule",
+                    "key": "high-throughput",
+                    "operator": "Equal",
+                    "value": "true",
+                }],
+                "sriov_network_device_plugin_configmap_name": "sriov-device-plugin-pool4",
+                "sriov_network_device_plugin_configmap_data": {
+                    "resourceList": [{
+                        "resourceName": "sriov_dpdk",
+                        "resourcePrefix": "intel.com",
+                        "isRdma": False,
+                        "selectors": {
+                            "vendors": ["8086"],
+                            "drivers": ["vfio-pci"],
+                            "rootDevices": ["0000:86:00.0"],
+                            "isRdma": False,
+                        },
+                    }],
+                },
+            },
+        },
         "ironic_internal_ntp_ip": "10.0.0.10",
     }
 
@@ -313,12 +374,13 @@ def test_worker_provisioning_discovers_crds_dry_runs_and_applies_all_resources()
         "workers-bootstrap",
         "workers-infra",
         "workers-network",
+        "sriov-device-plugin-pool4",
     }
     bootstrap = applied["workers-bootstrap"]
     script = "\n".join(bootstrap["spec"]["template"]["spec"]["preKubeadmCommands"])
     assert "server 10.0.0.10 iburst prefer" in script
     assert "pool " not in script
-    assert sum(1 for call in calls if call[0] == "apply") == 5
+    assert sum(1 for call in calls if call[0] == "apply") == 6
 
 
 def test_worker_provisioning_does_not_treat_observed_generation_as_reconciled_replicas(
@@ -355,6 +417,42 @@ def test_worker_provisioning_blocks_when_free_bmh_capacity_is_insufficient():
         assert str(exc) == "WORKER_PROVISIONING_AVAILABLE_BMH_CAPACITY_INSUFFICIENT"
     else:
         raise AssertionError("Insufficient free BMH capacity must block provisioning")
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_blocks_when_required_network_attachment_is_missing():
+    runner, calls, _applied = _runner_factory(missing_attachments={"data-sriov"})
+    try:
+        execute_worker_provisioning(
+            _payload(),
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_NETWORK_ATTACHMENT_NOT_FOUND"
+    else:
+        raise AssertionError("Missing SR-IOV NetworkAttachmentDefinition must block workers")
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_requires_sriov_nad_resource_in_device_plugin_config():
+    runner, calls, _applied = _runner_factory()
+    payload = _payload()
+    payload["sriov_device_plugin"]["pool4"]["sriov_network_device_plugin_configmap_data"][
+        "resourceList"
+    ][0]["resourceName"] = "sriov_other"
+    try:
+        execute_worker_provisioning(
+            payload,
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert str(exc) == "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_CONFIGURED"
+    else:
+        raise AssertionError("An unexposed SR-IOV resource must block worker provisioning")
     assert not any(call[0] == "apply" for call in calls)
 
 
