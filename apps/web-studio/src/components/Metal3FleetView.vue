@@ -8,6 +8,7 @@ import {
   getClusterDeployments,
   getProjects,
   getTenants,
+  updateClusterSriovDevicePlugin,
   SUPPORTED_KUBERNETES_VERSIONS,
   type AgentCommand,
   type AgentNode,
@@ -17,6 +18,7 @@ import {
   type Tenant,
 } from "../services/api";
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
+import SriovDevicePluginEditor from "./SriovDevicePluginEditor.vue";
 import { getKubernetesUpgradeFailure } from "../domain/kubernetesUpgrade";
 
 type FleetTab = "dashboard" | "fleet" | "eph" | "clusters" | "terminal" | "operations";
@@ -54,6 +56,18 @@ const selectedProjectId = ref("");
 const loading = ref(false);
 const refreshing = ref(false);
 const error = ref("");
+const selectedSriovDeploymentId = ref("");
+const sriovSaving = ref(false);
+const sriovSaveMessage = ref("");
+const sriovEditor = ref<{ validate: () => boolean } | null>(null);
+const sriovPools = ref<Record<string, any>>({
+  pool4: {
+    node_selectors: { type: "high-throughput" },
+    tolerations: [{ effect: "NoSchedule", key: "high-throughput", operator: "Equal", value: "true" }],
+    sriov_network_device_plugin_configmap_name: "sriov-dp-configmap",
+    sriov_network_device_plugin_configmap_data: { resourceList: [] },
+  },
+});
 let refreshTimer: number | undefined;
 let refreshGeneration = 0;
 
@@ -172,6 +186,60 @@ function changeCommandPage(direction: -1 | 1): void {
   if (nextOffset < 0 || nextOffset >= commandCount.value) return;
   commandOffset.value = nextOffset;
   void refreshData();
+}
+
+const sriovPciAddresses = computed(() => {
+  const addresses = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      const matches = value.match(/(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]/g) ?? [];
+      for (const match of matches) addresses.add(match.length === 7 ? "0000:" + match : match.toLowerCase());
+    } else if (Array.isArray(value)) {
+      value.forEach(visit);
+    } else if (value && typeof value === "object") {
+      Object.values(value as Record<string, unknown>).forEach(visit);
+    }
+  };
+  inventory.value.forEach((machine) => visit(machine.hardware_inventory));
+  return [...addresses].sort();
+});
+
+function loadSriovConfig(deploymentId: string): void {
+  const deployment = deployments.value.find((item) => item.id === deploymentId);
+  const workerConfig = deployment?.spec.worker_provisioning;
+  const configured = workerConfig && typeof workerConfig === "object"
+    ? (workerConfig as Record<string, unknown>).sriov_device_plugin
+    : null;
+  sriovPools.value = configured && typeof configured === "object" && !Array.isArray(configured)
+    ? JSON.parse(JSON.stringify(configured)) as Record<string, any>
+    : {
+        pool4: {
+          node_selectors: { type: "high-throughput" },
+          tolerations: [{ effect: "NoSchedule", key: "high-throughput", operator: "Equal", value: "true" }],
+          sriov_network_device_plugin_configmap_name: "sriov-dp-configmap",
+          sriov_network_device_plugin_configmap_data: { resourceList: [] },
+        },
+      };
+  sriovSaveMessage.value = "";
+}
+
+async function saveSriovConfig(): Promise<void> {
+  if (!selectedSriovDeploymentId.value || !sriovEditor.value?.validate()) return;
+  sriovSaving.value = true;
+  sriovSaveMessage.value = "";
+  try {
+    const updated = await updateClusterSriovDevicePlugin(
+      selectedSriovDeploymentId.value,
+      sriovPools.value,
+    );
+    const index = deployments.value.findIndex((item) => item.id === updated.id);
+    if (index >= 0) deployments.value[index] = updated;
+    sriovSaveMessage.value = "SR-IOV pool configuration saved to the deployment. It will be included in the Target Agent worker provisioning command.";
+  } catch (cause) {
+    sriovSaveMessage.value = cause instanceof Error ? cause.message : "Unable to save SR-IOV configuration.";
+  } finally {
+    sriovSaving.value = false;
+  }
 }
 
 function statusType(status: string): "success" | "warning" | "danger" | "info" {
@@ -302,6 +370,7 @@ function upgradeStepStatus(step: Record<string, unknown>): string {
 
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
 watch(selectedProjectId, () => void refreshData());
+watch(selectedSriovDeploymentId, (deploymentId) => loadSriovConfig(deploymentId));
 
 onMounted(async () => {
   await loadTenants();
@@ -527,6 +596,50 @@ onUnmounted(() => {
             <template #default="scope"><code>{{ scope.row.plan_hash.slice(0, 14) }}</code></template>
           </el-table-column>
         </el-table>
+        <section class="fleet-panel sriov-config-panel">
+          <div class="fleet-panel-heading">
+            <h3>Worker SR-IOV PCI Resource Configuration</h3>
+            <span>DEVICE PLUGIN</span>
+          </div>
+          <div class="fleet-inventory-controls">
+            <el-select
+              v-model="selectedSriovDeploymentId"
+              size="small"
+              placeholder="Select target cluster deployment"
+              style="width: min(360px, 100%)"
+            >
+              <el-option
+                v-for="deployment in deployments"
+                :key="deployment.id"
+                :label="deployment.cluster_name + ' · ' + deployment.status"
+                :value="deployment.id"
+              />
+            </el-select>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="sriovSaving"
+              :disabled="!selectedSriovDeploymentId"
+              @click="saveSriovConfig"
+            >Save to backend</el-button>
+          </div>
+          <SriovDevicePluginEditor
+            ref="sriovEditor"
+            v-model="sriovPools"
+            :pci-addresses="sriovPciAddresses"
+          />
+          <el-alert
+            v-if="sriovSaveMessage"
+            :title="sriovSaveMessage"
+            :type="sriovSaveMessage.startsWith('SR-IOV pool') ? 'success' : 'error'"
+            :closable="false"
+            show-icon
+          />
+          <p class="fleet-footnote">
+            PCI addresses discovered in Agent hardware inventory are offered as selectable values. You can also enter a BDF manually.
+            The backend validates the pool, ConfigMap identity, vendor, driver, RDMA flag and PCI ownership before saving.
+          </p>
+        </section>
         <p class="fleet-footnote">Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
       </section>
     </template>
