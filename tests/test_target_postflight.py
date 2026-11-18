@@ -123,6 +123,7 @@ def _fixtures():
             "items": [
                 _ready_daemonset("calico-node"),
                 _ready_daemonset("kube-multus-ds"),
+                _ready_daemonset("ovs-vswitchd", "openvswitch"),
                 _ready_daemonset("sriov-network-config-daemon", "sriov-network-operator"),
                 _ready_daemonset("ovs-cni"),
             ],
