@@ -48,6 +48,10 @@ def _resource(kind, name, credential=False):
 
 
 def _runner_factory():
+    cluster_role = _resource("ClusterRole", "eph-agent-preflight")
+    cluster_role_binding = _resource("ClusterRoleBinding", "eph-agent-preflight")
+    cluster_role["metadata"].pop("namespace")
+    cluster_role_binding["metadata"].pop("namespace")
     resources = {
         "deployments.apps": [_resource("Deployment", "eph-controller")],
         "statefulsets.apps": [],
@@ -56,6 +60,9 @@ def _runner_factory():
         "pods": [_resource("Pod", "eph-agent")],
         "configmaps": [],
         "secrets": [_resource("Secret", "eph-agent-credentials", credential=True)],
+        "clusterrolebindings.rbac.authorization.k8s.io": [cluster_role_binding],
+        "clusterroles.rbac.authorization.k8s.io": [cluster_role],
+        "serviceaccounts": [_resource("ServiceAccount", "eph-agent")],
     }
     calls = []
 
@@ -144,7 +151,7 @@ def test_eph_cleanup_deletes_only_attested_resources_and_revokes_credentials(tmp
     )
     assert result["eph_cleanup_verified"] is True
     assert result["eph_credentials_revoked"] is True
-    assert result["deleted_resource_count"] == 3
+    assert result["deleted_resource_count"] == 6
     assert result["revoked_credential_count"] == 1
     assert all(not items for items in resources.values())
     assert any(call[0] == "delete" and call[1] == "secrets" for call in calls)
@@ -353,7 +360,7 @@ def test_eph_cleanup_is_idempotent_after_resources_were_removed(tmp_path):
         runner,
         environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
     )
-    assert first["deleted_resource_count"] == 3
+    assert first["deleted_resource_count"] == 6
     assert second["deleted_resource_count"] == 0
     assert second["eph_workloads_absent"] is True
     assert second["eph_credentials_revoked"] is True
