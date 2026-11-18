@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import hashlib
 import json
 import re
 import uuid
@@ -22,6 +23,11 @@ from core.models import (
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.tool_router import ToolExecutionError, ToolRouter
+from core.token_budget import (
+    TenantTokenBudgetExceeded,
+    reserve_tenant_tokens,
+    settle_tenant_tokens,
+)
 
 
 FORBIDDEN_CREDENTIAL_KEYS = {
@@ -41,6 +47,31 @@ FORBIDDEN_CREDENTIAL_KEYS = {
 
 class WorkflowValidationError(ValueError):
     pass
+
+
+MAX_WORKFLOW_RUN_TOTAL_TOKENS = 16000
+MAX_WORKFLOW_RUN_OUTPUT_TOKENS = 2048
+MAX_WORKFLOW_NODE_OUTPUT_TOKENS = 1024
+MAX_WORKFLOW_RUN_INPUT_BYTES = 24000
+
+
+def _workflow_output_budget(
+    configured_max_tokens,
+    model_max_tokens,
+    input_tokens,
+    output_tokens,
+    estimated_input_tokens,
+):
+    return min(
+        configured_max_tokens,
+        model_max_tokens,
+        MAX_WORKFLOW_NODE_OUTPUT_TOKENS,
+        MAX_WORKFLOW_RUN_OUTPUT_TOKENS - output_tokens,
+        MAX_WORKFLOW_RUN_TOTAL_TOKENS
+        - input_tokens
+        - output_tokens
+        - estimated_input_tokens,
+    )
 
 
 def validate_workflow_definition(definition):
@@ -377,7 +408,7 @@ def _step_input(node, state):
     return None
 
 
-def _execute_node(node, state, input_data, tenant, project, task):
+def _execute_node(node, state, input_data, tenant, project, task, workflow_run=None):
     node_type = node["type"]
     config = node["config"]
     if node_type == "start":
@@ -524,28 +555,117 @@ def _execute_node(node, state, input_data, tenant, project, task):
             enabled=True,
             provider__enabled=True,
         )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        serialized_messages = json.dumps(
+            messages,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        if len(serialized_messages) > MAX_WORKFLOW_RUN_INPUT_BYTES:
+            raise WorkflowValidationError("WORKFLOW_LLM_INPUT_BUDGET_EXCEEDED")
+        estimated_input_tokens = (len(serialized_messages) + 1) // 2
+        usage = state.get("_token_usage", {})
+        if not isinstance(usage, dict):
+            raise WorkflowValidationError("WORKFLOW_TOKEN_USAGE_STATE_INVALID")
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (input_tokens, output_tokens)
+        ):
+            raise WorkflowValidationError("WORKFLOW_TOKEN_USAGE_STATE_INVALID")
+        allowed_output_tokens = _workflow_output_budget(
+            config.get("max_tokens", model.max_output_tokens),
+            model.max_output_tokens,
+            input_tokens,
+            output_tokens,
+            estimated_input_tokens,
+        )
+        if allowed_output_tokens < 1:
+            raise WorkflowValidationError("WORKFLOW_RUN_TOKEN_BUDGET_EXHAUSTED")
+        token_reservation = None
+        if workflow_run is not None:
+            reservation_key = hashlib.sha256(
+                f"{task.id}:{task.attempts}:workflow:{node['id']}".encode()
+            ).hexdigest()
+            try:
+                token_reservation = reserve_tenant_tokens(
+                    task=task,
+                    workflow_run=workflow_run,
+                    idempotency_key=reservation_key,
+                    requested_tokens=estimated_input_tokens + allowed_output_tokens,
+                )
+            except TenantTokenBudgetExceeded as exc:
+                raise WorkflowValidationError(
+                    "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
+                ) from exc
         try:
             response = ModelGateway().complete(
                 model,
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=config.get("max_tokens", model.max_output_tokens),
+                messages,
+                max_tokens=allowed_output_tokens,
                 timeout_seconds=config.get("timeout_seconds", 60),
             )
         except ModelGatewayError as exc:
-            if exc.retryable:
-                raise RuntimeError(exc.code) from exc
-            raise WorkflowValidationError(exc.code) from exc
-        return {
+            if token_reservation is not None:
+                settle_tenant_tokens(
+                    usage=token_reservation,
+                    consumed_tokens=token_reservation.reserved_tokens,
+                )
+            raise WorkflowValidationError(
+                "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
+            ) from exc
+        except Exception as exc:
+            if token_reservation is not None:
+                settle_tenant_tokens(
+                    usage=token_reservation,
+                    consumed_tokens=token_reservation.reserved_tokens,
+                )
+            raise WorkflowValidationError(
+                "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
+            ) from exc
+        actual_input_tokens = response.input_tokens or (
+            0 if model.provider.provider_type == "fake" else estimated_input_tokens
+        )
+        output_bytes = len(response.content.encode("utf-8"))
+        actual_output_tokens = response.output_tokens or (
+            0 if model.provider.provider_type == "fake" else (output_bytes + 1) // 2
+        )
+        if token_reservation is not None:
+            settle_tenant_tokens(
+                usage=token_reservation,
+                consumed_tokens=actual_input_tokens + actual_output_tokens,
+            )
+        usage = {
+            "input_tokens": input_tokens + actual_input_tokens,
+            "output_tokens": output_tokens + actual_output_tokens,
+        }
+        output = {
             "content": response.content,
-            "input_tokens": response.input_tokens,
-            "output_tokens": response.output_tokens,
+            "input_tokens": actual_input_tokens,
+            "output_tokens": actual_output_tokens,
             "provider": response.provider,
             "model": response.model,
             "latency_ms": response.latency_ms,
         }
+        pending_llm = state.get("_pending_llm", {})
+        if not isinstance(pending_llm, dict):
+            raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
+        pending_llm = {**pending_llm, node["id"]: output}
+        WorkflowRun.objects.filter(task=task).update(
+            state={"_token_usage": usage, "_pending_llm": pending_llm}
+        )
+        state["_token_usage"] = usage
+        state["_pending_llm"] = pending_llm
+        if (
+            usage["input_tokens"] + usage["output_tokens"] > MAX_WORKFLOW_RUN_TOTAL_TOKENS
+            or actual_output_tokens > allowed_output_tokens
+        ):
+            raise WorkflowValidationError("WORKFLOW_PROVIDER_USAGE_EXCEEDED_TOKEN_BUDGET")
+        return output
     raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
 
 
@@ -566,11 +686,28 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.node_id: step
         for step in WorkflowStepRun.objects.filter(workflow_run=workflow_run)
     }
+    usage = state.get("_token_usage")
+    if not isinstance(usage, dict):
+        usage = {"input_tokens": 0, "output_tokens": 0}
+        for completed_step in step_records.values():
+            if (
+                completed_step.status == WorkflowStepRun.Status.SUCCEEDED
+                and completed_step.node_type == "llm"
+                and isinstance(completed_step.output_data, dict)
+            ):
+                usage["input_tokens"] += completed_step.output_data.get("input_tokens", 0)
+                usage["output_tokens"] += completed_step.output_data.get("output_tokens", 0)
+    state["_token_usage"] = usage
     for node_id in graph["order"]:
         node = graph["nodes"][node_id]
         existing = step_records.get(node_id)
         if existing and existing.status == WorkflowStepRun.Status.SUCCEEDED:
             state[node_id] = existing.output_data
+            pending_llm = state.get("_pending_llm")
+            if isinstance(pending_llm, dict):
+                pending_llm.pop(node_id, None)
+                if not pending_llm:
+                    state.pop("_pending_llm", None)
             active_nodes.add(node_id)
             continue
         if existing and existing.status == WorkflowStepRun.Status.SKIPPED:
@@ -622,14 +759,19 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.input_data = {"active_predecessors": [edge["source"] for edge in active_incoming]}
         step.save()
         try:
-            output = _execute_node(
-                node,
-                state,
-                workflow_run.input_data,
-                workflow.tenant,
-                workflow.project,
-                workflow_run.task,
-            )
+            pending_llm = state.get("_pending_llm", {})
+            if node["type"] == "llm" and isinstance(pending_llm, dict) and node_id in pending_llm:
+                output = pending_llm[node_id]
+            else:
+                output = _execute_node(
+                    node,
+                    state,
+                    workflow_run.input_data,
+                    workflow.tenant,
+                    workflow.project,
+                    workflow_run.task,
+                    workflow_run,
+                )
             if not renew_lease(task.id, task.lease_token, worker_id):
                 raise RuntimeError("Workflow task cancellation requested or lease lost")
         except Exception as exc:
@@ -646,6 +788,11 @@ def execute_workflow_run(task, worker_id, renew_lease):
         step.finished_at = timezone.now()
         step.save(update_fields=["status", "output_data", "finished_at"])
         state[node_id] = output
+        pending_llm = state.get("_pending_llm")
+        if isinstance(pending_llm, dict):
+            pending_llm.pop(node_id, None)
+            if not pending_llm:
+                state.pop("_pending_llm", None)
         active_nodes.add(node_id)
         workflow_run.state = state
         workflow_run.save(update_fields=["state"])

@@ -1,0 +1,313 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eph-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eph-agent-preflight
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eph-agent-metal3-deployer
+  namespace: metal3
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs", "kubeadmconfigtemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machinetemplates", "metal3datatemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eph-agent-metal3-deployer
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: eph-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eph-agent-metal3-deployer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eph-agent-preflight
+subjects:
+  - kind: ServiceAccount
+    name: eph-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: eph-agent-preflight
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: target-agent-source-operator
+  namespace: ai-agent-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-agent-source-operator
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: target-agent-source-operator
+subjects:
+  - kind: ServiceAccount
+    name: target-agent-source-operator
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-agent-source-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-source-capi
+  namespace: metal3
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments", "machinesets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs", "kubeadmconfigtemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["ipam.metal3.io"]
+    resources: ["ippools"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-source-capi
+  namespace: metal3
+subjects:
+  - kind: ServiceAccount
+    name: target-agent-source-operator
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-source-capi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-source-cleanup
+  namespace: ai-agent-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-source-cleanup
+  namespace: ai-agent-system
+subjects:
+  - kind: ServiceAccount
+    name: target-agent-source-operator
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-source-cleanup
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eph-agent
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: eph-agent
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eph-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eph-agent
+        app.kubernetes.io/part-of: ai-agent-studio
+    spec:
+      serviceAccountName: eph-agent
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eph-agent
+          image: REPLACE_WITH_REGISTRY/ai-agent-eph-agent:VERSION
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.eph_agent.main"]
+          env:
+            - name: APP_ENV
+              value: production
+            - name: AGENT_ROLE
+              value: eph
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: control-url
+            - name: AGENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: agent-id
+            - name: AGENT_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: eph-agent-credentials
+                  key: installation-id
+            - name: AGENT_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_HEARTBEAT_SECONDS
+              value: "10"
+            - name: AGENT_POLL_SECONDS
+              value: "5"
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
+            - name: EPH_CAPI_NAMESPACE
+              value: metal3
+            - name: EPH_KUBECONFIG
+              value: /var/run/secrets/ai-agent/eph-cluster/kubeconfig
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: control-plane-tls
+              mountPath: /var/run/secrets/ai-agent/control-plane-tls
+              readOnly: true
+            - name: source-kubeconfig
+              mountPath: /var/run/secrets/ai-agent/capi-pivot/source
+              readOnly: true
+            - name: eph-tmp
+              mountPath: /tmp
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "apps.eph_agent.main", "--readiness-check"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "apps.eph_agent.main", "--healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: control-plane-tls
+          secret:
+            secretName: agent-control-plane-mtls
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+            defaultMode: 0440
+        - name: source-kubeconfig
+          secret:
+            secretName: capi-pivot-source-kubeconfig
+            items:
+              - key: kubeconfig
+                path: kubeconfig
+            defaultMode: 0440
+        - name: target-kubeconfig
+          secret:
+            secretName: capi-pivot-target-kubeconfig
+            optional: true
+            items:
+              - key: kubeconfig
+                path: kubeconfig
+            defaultMode: 0440
+        - name: eph-tmp
+          emptyDir:
+            sizeLimit: 64Mi

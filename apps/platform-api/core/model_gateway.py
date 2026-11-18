@@ -143,6 +143,34 @@ class ModelGateway:
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
+        effective_max_tokens = min(
+            max_tokens or model_config.max_output_tokens,
+            model_config.max_output_tokens,
+        )
+        request_bytes = len(
+            json.dumps(
+                {"messages": messages, "tools": tools or []},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if request_bytes > 256 * 1024:
+            raise ModelGatewayError(
+                "MODEL_REQUEST_CONTEXT_TOO_LARGE",
+                "The serialized model request exceeded the 256 KiB context limit.",
+            )
+        estimated_input_tokens = (request_bytes + 1) // 2
+        context_window = model_config.context_window
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window < 1
+            or estimated_input_tokens + effective_max_tokens > context_window
+        ):
+            raise ModelGatewayError(
+                "MODEL_CONTEXT_WINDOW_EXCEEDED",
+                "The estimated prompt and reserved output exceed the model context window.",
+            )
         started = time.monotonic()
         if provider.provider_type == ModelProvider.ProviderType.FAKE:
             content = provider.config.get("response", "Fake model response")
@@ -172,10 +200,7 @@ class ModelGateway:
             {
                 "model": model_config.model_name,
                 "messages": messages,
-                "max_tokens": min(
-                    max_tokens or model_config.max_output_tokens,
-                    model_config.max_output_tokens,
-                ),
+                "max_tokens": effective_max_tokens,
                 **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
             },
             timeout_seconds,
@@ -193,8 +218,20 @@ class ModelGateway:
                 raise TypeError("message content or tool_calls has an invalid type")
             if tool_calls and not tools:
                 raise TypeError("provider returned tool calls when no tools were offered")
-            input_tokens = int(usage.get("prompt_tokens", 0))
-            output_tokens = int(usage.get("completion_tokens", 0))
+            if not isinstance(usage, dict):
+                raise TypeError("usage must be an object")
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            if (
+                not isinstance(input_tokens, int)
+                or isinstance(input_tokens, bool)
+                or input_tokens < 0
+                or not isinstance(output_tokens, int)
+                or isinstance(output_tokens, bool)
+                or output_tokens < 0
+                or output_tokens > effective_max_tokens
+            ):
+                raise ValueError("provider token usage is outside the requested bounds")
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_INVALID_RESPONSE",
@@ -218,10 +255,15 @@ class ModelGateway:
                 "INVALID_EMBEDDING_INPUT",
                 "Embedding input must be a non-empty list of non-empty strings.",
             )
-        if len(inputs) > 128 or any(len(item) > 20000 for item in inputs):
+        if (
+            len(inputs) > 128
+            or any(len(item) > 20000 for item in inputs)
+            or sum(len(item.encode("utf-8")) for item in inputs) > 256 * 1024
+        ):
             raise ModelGatewayError(
                 "EMBEDDING_INPUT_LIMIT",
-                "Embedding requests are limited to 128 texts of at most 20,000 characters each.",
+                "Embedding requests are limited to 128 texts, 20,000 characters each, "
+                "and 256 KiB total UTF-8 input.",
             )
         provider = model_config.provider
         if not provider.enabled or not model_config.enabled:

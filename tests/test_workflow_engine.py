@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from core.models import (
@@ -21,10 +22,13 @@ from core.models import (
 from core.workflow_engine import (
     WorkflowValidationError,
     _execute_node,
+    _workflow_output_budget,
+    execute_workflow_run,
     validate_model_references,
     validate_workflow_definition,
 )
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 from worker_app.tasks import process_once, renew_lease
 
@@ -942,3 +946,123 @@ def test_workflow_tool_arguments_must_reference_an_earlier_node():
     }
     with pytest.raises(WorkflowValidationError, match="earlier node"):
         validate_workflow_definition(definition)
+
+
+def test_workflow_llm_output_is_capped_by_cumulative_run_budget():
+    allowed = _workflow_output_budget(
+        configured_max_tokens=4096,
+        model_max_tokens=8192,
+        input_tokens=2000,
+        output_tokens=100,
+        estimated_input_tokens=3000,
+    )
+
+    assert allowed == 1024
+
+
+def test_workflow_llm_budget_blocks_before_provider_call(workflow_workspace):
+    _, tenant, project, model = workflow_workspace
+    node = {
+        "type": "llm",
+        "config": {
+            "model_config_id": str(model.id),
+            "prompt_template": "Answer {{input}}",
+            "max_tokens": 256,
+            "timeout_seconds": 20,
+        },
+    }
+    state = {
+        "input": "question",
+        "_token_usage": {"input_tokens": 16000, "output_tokens": 0},
+    }
+    task = Task(id=uuid4())
+
+    with patch("core.workflow_engine.ModelGateway.complete") as complete:
+        with pytest.raises(WorkflowValidationError, match="TOKEN_BUDGET_EXHAUSTED"):
+            _execute_node(
+                node,
+                state,
+                {"question": "question"},
+                tenant,
+                project,
+                task,
+            )
+
+    complete.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_workflow_resumes_persisted_llm_result_after_lease_loss(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Lease recovery workflow",
+        slug="lease-recovery-workflow",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    published = client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    created = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "resume without duplicate"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-lease-recovery-001",
+    )
+    assert created.status_code == 202
+    run = WorkflowRun.objects.select_related("task").get(pk=created.data["id"])
+    task = run.task
+    task.status = Task.Status.RUNNING
+    task.lease_owner = "workflow-recovery-worker"
+    task.lease_token = uuid4()
+    task.lease_expires_at = timezone.now() + timezone.timedelta(minutes=5)
+    task.save(
+        update_fields=[
+            "status",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "updated_at",
+        ]
+    )
+
+    response = SimpleNamespace(
+        content="durable workflow answer",
+        input_tokens=12,
+        output_tokens=7,
+        provider="fake",
+        model="workflow-fake",
+        latency_ms=5,
+    )
+    renew_calls = [0]
+
+    def lose_lease_after_llm(_task_id, _lease_token, _worker_id):
+        renew_calls[0] += 1
+        return renew_calls[0] < 4
+
+    with patch("core.workflow_engine.ModelGateway.complete", return_value=response) as complete:
+        with pytest.raises(RuntimeError, match="lease lost"):
+            execute_workflow_run(
+                task,
+                "workflow-recovery-worker",
+                lose_lease_after_llm,
+            )
+        persisted = WorkflowRun.objects.get(pk=run.pk)
+        assert persisted.state["_pending_llm"]["answer"]["content"] == (
+            "durable workflow answer"
+        )
+        result = execute_workflow_run(
+            task,
+            "workflow-recovery-worker",
+            lambda *_args: True,
+        )
+
+    assert complete.call_count == 1
+    assert result["output"]["content"] == "durable workflow answer"

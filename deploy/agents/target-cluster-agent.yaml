@@ -1,23 +1,184 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: target-agent
+  namespace: ai-agent-system
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-leader-election
+  namespace: ai-agent-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-leader-election
+  namespace: ai-agent-system
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-leader-election
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: target-agent
+  namespace: ai-agent-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: target-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-agent-observer
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "pods", "events", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machines", "metal3machinetemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ipam.metal3.io"]
+    resources: ["ippools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: target-agent-observer
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-agent-observer
+---
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-source-operator-secret
+  namespace: ai-agent-system
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["target-agent-source-operator"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-source-operator-secret
+  namespace: ai-agent-system
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-source-operator-secret
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: target-agent-metal3-operator
+  namespace: REPLACE_WITH_TARGET_CAPI_NAMESPACE
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["clusters", "machines", "machinedeployments", "machinesets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kubeadmconfigs", "kubeadmconfigtemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kubeadmcontrolplanes"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["metal3clusters", "metal3machines", "metal3machinetemplates", "metal3datatemplates"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["metal3.io"]
+    resources: ["baremetalhosts"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["ipam.metal3.io"]
+    resources: ["ippools"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: target-agent-metal3-operator
+  namespace: REPLACE_WITH_TARGET_CAPI_NAMESPACE
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: target-agent-metal3-operator
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: target-cluster-agent
+  name: target-agent
   namespace: ai-agent-system
   labels:
-    app.kubernetes.io/name: target-cluster-agent
+    app.kubernetes.io/name: target-agent
     app.kubernetes.io/part-of: ai-agent-studio
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app.kubernetes.io/name: target-cluster-agent
+      app.kubernetes.io/name: target-agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: target-cluster-agent
+        app.kubernetes.io/name: target-agent
+        app.kubernetes.io/part-of: ai-agent-studio
     spec:
-      serviceAccountName: target-cluster-agent
+      serviceAccountName: target-agent
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
       tolerations:
@@ -27,6 +188,13 @@ spec:
         - key: node-role.kubernetes.io/master
           operator: Exists
           effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: target-agent
+              topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -35,93 +203,140 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: agent
-          image: REPLACE_WITH_REGISTRY/ai-agent-node-agent:VERSION
+        - name: target-agent
+          image: REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "apps.node_agent.agent", "--poll-seconds", "5"]
+          command: ["python", "-m", "apps.target_agent.main"]
           env:
             - name: APP_ENV
               value: production
-            - name: AGENT_TLS_CLIENT_CERT_REQUIRED
-              value: "true"
+            - name: AGENT_ROLE
+              value: target
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: control-url
+            - name: AGENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: agent-id
+            - name: AGENT_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: installation-id
+            - name: AGENT_CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: cluster-id
+            - name: IRONIC_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-api-url
+            - name: IRONIC_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-api-token
+            - name: IRONIC_API_MICROVERSION
+              value: "1.82"
+            - name: IRONIC_INTERNAL_NTP_IP
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: ironic-internal-ntp-ip
+            - name: APPROVED_EXTERNAL_NTP_SOURCES
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: approved-external-ntp-sources
+            - name: WORKER_NETWORK_CIDRS
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: worker-network-cidrs
+            - name: TARGET_REQUIRED_CONTROLLER_DEPLOYMENTS
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: required-controller-deployments
+            - name: TARGET_CAPI_NAMESPACE
+              value: REPLACE_WITH_TARGET_CAPI_NAMESPACE
+            - name: CAPI_PIVOT_SOURCE_KUBECONFIG
+              value: /var/run/secrets/ai-agent/source-operator/config
+            - name: AGENT_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AGENT_LEASE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENT_LEASE_NAME
+              value: target-agent-leader
+            - name: AGENT_LEASE_DURATION_SECONDS
+              value: "30"
+            - name: AGENT_HEARTBEAT_SECONDS
+              value: "10"
+            - name: AGENT_POLL_SECONDS
+              value: "5"
             - name: AGENT_TLS_CA_FILE
               value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
             - name: AGENT_TLS_CERT_FILE
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
             - name: AGENT_TLS_KEY_FILE
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
-            - name: AGENT_NODE_TYPE
-              value: target_cluster
-            - name: AGENT_HOST_SYSFS_PATH
-              value: /host/sys
-            - name: AGENT_CONTROL_URL
-              valueFrom:
-                secretKeyRef:
-                  name: target-cluster-agent-credentials
-                  key: control-url
-            - name: AGENT_NODE_ID
-              valueFrom:
-                secretKeyRef:
-                  name: target-cluster-agent-credentials
-                  key: node-id
-            - name: AGENT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: target-cluster-agent-credentials
-                  key: token
-            - name: IRONIC_API_URL
-              valueFrom:
-                secretKeyRef:
-                  name: ironic-api-credentials
-                  key: api-url
-                  optional: true
-            - name: IRONIC_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: ironic-api-credentials
-                  key: token
-                  optional: true
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: "1"
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: agent-health
+            - name: agent-tmp
               mountPath: /tmp
+            - name: source-cluster-operator
+              mountPath: /var/run/secrets/ai-agent/source-operator
+              readOnly: true
             - name: control-plane-tls
               mountPath: /var/run/secrets/ai-agent/control-plane-tls
               readOnly: true
-            - name: host-sysfs
-              mountPath: /host/sys
+            - name: kube-api-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
           readinessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--readiness-check"]
-            initialDelaySeconds: 5
-            periodSeconds: 10
+              command: ["python", "-m", "apps.target_agent.main", "--readiness-check"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["python", "-m", "apps.node_agent.agent", "--healthcheck"]
+              command: ["python", "-m", "apps.target_agent.main", "--healthcheck"]
             initialDelaySeconds: 15
-            periodSeconds: 15
+            periodSeconds: 20
             failureThreshold: 3
       volumes:
-        - name: host-sysfs
-          hostPath:
-            path: /sys
-            type: Directory
-        - name: agent-health
+        - name: agent-tmp
           emptyDir:
-            sizeLimit: 1Mi
+            sizeLimit: 16Mi
+        - name: source-cluster-operator
+          secret:
+            secretName: target-agent-source-operator
+            items:
+              - key: kubeconfig
+                path: config
+            defaultMode: 0440
         - name: control-plane-tls
           secret:
             secretName: agent-control-plane-mtls
@@ -133,3 +348,14 @@ spec:
               - key: tls.key
                 path: tls.key
             defaultMode: 0440
+        - name: kube-api-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt

@@ -629,6 +629,16 @@ export function createClusterDeployment(
   );
 }
 
+export function updateClusterSriovDevicePlugin(
+  deploymentId: string,
+  pools: Record<string, unknown>,
+): Promise<ClusterDeployment> {
+  return request("/api/v1/cluster-deployments/" + deploymentId + "/sriov-device-plugin/", {
+    method: "PUT",
+    body: JSON.stringify({ pools }),
+  });
+}
+
 export function cancelClusterDeployment(deploymentId: string): Promise<ClusterDeployment> {
   return request("/api/v1/cluster-deployments/" + deploymentId + "/cancel/", {
     method: "POST",

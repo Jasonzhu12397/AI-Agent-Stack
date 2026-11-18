@@ -23,6 +23,7 @@ from core.cluster_deployment_services import (
     _maybe_queue_capi_pivot,
     _update_capi_pivot_provider_compatibility,
     handle_deployment_command_result,
+    queue_deployment_command,
 )
 
 
@@ -613,9 +614,14 @@ def test_target_agent_restores_and_advances_durable_deployment_checkpoint(
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "checkpoint-source-cluster-uid"}
         },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "checkpoint-target-cluster-uid",
+            "source_cluster_uid": "checkpoint-source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
         "dual_agent": {
             "target_agent_owns_cluster": True,
-            "target_agent_cluster_uid": "checkpoint-source-cluster-uid",
+            "target_agent_cluster_uid": "checkpoint-target-cluster-uid",
         },
     }
     deployment.save(update_fields=["plan_result"])
@@ -1081,6 +1087,21 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert source_command.node_id == eph_node.id
     assert handoff.data["source_preflight_command_id"] == str(source_command.id)
 
+    blocked_command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.delivery.lifecycle.evaluate",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="role-ineligible-command-before-source-preflight",
+    )
+    AgentCommand.objects.filter(pk=blocked_command.pk).update(
+        created_at=timezone.now() - datetime.timedelta(minutes=1)
+    )
+
     source_client = APIClient()
     source_poll = source_client.post(
         "/api/v1/agent-runtime/commands/poll/",
@@ -1091,6 +1112,9 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert source_poll.status_code == 200
     source_command_data = source_poll.data["command"]
     assert source_command_data["command_type"] == "cluster.capi.pivot.source.preflight"
+    blocked_command.refresh_from_db()
+    assert blocked_command.status == AgentCommand.Status.FAILED
+    assert blocked_command.error["code"] == "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE"
     source_groups = {
         "cluster.x-k8s.io",
         "bootstrap.cluster.x-k8s.io",
@@ -1276,33 +1300,16 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
         "mismatches": [],
         "execution_allowed": False,
     }
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_waiting_approval"
+    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_queued_for_eph_agent"
     pivot_command = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.pivot.execute",
     )
-    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
+    assert pivot_command.status == AgentCommand.Status.QUEUED
     assert pivot_command.node_id == eph_node.id
     assert deployment.error is None
 
-    approver = get_user_model().objects.create_user(
-        username="dual-agent-e2e-approver",
-        password="test-password",
-    )
-    TenantMembership.objects.create(
-        tenant=tenant,
-        user=approver,
-        role=TenantMembership.Role.ADMIN,
-    )
-    approver_client = APIClient()
-    approver_client.force_authenticate(user=approver)
-    approved = approver_client.post(
-        f"/api/v1/agent-commands/{pivot_command.id}/approve/",
-        {"plan_hash": pivot_command.plan_hash},
-        format="json",
-    )
-    assert approved.status_code == 200
-    assert approved.data["status"] == AgentCommand.Status.QUEUED
+    assert pivot_command.status == AgentCommand.Status.QUEUED
 
     eph_agent_client = APIClient()
     pivot_poll = eph_agent_client.post(
@@ -1316,20 +1323,29 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     assert pivot_command_data["id"] == str(pivot_command.id)
     assert pivot_command_data["command_type"] == "cluster.capi.pivot.execute"
 
+    source_uid = deployment.plan_result["capi_pivot_source_preflight"][
+        "source_cluster_identity"
+    ]["uid"]
+    target_uid = "target-cluster-uid"
     pivot_result = {
-        "pivot_executed": False,
-        "pivot_simulated": True,
-        "execution_mode": "preflight_verified_simulation",
-        "simulation_status": "ready_for_target_agent_acknowledgement",
+        "pivot_executed": True,
+        "pivot_simulated": False,
+        "execution_mode": "clusterctl_move",
         "dry_run_passed": True,
         "source_namespace_scope_verified": True,
         "target_management_plane_verified": True,
         "cluster_name": "edge-lab",
         "namespace": "capi-system",
-        "ownership_transferred": False,
-        "target_agent_acknowledgement_required": True,
+        "target_cluster_uid": target_uid,
+        "source_cluster_uid": source_uid,
+        "cluster_identity_preserved": True,
+        "source_cluster_identity_annotation": "ai-agent-stack.io/source-cluster-uid",
+        "source_cluster_identity_annotation_written": True,
+        "source_cluster_absent": True,
+        "ownership_transferred": True,
+        "automatic_retry_allowed": False,
         "postflight_required": True,
-        "side_effects": False,
+        "side_effects": True,
     }
     pivot_submitted = eph_agent_client.post(
         f"/api/v1/agent-runtime/commands/{pivot_command_data['id']}/result/",
@@ -1347,17 +1363,21 @@ def test_target_agent_handoff_dispatches_and_validates_capi_pivot_preflight(
     pivot_command.refresh_from_db()
     assert pivot_submitted.status_code == 200
     assert pivot_command.status == AgentCommand.Status.SUCCEEDED
-    assert pivot_command.approved_by_id == approver.id
     assert deployment.error is None
-    assert deployment.plan_result["dual_agent"]["phase"] == "pivot_simulation_ready"
-    assert deployment.plan_result["dual_agent"]["pivot_simulated"] is True
+    assert (
+        deployment.plan_result["dual_agent"]["phase"]
+        == "pivot_executed_waiting_target_verification"
+    )
+    assert deployment.plan_result["dual_agent"]["pivot_executed"] is True
     assert deployment.plan_result["dual_agent"]["pivot_completed"] is False
     assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is False
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    assert not AgentCommand.objects.filter(
+    target_verify = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.pivot.target.verify",
-    ).exists()
+    )
+    assert target_verify.status == AgentCommand.Status.QUEUED
+    assert target_verify.node_id == target_node.id
     assert not AgentCommand.objects.filter(
         deployment=deployment,
         command_type="cluster.capi.worker.preflight",
@@ -1548,21 +1568,14 @@ def test_capi_pivot_api_version_mismatch_never_allows_execution(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("approval_valid", [True, False])
-def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_transfer_ownership(
+def test_dual_agent_pivot_rejects_simulated_success_result(
     cluster_delivery_workspace,
-    approval_valid,
 ):
     user, tenant, project, eph_node, _, client = cluster_delivery_workspace
     created = create_deployment(
-        client,
-        tenant,
-        project,
-        eph_node,
-        key="dual-agent-pivot-simulation",
+        client, tenant, project, eph_node, key="dual-agent-pivot-simulation"
     )
     deployment = ClusterDeployment.objects.get(pk=created.data["id"])
-    target_token = "dual-agent-target-token"
     target_node = AgentNode.objects.create(
         tenant=tenant,
         project=project,
@@ -1570,7 +1583,7 @@ def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_
         name="dual-agent-target",
         node_type=AgentNode.NodeType.TARGET_CLUSTER,
         cluster_name="edge-lab",
-        credential_hash=hashlib.sha256(target_token.encode("utf-8")).hexdigest(),
+        credential_hash=hashlib.sha256(b"dual-agent-target-token").hexdigest(),
         status=AgentNode.Status.ONLINE,
         last_seen_at=timezone.now(),
     )
@@ -1587,45 +1600,19 @@ def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_
         },
         "capi_pivot_preflight": {"preflight_validated": True},
         "capi_pivot_provider_compatibility": {
-            "checked": True,
-            "compatible": True,
-            "execution_allowed": False,
+            "checked": True, "compatible": True, "execution_allowed": False,
         },
     }
     deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
     deployment.save(update_fields=["target_node", "spec", "plan_result", "status", "updated_at"])
-
     _maybe_queue_capi_pivot(deployment)
     pivot_command = AgentCommand.objects.get(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.execute",
+        deployment=deployment, command_type="cluster.capi.pivot.execute"
     )
     assert pivot_command.node_id == eph_node.id
-    assert pivot_command.status == AgentCommand.Status.WAITING_APPROVAL
-
-    if approval_valid:
-        approver = get_user_model().objects.create_user(
-            username="dual-agent-pivot-approver",
-            password="test-password",
-        )
-        TenantMembership.objects.create(
-            tenant=tenant,
-            user=approver,
-            role=TenantMembership.Role.ADMIN,
-        )
-        pivot_command.status = AgentCommand.Status.SUCCEEDED
-        pivot_command.approved_by = approver
-        pivot_command.approved_at = timezone.now()
-        pivot_command.approved_plan_hash = pivot_command.plan_hash
-        pivot_command.save(
-            update_fields=[
-                "status",
-                "approved_by",
-                "approved_at",
-                "approved_plan_hash",
-            ]
-        )
-
+    assert pivot_command.status == AgentCommand.Status.QUEUED
+    pivot_command.status = AgentCommand.Status.SUCCEEDED
+    pivot_command.save(update_fields=["status"])
     handle_deployment_command_result(
         pivot_command,
         "succeeded",
@@ -1646,34 +1633,14 @@ def test_dual_agent_pivot_simulation_requires_independent_approval_and_does_not_
         },
         None,
     )
-
     deployment.refresh_from_db()
-    if not approval_valid:
-        assert deployment.status == ClusterDeployment.Status.FAILED
-        assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
-        assert deployment.plan_result.get("dual_agent", {}).get(
-            "target_agent_owns_cluster"
-        ) is not True
-        return
-
-    dual_agent = deployment.plan_result["dual_agent"]
-    assert dual_agent["phase"] == "pivot_simulation_ready"
-    assert dual_agent["pivot_simulated"] is True
-    assert dual_agent["pivot_completed"] is False
-    assert dual_agent["target_agent_owns_cluster"] is False
-    assert dual_agent["eph_reclaim_allowed"] is False
-    assert deployment.error is None
+    assert deployment.status == ClusterDeployment.Status.FAILED
+    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_EXECUTION_RESULT"
     assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.capi.pivot.target.verify",
-    ).exists()
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.capi.worker.preflight",
+        deployment=deployment, command_type="cluster.capi.pivot.target.verify"
     ).exists()
 
 
-@pytest.mark.django_db
 def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
     cluster_delivery_workspace,
 ):
@@ -1725,7 +1692,7 @@ def test_control_plane_rejects_pivot_simulation_that_claims_side_effects(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_SIMULATION_RESULT"
+    assert deployment.error["code"] == "INVALID_CAPI_PIVOT_EXECUTION_RESULT"
     assert deployment.plan_result.get("dual_agent", {}).get("target_agent_owns_cluster") is not True
 
 @pytest.mark.django_db
@@ -1774,6 +1741,7 @@ def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory
             "cluster_name": "edge-lab",
             "namespace": "default",
             "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
@@ -1793,6 +1761,87 @@ def test_control_plane_rejects_postflight_without_complete_capi_worker_inventory
     assert deployment.error["not_ready_worker_machine_names"] == [
         "edge-lab-worker-04"
     ]
+
+
+@pytest.mark.django_db
+def test_control_plane_requeues_incomplete_worker_readiness_postflight(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="retry-capi-worker-postflight",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="retry-postflight-worker-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"retry-postflight-worker-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.save(update_fields=["target_node", "status", "updated_at"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.postflight",
+        payload={
+            "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+        },
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"retry-capi-worker-postflight:{deployment.id}:attempt:0",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "default",
+            "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
+            "node_count": 5,
+            "ready": False,
+            "not_ready_nodes": ["edge-lab-worker-04"],
+            "worker_machine_count": 4,
+            "ready_worker_machine_count": 3,
+            "not_ready_worker_machine_names": ["edge-lab-worker-04"],
+            "worker_node_names": ["worker-01", "worker-02", "worker-03"],
+            "capi_worker_inventory_complete": False,
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    retry = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+        idempotency_key=(
+            f"cluster-deployment:{deployment.id}:cluster.postflight:attempt:1"
+        ),
+    )
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
+    assert deployment.error is None
+    assert deployment.finished_at is None
+    assert retry.status == AgentCommand.Status.QUEUED
+    assert retry.payload["readiness_attempt"] == 1
+    assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
 
 
 @pytest.mark.django_db
@@ -1841,6 +1890,7 @@ def test_control_plane_accepts_postflight_only_when_all_capi_workers_are_ready(
             "cluster_name": "edge-lab",
             "namespace": "default",
             "expected_worker_replicas": 4,
+            "readiness_attempt": 0,
             "node_count": 5,
             "ready": True,
             "not_ready_nodes": [],
@@ -1897,6 +1947,11 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
         },
+        "capi_pivot_execution": {
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
         "dual_agent": {
             "phase": "target_agent_verification_pending",
             "target_agent_owns_cluster": False,
@@ -1922,7 +1977,8 @@ def test_control_plane_rejects_partial_target_machine_readiness_claim(
         {
             "cluster_name": "edge-lab",
             "namespace": "metal3",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
             "source_cluster_uid": "source-cluster-uid",
             "cluster_identity_preserved": True,
             "pivot_adoption_verified": True,
@@ -2067,6 +2123,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
         "machine_deployment_name": "edge-workers",
         "infrastructure_template_name": "edge-worker-template",
         "bootstrap_template_name": "edge-worker-bootstrap",
+        "ironic_internal_ip": "10.0.0.123",
         "baremetal_host_namespace": "metal3-system",
         "host_selector": {"pool": "workers"},
         "network_profile": network_profile,
@@ -2076,7 +2133,13 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
     }
     deployment.status = ClusterDeployment.Status.PROVISIONING
     deployment.save(update_fields=["target_node", "spec", "plan_result", "status"])
@@ -2107,7 +2170,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
     result = {
         "ready": True,
         "cluster_name": "edge-lab",
-        "cluster_uid": "source-cluster-uid",
+        "cluster_uid": "target-cluster-uid",
         "namespace": "default",
         "expected_worker_replicas": 4,
         "machine_deployment_name": "edge-workers",
@@ -2140,6 +2203,9 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
             "dpdk_requested": True,
             "attachment_count": 1,
         },
+        "ntp_server_ip": config["ironic_internal_ip"],
+        "ntp_server_ready": True,
+        "ntp_server_stratum": 2,
         "network_template_profile_hash": profile_hash,
         "network_template_profile_verified": True,
         "provider_versions": {
@@ -2172,7 +2238,7 @@ def _worker_preflight_fixture(cluster_delivery_workspace, key):
 
 
 @pytest.mark.django_db
-def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
+def test_control_plane_rejects_worker_preflight_without_target_cluster_uid(
     cluster_delivery_workspace,
 ):
     deployment, command, result = _worker_preflight_fixture(
@@ -2182,7 +2248,12 @@ def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
     deployment.plan_result = {
         **deployment.plan_result,
         "capi_pivot_source_preflight": {
-            "source_cluster_identity": {"uid": None}
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": None,
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
         },
         "dual_agent": {"target_agent_owns_cluster": True},
     }
@@ -2201,7 +2272,7 @@ def test_control_plane_rejects_worker_preflight_without_source_cluster_uid(
     ).exists()
 
 @pytest.mark.django_db
-def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_gate(
+def test_control_plane_accepts_worker_preflight_and_queues_autonomous_provisioning(
     cluster_delivery_workspace,
 ):
     deployment, command, result = _worker_preflight_fixture(
@@ -2212,12 +2283,12 @@ def test_control_plane_accepts_worker_preflight_but_keeps_provisioning_approval_
     handle_deployment_command_result(command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.WAITING_APPROVAL
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
     assert deployment.error is None
     assert deployment.plan_result["worker_provisioning_preflight"]["ready"] is True
     assert (
         deployment.plan_result["dual_agent"]["phase"]
-        == "worker_preflight_passed_waiting_provisioning_approval"
+        == "worker_preflight_passed"
     )
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
@@ -2266,12 +2337,12 @@ def test_control_plane_rejects_worker_preflight_without_healthy_provider_control
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is not True
 
 @pytest.mark.django_db
-def test_approved_worker_provisioning_result_stays_simulation_only(
+def test_worker_provisioning_persists_real_create_and_queues_readiness(
     cluster_delivery_workspace,
 ):
     deployment, preflight_command, preflight_result = _worker_preflight_fixture(
         cluster_delivery_workspace,
-        "worker-provisioning-simulation",
+        "worker-provisioning-real-create",
     )
     handle_deployment_command_result(
         preflight_command,
@@ -2279,54 +2350,37 @@ def test_approved_worker_provisioning_result_stays_simulation_only(
         preflight_result,
         None,
     )
-    deployment.refresh_from_db()
     provision_command = AgentCommand.objects.get(
         deployment=deployment,
         command_type="cluster.capi.worker.provision",
     )
-    assert provision_command.status == AgentCommand.Status.WAITING_APPROVAL
-
-    approver = get_user_model().objects.create_user(
-        username="worker-provisioning-simulation-approver",
-        password="test-password",
-    )
-    TenantMembership.objects.create(
-        tenant=deployment.tenant,
-        user=approver,
-        role=TenantMembership.Role.ADMIN,
-    )
     provision_command.status = AgentCommand.Status.SUCCEEDED
-    provision_command.approved_by = approver
-    provision_command.approved_at = timezone.now()
-    provision_command.approved_plan_hash = provision_command.plan_hash
-    provision_command.save(
-        update_fields=[
-            "status",
-            "approved_by",
-            "approved_at",
-            "approved_plan_hash",
-        ]
-    )
+    provision_command.save(update_fields=["status"])
     result = {
         "deployment_id": str(deployment.id),
         "cluster_name": deployment.cluster_name,
         "namespace": "default",
         "machine_deployment_name": "edge-workers",
-        "machine_deployment_uid": None,
+        "machine_deployment_uid": "machine-deployment-uid",
         "cluster_uid": provision_command.payload["expected_cluster_uid"],
         "provisioning_plan_hash": provision_command.payload[
             "provisioning_plan_hash"
         ],
         "machine_deployment_manifest_hash": "a" * 64,
-        "execution_mode": "server_side_dry_run_simulation",
-        "simulation_status": "ready_for_manual_execution",
+        "execution_mode": "real_create_or_idempotent_reconcile",
+        "chrony_ntp_server_ip": deployment.spec["worker_provisioning"]["ironic_internal_ip"],
+        "chrony_bootstrap_template_name": (
+            "edge-worker-bootstrap-ntp-" + str(deployment.id).replace("-", "")[:8]
+        ),
+        "chrony_bootstrap_template_uid": "chrony-bootstrap-template-uid",
+        "chrony_bootstrap_template_created": False,
         "network_profile_hash": preflight_result["network_profile"]["profile_hash"],
-        "created": False,
+        "created": True,
         "idempotent_reconciliation": False,
         "dry_run_passed": True,
-        "side_effects": False,
-        "execution_allowed": False,
-        "worker_creation_performed": False,
+        "side_effects": True,
+        "execution_allowed": True,
+        "worker_creation_performed": True,
         "worker_readiness_verified": False,
         "worker_machine_count": 0,
         "ready_worker_machine_count": 0,
@@ -2337,34 +2391,25 @@ def test_approved_worker_provisioning_result_stays_simulation_only(
     handle_deployment_command_result(provision_command, "succeeded", result, None)
 
     deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.PLAN_READY
+    assert deployment.status == ClusterDeployment.Status.PROVISIONING
     assert deployment.error is None
-    assert (
-        deployment.plan_result["dual_agent"]["phase"]
-        == "worker_provisioning_simulated_manual_execution_required"
+    assert deployment.plan_result["dual_agent"]["phase"] == (
+        "worker_provisioning_waiting_for_readiness"
     )
     assert deployment.plan_result["dual_agent"]["worker_provisioning_completed"] is False
-    assert deployment.plan_result["dual_agent"]["worker_provisioning_simulated"] is True
     assert deployment.plan_result["dual_agent"]["eph_reclaim_allowed"] is False
-    assert deployment.plan_result["worker_provisioning_simulation"] == result
+    assert deployment.plan_result["worker_provisioning"] == result
+    postflight = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="cluster.postflight",
+    )
+    assert postflight.node_id == deployment.target_node_id
+    assert postflight.status == AgentCommand.Status.QUEUED
     checkpoint = ClusterDeploymentCheckpoint.objects.get(deployment=deployment)
     assert checkpoint.sequence == 1
     assert checkpoint.phase == "worker_provisioning"
     assert checkpoint.data["pending_step"] == "worker_provisioning"
     assert "worker_provisioning" not in checkpoint.data["completed_steps"]
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.postflight",
-    ).exists()
-
-    handle_deployment_command_result(provision_command, "succeeded", result, None)
-
-    deployment.refresh_from_db()
-    assert deployment.status == ClusterDeployment.Status.PLAN_READY
-    assert not AgentCommand.objects.filter(
-        deployment=deployment,
-        command_type="cluster.postflight",
-    ).exists()
 
 
 @pytest.mark.django_db
@@ -2413,7 +2458,7 @@ def test_worker_provisioning_rejects_payload_mutation_after_approval(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
@@ -2460,7 +2505,7 @@ def test_worker_provisioning_rejects_non_object_payload_without_crashing(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
     assert deployment.plan_result.get("dual_agent", {}).get("eph_reclaim_allowed") is False
 
 
@@ -2510,7 +2555,7 @@ def test_worker_provisioning_result_without_independent_approval_is_rejected(
 
     deployment.refresh_from_db()
     assert deployment.status == ClusterDeployment.Status.FAILED
-    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_SIMULATION_FAILED"
+    assert deployment.error["code"] == "TARGET_WORKER_PROVISIONING_CREATE_RESULT_INVALID"
 
 
 
@@ -2544,7 +2589,13 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
     deployment.plan_result = {
         "capi_pivot_source_preflight": {
             "source_cluster_identity": {"uid": "source-cluster-uid"}
-        }
+        },
+        "capi_pivot_target_verification": {
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
     }
     deployment.save(update_fields=["target_node", "status", "plan_result"])
     command = AgentCommand.objects.create(
@@ -2566,7 +2617,10 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
             "postflight_passed": True,
             "cluster_name": "edge-lab",
             "namespace": "default",
-            "cluster_uid": "source-cluster-uid",
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
             "side_effects": False,
             "complete_hardware_verification": False,
             "verification_scope": "capi_metal3_without_direct_ironic_api",
@@ -2594,6 +2648,54 @@ def test_pivot_postflight_rejects_missing_direct_ironic_verification(
         command_type="cluster.capi.worker.preflight",
     ).exists()
 
+
+
+@pytest.mark.django_db
+def test_agent_poll_skips_exhausted_command_and_dispatches_next_eligible_command(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, eph_token, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="agent-poll-skips-exhausted-command",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    exhausted = AgentCommand.objects.get(
+        deployment=deployment,
+        command_type="host.preflight",
+    )
+    exhausted.attempts = exhausted.max_attempts
+    exhausted.save(update_fields=["attempts"])
+    next_command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="node.health",
+        payload={},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="agent-poll-next-eligible-command",
+    )
+
+    response = APIClient().post(
+        "/api/v1/agent-runtime/commands/poll/",
+        {"node_id": str(eph_node.id)},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {eph_token}",
+    )
+
+    assert response.status_code == 200
+    assert response.data["command"]["id"] == str(next_command.id)
+    exhausted.refresh_from_db()
+    next_command.refresh_from_db()
+    assert exhausted.status == AgentCommand.Status.FAILED
+    assert exhausted.error["code"] == "LEASE_EXPIRED"
+    assert next_command.status == AgentCommand.Status.RUNNING
+    assert next_command.attempts == 1
 
 @pytest.mark.django_db
 def test_eph_agent_cannot_poll_deployment_commands_after_target_ownership(
@@ -2781,3 +2883,212 @@ def test_terminal_deployment_ignores_late_command_callbacks(
     assert deployment.finished_at == finished_at
     assert (deployment.plan_result or {}).get("postflight") is None
 
+
+
+@pytest.mark.django_db
+def test_control_plane_accepts_pivot_with_distinct_source_and_target_uids(
+    cluster_delivery_workspace,
+):
+    user, tenant, project, eph_node, _, client = cluster_delivery_workspace
+    created = create_deployment(
+        client,
+        tenant,
+        project,
+        eph_node,
+        key="pivot-distinct-source-target-uids",
+    )
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    target_node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="pivot-distinct-uids-target",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        cluster_name="edge-lab",
+        credential_hash=hashlib.sha256(b"pivot-distinct-uids-token").hexdigest(),
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    deployment.target_node = target_node
+    deployment.status = ClusterDeployment.Status.PROVISIONING
+    deployment.spec = {**deployment.spec, "capi_namespace": "metal3"}
+    deployment.plan_result = {
+        "capi_pivot_source_preflight": {
+            "source_cluster_identity": {"uid": "source-cluster-uid"}
+        },
+        "capi_pivot_execution": {
+            "source_cluster_uid": "source-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "cluster_identity_preserved": True,
+        },
+        "dual_agent": {
+            "phase": "target_agent_verification_pending",
+            "target_agent_owns_cluster": False,
+            "eph_reclaim_allowed": False,
+        },
+    }
+    deployment.save(update_fields=["target_node", "status", "spec", "plan_result"])
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target_node,
+        requested_by=user,
+        deployment=deployment,
+        command_type="cluster.capi.pivot.target.verify",
+        payload={},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"pivot-distinct-uids:{deployment.id}",
+    )
+
+    handle_deployment_command_result(
+        command,
+        "succeeded",
+        {
+            "cluster_name": "edge-lab",
+            "namespace": "metal3",
+            "cluster_uid": "target-cluster-uid",
+            "target_cluster_uid": "target-cluster-uid",
+            "source_cluster_uid": "source-cluster-uid",
+            "cluster_identity_preserved": True,
+            "pivot_adoption_verified": True,
+            "machine_inventory_ready": True,
+            "controllers_ready": True,
+            "machine_count": 1,
+            "ready_machine_count": 1,
+            "not_ready_machine_names": [],
+            "controllers": [
+                {
+                    "namespace": "capi-system",
+                    "deployment": "capi-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capi-kubeadm-bootstrap-system",
+                    "deployment": "capi-kubeadm-bootstrap-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capi-kubeadm-control-plane-system",
+                    "deployment": "capi-kubeadm-control-plane-controller-manager",
+                    "ready": True,
+                },
+                {
+                    "namespace": "capm3-system",
+                    "deployment": "capm3-controller-manager",
+                    "ready": True,
+                },
+            ],
+            "side_effects": False,
+        },
+        None,
+    )
+
+    deployment.refresh_from_db()
+    assert deployment.error is None
+    assert deployment.plan_result["capi_pivot_target_verification"]["cluster_uid"] == (
+        "target-cluster-uid"
+    )
+    assert deployment.plan_result["dual_agent"]["target_agent_owns_cluster"] is True
+    assert deployment.plan_result["dual_agent"]["target_agent_cluster_uid"] == (
+        "target-cluster-uid"
+    )
+    assert AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type="cluster.capi.pivot.postflight",
+        status=AgentCommand.Status.QUEUED,
+        node=target_node,
+    ).exists()
+
+
+def _sriov_pools():
+    resource_list = [
+        {
+            "resourceName": "mlnx_dpdk_left",
+            "resourcePrefix": "mellanox.com",
+            "isRdma": True,
+            "selectors": {
+                "vendors": ["15b3"],
+                "drivers": ["mlx5_core"],
+                "rootDevices": ["0000:2f:00.0", "0000:8a:00.0"],
+                "isRdma": True,
+            },
+        },
+        {
+            "resourceName": "mlnx_dpdk_right",
+            "resourcePrefix": "mellanox.com",
+            "isRdma": True,
+            "selectors": {
+                "vendors": ["15b3"],
+                "drivers": ["mlx5_core"],
+                "rootDevices": ["0000:2f:00.1", "0000:8a:00.1"],
+                "isRdma": True,
+            },
+        },
+    ]
+    pool = {
+        "node_selectors": {"type": "high-throughput"},
+        "tolerations": [
+            {
+                "effect": "NoSchedule",
+                "key": "high-throughput",
+                "operator": "Equal",
+                "value": "true",
+            }
+        ],
+        "sriov_network_device_plugin_configmap_name": "sriov-dp-configmap",
+        "sriov_network_device_plugin_configmap_data": {"resourceList": resource_list},
+    }
+    return {"pool4": pool, "pool5": pool}
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_is_validated_and_persisted(cluster_delivery_workspace):
+    _user, _tenant, _project, _node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, _tenant, _project, _node, key="sriov-config-save")
+    response = client.put(
+        f"/api/v1/cluster-deployments/{created.data['id']}/sriov-device-plugin/",
+        {"pools": _sriov_pools()},
+        format="json",
+    )
+    assert response.status_code == 200
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    config = deployment.spec["worker_provisioning"]["sriov_device_plugin"]
+    assert config["pool4"]["sriov_network_device_plugin_configmap_name"] == "sriov-dp-configmap"
+    assert (
+        config["pool5"]["sriov_network_device_plugin_configmap_data"]
+        == config["pool4"]["sriov_network_device_plugin_configmap_data"]
+    )
+    command = queue_deployment_command(deployment, "cluster.capi.worker.provision", node=_node)
+    assert command.payload["worker_provisioning"]["sriov_device_plugin"] == config
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_rejects_invalid_pci_bdf(cluster_delivery_workspace):
+    _user, tenant, project, node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node, key="sriov-config-invalid")
+    pools = _sriov_pools()
+    selectors = pools["pool4"]["sriov_network_device_plugin_configmap_data"]
+    selectors["resourceList"][0]["selectors"]["rootDevices"] = ["2f:00.0"]
+    response = client.put(
+        f"/api/v1/cluster-deployments/{created.data['id']}/sriov-device-plugin/",
+        {"pools": pools},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert response.data["detail"] == "SRIOV_DEVICE_PLUGIN_SELECTORS_INVALID"
+
+
+@pytest.mark.django_db
+def test_cluster_deployment_sriov_config_is_immutable_after_worker_provision_command(
+    cluster_delivery_workspace,
+):
+    _user, tenant, project, node, _token, client = cluster_delivery_workspace
+    created = create_deployment(client, tenant, project, node, key="sriov-config-immutable")
+    deployment = ClusterDeployment.objects.get(pk=created.data["id"])
+    queue_deployment_command(deployment, "cluster.capi.worker.provision", node=node)
+    response = client.put(
+        f"/api/v1/cluster-deployments/{deployment.id}/sriov-device-plugin/",
+        {"pools": _sriov_pools()},
+        format="json",
+    )
+    assert response.status_code == 409

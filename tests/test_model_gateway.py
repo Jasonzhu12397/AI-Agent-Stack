@@ -172,6 +172,60 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
     assert fake_opener.request.get_header("Authorization") == "Bearer test-secret"
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": -1, "completion_tokens": 1},
+        {"prompt_tokens": 1, "completion_tokens": -1},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"prompt_tokens": 1, "completion_tokens": False},
+        {"prompt_tokens": 1, "completion_tokens": 201},
+        {"prompt_tokens": "12", "completion_tokens": 1},
+    ],
+)
+def test_model_gateway_rejects_invalid_or_unbounded_provider_token_usage(
+    monkeypatch, usage
+):
+    class FakeHTTPResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size=-1):
+            return json.dumps({
+                "choices": [{"message": {"content": "answer"}}],
+                "usage": usage,
+            }).encode("utf-8")
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            return FakeHTTPResponse()
+
+    provider = ModelProvider(
+        name="Usage validation provider",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="test-model",
+        display_name="Test Model",
+        max_output_tokens=200,
+    )
+    monkeypatch.setenv("MODEL_API_KEY", "test-secret")
+    with patch("core.model_gateway.build_opener", return_value=FakeOpener()):
+        with pytest.raises(ModelGatewayError) as error:
+            ModelGateway().complete(
+                model,
+                [{"role": "user", "content": "hello"}],
+                max_tokens=200,
+            )
+    assert error.value.code == "MODEL_PROVIDER_INVALID_RESPONSE"
+
+
 def test_missing_model_credential_fails_without_revealing_secret():
     provider = ModelProvider(
         name="Missing key",
@@ -251,3 +305,84 @@ def test_model_provider_rejects_secret_values_inside_config(model_tenant):
 
     assert response.status_code == 400
     assert not ModelProvider.objects.filter(tenant=tenant, name="Unsafe provider").exists()
+
+
+def test_model_gateway_rejects_context_overflow_before_network_call(monkeypatch):
+    provider = ModelProvider(
+        name="Context limited provider",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="small-context-model",
+        display_name="Small Context Model",
+        context_window=128,
+        max_output_tokens=64,
+    )
+    monkeypatch.setenv("MODEL_API_KEY", "test-secret")
+
+    with patch("core.model_gateway.build_opener") as opener:
+        with pytest.raises(ModelGatewayError) as error:
+            ModelGateway().complete(
+                model,
+                [{"role": "user", "content": "x" * 512}],
+            )
+
+    assert error.value.code == "MODEL_CONTEXT_WINDOW_EXCEEDED"
+    opener.assert_not_called()
+
+
+def test_model_gateway_rejects_oversized_serialized_tool_context():
+    provider = ModelProvider(
+        name="Context provider",
+        provider_type=ModelProvider.ProviderType.FAKE,
+        config={"response": "unused"},
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="fake",
+        display_name="Fake",
+        capabilities=["chat", "tools"],
+        context_window=500000,
+        max_output_tokens=64,
+    )
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "large_tool",
+            "description": "x" * (256 * 1024),
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    }]
+
+    with pytest.raises(ModelGatewayError) as error:
+        ModelGateway().complete(
+            model,
+            [{"role": "user", "content": "hello"}],
+            tools=tools,
+        )
+
+    assert error.value.code == "MODEL_REQUEST_CONTEXT_TOO_LARGE"
+
+
+def test_embedding_gateway_rejects_aggregate_input_over_byte_budget():
+    provider = ModelProvider(
+        name="Embedding provider",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="embedding-model",
+        display_name="Embedding Model",
+        capabilities=["embeddings"],
+    )
+    inputs = ["x" * 19000 for _ in range(14)]
+
+    with pytest.raises(ModelGatewayError) as error:
+        ModelGateway().embed(model, inputs)
+
+    assert error.value.code == "EMBEDDING_INPUT_LIMIT"

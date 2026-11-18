@@ -287,11 +287,78 @@ class AgentRun(models.Model):
     provider_name = models.CharField(max_length=120, blank=True)
     model_name = models.CharField(max_length=160, blank=True)
     latency_ms = models.PositiveIntegerField(default=0)
+    execution_state = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class TenantTokenBudget(models.Model):
+    tenant = models.OneToOneField(Tenant, on_delete=models.CASCADE, related_name="token_budget")
+    daily_limit = models.PositiveBigIntegerField(default=100_000)
+    monthly_limit = models.PositiveBigIntegerField(default=1_000_000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class TenantTokenUsage(models.Model):
+    class Status(models.TextChoices):
+        RESERVED = "reserved", "Reserved"
+        SETTLED = "settled", "Settled"
+        RELEASED = "released", "Released"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="token_usage")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="token_usage")
+    agent_run = models.ForeignKey(
+        AgentRun,
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
+    workflow_run = models.ForeignKey(
+        "WorkflowRun",
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
+    idempotency_key = models.CharField(max_length=160)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
+    reserved_tokens = models.PositiveBigIntegerField(default=0)
+    consumed_tokens = models.PositiveBigIntegerField(default=0)
+    expires_at = models.DateTimeField()
+    settled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="uniq_tenant_token_usage_idempotency",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agent_run__isnull=False, workflow_run__isnull=True)
+                    | models.Q(agent_run__isnull=True, workflow_run__isnull=False)
+                ),
+                name="tenant_token_usage_exactly_one_run",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "status", "settled_at"],
+                name="tenant_token_settled_idx",
+            ),
+            models.Index(
+                fields=["tenant", "status", "expires_at"],
+                name="tenant_token_reserved_idx",
+            ),
+        ]
 
 
 class WorkflowDefinition(models.Model):

@@ -35,6 +35,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentListCreateView,
     ClusterDeploymentTargetAgentHandoffView,
     ClusterDeploymentTargetPostflightView,
+    ClusterDeploymentSriovConfigView,
 )
 from core.knowledge_views import (
     KnowledgeDocumentDetailView,
@@ -69,6 +70,7 @@ from core.tool_approval_views import (
     ToolApprovalRejectView,
 )
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
+from core.token_budget_views import TenantTokenBudgetView
 from core.views import TenantListView, TenantProjectListView, liveness, readiness
 from core.workflow_views import (
     WorkflowDetailView,
@@ -81,6 +83,11 @@ from core.workflow_views import (
 
 
 urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/token-budget/",
+        TenantTokenBudgetView.as_view(),
+        name="tenant-token-budget",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/audit-events/verify/",
         AuditEventVerifyView.as_view(),
@@ -160,6 +167,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/",
         ClusterDeploymentDetailView.as_view(),
         name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/sriov-device-plugin/",
+        ClusterDeploymentSriovConfigView.as_view(),
+        name="cluster-deployment-sriov-device-plugin",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
