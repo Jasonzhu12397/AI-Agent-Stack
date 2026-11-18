@@ -127,6 +127,8 @@ def apply_baremetalhosts(
     runner: Callable[..., dict[str, Any]],
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise Metal3SkillError("COMMAND_LEASE_LOST_BEFORE_METAL3_APPLY")
     namespace = _namespace(payload.get("namespace", "metal3"))
     manifests = _validate_bundle(
         payload.get("manifests"),
