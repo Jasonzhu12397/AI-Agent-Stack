@@ -649,6 +649,7 @@ def _prepare_sriov_device_plugin_configmaps(
                 namespace=namespace,
                 deployment_id=deployment_id,
                 cluster_name=cluster_name,
+                target_cluster_uid=target_cluster_uid,
             )
         except SriovDevicePluginConfigError as exc:
             raise WorkerProvisioningError(str(exc)) from exc
@@ -689,6 +690,8 @@ def _verify_sriov_configmap_ownership(
             or labels.get(MANAGED_BY_LABEL) != "target-agent"
             or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
             or labels.get(CLUSTER_NAME_LABEL) != cluster_name
+            or metadata.get("annotations", {}).get("ai-agent-stack.io/target-cluster-uid")
+            != configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"]
         ):
             raise WorkerProvisioningError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_OWNERSHIP_CONFLICT")
 
