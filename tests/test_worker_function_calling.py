@@ -193,6 +193,9 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
         task.refresh_from_db()
         assert task.status == Task.Status.RUNNING
         assert task.lease_expires_at < timezone.now()
+        persisted_run = AgentRun.objects.get(task=task)
+        assert persisted_run.execution_state["next_call_index"] == 1
+        assert persisted_run.execution_state["messages"][-1]["role"] == "tool"
         assert len(fake_gateway.calls) == 1
         return
 
@@ -207,6 +210,8 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
         assert approval.arguments == {"key": "service-status"}
         assert approval.execution_checkpoint["pending_calls"][0]["id"] == "call-1"
         assert approval.execution_checkpoint["messages"][-1]["role"] == "assistant"
+        persisted_run = AgentRun.objects.get(task=task)
+        assert persisted_run.execution_state["pending_raw_tool_calls"][0]["id"] == "call-1"
         assert len(fake_gateway.calls) == 1
         assert fake_gateway.calls[0]["messages"][-1]["role"] == "user"
 
@@ -240,6 +245,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
         assert resumed_result["content"] == "The service is ready."
         assert resumed_result["tool_calls"] == 1
         assert resumed_result["input_tokens"] == 27
+        assert AgentRun.objects.get(task=task).execution_state["completed"] is True
         assert len(fake_gateway.calls) == 2
         resumed_messages = fake_gateway.calls[1]["messages"]
         assert resumed_messages[-1]["role"] == "tool"
@@ -257,6 +263,7 @@ def test_agent_worker_executes_tool_then_returns_final_model_answer(
     assert result["content"] == "The service is ready."
     assert result["tool_calls"] == 1
     assert result["input_tokens"] == 27
+    assert AgentRun.objects.get(task=task).execution_state["completed"] is True
     assert len(fake_gateway.calls) == 2
     second_turn_messages = fake_gateway.calls[1]["messages"]
     assert second_turn_messages[-1]["role"] == "tool"
