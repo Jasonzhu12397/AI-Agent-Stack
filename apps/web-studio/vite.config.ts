@@ -3,9 +3,17 @@ import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
+  resolve: {
+    alias: [
+      {
+        find: /^dayjs$/,
+        replacement: "dayjs/esm/index.js",
+      },
+    ],
+  },
   build: {
     commonjsOptions: {
-      exclude: [/dayjs/, /vue/, /@vue/],
+      exclude: [/node_modules\\/dayjs\\/esm\\//, /node_modules\\/lodash-es\\//],
     },
   },
   server: { host: "0.0.0.0", port: 5173 },
