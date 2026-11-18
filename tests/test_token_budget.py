@@ -2,11 +2,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from django.contrib.auth import get_user_model
-from django.urls import reverse
-from django.utils import timezone
-from rest_framework.test import APIClient
-
 from core.models import (
     AgentDefinition,
     AgentRun,
@@ -27,6 +22,10 @@ from core.token_budget import (
     reserve_tenant_tokens,
     settle_tenant_tokens,
 )
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from django.utils import timezone
+from rest_framework.test import APIClient
 
 
 @pytest.fixture
