@@ -81,6 +81,91 @@ def _get(
     return document
 
 
+def _patch_deployment_template_source_uid(
+    runner: Callable[..., dict[str, Any]],
+    kubeconfig: str,
+    deployment: dict[str, Any],
+    deployment_id: str,
+    source_cluster_uid: str,
+    lease_lost_event: Any = None,
+) -> bool:
+    metadata = deployment.get("metadata", {})
+    template_metadata = (
+        deployment.get("spec", {})
+        .get("template", {})
+        .get("metadata", {})
+    )
+    labels = template_metadata.get("labels", {})
+    annotations = template_metadata.get("annotations", {})
+    if not isinstance(labels, dict) or not isinstance(annotations, dict):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_DEPLOYMENT_TEMPLATE_METADATA_INVALID")
+    if (
+        labels.get(MANAGED_BY_LABEL) != "ai-agent-stack"
+        or labels.get(CLEANUP_LABEL) != "true"
+        or labels.get(DEPLOYMENT_ID_LABEL) != deployment_id
+        or annotations.get(CLEANUP_ANNOTATION) != "true"
+    ):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_DEPLOYMENT_TEMPLATE_OWNERSHIP_MISMATCH")
+    current_source_uid = annotations.get(SOURCE_UID_ANNOTATION)
+    if current_source_uid not in (None, source_cluster_uid):
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_DEPLOYMENT_TEMPLATE_SOURCE_UID_MISMATCH")
+    if current_source_uid == source_cluster_uid:
+        return False
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_DEPLOYMENT_UID_MISSING")
+    patch = [
+        {"op": "test", "path": "/metadata/uid", "value": uid},
+        {
+            "op": "add",
+            "path": (
+                "/spec/template/metadata/annotations/"
+                "ai-agent-stack.io~1source-cluster-uid"
+            ),
+            "value": source_cluster_uid,
+        },
+    ]
+    try:
+        _run(
+            runner,
+            kubeconfig,
+            [
+                "patch",
+                "deployments.apps",
+                metadata["name"],
+                "--namespace",
+                NAMESPACE,
+                "--type=json",
+                "-p",
+                json.dumps(patch, separators=(",", ":")),
+            ],
+            lease_lost_event,
+        )
+    except CleanupScopeError as exc:
+        exc.side_effects = True
+        raise
+    verified = _get(
+        runner,
+        kubeconfig,
+        "deployments.apps",
+        metadata["name"],
+        True,
+        lease_lost_event,
+    )
+    verified_annotations = (
+        verified.get("spec", {})
+        .get("template", {})
+        .get("metadata", {})
+        .get("annotations", {})
+    )
+    if verified_annotations.get(SOURCE_UID_ANNOTATION) != source_cluster_uid:
+        raise CleanupScopeError(
+            "EPH_CLEANUP_SCOPE_DEPLOYMENT_TEMPLATE_SOURCE_UID_VERIFICATION_FAILED",
+            side_effects=True,
+        )
+    return True
+
+
 def _patch_source_uid(
     runner: Callable[..., dict[str, Any]],
     kubeconfig: str,
