@@ -161,12 +161,25 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
             "uid": "target-uid",
             "annotations": {"ai-agent-stack.io/source-cluster-uid": "source-uid"},
         },
+        "spec": {
+            "controlPlaneRef": {
+                "apiGroup": "controlplane.cluster.x-k8s.io",
+                "kind": "KubeadmControlPlane",
+                "name": "target-control-plane",
+            },
+        },
     }
     existing = existing_machine_deployment or {}
     def runner(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[0] == "get" and arguments[1] == "clusters.cluster.x-k8s.io":
             return {"available": True, "stdout": json.dumps(cluster), "stderr": ""}
+        if arguments[0] == "get" and arguments[1] == "kubeadmcontrolplanes.controlplane.cluster.x-k8s.io":
+            return {
+                "available": True,
+                "stdout": json.dumps({"spec": {"version": "v1.37.0"}}),
+                "stderr": "",
+            }
         if arguments[0] == "get" and arguments[1] == "crd":
             group = arguments[2].split(".", 1)[1]
             kind = arguments[2].split(".", 1)[0]
