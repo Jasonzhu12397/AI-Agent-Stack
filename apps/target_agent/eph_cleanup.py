@@ -164,7 +164,7 @@ def execute_eph_cleanup(
             name = metadata.get("name")
             item_namespace = metadata.get("namespace")
             expected_namespace = (
-                None if resource in CLUSTER_SCOPED_RESOURCES else namespace
+                None if resource in CLUSTER_SCOPED_RESOURCES else resource_namespace
             )
             if (
                 not isinstance(annotations, dict)
