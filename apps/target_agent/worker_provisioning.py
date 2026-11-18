@@ -439,6 +439,9 @@ def _verify_sriov_device_plugin_daemonsets(
     runner: Callable[..., dict[str, Any]],
     namespace: str,
     value: Any,
+    *,
+    require_ready: bool = False,
+    lease_lost_event: Any = None,
 ) -> list[dict[str, Any]]:
     try:
         pools = validate_sriov_device_plugin_config(value)
@@ -453,6 +456,7 @@ def _verify_sriov_device_plugin_daemonsets(
         ["get", "daemonsets.apps", "--namespace", namespace, "-o", "json"],
         timeout=60,
         max_output_bytes=4 * 1024 * 1024,
+        lease_lost_event=lease_lost_event,
     )
     if result.get("returncode", 0) != 0:
         if _not_found(result):
@@ -506,7 +510,8 @@ def _verify_sriov_device_plugin_daemonsets(
             raise WorkerProvisioningError(
                 "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_DAEMONSET_NOT_FOUND"
             )
-        matching = []
+        policy_matches = []
+        ready_matches = []
         for daemonset, pod_spec in candidates:
             node_selector = pod_spec.get("nodeSelector", {})
             tolerations = pod_spec.get("tolerations", [])
@@ -523,12 +528,33 @@ def _verify_sriov_device_plugin_daemonsets(
                 )
                 for required in pool["tolerations"]
             )
-            if selectors_match and tolerations_match:
-                matching.append(daemonset)
-        if not matching:
+            if not selectors_match or not tolerations_match:
+                continue
+            policy_matches.append(daemonset)
+            if not require_ready:
+                ready_matches.append(daemonset)
+                continue
+            status = daemonset.get("status", {})
+            desired = status.get("desiredNumberScheduled")
+            ready = status.get("numberReady")
+            if (
+                isinstance(desired, int)
+                and not isinstance(desired, bool)
+                and desired > 0
+                and isinstance(ready, int)
+                and not isinstance(ready, bool)
+                and ready >= desired
+            ):
+                ready_matches.append(daemonset)
+        if not policy_matches:
             raise WorkerProvisioningError(
                 "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_SCHEDULING_POLICY_MISMATCH"
             )
+        if require_ready and len(ready_matches) != len(policy_matches):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_NOT_READY"
+            )
+        matching = ready_matches if require_ready else policy_matches
         evidence.append({
             "pool": pool_name,
             "configmap": configmap_name,
@@ -538,6 +564,106 @@ def _verify_sriov_device_plugin_daemonsets(
             ),
             "node_selectors": pool["node_selectors"],
             "tolerations": pool["tolerations"],
+        })
+    return evidence
+
+
+def _verify_sriov_node_resources(
+    runner: Callable[..., dict[str, Any]],
+    value: Any,
+    lease_lost_event: Any = None,
+) -> list[dict[str, Any]]:
+    try:
+        pools = validate_sriov_device_plugin_config(value)
+    except SriovDevicePluginConfigError as exc:
+        raise WorkerProvisioningError(
+            "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_CONFIG_INVALID"
+        ) from exc
+    evidence = []
+    for pool_name, pool in pools.items():
+        node_selectors = pool["node_selectors"]
+        selector = ",".join(
+            f"{key}={value}" for key, value in sorted(node_selectors.items())
+        )
+        result = _run(
+            runner,
+            ["get", "nodes", "--selector", selector, "-o", "json"],
+            timeout=60,
+            max_output_bytes=16 * 1024 * 1024,
+            lease_lost_event=lease_lost_event,
+        )
+        if result.get("returncode", 0) != 0:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_NODE_INVENTORY_LOOKUP_FAILED"
+            )
+        try:
+            document = json.loads(result.get("stdout", ""))
+        except (TypeError, ValueError) as exc:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_NODE_INVENTORY_INVALID"
+            ) from exc
+        if not isinstance(document, dict) or not isinstance(document.get("items"), list):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_NODE_INVENTORY_INVALID"
+            )
+        matching_nodes = []
+        for node in document["items"]:
+            if not isinstance(node, dict):
+                continue
+            metadata = node.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            labels = metadata.get("labels")
+            if not isinstance(labels, dict):
+                continue
+            if all(labels.get(key) == expected for key, expected in node_selectors.items()):
+                matching_nodes.append(node)
+        if not matching_nodes:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_POOL_NODES_NOT_FOUND"
+            )
+        resource_list = pool["sriov_network_device_plugin_configmap_data"].get(
+            "resourceList"
+        )
+        if not isinstance(resource_list, list) or not resource_list:
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_SRIOV_CONFIGMAP_CONTENT_INVALID"
+            )
+        resource_names = [
+            f"{resource['resourcePrefix']}/{resource['resourceName']}"
+            for resource in resource_list
+        ]
+        verified_nodes = []
+        for node in matching_nodes:
+            metadata = node["metadata"]
+            status = node.get("status")
+            if not isinstance(status, dict):
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_ADVERTISED"
+                )
+            capacity = status.get("capacity")
+            allocatable = status.get("allocatable")
+            if not isinstance(capacity, dict) or not isinstance(allocatable, dict):
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_ADVERTISED"
+                )
+            for resource_name in resource_names:
+                try:
+                    capacity_count = int(capacity.get(resource_name, "0"))
+                    allocatable_count = int(allocatable.get(resource_name, "0"))
+                except (TypeError, ValueError):
+                    capacity_count = 0
+                    allocatable_count = 0
+                if capacity_count < 1 or allocatable_count < 1:
+                    raise WorkerProvisioningError(
+                        "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_ADVERTISED"
+                    )
+            verified_nodes.append(metadata.get("name", ""))
+        evidence.append({
+            "pool": pool_name,
+            "node_selector": node_selectors,
+            "nodes": sorted(verified_nodes),
+            "resources": sorted(resource_names),
         })
     return evidence
 
@@ -1035,6 +1161,7 @@ def execute_worker_provisioning(
         runner,
         sriov_namespace,
         payload.get("sriov_device_plugin"),
+        lease_lost_event=lease_lost_event,
     )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
@@ -1204,6 +1331,54 @@ def execute_worker_provisioning(
             "WORKER_PROVISIONING_MACHINE_DEPLOYMENT_SPEC_INVALID",
             side_effects=bool(applied_output),
         )
+    try:
+        daemonset_names = sorted({
+            name
+            for pool in sriov_device_plugin_pool_evidence
+            for name in pool["daemonsets"]
+        })
+        for daemonset_name in daemonset_names:
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_COMMAND_LEASE_LOST",
+                    side_effects=bool(applied_output),
+                )
+            try:
+                _run(
+                    runner,
+                    [
+                        "rollout",
+                        "status",
+                        "daemonset",
+                        daemonset_name,
+                        "--namespace",
+                        sriov_namespace,
+                        "--timeout=120s",
+                    ],
+                    timeout=130,
+                    lease_lost_event=lease_lost_event,
+                )
+            except WorkerProvisioningError as exc:
+                if str(exc) == "WORKER_PROVISIONING_COMMAND_LEASE_LOST":
+                    raise
+                raise WorkerProvisioningError(
+                    "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_ROLLOUT_FAILED"
+                ) from exc
+        sriov_device_plugin_ready_evidence = _verify_sriov_device_plugin_daemonsets(
+            runner,
+            sriov_namespace,
+            payload.get("sriov_device_plugin"),
+            require_ready=True,
+            lease_lost_event=lease_lost_event,
+        )
+        sriov_node_resource_evidence = _verify_sriov_node_resources(
+            runner,
+            payload.get("sriov_device_plugin"),
+            lease_lost_event,
+        )
+    except WorkerProvisioningError as exc:
+        exc.side_effects = bool(applied_output)
+        raise
     return {
         "worker_provisioning_resources_applied": True,
         "worker_provisioning_server_dry_run_passed": True,
@@ -1231,6 +1406,8 @@ def execute_worker_provisioning(
         "configured_sriov_resources": sorted(configured_sriov_resources),
         "sriov_device_plugin_namespace": sriov_namespace,
         "sriov_device_plugin_pools_verified": sriov_device_plugin_pool_evidence,
+        "sriov_device_plugin_pools_ready": sriov_device_plugin_ready_evidence,
+        "sriov_node_resources_verified": sriov_node_resource_evidence,
         "worker_ip_pools_verified": ip_pool_references,
         "target_cluster_uid": target_uid,
         "deployment_id": deployment_id,

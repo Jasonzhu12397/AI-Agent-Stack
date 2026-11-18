@@ -174,6 +174,8 @@ def _runner_factory(
     updated_replicas=2,
     missing_attachments=None,
     sriov_resource_name="intel.com/sriov_dpdk",
+    daemonset_ready=True,
+    sriov_resource_advertised=True,
 ):
     calls = []
     applied = {}
@@ -257,6 +259,10 @@ def _runner_factory(
                         "name": f"sriov-device-plugin-{configmap_name}",
                         "namespace": namespace,
                     },
+                    "status": {
+                        "desiredNumberScheduled": 1,
+                        "numberReady": 1 if daemonset_ready else 0,
+                    },
                     "spec": {
                         "template": {
                             "spec": {
@@ -274,6 +280,34 @@ def _runner_factory(
                 "available": True,
                 "returncode": 0,
                 "stdout": json.dumps({"items": daemonsets}),
+                "stderr": "",
+            }
+        if arguments[0] == "rollout" and arguments[1] == "status":
+            if not daemonset_ready:
+                return {
+                    "available": True,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "timed out waiting for daemonset rollout",
+                }
+            return {"available": True, "returncode": 0, "stdout": "success", "stderr": ""}
+        if arguments[0] == "get" and arguments[1] == "nodes":
+            capacity = {sriov_resource_name: "8"} if sriov_resource_advertised else {}
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps({
+                    "items": [{
+                        "metadata": {
+                            "name": "worker-high-throughput-1",
+                            "labels": {"type": "high-throughput"},
+                        },
+                        "status": {
+                            "capacity": capacity,
+                            "allocatable": capacity,
+                        },
+                    }],
+                }),
                 "stderr": "",
             }
         if (
@@ -461,6 +495,34 @@ def test_worker_provisioning_blocks_when_free_bmh_capacity_is_insufficient():
     else:
         raise AssertionError("Insufficient free BMH capacity must block provisioning")
     assert not any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_waits_for_sriov_device_plugin_rollout():
+    runner, calls, _applied = _runner_factory(daemonset_ready=False)
+    with pytest.raises(WorkerProvisioningError) as raised:
+        execute_worker_provisioning(
+            _payload(),
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    assert str(raised.value) == "WORKER_PROVISIONING_SRIOV_DEVICE_PLUGIN_ROLLOUT_FAILED"
+    assert raised.value.side_effects is True
+    assert any(call[0] == "apply" for call in calls)
+
+
+def test_worker_provisioning_requires_sriov_resources_advertised_by_worker_nodes():
+    runner, calls, _applied = _runner_factory(sriov_resource_advertised=False)
+    with pytest.raises(WorkerProvisioningError) as raised:
+        execute_worker_provisioning(
+            _payload(),
+            _proof(),
+            runner,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    assert str(raised.value) == "WORKER_PROVISIONING_SRIOV_RESOURCE_NOT_ADVERTISED"
+    assert raised.value.side_effects is True
+    assert any(call[0] == "apply" for call in calls)
 
 
 def test_worker_provisioning_blocks_when_required_network_attachment_is_missing():
