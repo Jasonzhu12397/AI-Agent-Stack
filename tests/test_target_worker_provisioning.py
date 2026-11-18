@@ -944,3 +944,19 @@ def test_sriov_configmap_ownership_does_not_hide_api_or_transport_errors():
             assert str(exc) == "SRIOV_DEVICE_PLUGIN_CONFIGMAP_LOOKUP_FAILED"
         else:
             raise AssertionError(f"Unexpectedly ignored ConfigMap lookup error: {stderr}")
+
+
+def test_kubectl_cancels_in_flight_command_when_leadership_lease_is_lost(monkeypatch):
+    class LeaseLost:
+        def is_set(self):
+            return True
+
+    calls = []
+    def forbidden_popen(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("kubectl must not start after lease loss")
+
+    monkeypatch.setattr(target_main.subprocess, "Popen", forbidden_popen)
+    result = target_main._kubectl(["apply", "-f", "worker.yaml"], lease_lost_event=LeaseLost())
+    assert result == {"available": False, "error": "COMMAND_LEASE_LOST"}
+    assert calls == []
