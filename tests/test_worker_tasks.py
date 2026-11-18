@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -132,7 +133,7 @@ def test_agent_token_reservation_uses_utf8_byte_upper_bound():
     estimated = _estimate_message_tokens(messages)
     upper_bound = _estimate_message_token_upper_bound(messages)
 
-    serialized = __import__("json").dumps(
+    serialized = json.dumps(
         {"messages": messages, "tools": []},
         ensure_ascii=False,
         separators=(",", ":"),
