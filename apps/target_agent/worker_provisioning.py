@@ -486,7 +486,29 @@ def execute_worker_provisioning(
     )
     for document in ordered:
         _crd_version_is_served(runner, document["kind"], document["apiVersion"])
-    _verify_existing_ownership(runner, ordered, namespace, deployment_id, target_uid)
+    existing_resources = _verify_existing_ownership(
+        runner,
+        ordered,
+        namespace,
+        deployment_id,
+        target_uid,
+    )
+    md_name = machine_deployment["metadata"]["name"]
+    desired_replicas = machine_deployment["spec"]["replicas"]
+    existing_machine_deployment = existing_resources.get("MachineDeployment")
+    existing_replicas = (
+        existing_machine_deployment.get("spec", {}).get("replicas", 0)
+        if existing_machine_deployment
+        else 0
+    )
+    if desired_replicas < existing_replicas:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_SCALE_DOWN_REQUIRES_DRAIN_EXECUTOR")
+    additional_workers = desired_replicas - existing_replicas
+    available_bmh_count = (
+        _available_bmh_count(runner, namespace) if additional_workers else 0
+    )
+    if available_bmh_count < additional_workers:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_AVAILABLE_BMH_CAPACITY_INSUFFICIENT")
 
     applied_output = []
     with tempfile.TemporaryDirectory(prefix="target-worker-plan-", dir="/tmp") as workdir:
@@ -569,6 +591,8 @@ def execute_worker_provisioning(
         "worker_provisioning_server_dry_run_passed": True,
         "worker_provisioning_controller_observed": True,
         "machine_deployment": md_name,
+        "available_bmh_count_before_provisioning": available_bmh_count,
+        "new_worker_capacity_verified": available_bmh_count >= additional_workers,
         "machine_deployment_namespace": namespace,
         "desired_worker_count": desired,
         "worker_template_resources": [
