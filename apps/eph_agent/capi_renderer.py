@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 import yaml
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
 from .metal3_skill import Metal3SkillError
 
