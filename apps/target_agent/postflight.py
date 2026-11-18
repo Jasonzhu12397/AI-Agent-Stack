@@ -345,6 +345,14 @@ def verify_target_postflight(
         if not isinstance(node_name, str) or not node_name or node_name in nodes_by_name:
             raise PostflightError("POSTFLIGHT_NODE_IDENTITY_INVALID")
         nodes_by_name[node_name] = node
+    control_plane_nodes = [
+        node for node in nodes_by_name.values() if _control_plane_node(node)
+    ]
+    if len(control_plane_nodes) != 3 or any(
+        not _ready_condition(node.get("status", {}).get("conditions"))
+        for node in control_plane_nodes
+    ):
+        raise PostflightError("POSTFLIGHT_READY_CONTROL_PLANE_NODE_COUNT_MISMATCH")
     ready_workers = []
     for node_name in worker_node_names:
         node = nodes_by_name.get(node_name)
@@ -452,7 +460,7 @@ def verify_target_postflight(
         "target_postflight_passed": True,
         "worker_network_postflight_passed": True,
         "deployment_checkpoint_durable": True,
-        "ready_control_plane_count": control_plane_status.get("readyReplicas"),
+        "ready_control_plane_count": len(control_plane_nodes),
         "ready_worker_count": len(ready_workers),
         "worker_ntp_bootstrap_attested": True,
         "worker_chronyd_live_tracking_verified": False,
