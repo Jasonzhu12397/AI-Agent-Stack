@@ -169,6 +169,8 @@ def verify_target_postflight(
         raise PostflightError("POSTFLIGHT_WORKER_NETWORK_CONTRACT_REQUIRED")
     if deployment_checkpoint_durable is not True:
         raise PostflightError("POSTFLIGHT_DURABLE_WORKER_CHECKPOINT_REQUIRED")
+    if not isinstance(ownership_evidence, dict):
+        raise PostflightError("POSTFLIGHT_OWNERSHIP_EVIDENCE_INVALID")
     if (
         ownership_evidence.get("target_metal3_ownership_verified") is not True
         or ownership_evidence.get("target_metal3_reconciliation_healthy") is not True
@@ -222,15 +224,19 @@ def verify_target_postflight(
         ["get", "clusters.cluster.x-k8s.io", cluster_name, "--namespace", namespace, "-o", "json"],
         "target-cluster",
     )
+    cluster_metadata = cluster.get("metadata", {})
+    cluster_spec = cluster.get("spec", {})
     cluster_status = cluster.get("status", {})
+    if not all(isinstance(value, dict) for value in (cluster_metadata, cluster_spec, cluster_status)):
+        raise PostflightError("POSTFLIGHT_CAPI_CLUSTER_DOCUMENT_INVALID")
     if (
-        cluster.get("metadata", {}).get("name") != cluster_name
-        or cluster.get("metadata", {}).get("namespace") != namespace
+        cluster_metadata.get("name") != cluster_name
+        or cluster_metadata.get("namespace") != namespace
         or cluster_status.get("infrastructureReady") is not True
         or cluster_status.get("controlPlaneReady") is not True
     ):
         raise PostflightError("POSTFLIGHT_CAPI_CLUSTER_NOT_READY")
-    control_plane_ref = cluster.get("spec", {}).get("controlPlaneRef", {})
+    control_plane_ref = cluster_spec.get("controlPlaneRef", {})
     if (
         control_plane_ref.get("apiGroup") != "controlplane.cluster.x-k8s.io"
         or control_plane_ref.get("kind") != "KubeadmControlPlane"
@@ -252,6 +258,8 @@ def verify_target_postflight(
     )
     control_plane_spec = control_plane.get("spec", {})
     control_plane_status = control_plane.get("status", {})
+    if not isinstance(control_plane_spec, dict) or not isinstance(control_plane_status, dict):
+        raise PostflightError("POSTFLIGHT_KUBEADM_CONTROL_PLANE_DOCUMENT_INVALID")
     if (
         control_plane_spec.get("replicas") != 3
         or control_plane_status.get("readyReplicas") != 3
@@ -275,6 +283,10 @@ def verify_target_postflight(
     md_metadata = machine_deployment.get("metadata", {})
     md_labels = md_metadata.get("labels", {})
     md_annotations = md_metadata.get("annotations", {})
+    md_spec = machine_deployment.get("spec", {})
+    md_status = machine_deployment.get("status", {})
+    if not all(isinstance(value, dict) for value in (md_metadata, md_labels, md_annotations, md_spec, md_status)):
+        raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_DOCUMENT_INVALID")
     if (
         md_metadata.get("name") != machine_deployment_name
         or md_metadata.get("namespace") != namespace
@@ -282,15 +294,13 @@ def verify_target_postflight(
         or md_labels.get("ai-agent-stack.io/deployment-id") != deployment_id
         or md_annotations.get("ai-agent-stack.io/target-cluster-uid")
         != ownership_evidence.get("target_cluster_uid")
-        or machine_deployment.get("spec", {}).get("clusterName") != cluster_name
-        or machine_deployment.get("spec", {}).get("template", {}).get("spec", {}).get(
-            "version"
-        )
+        or md_spec.get("clusterName") != cluster_name
+        or not isinstance(md_spec.get("template"), dict)
+        or not isinstance(md_spec.get("template", {}).get("spec"), dict)
+        or md_spec.get("template", {}).get("spec", {}).get("version")
         != control_plane_spec.get("version")
     ):
         raise PostflightError("POSTFLIGHT_MACHINE_DEPLOYMENT_OWNERSHIP_MISMATCH")
-    md_spec = machine_deployment.get("spec", {})
-    md_status = machine_deployment.get("status", {})
     generation = md_metadata.get("generation", 0)
     if (
         md_spec.get("replicas") != desired_worker_count
@@ -375,10 +385,13 @@ def verify_target_postflight(
     ready_workers = []
     for node_name in worker_node_names:
         node = nodes_by_name.get(node_name)
+        node_status = node.get("status", {}) if isinstance(node, dict) else {}
+        if node is not None and not isinstance(node_status, dict):
+            raise PostflightError("POSTFLIGHT_NODE_STATUS_INVALID")
         if (
             node is None
             or _control_plane_node(node)
-            or not _ready_condition(node.get("status", {}).get("conditions"))
+            or not _ready_condition(node_status.get("conditions"))
         ):
             raise PostflightError(f"POSTFLIGHT_WORKER_NODE_NOT_READY:{node_name}")
         ready_workers.append(node)
@@ -515,7 +528,12 @@ def verify_target_postflight(
     if not dpdk_resource_names:
         raise PostflightError("POSTFLIGHT_DPDK_DEVICE_RESOURCE_MISSING")
     for node in ready_workers:
-        allocatable = node.get("status", {}).get("allocatable", {})
+        node_status = node.get("status", {})
+        if not isinstance(node_status, dict):
+            raise PostflightError("POSTFLIGHT_NODE_STATUS_INVALID")
+        allocatable = node_status.get("allocatable", {})
+        if not isinstance(allocatable, dict):
+            raise PostflightError("POSTFLIGHT_NODE_ALLOCATABLE_INVALID")
         if not all(
             _quantity_is_positive(allocatable.get(name))
             for name in sriov_resource_names
