@@ -904,6 +904,7 @@ def execute(
         try:
             if not isinstance(checkpoint, dict):
                 raise HandoffError("HANDOFF_CHECKPOINT_MISSING")
+            current_phase = checkpoint.get("phase")
             next_phase = str(payload.get("next_phase", ""))
             evidence = payload.get("evidence", {})
             if next_phase == HandoffPhase.TARGET_CONTROL_PLANE_READY.value:
@@ -970,7 +971,6 @@ def execute(
                     command.get("deployment_context"),
                 )
                 evidence = {**evidence, **observed_ownership}
-            current_phase = checkpoint.get("phase")
             if current_phase == "not_started":
                 raise HandoffError("HANDOFF_EPH_CHECKPOINT_REQUIRED")
             if current_phase == next_phase:
