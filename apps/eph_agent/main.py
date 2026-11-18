@@ -22,6 +22,12 @@ from packages.agent_transport import (
 )
 
 from .capi_renderer import render_bmh_manifests, render_capi_metal3_manifests
+from .control_stack import plan_control_stack
+from .control_stack_adapter import (
+    ControlStackAdapterError,
+    apply_control_stack,
+    wait_for_control_stack_ready,
+)
 from .metal3_skill import (
     Metal3SkillError,
     apply_baremetalhosts,
@@ -36,6 +42,7 @@ LOG = logging.getLogger("eph-agent")
 CAPABILITIES = [
     "eph.preflight",
     "eph.source.observe",
+    "eph.controlstack.apply",
     "eph.metal3.bmh.apply",
     "eph.metal3.bmh.observe",
     "eph.metal3.bmh.wait_ready",
@@ -128,7 +135,7 @@ def execute(
             "ready_nodes": ready_nodes,
             "node_observation_available": nodes["available"],
             "clusterctl": _run_read_only(["clusterctl", "version"]),
-            "kubectl": _run_read_only(["kubectl", "version", "--client"]),
+            "kubectl": _run_read_only(["kubectl", "version", "client"]),
             "observed_at": datetime.now(UTC).isoformat(),
         }
         ready = (
@@ -146,6 +153,43 @@ def execute(
             "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
             "output": evidence,
             "side_effects": False,
+        }
+    if action == "eph.controlstack.apply":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "eph_single_node_ready":
+            return {
+                "status": "blocked",
+                "error_code": "CONTROL_STACK_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
+        try:
+            payload = command.get("payload", {})
+            if not isinstance(payload, dict):
+                raise ControlStackAdapterError("COMMAND_PAYLOAD_INVALID")
+            spec = payload.get("spec", payload)
+            manifests = payload.get("manifests")
+            plan = plan_control_stack(spec)
+            applied = apply_control_stack(
+                plan,
+                _run_kubectl,
+                lease_lost_event,
+                manifests,
+            )
+            readiness = wait_for_control_stack_ready(plan, _run_kubectl, lease_lost_event)
+            evidence = {**applied, "readiness": readiness}
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"resource_type": "CONTROL_STACK"},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": applied.get("side_effects", False),
         }
     if action == "eph.metal3.bmh.apply":
         checkpoint = command.get("deployment_checkpoint", {})
