@@ -25,6 +25,18 @@ const emit = defineEmits<{ "update:modelValue": [value: SriovConfig] }>();
 const poolNames = computed(() => Object.keys(props.modelValue));
 const selectedPool = ref("");
 const error = ref("");
+const selectedPoolConfig = computed(() => props.modelValue[selectedPool.value]);
+const selectedNodeSelector = computed(
+  () => Object.entries(selectedPoolConfig.value?.node_selectors ?? {})[0] ?? ["", ""],
+);
+const selectedToleration = computed(
+  () => selectedPoolConfig.value?.tolerations?.[0] ?? {
+    effect: "NoSchedule",
+    key: "",
+    operator: "Equal",
+    value: "",
+  },
+);
 
 function clone(value: SriovConfig): SriovConfig {
   return JSON.parse(JSON.stringify(value)) as SriovConfig;
@@ -39,6 +51,41 @@ function ensureSelection(): void {
 }
 watch(poolNames, ensureSelection, { immediate: true });
 
+function updateConfigMapName(value: string): void {
+  const name = selectedPool.value;
+  if (!name) return;
+  update((draft) => { draft[name].sriov_network_device_plugin_configmap_name = value; });
+}
+function updateNodeSelectorValue(value: string): void {
+  const name = selectedPool.value;
+  const key = selectedNodeSelector.value[0];
+  if (!name || !key) return;
+  update((draft) => { draft[name].node_selectors[key] = value; });
+}
+function updateToleration(field: "key" | "value" | "effect", value: string): void {
+  const name = selectedPool.value;
+  if (!name) return;
+  update((draft) => {
+    const current = draft[name].tolerations[0] ?? {
+      effect: "NoSchedule",
+      key: "",
+      operator: "Equal",
+      value: "",
+    };
+    draft[name].tolerations[0] = { ...current, [field]: value };
+  });
+}
+function updateResourceField(
+  index: number,
+  field: "resourceName" | "resourcePrefix",
+  value: string,
+): void {
+  const name = selectedPool.value;
+  if (!name) return;
+  update((draft) => {
+    draft[name].sriov_network_device_plugin_configmap_data.resourceList[index][field] = value;
+  });
+}
 function addPool(): void {
   let index = 4;
   while (props.modelValue["pool" + index]) index += 1;
@@ -180,24 +227,24 @@ defineExpose({ validate });
           <div class="form-grid">
             <el-form-item label="Node selector key">
               <el-input
-                :model-value="props.modelValue[selectedPool].node_selectors.type !== undefined ? 'type' : Object.keys(props.modelValue[selectedPool].node_selectors)[0]"
+                :model-value="selectedNodeSelector[0]"
                 disabled
               />
             </el-form-item>
             <el-form-item label="Node selector value">
-              <el-input v-model="props.modelValue[selectedPool].node_selectors.type" placeholder="high-throughput" />
+              <el-input :model-value="selectedNodeSelector[1]" placeholder="high-throughput" @update:model-value="updateNodeSelectorValue" />
             </el-form-item>
             <el-form-item label="ConfigMap name">
-              <el-input v-model="props.modelValue[selectedPool].sriov_network_device_plugin_configmap_name" />
+              <el-input :model-value="props.modelValue[selectedPool].sriov_network_device_plugin_configmap_name" @update:model-value="updateConfigMapName" />
             </el-form-item>
             <el-form-item label="Toleration key">
-              <el-input v-model="props.modelValue[selectedPool].tolerations[0].key" />
+              <el-input :model-value="selectedToleration.key" @update:model-value="(value: string) => updateToleration('key', value)" />
             </el-form-item>
             <el-form-item label="Toleration value">
-              <el-input v-model="props.modelValue[selectedPool].tolerations[0].value" />
+              <el-input :model-value="selectedToleration.value ?? ''" @update:model-value="(value: string) => updateToleration('value', value)" />
             </el-form-item>
             <el-form-item label="Toleration effect">
-              <el-select v-model="props.modelValue[selectedPool].tolerations[0].effect">
+              <el-select :model-value="selectedToleration.effect" @update:model-value="(value: string) => updateToleration('effect', value)">
                 <el-option label="NoSchedule" value="NoSchedule" />
                 <el-option label="PreferNoSchedule" value="PreferNoSchedule" />
                 <el-option label="NoExecute" value="NoExecute" />
@@ -220,10 +267,10 @@ defineExpose({ validate });
           </div>
           <div class="form-grid">
             <el-form-item label="resourceName">
-              <el-input v-model="resource.resourceName" placeholder="mlnx_dpdk_left" />
+              <el-input :model-value="resource.resourceName" placeholder="mlnx_dpdk_left" @update:model-value="(value: string) => updateResourceField(index, 'resourceName', value)" />
             </el-form-item>
             <el-form-item label="resourcePrefix">
-              <el-input v-model="resource.resourcePrefix" placeholder="mellanox.com" />
+              <el-input :model-value="resource.resourcePrefix" placeholder="mellanox.com" @update:model-value="(value: string) => updateResourceField(index, 'resourcePrefix', value)" />
             </el-form-item>
             <el-form-item label="Vendors (comma separated)">
               <el-input :model-value="resource.selectors.vendors.join(',')" @change="(value: string) => updateList(index, 'vendors', value)" />
