@@ -3,7 +3,6 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-
 from core.models import (
     KnowledgeBase,
     ModelConfig,
