@@ -124,7 +124,7 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         _require(evidence, "worker_provisioning_server_dry_run_passed")
         _require(evidence, "worker_provisioning_controller_observed")
         _require(evidence, "worker_network_contract_validated")
-        _require(evidence, "new_worker_capacity_verified")
+        _require(evidence, "preprovision_bmh_capacity_verified")
         desired = evidence.get("desired_worker_count")
         if not isinstance(desired, int) or isinstance(desired, bool) or desired < 1:
             raise HandoffError("HANDOFF_WORKER_PROVISIONING_REPLICA_COUNT_INVALID")
