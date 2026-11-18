@@ -250,7 +250,7 @@ def _patch_source_uid(
             side_effects=True,
         )
     if resource == "deployments.apps" and name == "eph-agent":
-        return True or _patch_deployment_template_source_uid(
+        _patch_deployment_template_source_uid(
             runner,
             kubeconfig,
             verified,
