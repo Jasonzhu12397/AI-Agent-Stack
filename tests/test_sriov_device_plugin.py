@@ -102,3 +102,18 @@ def test_render_sriov_configmap_adds_deployment_ownership():
         == "target-uid"
     )
     assert '"rootDevices":["0000:2f:00.0"]' in configmap["data"]["config.json"]
+
+
+def test_validate_sriov_config_rejects_overlapping_pools_with_different_configmaps():
+    left = _pool(["0000:2f:00.0"], configmap="sriov-pool4")
+    right = _pool(["0000:8a:00.0"], configmap="sriov-pool5")
+    with pytest.raises(SriovDevicePluginConfigError, match="POOL_NODE_SELECTORS_OVERLAP"):
+        validate_sriov_device_plugin_config({"pool4": left, "pool5": right})
+
+
+def test_validate_sriov_config_allows_disjoint_node_selector_pools():
+    left = _pool(["0000:2f:00.0"], configmap="sriov-pool4")
+    right = _pool(["0000:8a:00.0"], configmap="sriov-pool5")
+    right["node_selectors"] = {"type": "low-latency"}
+    normalized = validate_sriov_device_plugin_config({"pool4": left, "pool5": right})
+    assert set(normalized) == {"pool4", "pool5"}
