@@ -279,7 +279,7 @@ def execute_eph_cleanup(
     return {
         "eph_cleanup_verified": True,
         "eph_workloads_absent": True,
-        "eph_credentials_revoked": True,
+        "eph_credentials_revoked": sum(item["credential"] for item in deleted) > 0,
         "eph_api_no_longer_required": True,
         "target_agent_owns_handoff": True,
         "source_cluster_uid": proof["source_cluster_uid"],
