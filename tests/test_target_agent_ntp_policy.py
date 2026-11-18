@@ -162,3 +162,59 @@ def test_internal_ntp_probe_rejects_unsynchronized_server(monkeypatch):
     monkeypatch.setattr(ntp_policy.socket, "socket", FakeSocket)
     with pytest.raises(NtpPolicyError, match="UNSYNCHRONIZED"):
         ntp_policy.probe_ironic_internal_ntp_endpoint("10.130.60.84")
+
+
+def test_internal_ntp_probe_rejects_response_from_wrong_endpoint(monkeypatch):
+    class FakeSocket:
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, _value):
+            return None
+
+        def sendto(self, _packet, _destination):
+            return None
+
+        def recvfrom(self, _size):
+            response = bytearray(48)
+            response[0] = (4 << 3) | 4
+            response[1] = 2
+            return bytes(response), ("10.130.60.85", 123)
+
+    monkeypatch.setattr(ntp_policy.socket, "socket", FakeSocket)
+    with pytest.raises(NtpPolicyError, match="PEER_MISMATCH"):
+        ntp_policy.probe_ironic_internal_ntp_endpoint("10.130.60.84")
+
+
+def test_internal_ntp_probe_rejects_response_from_wrong_port(monkeypatch):
+    class FakeSocket:
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, _value):
+            return None
+
+        def sendto(self, _packet, _destination):
+            return None
+
+        def recvfrom(self, _size):
+            response = bytearray(48)
+            response[0] = (4 << 3) | 4
+            response[1] = 2
+            return bytes(response), ("10.130.60.84", 1234)
+
+    monkeypatch.setattr(ntp_policy.socket, "socket", FakeSocket)
+    with pytest.raises(NtpPolicyError, match="PEER_MISMATCH"):
+        ntp_policy.probe_ironic_internal_ntp_endpoint("10.130.60.84")
