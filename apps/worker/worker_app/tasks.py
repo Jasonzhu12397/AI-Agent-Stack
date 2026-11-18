@@ -359,6 +359,15 @@ def _allowed_agent_output_tokens(
     )
 
 
+def _resolve_provider_usage(**usage):
+    try:
+        return resolve_provider_token_usage(**usage)
+    except ValueError as exc:
+        raise PermanentTaskError(
+            "Provider returned invalid token usage; automatic retry is unsafe"
+        ) from exc
+
+
 def _settle_provider_usage(usage, consumed_tokens):
     try:
         return settle_tenant_tokens(
@@ -804,7 +813,7 @@ def execute_agent_run(task):
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_UNEXPECTEDLY"
                 ) from exc
-            actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
+            actual_input_tokens, actual_output_tokens = _resolve_provider_usage(
                 provider_type=model_config.provider.provider_type,
                 reported_input_tokens=response.input_tokens,
                 reported_output_tokens=response.output_tokens,
