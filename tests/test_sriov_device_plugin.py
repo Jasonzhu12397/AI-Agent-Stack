@@ -95,7 +95,7 @@ def test_render_sriov_configmap_adds_deployment_ownership():
         == "deployment-1"
     )
     assert (
-        configmap["metadata"]["labels"]["ai-agent-stack.io/cluster-name"] == "edge-lab"
+        configmap["metadata"]["labels"]["cluster.x-k8s.io/cluster-name"] == "edge-lab"
     )
     assert (
         configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"]
