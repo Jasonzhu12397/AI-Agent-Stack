@@ -222,8 +222,18 @@ def _network_contract(
         interface_ids = set()
     if not {control_interface, data_interface}.issubset(interface_ids):
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_INTERFACE_NOT_IN_DATA_TEMPLATE")
-    if not network_data.get("networks"):
+    networks = network_data.get("networks")
+    if not isinstance(networks, dict) or not networks:
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_SUBNETS_REQUIRED")
+    network_links = {
+        entry.get("link")
+        for entries in networks.values()
+        if isinstance(entries, list)
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("link"), str)
+    }
+    if not {control_interface, data_interface}.issubset(network_links):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_LINK_MAPPING_INCOMPLETE")
 
 
 def _ensure_worker_ntp(
