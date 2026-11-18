@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
