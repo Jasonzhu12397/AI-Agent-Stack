@@ -44,9 +44,10 @@ def test_bmh_registration_uses_existing_secret_reference_and_server_side_apply()
     assert result["server_side_dry_run_passed"] is True
     assert result["server_side_apply_succeeded"] is True
     assert result["resource_names"] == ["worker-01"]
-    assert len(calls) == 2
-    assert "--dry-run=server" in calls[0][0]
-    assert "--server-side" in calls[1][0]
+    assert len(calls) == 3
+    assert calls[0][0][:3] == ["get", "secret", "worker-01-bmc-secret"]
+    assert "--dry-run=server" in calls[1][0]
+    assert "--server-side" in calls[2][0]
 
 
 def test_bmh_registration_rejects_credentials_embedded_in_bmc_url():
@@ -136,6 +137,8 @@ def test_server_side_dry_run_failure_prevents_mutation():
 
     def runner(arguments, **_kwargs):
         calls.append(arguments)
+        if arguments[:2] == ["get", "secret"]:
+            return {"available": True, "returncode": 0, "stdout": "secret/bmc", "stderr": ""}
         return {
             "available": True,
             "returncode": 1,
@@ -150,8 +153,8 @@ def test_server_side_dry_run_failure_prevents_mutation():
         )
 
     assert error.value.side_effects is False
-    assert len(calls) == 1
-    assert "--dry-run=server" in calls[0]
+    assert len(calls) == 2
+    assert "--dry-run=server" in calls[1]
 
 
 def test_apply_failure_reports_possible_partial_side_effects():
@@ -159,6 +162,8 @@ def test_apply_failure_reports_possible_partial_side_effects():
 
     def runner(arguments, **_kwargs):
         calls.append(arguments)
+        if arguments[:2] == ["get", "secret"]:
+            return {"available": True, "returncode": 0, "stdout": "secret/bmc", "stderr": ""}
         if "--dry-run=server" in arguments:
             return {"available": True, "returncode": 0, "stdout": "", "stderr": ""}
         return {
@@ -175,7 +180,7 @@ def test_apply_failure_reports_possible_partial_side_effects():
         )
 
     assert error.value.side_effects is True
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_lease_loss_blocks_before_any_metal3_mutation():
