@@ -114,6 +114,15 @@ def _patch_source_uid(
     if not isinstance(uid, str) or not uid:
         raise CleanupScopeError("EPH_CLEANUP_SCOPE_RESOURCE_UID_MISSING")
     if current_source_uid == source_cluster_uid:
+        if resource == "deployments.apps" and name == "eph-agent":
+            return _patch_deployment_template_source_uid(
+                runner,
+                kubeconfig,
+                document,
+                deployment_id,
+                source_cluster_uid,
+                lease_lost_event,
+            )
         return False
     patch = [
         {"op": "test", "path": "/metadata/uid", "value": uid},
@@ -161,10 +170,11 @@ def _mark_optional_target_kubeconfig(
     source_cluster_uid: str,
     lease_lost_event: Any = None,
 ) -> bool:
-    result = _run(
-        runner,
-        source_kubeconfig,
+    result = runner(
         [
+            "kubectl",
+            "--kubeconfig",
+            source_kubeconfig,
             "get",
             "secret",
             OPTIONAL_TARGET_KUBECONFIG_SECRET,
@@ -173,8 +183,16 @@ def _mark_optional_target_kubeconfig(
             "-o",
             "json",
         ],
-        lease_lost_event,
+        source_kubeconfig,
+        timeout_seconds=30,
+        lease_lost_event=lease_lost_event,
+        max_output_bytes=8 * 1024 * 1024,
     )
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        error = result.get("stderr", "").lower() if isinstance(result, dict) else ""
+        if "notfound" in error or "not found" in error:
+            return False
+        raise CleanupScopeError("EPH_CLEANUP_SCOPE_KUBERNETES_API_FAILED")
     try:
         document = json.loads(result.get("stdout", ""))
     except (TypeError, ValueError) as exc:
