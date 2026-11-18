@@ -202,7 +202,7 @@ def _cluster_uid(
 def _network_contract(
     contract: Any,
     data_template: dict[str, Any],
-) -> None:
+) -> set[str]:
     if not isinstance(contract, dict):
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_CONTRACT_REQUIRED")
     control_interface = contract.get("control_plane_interface")
@@ -367,12 +367,17 @@ def _verify_network_attachment_definitions(
             raise WorkerProvisioningError(
                 "WORKER_PROVISIONING_NETWORK_ATTACHMENT_JSON_INVALID"
             ) from exc
-        metadata = document.get("metadata", {})
-        spec = document.get("spec", {})
+        if not isinstance(document, dict):
+            raise WorkerProvisioningError(
+                "WORKER_PROVISIONING_NETWORK_ATTACHMENT_JSON_INVALID"
+            )
+        metadata = document.get("metadata")
+        spec = document.get("spec")
         if (
-            metadata.get("name") != name
-            or metadata.get("namespace") != namespace
+            not isinstance(metadata, dict)
             or not isinstance(spec, dict)
+            or metadata.get("name") != name
+            or metadata.get("namespace") != namespace
         ):
             raise WorkerProvisioningError(
                 "WORKER_PROVISIONING_NETWORK_ATTACHMENT_IDENTITY_MISMATCH"
