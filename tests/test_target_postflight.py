@@ -318,18 +318,21 @@ def test_postflight_rejects_unready_ovs_daemonset():
 
 def test_postflight_rejects_required_nad_with_wrong_resource_name():
     runner, documents = _fixtures()
-    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["spec"]["config"] = json.dumps({
+    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["spec"]["config"] = json.dumps(
+        {
         "cniVersion": "0.3.1",
         "type": "sriov",
-        "resourceName": "intel.com/other_resource",
-    })
+            "resourceName": "intel.com/other_resource",
+        }
+    )
     with pytest.raises(PostflightError, match="POSTFLIGHT_NETWORK_ATTACHMENT_RESOURCE_MISMATCH"):
         verify_target_postflight(runner=runner, **_kwargs())
 
 
 def test_postflight_rejects_unrelated_nads_when_required_attachment_is_missing():
     runner, documents = _fixtures()
-    documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]["metadata"]["name"] = "unrelated-sriov"
+    nad = documents["network-attachment-definitions.k8s.cni.cncf.io"]["items"][0]
+    nad["metadata"]["name"] = "unrelated-sriov"
     with pytest.raises(PostflightError, match="POSTFLIGHT_REQUIRED_NETWORK_ATTACHMENT_MISSING"):
         verify_target_postflight(runner=runner, **_kwargs())
 
@@ -339,7 +342,11 @@ def test_postflight_rejects_unrelated_nads_when_required_attachment_is_missing()
     [
         ("machines.cluster.x-k8s.io", [None], "POSTFLIGHT_CAPI_WORKER_MACHINE_INVALID"),
         ("daemonsets.apps", [None], "POSTFLIGHT_DAEMONSET_DOCUMENT_INVALID"),
-        ("network-attachment-definitions.k8s.cni.cncf.io", [None], "POSTFLIGHT_NETWORK_ATTACHMENT_DOCUMENT_INVALID"),
+        (
+            "network-attachment-definitions.k8s.cni.cncf.io",
+            [None],
+            "POSTFLIGHT_NETWORK_ATTACHMENT_DOCUMENT_INVALID",
+        ),
     ],
 )
 def test_postflight_rejects_malformed_resource_items(resource, items, error):
