@@ -242,12 +242,12 @@ def execute_eph_cleanup(
         for item in inventory:
             if lease_lost_event is not None and lease_lost_event.is_set():
                 raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+            namespace_args = _namespace_args(item["resource"], namespace)
             arguments = [
                 "delete",
                 item["resource"],
                 item["name"],
-                "--namespace",
-                namespace,
+                *namespace_args,
                 "--wait=true",
                 "--timeout=120s",
                 "--ignore-not-found=true",
@@ -257,8 +257,7 @@ def execute_eph_cleanup(
                     "get",
                     item["resource"],
                     item["name"],
-                    "--namespace",
-                    namespace,
+                    *namespace_args,
                     "-o",
                     "json",
                 ],
