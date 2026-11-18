@@ -161,6 +161,18 @@ def execute_eph_cleanup(
                 ),
             })
 
+    workload_resources = {
+        "deployments.apps",
+        "statefulsets.apps",
+        "daemonsets.apps",
+        "jobs.batch",
+        "pods",
+    }
+    if not any(item["resource"] in workload_resources for item in inventory):
+        raise EphCleanupError("EPH_CLEANUP_MANAGED_WORKLOAD_INVENTORY_EMPTY")
+    if not any(item["credential"] for item in inventory):
+        raise EphCleanupError("EPH_CLEANUP_EPH_CREDENTIAL_INVENTORY_EMPTY")
+
     deleted: list[dict[str, Any]] = []
     for item in inventory:
         if lease_lost_event is not None and lease_lost_event.is_set():
