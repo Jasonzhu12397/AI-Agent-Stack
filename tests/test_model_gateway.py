@@ -311,3 +311,24 @@ def test_model_gateway_rejects_oversized_serialized_tool_context():
         )
 
     assert error.value.code == "MODEL_REQUEST_CONTEXT_TOO_LARGE"
+
+
+def test_embedding_gateway_rejects_aggregate_input_over_byte_budget():
+    provider = ModelProvider(
+        name="Embedding provider",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="embedding-model",
+        display_name="Embedding Model",
+        capabilities=["embeddings"],
+    )
+    inputs = ["x" * 19000 for _ in range(14)]
+
+    with pytest.raises(ModelGatewayError) as error:
+        ModelGateway().embed(model, inputs)
+
+    assert error.value.code == "EMBEDDING_INPUT_LIMIT"
