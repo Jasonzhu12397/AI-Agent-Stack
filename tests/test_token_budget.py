@@ -235,6 +235,24 @@ def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_bu
         )
 
 
+@pytest.mark.parametrize("invalid_limit", [True, False, 1.5, "12"])
+@pytest.mark.django_db
+def test_tenant_token_budget_api_rejects_non_integer_limits(token_budget_run, invalid_limit):
+    task, _, _ = token_budget_run
+    TenantMembership.objects.create(
+        tenant=task.tenant,
+        user=task.created_by,
+        role=TenantMembership.Role.OWNER,
+    )
+    client = APIClient()
+    client.force_authenticate(user=task.created_by)
+    url = reverse("tenant-token-budget", kwargs={"tenant_id": task.tenant_id})
+
+    response = client.patch(url, {"daily_limit": invalid_limit}, format="json")
+
+    assert response.status_code == 400
+
+
 @pytest.mark.django_db
 def test_tenant_token_budget_api_is_tenant_admin_managed(token_budget_run):
     task, _, budget = token_budget_run
