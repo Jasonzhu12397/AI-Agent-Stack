@@ -471,9 +471,12 @@ def observe_capi_cluster(
         or observed_generation < 0
     ):
         raise Metal3SkillError("CAPI_CLUSTER_GENERATION_INVALID")
+    condition_items = status.get("conditions", [])
+    if not isinstance(condition_items, list):
+        raise Metal3SkillError("CAPI_CLUSTER_CONDITIONS_INVALID")
     conditions = {
         item.get("type"): item.get("status")
-        for item in status.get("conditions", [])
+        for item in condition_items
         if isinstance(item, dict)
     }
     control_plane_ready = (
