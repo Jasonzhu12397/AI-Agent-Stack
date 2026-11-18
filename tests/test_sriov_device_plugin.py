@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from apps.agent_contracts.sriov_device_plugin import (
@@ -154,3 +156,14 @@ def test_validate_sriov_config_accepts_yaml_string_for_device_plugin_config():
     assert normalized["pool4"]["sriov_network_device_plugin_configmap_data"][
         "resourceList"
     ][0]["selectors"]["rootDevices"] == ["0000:2f:00.0"]
+
+
+def test_sriov_editor_emits_immutable_updates_and_uses_unique_defaults():
+    editor = (
+        Path(__file__).resolve().parents[1]
+        / "apps/web-studio/src/components/SriovDevicePluginEditor.vue"
+    ).read_text(encoding="utf-8")
+    assert "v-model=" not in editor
+    assert "@update:model-value=" in editor
+    assert 'sriov-dp-configmap-" + name' in editor
+    assert 'existingNames.has("mlnx_dpdk_" + suffix)' in editor
