@@ -41,8 +41,7 @@ follow upstream `main`.
 ## What this validates
 
 The upstream dev-env lifecycle validates the community's virtualized CAPI/Metal3
-provisioning and pivot workflow. It is a provider/environment validation tier, not
-an AI Agent Stack three-agent end-to-end test. It does not claim to have exercised
+provisioning and pivot workflow. It is a provider/environment validation tier. This is not an AI Agent Stack three-agent end-to-end test. It does not claim to have exercised
 Cloud Control Agent command scheduling, EPH Agent pivot execution, Target Agent
 handoff, the project's worker provisioning adapter, or the project's EPH cleanup.
 
