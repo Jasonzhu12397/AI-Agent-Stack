@@ -115,11 +115,18 @@ def verify_control_plane_ntp_bootstrap(
             r"zypper\s+(?:--non-interactive\s+)?install"
             r")\s+[^\n]*\bchrony\b"
         )
+        service_assignment_pattern = re.compile(
+            r"""(?m)^\s*CHRONY_SERVICE=["']?(chrony|chronyd)["']?\s*$"""
+        )
         service_enable_pattern = re.compile(
-            r"(?m)^\s*systemctl\s+enable\s+(?:chrony|chronyd)(?:\s|$)"
+            r"""(?m)^\s*systemctl\s+enable\s+(?:"?\$CHRONY_SERVICE"?|chrony|chronyd)(?:\s|$)"""
         )
         service_restart_pattern = re.compile(
-            r"(?m)^\s*systemctl\s+restart\s+(?:chrony|chronyd)(?:\s|$)"
+            r"""(?m)^\s*systemctl\s+restart\s+(?:"?\$CHRONY_SERVICE"?|chrony|chronyd)(?:\s|$)"""
+        )
+        service_variable_used = "$CHRONY_SERVICE" in script
+        service_variable_valid = (
+            not service_variable_used or service_assignment_pattern.search(script) is not None
         )
         required_markers = (
             "chronyc -n sources",
@@ -128,6 +135,7 @@ def verify_control_plane_ntp_bootstrap(
         )
         if (
             not chrony_install_pattern.search(script)
+            or not service_variable_valid
             or not service_enable_pattern.search(script)
             or not service_restart_pattern.search(script)
             or not all(marker in script for marker in required_markers)
