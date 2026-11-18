@@ -232,6 +232,11 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
                 }),
                 "stderr": "",
             }
+        if arguments[0] == "get" and arguments[1] == "configmaps":
+            name = arguments[2]
+            if name in applied:
+                return {"available": True, "stdout": json.dumps(applied[name]), "stderr": ""}
+            return {"available": False, "stdout": "", "stderr": "NotFound"}
         if arguments[0] == "get" and arguments[1] == "baremetalhosts.metal3.io":
             hosts = [
                 {
@@ -516,3 +521,52 @@ def test_lifecycle_command_payload_binds_cloud_deployment_identity():
         assert str(exc) == "AGENT_COMMAND_DEPLOYMENT_ID_MISMATCH"
     else:
         raise AssertionError("Lifecycle command must reject a mismatched deployment ID")
+
+
+def test_worker_provisioning_applies_sriov_configmap_from_selected_pci_resources():
+    runner, calls, applied = _runner_factory()
+    payload = _payload()
+    pool = {
+        "node_selectors": {"type": "high-throughput"},
+        "tolerations": [
+            {
+                "effect": "NoSchedule",
+                "key": "high-throughput",
+                "operator": "Equal",
+                "value": "true",
+            }
+        ],
+        "sriov_network_device_plugin_configmap_name": "sriov-dp-configmap",
+        "sriov_network_device_plugin_configmap_data": {
+            "resourceList": [
+                {
+                    "resourceName": "mlnx_dpdk_left",
+                    "resourcePrefix": "mellanox.com",
+                    "isRdma": True,
+                    "selectors": {
+                        "vendors": ["15b3"],
+                        "drivers": ["mlx5_core"],
+                        "rootDevices": ["0000:2f:00.0", "0000:8a:00.0"],
+                        "isRdma": True,
+                    },
+                }
+            ]
+        },
+    }
+    payload["sriov_device_plugin"] = {"pool4": pool, "pool5": pool}
+    result = execute_worker_provisioning(
+        payload,
+        _proof(),
+        runner,
+        environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+    )
+    configmap = applied["sriov-dp-configmap"]
+    assert configmap["kind"] == "ConfigMap"
+    assert configmap["metadata"]["annotations"]["ai-agent-stack.io/target-cluster-uid"] == "target-uid"
+    config = json.loads(configmap["data"]["config.json"])
+    assert config["resourceList"][0]["selectors"]["rootDevices"] == [
+        "0000:2f:00.0",
+        "0000:8a:00.0",
+    ]
+    assert result["worker_provisioning_resources_applied"] is True
+    assert sum(1 for call in calls if call[0] == "apply") == 6
