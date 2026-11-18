@@ -151,6 +151,14 @@ def execute(
             "side_effects": False,
         }
     if action == "eph.metal3.bmh.apply":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "eph_single_node_ready":
+            return {
+                "status": "blocked",
+                "error_code": "METAL3_BMH_REGISTRATION_EPH_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
         try:
             payload = command.get("payload", {})
             if not isinstance(payload, dict) or "hosts" not in payload:
@@ -164,6 +172,27 @@ def execute(
                 _run_kubectl,
                 lease_lost_event,
             )
+            observed = observe_baremetalhosts(
+                {"namespace": payload.get("namespace", "metal3")},
+                _run_kubectl,
+            )
+            requested_names = {item["metadata"]["name"] for item in rendered}
+            observed_names = {
+                item["name"] for item in observed["hosts"]
+                if item.get("name") in requested_names
+            }
+            if observed_names != requested_names:
+                raise Metal3SkillError(
+                    "METAL3_BMH_POST_APPLY_INVENTORY_MISMATCH",
+                    side_effects=True,
+                )
+            evidence.update({
+                "bmh_registration_applied": True,
+                "bmh_secret_refs_verified": evidence["bmc_secret_references_verified"],
+                "bmh_count": len(requested_names),
+                "bmh_inventory_count": len(observed_names),
+                "bmh_host_names": sorted(requested_names),
+            })
         except Metal3SkillError as exc:
             return {
                 "status": "failed",
@@ -194,6 +223,14 @@ def execute(
             "side_effects": False,
         }
     if action == "eph.capi.cluster.apply":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "bmh_ready":
+            return {
+                "status": "blocked",
+                "error_code": "CAPI_CLUSTER_BMH_READY_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
         try:
             payload = command.get("payload", {})
             if not isinstance(payload, dict) or "cluster_spec" not in payload:
@@ -238,6 +275,14 @@ def execute(
             "side_effects": False,
         }
     if action == "eph.metal3.bmh.wait_ready":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "bmh_registered":
+            return {
+                "status": "blocked",
+                "error_code": "METAL3_BMH_READY_REGISTRATION_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
         try:
             evidence = wait_for_baremetalhosts_ready(
                 command.get("payload", {}),
@@ -368,15 +413,20 @@ def main() -> int:
                                 "output": outcome.get("output", {}),
                                 "side_effects": outcome.get("side_effects", False),
                             }
+                        checkpoint_phase = {
+                            "eph.preflight": "eph_single_node_ready",
+                            "eph.metal3.bmh.apply": "bmh_registered",
+                            "eph.metal3.bmh.wait_ready": "bmh_ready",
+                        }.get(command.get("action"))
                         if (
-                            command.get("action") == "eph.preflight"
+                            checkpoint_phase is not None
                             and outcome["status"] == "succeeded"
                             and not guard.lost.is_set()
                         ):
                             try:
                                 checkpoint = client.persist_checkpoint(
                                     command,
-                                    "eph_single_node_ready",
+                                    checkpoint_phase,
                                     outcome["output"],
                                 )
                                 outcome["output"]["checkpoint"] = checkpoint
@@ -385,8 +435,8 @@ def main() -> int:
                                 outcome = {
                                     "status": "failed",
                                     "error_code": "EPH_CHECKPOINT_PERSIST_FAILED",
-                                    "output": {"phase": "eph_single_node_ready"},
-                                    "side_effects": False,
+                                    "output": {"phase": checkpoint_phase},
+                                    "side_effects": outcome.get("side_effects", False),
                                 }
                         client.report_result(
                             _result(command, settings.agent_id, outcome, started_at)
