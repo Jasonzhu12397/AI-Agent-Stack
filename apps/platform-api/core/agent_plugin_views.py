@@ -12,7 +12,6 @@ from core.audit import record_audit_event
 from core.models import (
     AgentPluginDefinition,
     AgentPluginInstallation,
-    AuditEvent,
     Project,
     ProjectMembership,
     Tenant,
