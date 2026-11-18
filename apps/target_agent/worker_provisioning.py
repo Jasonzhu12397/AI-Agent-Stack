@@ -238,6 +238,65 @@ def _network_contract(
         raise WorkerProvisioningError("WORKER_PROVISIONING_NETWORK_LINK_MAPPING_INCOMPLETE")
 
 
+def _ip_pool_references(value: Any) -> set[str]:
+    references = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"ipAddressFromIPPool", "gatewayFromIPPool"}:
+                if isinstance(item, str) and item:
+                    references.add(item)
+            references.update(_ip_pool_references(item))
+    elif isinstance(value, list):
+        for item in value:
+            references.update(_ip_pool_references(item))
+    return references
+
+
+def _verify_ip_pools(
+    runner: Callable[..., dict[str, Any]],
+    namespace: str,
+    cluster_name: str,
+    data_template: dict[str, Any],
+) -> list[str]:
+    references = sorted(
+        _ip_pool_references(data_template.get("spec", {}).get("networkData", {}))
+    )
+    if not references:
+        return []
+    result = _run(
+        runner,
+        [
+            "get",
+            "ippools.ipam.metal3.io",
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+    )
+    try:
+        document = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise WorkerProvisioningError("WORKER_PROVISIONING_IP_POOL_INVENTORY_INVALID") from exc
+    items = document.get("items")
+    if not isinstance(items, list):
+        raise WorkerProvisioningError("WORKER_PROVISIONING_IP_POOL_INVENTORY_INVALID")
+    pools = {
+        item.get("metadata", {}).get("name"): item
+        for item in items
+        if isinstance(item, dict)
+    }
+    for name in references:
+        pool = pools.get(name)
+        if not pool:
+            raise WorkerProvisioningError(f"WORKER_PROVISIONING_IP_POOL_NOT_FOUND:{name}")
+        if pool.get("spec", {}).get("clusterName") != cluster_name:
+            raise WorkerProvisioningError(
+                f"WORKER_PROVISIONING_IP_POOL_CLUSTER_MISMATCH:{name}"
+            )
+    return references
+
+
 def _ensure_worker_ntp(
     kubeadm_template: dict[str, Any],
     ironic_internal_ntp_ip: str,
