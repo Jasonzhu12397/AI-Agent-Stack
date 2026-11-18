@@ -85,6 +85,44 @@ def test_agent_draft_publish_creates_immutable_version(agent_workspace):
     assert version.config_snapshot["model_config_id"] == str(model.id)
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [("timeout_seconds", True), ("max_tokens", True)],
+)
+@pytest.mark.django_db
+def test_agent_publish_rejects_boolean_numeric_limits(agent_workspace, field, value):
+    user, tenant, project, model = agent_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    created = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agents/",
+        {
+            "name": "Invalid numeric limits",
+            "slug": f"invalid-{field.replace(chr(95), '-')}",
+            "draft_config": {
+                "model_config_id": str(model.id),
+                "system_prompt": "You are a test agent.",
+                "max_iterations": 1,
+                "timeout_seconds": 20,
+                "max_tokens": 512,
+                "tool_allowlist": [],
+                "knowledge_base_ids": [],
+            },
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    agent_id = created.data["id"]
+    agent = AgentDefinition.objects.get(pk=agent_id)
+    agent.draft_config[field] = value
+    agent.save(update_fields=["draft_config", "updated_at"])
+
+    response = client.post(f"/api/v1/agents/{agent_id}/publish/", {}, format="json")
+
+    assert response.status_code == 400
+    assert not AgentVersion.objects.filter(agent=agent).exists()
+
+
 @pytest.mark.django_db
 def test_agent_run_executes_through_persistent_worker(agent_workspace):
     user, tenant, project, model = agent_workspace
