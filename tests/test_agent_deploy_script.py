@@ -19,6 +19,8 @@ def test_three_agent_deploy_requires_three_distinct_contexts_and_digest_images()
     assert "THREE_AGENT_DEPLOYMENT_READY" in script
     assert "network-inventory-agent" not in script
     assert "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL" in script
+    assert "TARGET_CAPI_NAMESPACE_MUST_BE_A_DNS_LABEL" in script
+    assert "REPLACE_WITH_TARGET_CAPI_NAMESPACE" in script
     assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent' in script
     assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight' in script
     assert (
@@ -57,6 +59,22 @@ def test_target_agent_is_three_replicas_with_control_plane_anti_affinity_and_lea
     assert any(item.get("kind") == "ClusterRole" for item in manifest)
     assert any(item.get("kind") == "PodDisruptionBudget" for item in manifest)
     assert "target-agent-leader" in str(deployment)
+    configmap_role = next(
+        item for item in manifest
+        if item.get("kind") == "Role" and item["metadata"]["name"] == "target-agent-sriov-configmaps"
+    )
+    configmap_binding = next(
+        item for item in manifest
+        if item.get("kind") == "RoleBinding"
+        and item["metadata"]["name"] == "target-agent-sriov-configmaps"
+    )
+    assert configmap_role["metadata"]["namespace"] == "REPLACE_WITH_TARGET_CAPI_NAMESPACE"
+    assert configmap_role["rules"][0]["resources"] == ["configmaps"]
+    assert set(configmap_role["rules"][0]["verbs"]) == {
+        "get", "list", "watch", "create", "patch", "update"
+    }
+    assert configmap_binding["roleRef"]["name"] == "target-agent-sriov-configmaps"
+    assert configmap_binding["subjects"][0]["namespace"] == "ai-agent-system"
     assert "ai-agent-target-agent:VERSION" in pod_spec["containers"][0]["image"]
 
 
