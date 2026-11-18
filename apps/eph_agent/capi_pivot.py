@@ -563,6 +563,19 @@ def execute_capi_pivot(
                 }
                 if expected_set != target_set:
                     raise CapiPivotError("CAPI_PIVOT_REPLAY_BMH_IDENTITY_SET_MISMATCH")
+                try:
+                    cleanup_scope = attest_cleanup_scope(
+                        source,
+                        target,
+                        deployment_id,
+                        annotations[SOURCE_UID_ANNOTATION],
+                        _run,
+                        lease_lost_event,
+                    )
+                except CleanupScopeError as exc:
+                    side_effects = side_effects or exc.side_effects
+                    raise CapiPivotError(str(exc)) from exc
+                side_effects = cleanup_scope["mutated_resource_count"] > 0
                 return {
                     "status": "succeeded",
                     "error_code": None,
@@ -584,8 +597,21 @@ def execute_capi_pivot(
                         "target_bmh_digest": _inventory_digest(target_bmhs),
                         "target_controllers_ready": preflight["target_controllers"]["ready"],
                         "provider_preflight": preflight,
+                        "cleanup_scope_attested": cleanup_scope["cleanup_scope_attested"],
+                        "source_cleanup_resource_count": cleanup_scope[
+                            "source_cleanup_resource_count"
+                        ],
+                        "target_observer_secret_source_uid_attested": cleanup_scope[
+                            "target_observer_secret_source_uid_attested"
+                        ],
+                        "optional_target_kubeconfig_marked": cleanup_scope[
+                            "optional_target_kubeconfig_marked"
+                        ],
+                        "cleanup_scope_mutated_resource_count": cleanup_scope[
+                            "mutated_resource_count"
+                        ],
                     },
-                    "side_effects": False,
+                    "side_effects": side_effects,
                 }
         if source_cluster is None or target_cluster is not None:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_TARGET_CLUSTER_STATE_CONFLICT")
@@ -721,6 +747,18 @@ def execute_capi_pivot(
         target_uid = target_after.get("metadata", {}).get("uid")
         if not isinstance(target_uid, str) or not target_uid:
             raise CapiPivotError("CAPI_PIVOT_TARGET_CLUSTER_UID_MISSING")
+        try:
+            cleanup_scope = attest_cleanup_scope(
+                source,
+                target,
+                deployment_id,
+                source_uid,
+                _run,
+                lease_lost_event,
+            )
+        except CleanupScopeError as exc:
+            side_effects = side_effects or exc.side_effects
+            raise CapiPivotError(str(exc)) from exc
         return {
             "status": "succeeded",
             "error_code": None,
@@ -740,6 +778,19 @@ def execute_capi_pivot(
                 "target_bmh_digest": _inventory_digest(target_bmhs),
                 "provider_preflight": preflight,
                 "clusterctl_output": moved["stdout"][-8000:],
+                "cleanup_scope_attested": cleanup_scope["cleanup_scope_attested"],
+                "source_cleanup_resource_count": cleanup_scope[
+                    "source_cleanup_resource_count"
+                ],
+                "target_observer_secret_source_uid_attested": cleanup_scope[
+                    "target_observer_secret_source_uid_attested"
+                ],
+                "optional_target_kubeconfig_marked": cleanup_scope[
+                    "optional_target_kubeconfig_marked"
+                ],
+                "cleanup_scope_mutated_resource_count": cleanup_scope[
+                    "mutated_resource_count"
+                ],
             },
             "side_effects": True,
         }
