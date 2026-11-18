@@ -156,6 +156,20 @@ def test_settled_usage_is_charged_to_the_day_the_provider_call_finishes(token_bu
             idempotency_key="cross-midnight-call",
             requested_tokens=80,
         )
+
+    with (
+        patch("core.token_budget.timezone.now", return_value=settled_at),
+        patch("core.token_budget.timezone.localtime", side_effect=lambda value: value),
+        pytest.raises(TenantTokenBudgetExceeded, match="daily"),
+    ):
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="next-day-while-pending",
+            requested_tokens=30,
+        )
+
+    with patch("core.token_budget.timezone.now", return_value=settled_at):
         settle_tenant_tokens(usage=reservation, consumed_tokens=35)
 
     reservation.refresh_from_db()
