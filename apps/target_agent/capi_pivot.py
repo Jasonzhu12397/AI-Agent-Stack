@@ -748,6 +748,13 @@ def execute_capi_pivot(
             }
         if action != "target.capi.pivot":
             raise CapiPivotError("CAPI_PIVOT_ACTION_UNSUPPORTED")
+        move_timeout = payload.get("move_timeout_seconds", 1800)
+        if (
+            not isinstance(move_timeout, int)
+            or isinstance(move_timeout, bool)
+            or not 60 <= move_timeout <= 3600
+        ):
+            raise CapiPivotError("CAPI_PIVOT_MOVE_TIMEOUT_INVALID")
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise CapiPivotError("COMMAND_LEASE_LOST_BEFORE_CAPI_PIVOT")
         annotate = _run(
@@ -765,9 +772,6 @@ def execute_capi_pivot(
         if not annotate["ok"]:
             raise CapiPivotError("CAPI_PIVOT_SOURCE_IDENTITY_ANNOTATION_FAILED")
         side_effects = True
-        move_timeout = payload.get("move_timeout_seconds", 1800)
-        if not isinstance(move_timeout, int) or not 60 <= move_timeout <= 3600:
-            raise CapiPivotError("CAPI_PIVOT_MOVE_TIMEOUT_INVALID")
         moved = _run(
             move_command,
             source,
