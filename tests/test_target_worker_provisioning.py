@@ -484,3 +484,21 @@ def test_worker_provisioning_requires_trusted_eph_cleanup_scope_proof(monkeypatc
         assert str(exc) == "WORKER_PROVISIONING_CLEANUP_SCOPE_ATTESTATION_REQUIRED"
     else:
         raise AssertionError("Worker provisioning must require trusted cleanup scope proof")
+
+
+
+def test_lifecycle_command_payload_binds_cloud_deployment_identity():
+    payload = target_main._command_payload({
+        "deployment_id": "deployment-1",
+        "payload": {"target_namespace": "metal3"},
+    })
+    assert payload["deployment_id"] == "deployment-1"
+    try:
+        target_main._command_payload({
+            "deployment_id": "deployment-1",
+            "payload": {"deployment_id": "deployment-2"},
+        })
+    except target_main.HandoffError as exc:
+        assert str(exc) == "AGENT_COMMAND_DEPLOYMENT_ID_MISMATCH"
+    else:
+        raise AssertionError("Lifecycle command must reject a mismatched deployment ID")
