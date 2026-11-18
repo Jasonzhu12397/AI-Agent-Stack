@@ -307,3 +307,24 @@ def test_cleanup_scope_rejects_observer_secret_with_unrelated_source_kubeconfig(
         for call in calls
         if len(call) > 5
     )
+
+def test_cleanup_scope_validates_metal3_rbac_before_mutating_source_inventory(tmp_path):
+    runner, source, _target, calls = _runner_factory()
+    source["metal3:roles.rbac.authorization.k8s.io"] = [
+        item
+        for item in source["metal3:roles.rbac.authorization.k8s.io"]
+        if item["metadata"]["name"] != "target-agent-source-capi"
+    ]
+    try:
+        attest_cleanup_scope(
+            _source_kubeconfig(tmp_path),
+            _target_kubeconfig(tmp_path),
+            DEPLOYMENT_ID,
+            SOURCE_UID,
+            runner,
+        )
+    except CleanupScopeError as exc:
+        assert str(exc) == "EPH_CLEANUP_SCOPE_REQUIRED_METAL3_RBAC_MISSING"
+    else:
+        raise AssertionError("Missing Metal3 RBAC must block cleanup-scope attestation")
+    assert not any(command[3] == "patch" for command in calls)
