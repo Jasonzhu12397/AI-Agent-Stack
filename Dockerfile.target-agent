@@ -16,6 +16,6 @@ COPY packages/agent_transport ./packages/agent_transport
 COPY apps/__init__.py ./apps/__init__.py
 COPY apps/agent_contracts ./apps/agent_contracts
 COPY apps/target_agent ./apps/target_agent
-RUN pip install --no-cache-dir "httpx>=0.27,<1.0" "pydantic>=2.8,<3.0" "psycopg[binary]>=3.2,<4.0"
+RUN pip install --no-cache-dir "httpx>=0.27,<1.0" "pydantic>=2.8,<3.0" "psycopg[binary]>=3.2,<4.0" "PyYAML>=6.0,<7.0"
 USER 10001:10001
 ENTRYPOINT ["python", "-m", "apps.target_agent.main"]
