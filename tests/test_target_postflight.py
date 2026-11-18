@@ -112,6 +112,8 @@ def _fixtures():
         "nodes": {
             "items": [
                 _node("master-1", control_plane=True),
+                _node("master-2", control_plane=True),
+                _node("master-3", control_plane=True),
                 _node("worker-1"),
                 _node("worker-2"),
                 _node("infra-1"),
