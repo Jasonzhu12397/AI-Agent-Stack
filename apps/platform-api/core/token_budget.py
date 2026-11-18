@@ -17,8 +17,8 @@ def _period_usage(tenant_id, start, now):
     settled = TenantTokenUsage.objects.filter(
         tenant_id=tenant_id,
         status=TenantTokenUsage.Status.SETTLED,
-        created_at__gte=start,
-        created_at__lte=now,
+        settled_at__gte=start,
+        settled_at__lte=now,
     ).aggregate(total=Sum("consumed_tokens"))["total"] or 0
     reserved = TenantTokenUsage.objects.filter(
         tenant_id=tenant_id,
@@ -112,7 +112,16 @@ def settle_tenant_tokens(*, usage, consumed_tokens: int):
     locked.status = TenantTokenUsage.Status.SETTLED
     locked.consumed_tokens = consumed_tokens
     locked.reserved_tokens = 0
-    locked.save(update_fields=["status", "consumed_tokens", "reserved_tokens", "updated_at"])
+    locked.settled_at = timezone.now()
+    locked.save(
+        update_fields=[
+            "status",
+            "consumed_tokens",
+            "reserved_tokens",
+            "settled_at",
+            "updated_at",
+        ]
+    )
     return locked
 
 
