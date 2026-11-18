@@ -265,7 +265,7 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
         "attest_cleanup_scope",
         lambda *_args, **_kwargs: {
             "cleanup_scope_attested": True,
-            "source_cleanup_resource_count": 6,
+            "source_cleanup_resource_count": 7,
             "target_observer_secret_source_uid_attested": True,
             "optional_target_kubeconfig_marked": True,
             "mutated_resource_count": 0,
@@ -348,7 +348,7 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
         "attest_cleanup_scope",
         lambda *_args, **_kwargs: {
             "cleanup_scope_attested": True,
-            "source_cleanup_resource_count": 6,
+            "source_cleanup_resource_count": 7,
             "target_observer_secret_source_uid_attested": True,
             "optional_target_kubeconfig_marked": True,
             "mutated_resource_count": 0,
