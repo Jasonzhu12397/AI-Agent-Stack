@@ -167,7 +167,11 @@ def verify_target_postflight(
     ):
         raise PostflightError("POSTFLIGHT_WORKER_NTP_EVIDENCE_INCOMPLETE")
     for worker_name, sources in worker_ntp_bootstrap_sources.items():
-        if not isinstance(worker_name, str) or not worker_name or sources != [ironic_internal_ntp_ip]:
+        if (
+            not isinstance(worker_name, str)
+            or not worker_name
+            or sources != [ironic_internal_ntp_ip]
+        ):
             raise PostflightError(f"POSTFLIGHT_WORKER_NTP_SOURCE_MISMATCH:{worker_name}")
 
     contract_flags = (
