@@ -922,9 +922,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("COMMAND_LEASE_NOT_VALID")
                     if (
                         status == "succeeded"
-                        and identity["role"] == "eph"
-                        and updated["required_role"] == "eph"
-                        and updated["action"] == "eph.capi.pivot"
+                        and identity["role"] == "target"
+                        and updated["required_role"] == "target"
+                        and updated["action"] == "target.capi.pivot"
                     ):
                         attestation = (
                             _validated_eph_pivot_attestation(document.get("output"))
