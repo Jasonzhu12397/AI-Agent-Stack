@@ -331,6 +331,7 @@ class TenantTokenUsage(models.Model):
     reserved_tokens = models.PositiveBigIntegerField(default=0)
     consumed_tokens = models.PositiveBigIntegerField(default=0)
     expires_at = models.DateTimeField()
+    settled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
