@@ -226,6 +226,7 @@ class ModelGateway:
                 not isinstance(input_tokens, int)
                 or isinstance(input_tokens, bool)
                 or input_tokens < 0
+                or input_tokens > request_bytes
                 or not isinstance(output_tokens, int)
                 or isinstance(output_tokens, bool)
                 or output_tokens < 0
