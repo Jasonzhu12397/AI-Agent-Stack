@@ -23,6 +23,10 @@ class ControlApiError(ValueError):
 EPH_ACTIONS = frozenset({
     "eph.preflight",
     "eph.source.observe",
+    "eph.metal3.bmh.apply",
+    "eph.metal3.bmh.observe",
+    "eph.capi.cluster.apply",
+    "eph.capi.cluster.observe",
     "eph.capi.pivot.dry_run",
     "eph.capi.pivot",
 })
