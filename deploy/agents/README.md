@@ -8,7 +8,7 @@ This directory deploys the new three-Agent architecture. The legacy Node Agent d
 - **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight and reports readiness. Mutating CAPI Pivot remains blocked until its dedicated, approved adapter is implemented and tested.
 - **Target Agent**: three replicas, spread one per Target Control Plane master. Kubernetes Lease leader election ensures only the elected replica polls and executes commands. All replicas expose readiness and report their own pod identity.
 
-The Target Agent currently has read-only Kubernetes/CAPI/Metal3 observation handlers, a Control Plane chrony profile renderer restricted to approved external sources and Worker networks, a Worker NTP policy validator, and pre-kubeadm chrony command renderers for both roles. The EPH CAPI Pivot payload and approval requirements are specified in [CAPI Pivot contract](../../docs/capi-pivot-contract.md). The generated Control Plane command installs chrony, configures only approved external sources, allows the Worker networks and verifies external synchronization plus UDP/123 listening. Target Agent inspects the CAPI Machine/KubeadmConfig bootstrap records for all Ready Control Plane Machines and requires the chrony verification command to be present; it also sends an actual NTP request to the Ironic internal IP/VIP over UDP/123 and rejects an unsynchronized response. The generated Worker command replaces the Worker source list with exactly the Ironic internal IP/VIP and verifies that chronyd selected that endpoint. The commands are not yet injected automatically into CAPI bootstrap templates or executed on newly provisioned physical hosts, so Worker host synchronization remains unverified.
+The Target Agent currently has live Kubernetes/CAPI/Metal3/Ironic observation, trusted Pivot ownership verification, a guarded EPH cleanup executor, a Control Plane chrony profile renderer restricted to approved external sources and Worker networks, a Worker NTP policy validator, and pre-kubeadm chrony command renderers for both roles. The EPH CAPI Pivot payload and approval requirements are specified in [CAPI Pivot contract](../../docs/capi-pivot-contract.md). The generated Control Plane command installs chrony, configures only approved external sources, allows the Worker networks and verifies external synchronization plus UDP/123 listening. Target Agent inspects the CAPI Machine/KubeadmConfig bootstrap records for all Ready Control Plane Machines and requires the chrony verification command to be present; it also sends an actual NTP request to the Ironic internal IP/VIP over UDP/123 and rejects an unsynchronized response. The generated Worker command replaces the Worker source list with exactly the Ironic internal IP/VIP and verifies that chronyd selected that endpoint. The commands are not yet injected automatically into CAPI bootstrap templates or executed on newly provisioned physical hosts, so Worker host synchronization remains unverified.
 
 ## Required contexts and image references
 
@@ -23,6 +23,8 @@ All images must be pinned by immutable SHA-256 digest:
 - `CLOUD_CONTROL_IMAGE`
 - `EPH_AGENT_IMAGE`
 - `TARGET_AGENT_IMAGE`
+- `DEPLOYMENT_ID`: stable DNS-label identifier shared by the EPH and Target cleanup scope.
+- `SOURCE_CLUSTER_UID`: UID of the source-side CAPI Cluster object preserved in the Pivot attestation.
 
 Run `deploy.sh` only after the secrets below have been provisioned by your secret manager. The script performs server-side dry-run validation before applying resources and waits for all three Deployments.
 
@@ -48,6 +50,7 @@ The EPH client certificate Common Name must equal the configured Agent UUID. EPH
 
 - `target-agent-credentials`: `control-url`, `agent-id`, `installation-id`, `cluster-id`, `ironic-api-url`, `ironic-api-token`, `ironic-internal-ntp-ip`. The Ironic API endpoint must use HTTPS and its certificate must chain to a CA trusted by the Target Agent image. The NTP IP is a separately pinned internal service/VIP address; Target Agent rejects command payloads that request any other NTP server. The API token is loaded from the Kubernetes Secret and is never included in command payloads or logs.
 - `agent-control-plane-mtls`: `ca.crt`, `tls.crt`, `tls.key`.
+- `target-agent-source-observer`: key `kubeconfig`; the Target Agent uses this source-cluster observer credential only through Pivot and cleanup, then revokes this Secret after successful EPH cleanup.
 
 All three Target replicas share one logical Agent UUID and installation/cluster identity. Their per-pod `AGENT_INSTANCE_ID` is populated from the Pod name. The Target client certificate Common Name must equal the logical Agent UUID.
 
@@ -95,9 +98,11 @@ export TARGET_CONTEXT=<target-cluster-context>
 export CLOUD_CONTROL_IMAGE=<registry>/ai-agent-cloud-control-agent@sha256:<digest>
 export EPH_AGENT_IMAGE=<registry>/ai-agent-eph-agent@sha256:<digest>
 export TARGET_AGENT_IMAGE=<registry>/ai-agent-target-agent@sha256:<digest>
+export DEPLOYMENT_ID=<stable-dns-label>
+export SOURCE_CLUSTER_UID=<source-capi-cluster-uid>
 bash deploy.sh
 ```
 
 ## Current implementation boundary
 
-The current fresh runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, read-only CAPI/Metal3 observation, live TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH Agent now has a dry-run and approval-digest-gated `clusterctl move` adapter with provider-version and Target-master controller-placement checks. It has not yet been validated against the selected live provider compatibility matrix. Autonomous EPH cleanup, Worker provisioning, host-level chronyd application/synchronization, and end-to-end integration with the existing platform API are not yet enabled. They must be implemented as explicit adapters and verified with the selected CAPI/Metal3/Ironic provider versions before production use.
+The current runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, live CAPI/Metal3 ownership observation, TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH cleanup executor now requires the Cloud Control trusted Pivot attestation and live Target Metal3/Ironic ownership verification; it deletes only resources explicitly labelled for the matching deployment and source Cluster UID, verifies their absence, and removes the Target-side `target-agent-source-observer` Secret. `deploy.sh` applies the matching cleanup labels and requires `DEPLOYMENT_ID`, `SOURCE_CLUSTER_UID`, and the observer Secret. This cleanup path still requires live provider validation and fault-injection/retry verification before production use. Worker provisioning, host-level chronyd application/synchronization, autonomous diagnosis/repair, and the full three-Agent lifecycle E2E remain incomplete.
