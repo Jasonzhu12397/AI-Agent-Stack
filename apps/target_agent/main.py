@@ -813,7 +813,7 @@ def _execute_worker_provisioning(
         "target_metal3_ownership_verified": True,
         "target_metal3_reconciliation_healthy": True,
         "target_ironic_inventory_verified": True,
-        "target_bmh_identity_count": ownership.get("target_bmh_identity_count"),
+        "target_bmh_identity_count": len(ownership.get("target_bmh_identities", [])),
     }
 
 
