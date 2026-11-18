@@ -142,6 +142,15 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     if not isinstance(version, str) or not _VERSION_PATTERN.fullmatch(version):
         raise Metal3SkillError("CAPI_KUBERNETES_VERSION_INVALID")
     cluster["k8s_version"] = version
+    image_url = cluster.get("image_url")
+    if not isinstance(image_url, str) or not image_url.startswith(("http://", "https://", "oci://")):
+        raise Metal3SkillError("CAPI_MACHINE_IMAGE_URL_REQUIRED")
+    image_parsed = urlsplit(image_url)
+    if image_parsed.scheme in {"http", "https"} and (
+        not image_parsed.hostname or image_parsed.username or image_parsed.password
+    ):
+        raise Metal3SkillError("CAPI_MACHINE_IMAGE_URL_INVALID")
+    cluster["image_url"] = image_url
     control_plane_count = cluster.get("control_plane_count", 3)
     if (
         not isinstance(control_plane_count, int)
