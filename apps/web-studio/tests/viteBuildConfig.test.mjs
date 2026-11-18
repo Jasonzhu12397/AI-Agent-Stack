@@ -15,6 +15,7 @@ test("Vite resolves Day.js core and plugin subpaths to valid ESM entrypoints", a
 test("Vite excludes ESM-only dependencies from CommonJS conversion", async () => {
   const source = await readFile(viteConfig, "utf8");
   const exclusions = source.split("exclude: [", 2)[1]?.split("]", 1)[0] ?? "";
+  const normalizedExclusions = exclusions.replaceAll("\\/", "/");
   for (const packageName of [
     "dayjs",
     "lodash-es",
@@ -26,7 +27,7 @@ test("Vite excludes ESM-only dependencies from CommonJS conversion", async () =>
     "async-validator",
     "@ctrl/tinycolor",
   ]) {
-    assert.ok(exclusions.includes(packageName), `Missing CommonJS exclusion for ${packageName}`);
+    assert.ok(normalizedExclusions.includes(packageName), `Missing CommonJS exclusion for ${packageName}`);
   }
   assert.ok(source.includes("commonjsOptions"));
 });
