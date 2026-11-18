@@ -272,3 +272,46 @@ def test_handoff_accepts_worker_provisioning_only_after_server_dry_run_and_contr
     )
     assert result["accepted"] is True
     assert result["evidence"]["desired_worker_count"] == 10
+
+@pytest.mark.parametrize(
+    ("current", "next_phase", "evidence", "error"),
+    [
+        (
+            None,
+            "eph_single_node_ready",
+            {
+                "eph_ready": True,
+                "eph_node_count": True,
+                "eph_source_preflight_passed": True,
+            },
+            "SINGLE_NODE",
+        ),
+        (
+            "bmh_registered",
+            "bmh_ready",
+            {
+                "expected_bmh_count": True,
+                "bmh_ready_count": True,
+                "bmh_all_operational": True,
+                "ironic_inventory_verified": True,
+            },
+            "BMH_READINESS_INCOMPLETE",
+        ),
+        (
+            "worker_provisioning",
+            "workers_ready",
+            {
+                "ironic_internal_ntp_ip": "10.130.60.84",
+                "desired_worker_count": True,
+                "ready_worker_count": True,
+                "worker_ntp_bootstrap_sources": {"worker-1": ["10.130.60.84"]},
+            },
+            "WORKER_READINESS_INCOMPLETE",
+        ),
+    ],
+)
+def test_handoff_rejects_boolean_values_as_capacity_counts(
+    current, next_phase, evidence, error
+):
+    with pytest.raises(HandoffError, match=error):
+        evaluate_transition(current, next_phase, evidence)
