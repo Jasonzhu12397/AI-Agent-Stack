@@ -367,7 +367,8 @@ def _verify_existing_ownership(
     namespace: str,
     deployment_id: str,
     target_cluster_uid: str,
-) -> None:
+) -> dict[str, dict[str, Any]]:
+    existing_resources = {}
     for document in documents:
         kind = document["kind"]
         info = RESOURCE_TYPES[kind]
@@ -402,6 +403,8 @@ def _verify_existing_ownership(
             or annotations.get(TARGET_CLUSTER_UID_ANNOTATION) != target_cluster_uid
         ):
             raise WorkerProvisioningError("WORKER_PROVISIONING_EXISTING_RESOURCE_NOT_OWNED")
+        existing_resources[kind] = existing
+    return existing_resources
 
 
 def execute_worker_provisioning(
