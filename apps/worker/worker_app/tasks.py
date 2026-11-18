@@ -21,6 +21,12 @@ from core.models import (
 )
 from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
+from core.token_budget import (
+    TenantTokenBudgetExceeded,
+    release_tenant_tokens,
+    reserve_tenant_tokens,
+    settle_tenant_tokens,
+)
 from core.tool_approvals import (
     consume_approved_tool_call,
     create_pending_tool_approval,
@@ -727,6 +733,17 @@ def execute_agent_run(task):
                 )
                 if allowed_output_tokens < 1:
                     raise PermanentTaskError("Agent run reached its cumulative token budget")
+                try:
+                    token_reservation = reserve_tenant_tokens(
+                        task=task,
+                        agent_run=agent_run,
+                        idempotency_key=f"{task.id}:{task.attempts}:{iteration}",
+                        requested_tokens=estimated_input_tokens + allowed_output_tokens,
+                    )
+                except TenantTokenBudgetExceeded as exc:
+                    raise PermanentTaskError(
+                        "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
+                    ) from exc
                 response = gateway.complete(
                     model_config,
                     messages,
@@ -736,6 +753,8 @@ def execute_agent_run(task):
                     tool_choice="auto" if offered_tools else None,
                 )
             except ModelGatewayError as exc:
+                if "token_reservation" in locals():
+                    release_tenant_tokens(usage=token_reservation)
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
                 ) from exc
@@ -754,6 +773,10 @@ def execute_agent_run(task):
             actual_output_tokens = response.output_tokens or (
                 0 if model_config.provider.provider_type == "fake"
                 else (len(output_payload) + 1) // 2
+            )
+            settle_tenant_tokens(
+                usage=token_reservation,
+                consumed_tokens=actual_input_tokens + actual_output_tokens,
             )
             input_tokens += actual_input_tokens
             output_tokens += actual_output_tokens
