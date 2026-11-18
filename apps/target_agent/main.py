@@ -706,6 +706,8 @@ def _revoke_source_observer_secret(
     metadata = secret.get("metadata", {})
     labels = metadata.get("labels", {})
     annotations = metadata.get("annotations", {})
+    if not all(isinstance(value, dict) for value in (metadata, labels, annotations)):
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_METADATA_INVALID")
     if (
         labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
         or labels.get("ai-agent-stack.io/eph-cleanup") != "true"
