@@ -703,10 +703,12 @@ def _revoke_source_observer_secret(
         secret = json.loads(observed.get("stdout", ""))
     except (TypeError, ValueError) as exc:
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_JSON_INVALID") from exc
-    metadata = secret.get("metadata", {})
+    metadata = secret.get("metadata")
+    if not isinstance(metadata, dict):
+        raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_METADATA_INVALID")
     labels = metadata.get("labels", {})
     annotations = metadata.get("annotations", {})
-    if not all(isinstance(value, dict) for value in (metadata, labels, annotations)):
+    if not isinstance(labels, dict) or not isinstance(annotations, dict):
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_METADATA_INVALID")
     if (
         labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
