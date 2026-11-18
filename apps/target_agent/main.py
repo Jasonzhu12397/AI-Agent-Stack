@@ -1115,7 +1115,7 @@ def execute(
                 "status": "blocked",
                 "error_code": str(exc) or "HANDOFF_EVIDENCE_REJECTED",
                 "output": {},
-                "side_effects": False,
+                "side_effects": getattr(exc, "side_effects", False),
             }
     if action == "target.ntp.internal.probe":
         payload = command.get("payload", {})
