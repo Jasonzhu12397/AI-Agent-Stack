@@ -458,11 +458,12 @@ def verify_target_postflight(
 
     return {
         "target_postflight_passed": True,
-        "worker_network_postflight_passed": True,
+        "worker_network_postflight_passed": False,
         "deployment_checkpoint_durable": True,
         "ready_control_plane_count": len(control_plane_nodes),
         "ready_worker_count": len(ready_workers),
         "worker_ntp_bootstrap_attested": True,
+        "worker_chronyd_bootstrap_sync_verified": True,
         "worker_chronyd_live_tracking_verified": False,
         "data_plane_pod_packet_path_verified": False,
         "postflight_scope": "capi-metal3-worker-and-network-stack-readiness",
