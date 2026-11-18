@@ -108,18 +108,18 @@ def verify_control_plane_ntp_bootstrap(
         if re.search(r"(?m)^\s*pool\s+", script):
             raise NtpAttestationError(f"TARGET_NTP_EXTERNAL_FALLBACK_FOUND:{machine_name}")
         chrony_install_pattern = re.compile(
-            r"(?m)^\\s*(?:"
-            r"apt-get\\s+install\\s+-y|"
-            r"dnf\\s+install\\s+-y|"
-            r"yum\\s+install\\s+-y|"
-            r"zypper\\s+(?:--non-interactive\\s+)?install"
-            r")\\s+[^\\n]*\\bchrony\\b"
+            r"(?m)^\s*(?:"
+            r"apt-get\s+install\s+-y|"
+            r"dnf\s+install\s+-y|"
+            r"yum\s+install\s+-y|"
+            r"zypper\s+(?:--non-interactive\s+)?install"
+            r")\s+[^\n]*\bchrony\b"
         )
         service_enable_pattern = re.compile(
-            r"(?m)^\\s*systemctl\\s+enable\\s+(?:chrony|chronyd)(?:\\s|$)"
+            r"(?m)^\s*systemctl\s+enable\s+(?:chrony|chronyd)(?:\s|$)"
         )
         service_restart_pattern = re.compile(
-            r"(?m)^\\s*systemctl\\s+restart\\s+(?:chrony|chronyd)(?:\\s|$)"
+            r"(?m)^\s*systemctl\s+restart\s+(?:chrony|chronyd)(?:\s|$)"
         )
         required_markers = (
             "chronyc -n sources",
