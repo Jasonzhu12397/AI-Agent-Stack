@@ -1,16 +1,23 @@
 import pytest
 
+from apps.target_agent.ntp_policy import render_control_plane_chrony_pre_kubeadm_command
 from apps.target_agent.ntp_attestation import (
     NtpAttestationError,
     verify_control_plane_ntp_bootstrap,
 )
 
 
-def _machine_and_config(index, approved_source, worker_network, install_command=None):
+def _machine_and_config(
+    index,
+    approved_source,
+    worker_network,
+    install_command=None,
+    script_override=None,
+):
     machine_name = f"control-plane-{index}"
     machine_uid = f"machine-uid-{index}"
     config_name = f"control-plane-{index}-bootstrap"
-    script = "\n".join((
+    script = script_override or "\n".join((
         install_command or "apt-get install -y chrony iproute2",
         "server " + approved_source + " iburst",
         "allow " + worker_network,
@@ -175,3 +182,31 @@ def test_control_plane_ntp_attestation_rejects_chrony_without_package_install():
             ["10.130.60.80/28"],
             "target-cluster",
         )
+
+
+def test_control_plane_ntp_attestation_accepts_generated_chrony_bootstrap_script():
+    script = render_control_plane_chrony_pre_kubeadm_command(
+        ["192.0.2.10"],
+        ["10.130.60.80/28"],
+    )
+    machines = []
+    configs = []
+    for index in range(1, 4):
+        machine, config = _machine_and_config(
+            index,
+            "192.0.2.10",
+            "10.130.60.80/28",
+            script_override=script,
+        )
+        machines.append(machine)
+        configs.append(config)
+
+    result = verify_control_plane_ntp_bootstrap(
+        {"items": machines},
+        {"items": configs},
+        ["192.0.2.10"],
+        ["10.130.60.80/28"],
+        "target-cluster",
+    )
+
+    assert result["target_control_plane_ntp_bootstrap_sync_gate_verified"] is True
