@@ -51,6 +51,29 @@ def reserve_tenant_tokens(
         raise ValueError("Token reservation must be a positive integer")
     if (agent_run is None) == (workflow_run is None):
         raise ValueError("Exactly one AgentRun or WorkflowRun must own a token reservation")
+    if (
+        not isinstance(idempotency_key, str)
+        or not idempotency_key.strip()
+        or len(idempotency_key) > 160
+    ):
+        raise ValueError("Token reservation idempotency key must contain 1 to 160 characters")
+    if task.project.tenant_id != task.tenant_id:
+        raise ValueError("Token reservation task project is outside its tenant")
+    if agent_run is not None:
+        if (
+            agent_run.task_id != task.id
+            or agent_run.agent_version.agent.tenant_id != task.tenant_id
+            or agent_run.agent_version.agent.project_id != task.project_id
+        ):
+            raise ValueError("AgentRun is outside the token reservation task scope")
+    if workflow_run is not None:
+        workflow = workflow_run.workflow_version.workflow
+        if (
+            workflow_run.task_id != task.id
+            or workflow.tenant_id != task.tenant_id
+            or workflow.project_id != task.project_id
+        ):
+            raise ValueError("WorkflowRun is outside the token reservation task scope")
     now = timezone.now()
     lease_expires_at = task.lease_expires_at
     if lease_expires_at is not None and lease_expires_at <= now:
