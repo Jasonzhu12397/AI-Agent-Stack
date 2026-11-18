@@ -299,7 +299,7 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
         },
     )
     result = capi_pivot.execute_capi_pivot({
-        "action": "eph.capi.pivot",
+        "action": "target.capi.pivot",
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
@@ -357,7 +357,7 @@ def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
         return {"ok": False, "stdout": "", "stderr": "move failed", "returncode": 1}
     monkeypatch.setattr(capi_pivot, "_run", run)
     result = capi_pivot.execute_capi_pivot({
-        "action": "eph.capi.pivot",
+        "action": "target.capi.pivot",
         "payload": {
             "deployment_id": "deployment-1",
             "namespace": "metal3",
