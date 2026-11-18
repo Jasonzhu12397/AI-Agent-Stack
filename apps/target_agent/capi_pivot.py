@@ -7,10 +7,10 @@ import re
 import subprocess
 import time
 from pathlib import Path
-
-import yaml
 from threading import Event
 from typing import Any
+
+import yaml
 
 from .cleanup_scope import CleanupScopeError, attest_cleanup_scope
 
