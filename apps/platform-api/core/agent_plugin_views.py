@@ -20,6 +20,7 @@ from core.models import (
 
 
 _CAPABILITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
+_PLUGIN_KEY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _CREDENTIAL_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 _SENSITIVE_KEY_PARTS = (
     "password",
@@ -204,6 +205,11 @@ class AgentPluginCatalogView(APIView):
             return Response({"detail": "plugin_key, name, version, protocol and endpoint_url are required strings."}, status=400)
         if len(data["name"]) > 120 or len(data["version"]) > 40 or len(data["plugin_key"]) > 100:
             return Response({"detail": "Agent plugin identity fields exceed their maximum lengths."}, status=400)
+        if not _PLUGIN_KEY_PATTERN.fullmatch(data["plugin_key"]):
+            return Response({"detail": "plugin_key must be a lowercase hyphenated identifier."}, status=400)
+        description = data.get("description", "")
+        if not isinstance(description, str) or len(description) > 4000:
+            return Response({"detail": "description must be a string no longer than 4,000 characters."}, status=400)
         if data["protocol"] not in AgentPluginDefinition.Protocol.values:
             return Response({"detail": "Unsupported agent plugin protocol."}, status=400)
 
@@ -244,7 +250,7 @@ class AgentPluginCatalogView(APIView):
             created_by=request.user,
             plugin_key=data["plugin_key"],
             name=data["name"],
-            description=data.get("description", ""),
+            description=description,
             version=data["version"],
             protocol=data["protocol"],
             endpoint_url=data["endpoint_url"],
