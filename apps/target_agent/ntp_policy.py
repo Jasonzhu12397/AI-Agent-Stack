@@ -252,9 +252,22 @@ def probe_ironic_internal_ntp_endpoint(
         with socket.socket(family, socket.SOCK_DGRAM) as client:
             client.settimeout(timeout_seconds)
             client.sendto(request, destination)
-            response, _peer = client.recvfrom(512)
+            response, peer = client.recvfrom(512)
     except OSError as exc:
         raise NtpPolicyError("IRONIC_INTERNAL_NTP_UNREACHABLE") from exc
+    if (
+        not isinstance(peer, tuple)
+        or len(peer) < 2
+        or not isinstance(peer[0], str)
+        or not isinstance(peer[1], int)
+    ):
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_PEER_INVALID")
+    try:
+        peer_address = ipaddress.ip_address(peer[0])
+    except ValueError as exc:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_PEER_INVALID") from exc
+    if peer_address != address or peer[1] != 123:
+        raise NtpPolicyError("IRONIC_INTERNAL_NTP_PEER_MISMATCH")
     elapsed_ms = (time.monotonic() - started) * 1000
     if len(response) < 48:
         raise NtpPolicyError("IRONIC_INTERNAL_NTP_RESPONSE_INVALID")
