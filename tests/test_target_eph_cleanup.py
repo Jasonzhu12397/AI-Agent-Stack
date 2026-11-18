@@ -270,7 +270,7 @@ def test_target_agent_refuses_to_revoke_another_deployments_observer_secret(monk
         },
     )
     try:
-        target_main._revoke_source_observer_secret("deployment-1", "source-uid")
+        target_main._revoke_source_operator_secret("deployment-1", "source-uid")
     except target_main.HandoffError as exc:
         assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
     else:
@@ -313,7 +313,7 @@ def test_eph_cleanup_runs_only_after_live_target_ownership_and_uses_separate_nam
     monkeypatch.setattr(target_main, "execute_eph_cleanup", cleanup_executor)
     monkeypatch.setattr(
         target_main,
-        "_revoke_source_observer_secret",
+        "_revoke_source_operator_secret",
         lambda deployment_id, source_uid, _lease: (
             deployment_id == "deployment-1" and source_uid == "source-uid"
         ),
@@ -400,7 +400,7 @@ def test_eph_cleanup_is_idempotent_after_resources_were_removed(tmp_path):
         runner,
         environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
     )
-    assert first["deleted_resource_count"] == 6
+    assert first["deleted_resource_count"] == 10
     assert second["deleted_resource_count"] == 0
     assert second["eph_workloads_absent"] is True
     assert second["eph_credentials_revoked"] is True
@@ -603,7 +603,7 @@ def test_target_agent_requires_source_uid_on_observer_secret(monkeypatch):
         },
     )
     try:
-        target_main._revoke_source_observer_secret("deployment-1", "source-uid")
+        target_main._revoke_source_operator_secret("deployment-1", "source-uid")
     except target_main.HandoffError as exc:
         assert str(exc) == "EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH"
     else:
@@ -623,7 +623,7 @@ def test_target_agent_treats_missing_observer_secret_as_idempotent_noop(monkeypa
         }
 
     monkeypatch.setattr(target_main, "_kubectl", runner)
-    assert target_main._revoke_source_observer_secret("deployment-1", "source-uid") is False
+    assert target_main._revoke_source_operator_secret("deployment-1", "source-uid") is False
     assert len(calls) == 1
     assert not any(call[0] == "delete" for call in calls)
 
