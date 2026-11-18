@@ -23,7 +23,6 @@ from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 from core.token_budget import (
     TenantTokenBudgetExceeded,
-    release_tenant_tokens,
     reserve_tenant_tokens,
     settle_tenant_tokens,
 )
