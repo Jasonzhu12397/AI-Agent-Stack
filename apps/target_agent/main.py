@@ -713,14 +713,13 @@ def _revoke_source_observer_secret(
     if not isinstance(labels, dict) or not isinstance(annotations, dict):
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_METADATA_INVALID")
     if (
-        labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
+        metadata.get("name") != secret_name
+        or metadata.get("namespace") != namespace
+        or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
         or labels.get("ai-agent-stack.io/eph-cleanup") != "true"
         or labels.get("ai-agent-stack.io/deployment-id") != deployment_id
         or annotations.get("ai-agent-stack.io/eph-cleanup") != "true"
-        or (
-            annotations.get("ai-agent-stack.io/source-cluster-uid") is not None
-            and annotations.get("ai-agent-stack.io/source-cluster-uid") != source_cluster_uid
-        )
+        or annotations.get("ai-agent-stack.io/source-cluster-uid") != source_cluster_uid
     ):
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_OWNERSHIP_MISMATCH")
     uid = metadata.get("uid")
@@ -737,6 +736,7 @@ def _revoke_source_observer_secret(
         "--wait=true",
         "--timeout=120s",
         "--ignore-not-found=true",
+        f"--preconditions=uid={uid}",
     ], timeout=150)
     if not deleted.get("available"):
         raise HandoffError("EPH_SOURCE_OBSERVER_SECRET_REVOCATION_FAILED", side_effects=True)
