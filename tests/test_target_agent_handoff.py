@@ -186,3 +186,40 @@ def test_handoff_completion_is_blocked_without_live_postflight_executor():
     })
     assert outcome["status"] == "blocked"
     assert outcome["error_code"] == "TARGET_POSTFLIGHT_EXECUTOR_NOT_REGISTERED"
+
+
+
+def test_handoff_requires_applied_worker_resources_and_validated_network_contract():
+    with pytest.raises(
+        HandoffError,
+        match="EVIDENCE_REQUIRED:worker_provisioning_resources_applied",
+    ):
+        evaluate_transition(
+            "eph_cleanup_verified",
+            "worker_provisioning",
+            {
+                "ironic_internal_ntp_ip": "10.130.60.84",
+                "ironic_internal_ntp_service_reachable": True,
+                "target_agent_leader_elected": True,
+            },
+        )
+
+
+def test_handoff_accepts_worker_provisioning_only_after_server_dry_run_and_controller_observation():
+    result = evaluate_transition(
+        "eph_cleanup_verified",
+        "worker_provisioning",
+        {
+            "ironic_internal_ntp_ip": "10.130.60.84",
+            "ironic_internal_ntp_service_reachable": True,
+            "target_agent_leader_elected": True,
+            "worker_provisioning_resources_applied": True,
+            "worker_provisioning_server_dry_run_passed": True,
+            "worker_provisioning_controller_observed": True,
+            "worker_network_contract_validated": True,
+            "new_worker_capacity_verified": True,
+            "desired_worker_count": 10,
+        },
+    )
+    assert result["accepted"] is True
+    assert result["evidence"]["desired_worker_count"] == 10
