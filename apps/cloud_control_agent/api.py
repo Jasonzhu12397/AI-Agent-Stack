@@ -487,7 +487,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT command_id, deployment_id, target_agent_id, required_role,
-                           action, status, result, lease_expires_at, deadline , created_at, updated_at
+                           action, status, result, lease_expires_at, deadline,
+                           created_at, updated_at
                     FROM agent_control_commands
                     WHERE command_id = %s
                     """,
