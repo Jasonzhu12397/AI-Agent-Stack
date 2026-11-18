@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 import ipaddress
 import re
 from urllib.parse import urlsplit
