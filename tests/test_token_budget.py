@@ -57,6 +57,13 @@ def test_tenant_token_budget_settlement_releases_unused_reservation(token_budget
     assert reservation.status == TenantTokenUsage.Status.SETTLED
     assert reservation.reserved_tokens == 0
     assert reservation.consumed_tokens == 35
+    with pytest.raises(ValueError, match="cannot be replayed"):
+        reserve_tenant_tokens(
+            task=task,
+            agent_run=run,
+            idempotency_key="run:1:0",
+            requested_tokens=80,
+        )
     reserve_tenant_tokens(task=task, agent_run=run, idempotency_key="run:1:1", requested_tokens=65)
 
 
