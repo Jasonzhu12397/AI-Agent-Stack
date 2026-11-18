@@ -484,6 +484,36 @@ def test_http_plugin_connection_health_check_activates_connection(
     assert connection_record.status == PluginConnection.Status.HEALTHY
     assert connection_record.last_health_check_at is not None
 
+    second_connection = client.post(
+        f"/api/v1/plugin-installations/{installed.data['id']}/connections/",
+        {
+            "name": "github-readonly-secondary",
+            "auth_type": "none",
+            "credential_ref": "",
+            "config": {},
+        },
+        format="json",
+    )
+    assert second_connection.status_code == 201
+
+    from django.db import IntegrityError, transaction
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            PluginConnection.objects.filter(
+                pk=second_connection.data["id"]
+            ).update(status=PluginConnection.Status.HEALTHY)
+
+    rejected = client.post(
+        f"/api/v1/plugin-connections/{second_connection.data['id']}/test/",
+        {},
+        format="json",
+    )
+    assert rejected.status_code == 409
+    assert PluginConnection.objects.get(
+        pk=connection.data["id"]
+    ).status == PluginConnection.Status.HEALTHY
+
 
 @pytest.mark.django_db
 def test_http_plugin_connection_health_check_marks_failure(
