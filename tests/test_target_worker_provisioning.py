@@ -4,6 +4,7 @@ import json
 
 import yaml
 
+from apps.target_agent import main as target_main
 from apps.target_agent.ntp_policy import render_worker_chrony_pre_kubeadm_command
 from apps.target_agent.worker_provisioning import (
     WorkerProvisioningError,
@@ -347,3 +348,46 @@ def test_worker_provisioning_rejects_external_ntp_pool_in_worker_bootstrap():
     else:
         raise AssertionError("Worker external NTP pools must be rejected")
     assert not any(call[0] == "apply" for call in calls)
+
+
+
+def test_worker_provisioning_preserves_partial_apply_state_on_failure():
+    runner, _calls, _applied = _runner_factory()
+    actual_applies = 0
+
+    def fail_during_apply(arguments, **kwargs):
+        nonlocal actual_applies
+        if arguments[0] == "apply" and "--dry-run=server" not in arguments:
+            actual_applies += 1
+            if actual_applies == 3:
+                return {"available": False, "stdout": "", "stderr": "simulated API timeout"}
+        return runner(arguments, **kwargs)
+
+    try:
+        execute_worker_provisioning(
+            _payload(),
+            _proof(),
+            fail_during_apply,
+            environ={"IRONIC_INTERNAL_NTP_IP": "10.0.0.10"},
+        )
+    except WorkerProvisioningError as exc:
+        assert exc.side_effects is True
+    else:
+        raise AssertionError("A partial apply failure must retain side-effect state")
+
+
+def test_worker_provisioning_action_requires_completed_eph_cleanup_checkpoint(monkeypatch):
+    monkeypatch.setattr(
+        target_main,
+        "_execute_worker_provisioning",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("worker provisioning must not run before EPH cleanup")
+        ),
+    )
+    outcome = target_main.execute({
+        "action": "target.worker.provision",
+        "payload": {},
+        "deployment_checkpoint": {"phase": "bmh_registry_migrated"},
+    })
+    assert outcome["status"] == "blocked"
+    assert outcome["error_code"] == "WORKER_PROVISIONING_EPH_CLEANUP_CHECKPOINT_REQUIRED"
