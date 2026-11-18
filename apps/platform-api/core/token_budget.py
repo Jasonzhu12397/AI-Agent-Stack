@@ -24,8 +24,6 @@ def _period_usage(tenant_id, start, now):
         tenant_id=tenant_id,
         status=TenantTokenUsage.Status.RESERVED,
         expires_at__gt=now,
-        created_at__gte=start,
-        created_at__lte=now,
     ).aggregate(total=Sum("reserved_tokens"))["total"] or 0
     return settled + reserved
 
