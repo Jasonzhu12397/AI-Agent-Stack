@@ -266,6 +266,32 @@ def verify_target_postflight(
     ):
         raise PostflightError("POSTFLIGHT_WORKER_MACHINE_DEPLOYMENT_NOT_READY")
 
+    machines_document = _query_json(
+        runner,
+        ["get", "machines.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+        "worker-machines",
+    )
+    machines = machines_document.get("items")
+    if not isinstance(machines, list):
+        raise PostflightError("POSTFLIGHT_MACHINE_INVENTORY_INVALID")
+    worker_machines = [
+        machine
+        for machine in machines
+        if machine.get("metadata", {}).get("labels", {}).get(
+            "cluster.x-k8s.io/deployment-name"
+        ) == machine_deployment_name
+        and machine.get("metadata", {}).get("labels", {}).get(
+            "cluster.x-k8s.io/cluster-name"
+        ) == cluster_name
+    ]
+    if len(worker_machines) != desired_worker_count or any(
+        machine.get("status", {}).get("phase") != "Running"
+        or machine.get("status", {}).get("infrastructureReady") is not True
+        or machine.get("status", {}).get("bootstrapReady") is not True
+        for machine in worker_machines
+    ):
+        raise PostflightError("POSTFLIGHT_CAPI_WORKER_MACHINES_NOT_READY")
+
     nodes_document = _query_json(runner, ["get", "nodes", "-o", "json"], "nodes")
     nodes = nodes_document.get("items")
     if not isinstance(nodes, list):
@@ -295,6 +321,12 @@ def verify_target_postflight(
         raise PostflightError("POSTFLIGHT_CALICO_DAEMONSET_NOT_READY")
     if not multus:
         raise PostflightError("POSTFLIGHT_MULTUS_DAEMONSET_NOT_READY")
+    sriov_daemonset = _find_ready_daemonset(
+        daemonsets,
+        ("sriov-cni", "sriov-network", "sriov-config-daemon"),
+    )
+    if not sriov_daemonset:
+        raise PostflightError("POSTFLIGHT_SRIOV_CNI_DAEMONSET_NOT_READY")
 
     nad_document = _query_json(
         runner,
@@ -366,6 +398,7 @@ def verify_target_postflight(
         "worker_ntp_bootstrap_attested": True,
         "calico_daemonset": calico,
         "multus_daemonset": multus,
+        "sriov_daemonset": sriov_daemonset,
         "sriov_nad_count": len(sriov_nads),
         "ovs_nad_count": len(ovs_nads),
         "sriov_resource_names": sorted(sriov_resource_names),
