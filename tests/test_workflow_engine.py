@@ -3,10 +3,6 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from django.contrib.auth import get_user_model
-from django.utils import timezone
-from rest_framework.test import APIClient
-
 from core.models import (
     KnowledgeBase,
     ModelConfig,
@@ -31,6 +27,10 @@ from core.workflow_engine import (
     validate_model_references,
     validate_workflow_definition,
 )
+
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from rest_framework.test import APIClient
 from worker_app.tasks import process_once, renew_lease
 
 
