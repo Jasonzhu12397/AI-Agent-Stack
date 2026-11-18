@@ -112,11 +112,11 @@ rendered_apply() {
     local placeholder="$4"
     local mode="$5"
     if [ "$mode" = "dry-run" ]; then
-        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \\
+        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \
         -e "s|REPLACE_WITH_SRIOV_DEVICE_PLUGIN_NAMESPACE|$SRIOV_DEVICE_PLUGIN_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply --dry-run=server -f -
     else
-        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \\
+        sed -e "s|$placeholder|$image|g" -e "s|REPLACE_WITH_TARGET_CAPI_NAMESPACE|$TARGET_CAPI_NAMESPACE|g" \
         -e "s|REPLACE_WITH_SRIOV_DEVICE_PLUGIN_NAMESPACE|$SRIOV_DEVICE_PLUGIN_NAMESPACE|g" "$file" |
             kubectl --context "$context" apply -f -
     fi
