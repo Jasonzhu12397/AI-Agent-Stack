@@ -528,6 +528,19 @@ def test_eph_cleanup_delete_uses_uid_precondition(tmp_path):
         runner,
         environ={"CAPI_PIVOT_SOURCE_KUBECONFIG": str(kubeconfig)},
     )
+    inventory_calls = [
+        call for call in calls if call[0] == "get" and "--selector" in call
+    ]
+    assert inventory_calls
+    for call in inventory_calls:
+        selector = call[call.index("--selector") + 1]
+        assert isinstance(selector, str)
+        assert selector == (
+            "ai-agent-stack.io/eph-cleanup=true,"
+            "app.kubernetes.io/managed-by=ai-agent-stack,"
+            "ai-agent-stack.io/deployment-id=deployment-1"
+        )
+
     delete_calls = [call for call in calls if call[0] == "delete"]
     assert delete_calls
     assert all(
