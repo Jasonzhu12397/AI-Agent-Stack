@@ -8,6 +8,31 @@ from apps.target_agent.handoff import (
 )
 
 
+def test_handoff_requires_bmh_registration_and_inspected_readiness():
+    with pytest.raises(HandoffError, match="BMH_REGISTRATION_INVENTORY_INCOMPLETE"):
+        evaluate_transition(
+            "eph_single_node_ready",
+            "bmh_registered",
+            {
+                "bmh_registration_applied": True,
+                "bmh_secret_refs_verified": True,
+                "bmh_count": 2,
+                "bmh_inventory_count": 1,
+            },
+        )
+    with pytest.raises(HandoffError, match="BMH_READINESS_INCOMPLETE"):
+        evaluate_transition(
+            "bmh_registered",
+            "bmh_ready",
+            {
+                "expected_bmh_count": 2,
+                "bmh_ready_count": 1,
+                "bmh_all_operational": True,
+                "ironic_inventory_verified": True,
+            },
+        )
+
+
 def test_handoff_rejects_skipped_phase():
     with pytest.raises(HandoffError, match="TRANSITION_INVALID"):
         evaluate_transition(
@@ -33,7 +58,7 @@ def test_handoff_requires_single_node_eph():
 def test_handoff_requires_three_ready_target_masters_and_internal_ntp():
     with pytest.raises(HandoffError, match="THREE_TARGET_MASTERS"):
         evaluate_transition(
-            "eph_single_node_ready",
+            "bmh_ready",
             "target_control_plane_ready",
             {
                 "target_control_plane_ready": True,
@@ -155,7 +180,7 @@ def test_handoff_blocks_workers_until_control_plane_chronyd_is_verified():
 
 def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
     result = evaluate_transition(
-        "eph_single_node_ready",
+        "bmh_ready",
         "target_control_plane_ready",
         {
             "target_control_plane_ready": True,
