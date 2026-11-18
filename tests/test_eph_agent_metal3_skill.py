@@ -147,6 +147,21 @@ def test_capi_apply_is_limited_to_capi_and_metal3_resources():
     assert len(calls) == 2
 
 
+def test_capi_apply_rejects_wrong_api_versions_for_allowed_kinds():
+    cluster = {
+        "apiVersion": "v1",
+        "kind": "Cluster",
+        "metadata": {"name": "target-01", "namespace": "metal3"},
+        "spec": {},
+    }
+
+    with pytest.raises(Metal3SkillError, match="METAL3_RESOURCE_API_VERSION_NOT_ALLOWED"):
+        apply_capi_cluster_resources(
+            {"namespace": "metal3", "manifests": [cluster]},
+            lambda *_args, **_kwargs: {},
+        )
+
+
 def test_capi_apply_rejects_arbitrary_cluster_scoped_resources():
     manifest = {
         "apiVersion": "v1",
