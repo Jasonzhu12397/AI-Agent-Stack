@@ -28,6 +28,7 @@ from core.workflow_engine import (
     validate_workflow_definition,
 )
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 from worker_app.tasks import process_once, renew_lease
 
