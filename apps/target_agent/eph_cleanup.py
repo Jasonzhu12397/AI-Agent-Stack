@@ -24,7 +24,9 @@ MAX_INVENTORY_BYTES = 8 * 1024 * 1024
 
 
 class EphCleanupError(ValueError):
-    pass
+    def __init__(self, message: str, side_effects: bool = False) -> None:
+        super().__init__(message)
+        self.side_effects = side_effects
 
 
 def _valid_name(value: Any, field: str) -> str:
@@ -220,109 +222,120 @@ def execute_eph_cleanup(
             })
 
     deleted: list[dict[str, Any]] = []
-    for item in inventory:
-        if lease_lost_event is not None and lease_lost_event.is_set():
-            raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-        arguments = [
-            "delete",
-            item["resource"],
-            item["name"],
-            "--namespace",
-            namespace,
-            "--wait=true",
-            "--timeout=120s",
-            "--ignore-not-found=true",
-        ]
-        current_result = runner(
-            [
-                "get",
+    side_effects = False
+    try:
+        for item in inventory:
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+            arguments = [
+                "delete",
                 item["resource"],
                 item["name"],
                 "--namespace",
                 namespace,
-                "-o",
-                "json",
-            ],
-            timeout=30,
-            max_output_bytes=MAX_INVENTORY_BYTES,
-            kubeconfig=source_kubeconfig,
-        )
-        if current_result.get("available") is True:
-            try:
-                current = json.loads(current_result.get("stdout", ""))
-            except (TypeError, ValueError) as exc:
-                raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_INVALID") from exc
-            current_metadata = current.get("metadata", {})
-            if (
-                current_metadata.get("uid") != item["uid"]
-                or current_metadata.get("labels", {}).get(CLEANUP_ANNOTATION) != "true"
-                or current_metadata.get("labels", {}).get(DEPLOYMENT_ID_ANNOTATION)
-                != deployment_id
+                "--wait=true",
+                "--timeout=120s",
+                "--ignore-not-found=true",
+            ]
+            current_result = runner(
+                [
+                    "get",
+                    item["resource"],
+                    item["name"],
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "json",
+                ],
+                timeout=30,
+                max_output_bytes=MAX_INVENTORY_BYTES,
+                kubeconfig=source_kubeconfig,
+            )
+            if current_result.get("available") is True:
+                try:
+                    current = json.loads(current_result.get("stdout", ""))
+                except (TypeError, ValueError) as exc:
+                    raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_INVALID") from exc
+                current_metadata = current.get("metadata", {})
+                if (
+                    current_metadata.get("uid") != item["uid"]
+                    or current_metadata.get("labels", {}).get(CLEANUP_ANNOTATION) != "true"
+                    or current_metadata.get("labels", {}).get(DEPLOYMENT_ID_ANNOTATION)
+                    != deployment_id
+                ):
+                    raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_CHANGED")
+            elif "notfound" not in current_result.get("stderr", "").lower() and (
+                "not found" not in current_result.get("stderr", "").lower()
             ):
-                raise EphCleanupError("EPH_CLEANUP_RESOURCE_IDENTITY_CHANGED")
-        elif "notfound" not in current_result.get("stderr", "").lower() and (
-            "not found" not in current_result.get("stderr", "").lower()
-        ):
-            raise EphCleanupError("EPH_CLEANUP_RESOURCE_PREDELETE_OBSERVATION_FAILED")
-        _run(runner, arguments, source_kubeconfig, timeout=150)
-        verify = runner(
-            [
-                "get",
-                item["resource"],
-                item["name"],
-                "--namespace",
-                namespace,
-                "-o",
-                "json",
-            ],
-            timeout=30,
-            max_output_bytes=MAX_INVENTORY_BYTES,
-            kubeconfig=source_kubeconfig,
-        )
-        if verify.get("available") is True:
-            try:
-                current = json.loads(verify.get("stdout", ""))
-            except (TypeError, ValueError) as exc:
-                raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_JSON_INVALID") from exc
-            if current.get("metadata", {}).get("uid") == item["uid"]:
-                raise EphCleanupError("EPH_CLEANUP_RESOURCE_STILL_PRESENT")
-        elif "notfound" not in verify.get("stderr", "").lower() and (
-            "not found" not in verify.get("stderr", "").lower()
-        ):
-            raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_FAILED")
-        deleted.append(item)
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_PREDELETE_OBSERVATION_FAILED")
+            side_effects = True
+            _run(runner, arguments, source_kubeconfig, timeout=150)
+            verify = runner(
+                [
+                    "get",
+                    item["resource"],
+                    item["name"],
+                    "--namespace",
+                    namespace,
+                    "-o",
+                    "json",
+                ],
+                timeout=30,
+                max_output_bytes=MAX_INVENTORY_BYTES,
+                kubeconfig=source_kubeconfig,
+            )
+            if verify.get("available") is True:
+                try:
+                    current = json.loads(verify.get("stdout", ""))
+                except (TypeError, ValueError) as exc:
+                    raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_JSON_INVALID") from exc
+                if current.get("metadata", {}).get("uid") == item["uid"]:
+                    raise EphCleanupError("EPH_CLEANUP_RESOURCE_STILL_PRESENT")
+            elif "notfound" not in verify.get("stderr", "").lower() and (
+                "not found" not in verify.get("stderr", "").lower()
+            ):
+                raise EphCleanupError("EPH_CLEANUP_RESOURCE_VERIFY_FAILED")
+            deleted.append(item)
 
-    remaining = 0
-    remaining_secrets = 0
-    for resource in RESOURCE_ORDER:
-        if lease_lost_event is not None and lease_lost_event.is_set():
-            raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-        result = _run(
-            runner,
-            [
-                "get",
-                resource,
-                "--namespace",
-                namespace,
-                "--selector",
-                selector,
-                "-o",
-                "json",
-            ],
-            source_kubeconfig,
-        )
-        try:
-            document = json.loads(result.get("stdout", ""))
-            items = document.get("items")
-        except (TypeError, ValueError) as exc:
-            raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID") from exc
-        if not isinstance(items, list):
-            raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID")
-        remaining += len(items)
-        if resource == "secrets":
-            remaining_secrets = len(items)
-    if remaining:
-        raise EphCleanupError("EPH_CLEANUP_RESOURCES_REMAIN")
+    except EphCleanupError as exc:
+        exc.side_effects = side_effects
+        raise
+
+    try:
+        remaining = 0
+        remaining_secrets = 0
+        for resource in RESOURCE_ORDER:
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+            result = _run(
+                runner,
+                [
+                    "get",
+                    resource,
+                    "--namespace",
+                    namespace,
+                    "--selector",
+                    selector,
+                    "-o",
+                    "json",
+                ],
+                source_kubeconfig,
+            )
+            try:
+                document = json.loads(result.get("stdout", ""))
+                items = document.get("items")
+            except (TypeError, ValueError) as exc:
+                raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID") from exc
+            if not isinstance(items, list):
+                raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID")
+            remaining += len(items)
+            if resource == "secrets":
+                remaining_secrets = len(items)
+        if remaining:
+            raise EphCleanupError("EPH_CLEANUP_RESOURCES_REMAIN")
+    except EphCleanupError as exc:
+        exc.side_effects = bool(deleted)
+        raise
 
     return {
         "eph_cleanup_verified": True,
