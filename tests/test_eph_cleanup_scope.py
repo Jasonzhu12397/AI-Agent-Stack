@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import base64
 import copy
 import json
 
@@ -52,6 +51,12 @@ def _target_kubeconfig(tmp_path):
     return str(path)
 
 
+def _source_kubeconfig(tmp_path):
+    path = tmp_path / "source.kubeconfig"
+    path.write_bytes(b"source kubeconfig")
+    return str(path)
+
+
 def _runner_factory(include_optional_target_kubeconfig=True):
     source_objects = {
         "deployments.apps": [_resource("Deployment", "eph-agent")],
@@ -79,10 +84,12 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             "kubeconfig": base64.b64encode(b"target kubeconfig").decode("ascii"),
         }
         source_objects["secrets"].append(target_kubeconfig_secret)
+    observer_secret = _resource("Secret", "target-agent-source-observer")
+    observer_secret["data"] = {
+        "kubeconfig": base64.b64encode(b"source kubeconfig").decode("ascii"),
+    }
     target_objects = {
-        "secrets": [
-            _resource("Secret", "target-agent-source-observer"),
-        ],
+        "secrets": [observer_secret],
     }
     calls = []
 
@@ -114,7 +121,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
             namespaced = "--namespace" in arguments
             objects = (
                 source_objects.get(resource, [])
-                if kubeconfig == "source.kubeconfig"
+                if kubeconfig.endswith("source.kubeconfig")
                 else target_objects.get(resource, [])
             )
             item = next(
@@ -144,7 +151,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
 def test_cleanup_scope_attests_source_resources_and_target_observer_secret(tmp_path):
     runner, source, target, calls = _runner_factory()
     result = attest_cleanup_scope(
-        "source.kubeconfig",
+        _source_kubeconfig(tmp_path),
         _target_kubeconfig(tmp_path),
         DEPLOYMENT_ID,
         SOURCE_UID,
@@ -184,7 +191,7 @@ def test_cleanup_scope_accepts_absent_optional_target_kubeconfig_secret(tmp_path
     target_kubeconfig = tmp_path / "target.kubeconfig"
     target_kubeconfig.write_bytes(b"target kubeconfig")
     result = attest_cleanup_scope(
-        "source.kubeconfig",
+        _source_kubeconfig(tmp_path),
         str(target_kubeconfig),
         DEPLOYMENT_ID,
         SOURCE_UID,
@@ -203,7 +210,7 @@ def test_cleanup_scope_rejects_source_uid_conflict_without_overwriting_it(tmp_pa
         target_kubeconfig = tmp_path / "target.kubeconfig"
         target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
-            "source.kubeconfig",
+            _source_kubeconfig(tmp_path),
             str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
@@ -224,7 +231,7 @@ def test_cleanup_scope_rejects_target_observer_secret_from_another_deployment(tm
         target_kubeconfig = tmp_path / "target.kubeconfig"
         target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
-            "source.kubeconfig",
+            _source_kubeconfig(tmp_path),
             str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
@@ -252,7 +259,7 @@ def test_cleanup_scope_reports_partial_mutation_when_patch_fails(tmp_path):
         target_kubeconfig = tmp_path / "target.kubeconfig"
         target_kubeconfig.write_bytes(b"target kubeconfig")
         attest_cleanup_scope(
-            "source.kubeconfig",
+            _source_kubeconfig(tmp_path),
             str(target_kubeconfig),
             DEPLOYMENT_ID,
             SOURCE_UID,
@@ -273,7 +280,7 @@ def test_cleanup_scope_rejects_unrelated_optional_target_kubeconfig_secret(tmp_p
 
     try:
         attest_cleanup_scope(
-            "source.kubeconfig",
+            _source_kubeconfig(tmp_path),
             _target_kubeconfig(tmp_path),
             DEPLOYMENT_ID,
             SOURCE_UID,
