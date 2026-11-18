@@ -141,6 +141,20 @@ def _network_contract():
         "ovs_enabled": True,
         "sriov_cni_enabled": True,
         "sriov_dpdk_enabled": True,
+        "required_network_attachments": [
+            {
+                "namespace": "metal3",
+                "name": "data-sriov",
+                "cni_type": "sriov",
+                "resource_name": "intel.com/sriov_dpdk",
+            },
+            {
+                "namespace": "metal3",
+                "name": "data-ovs",
+                "cni_type": "ovs",
+                "resource_name": None,
+            },
+        ],
     }
 
 
