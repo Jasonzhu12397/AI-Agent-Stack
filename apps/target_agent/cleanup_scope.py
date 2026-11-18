@@ -411,7 +411,7 @@ def attest_cleanup_scope(
         ):
             raise CleanupScopeError("EPH_CLEANUP_SCOPE_REQUIRED_METAL3_RBAC_MISSING")
 
-        for resource, namespaced in RESOURCE_SCOPES:
+        for resource, _namespaced in RESOURCE_SCOPES:
             for item in observed[resource]:
                 metadata = item.get("metadata", {})
                 name = metadata.get("name")
