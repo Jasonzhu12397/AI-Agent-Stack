@@ -124,6 +124,25 @@ def test_tenant_token_budget_settlement_releases_unused_reservation(token_budget
 
 
 @pytest.mark.django_db
+def test_tenant_token_budget_rejects_settlement_above_reserved_ceiling(token_budget_run):
+    task, run, _ = token_budget_run
+    reservation = reserve_tenant_tokens(
+        task=task,
+        agent_run=run,
+        idempotency_key="over-ceiling-provider-call",
+        requested_tokens=40,
+    )
+
+    with pytest.raises(ValueError, match="exceed the reserved provider-call ceiling"):
+        settle_tenant_tokens(usage=reservation, consumed_tokens=41)
+
+    reservation.refresh_from_db()
+    assert reservation.status == TenantTokenUsage.Status.RESERVED
+    assert reservation.reserved_tokens == 40
+    assert reservation.consumed_tokens == 0
+
+
+@pytest.mark.django_db
 def test_tenant_token_budget_reservation_is_idempotent_and_releasable(token_budget_run):
     task, run, _ = token_budget_run
     first = reserve_tenant_tokens(
