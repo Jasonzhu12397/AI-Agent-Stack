@@ -285,31 +285,37 @@ def execute_eph_cleanup(
         remaining = 0
         remaining_secrets = 0
         for resource in RESOURCE_ORDER:
-            if lease_lost_event is not None and lease_lost_event.is_set():
-                raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-            result = _run(
-                runner,
-                [
-                    "get",
-                    resource,
-                    *_namespace_args(resource, namespace),
-                    "--selector",
-                    selector,
-                    "-o",
-                    "json",
-                ],
-                source_kubeconfig,
+            resource_namespaces = (
+                [namespace, "metal3"]
+                if resource in METAL3_NAMESPACE_RESOURCES and namespace != "metal3"
+                else [namespace]
             )
-            try:
-                document = json.loads(result.get("stdout", ""))
-                items = document.get("items")
-            except (TypeError, ValueError) as exc:
-                raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID") from exc
-            if not isinstance(items, list):
-                raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID")
-            remaining += len(items)
-            if resource == "secrets":
-                remaining_secrets = len(items)
+            for resource_namespace in resource_namespaces:
+                if lease_lost_event is not None and lease_lost_event.is_set():
+                    raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
+                result = _run(
+                    runner,
+                    [
+                        "get",
+                        resource,
+                        *_namespace_args(resource, resource_namespace),
+                        "--selector",
+                        selector,
+                        "-o",
+                        "json",
+                    ],
+                    source_kubeconfig,
+                )
+                try:
+                    document = json.loads(result.get("stdout", ""))
+                    items = document.get("items")
+                except (TypeError, ValueError) as exc:
+                    raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID") from exc
+                if not isinstance(items, list):
+                    raise EphCleanupError("EPH_CLEANUP_FINAL_INVENTORY_INVALID")
+                remaining += len(items)
+                if resource == "secrets" and resource_namespace == namespace:
+                    remaining_secrets = len(items)
         if remaining:
             raise EphCleanupError("EPH_CLEANUP_RESOURCES_REMAIN")
     except EphCleanupError as exc:
