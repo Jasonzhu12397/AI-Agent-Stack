@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import Tenant, TenantMembership, TenantTokenBudget
+from core.models import Tenant, TenantTokenBudget
 from core.permissions import IsTenantAdmin
 from core.token_budget import get_tenant_token_usage
 
