@@ -170,6 +170,7 @@ def _runner_factory(available_bmhs=2, existing_machine_deployment=None):
         },
     }
     existing = existing_machine_deployment or {}
+
     def runner(arguments, **_kwargs):
         calls.append(arguments)
         if arguments[0] == "get" and arguments[1] == "clusters.cluster.x-k8s.io":
