@@ -88,7 +88,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
         calls.append(command)
         arguments = command[3:]
         if arguments[0] == "get":
-            resource = arguments[1]
+            resource = {"secret": "secrets"}.get(arguments[1], arguments[1])
             if "--selector" in arguments:
                 items = source_objects.get(resource, [])
                 return {
@@ -111,7 +111,7 @@ def _runner_factory(include_optional_target_kubeconfig=True):
                 return {"ok": False, "stdout": "", "stderr": "NotFound"}
             return {"ok": True, "stdout": json.dumps(item), "stderr": ""}
         if arguments[0] == "patch":
-            resource = arguments[1]
+            resource = {"secret": "secrets"}.get(arguments[1], arguments[1])
             name = arguments[2]
             objects = (
                 source_objects.get(resource, [])
