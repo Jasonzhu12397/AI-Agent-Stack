@@ -4,7 +4,7 @@ from django.utils import timezone
 
 from core.models import (
     AgentDefinition, AgentRun, AgentVersion, Project, Task, Tenant,
-    TenantTokenBudget, TenantTokenUsage,
+    TenantTokenBudget, TenantTokenUsage, WorkflowDefinition, WorkflowRun, WorkflowVersion,
 )
 from core.token_budget import (
     TenantTokenBudgetExceeded, release_tenant_tokens,
@@ -80,3 +80,48 @@ def test_tenant_token_budget_reservation_is_idempotent_and_releasable(token_budg
     first.refresh_from_db()
     assert first.status == TenantTokenUsage.Status.RELEASED
     assert first.reserved_tokens == 0
+
+
+@pytest.mark.django_db
+def test_workflow_model_calls_use_the_same_tenant_budget_ledger():
+    user = get_user_model().objects.create_user(username="workflow-token-budget-user")
+    tenant = Tenant.objects.create(name="Workflow budget tenant", slug="workflow-budget-tenant")
+    project = Project.objects.create(
+        tenant=tenant, name="Workflow project", slug="workflow-project"
+    )
+    task = Task.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        task_type="workflow.run",
+        idempotency_key="workflow-token-budget-task",
+        available_at=timezone.now(),
+    )
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Budget workflow",
+        slug="budget-workflow",
+    )
+    version = WorkflowVersion.objects.create(
+        workflow=workflow,
+        version=1,
+        definition_snapshot={},
+        created_by=user,
+    )
+    workflow_run = WorkflowRun.objects.create(task=task, workflow_version=version)
+    TenantTokenBudget.objects.create(tenant=tenant, daily_limit=100, monthly_limit=100)
+
+    reservation = reserve_tenant_tokens(
+        task=task,
+        workflow_run=workflow_run,
+        idempotency_key="workflow-call-1",
+        requested_tokens=70,
+    )
+
+    assert reservation.agent_run_id is None
+    assert reservation.workflow_run_id == workflow_run.id
+    settle_tenant_tokens(usage=reservation, consumed_tokens=22)
+    reservation.refresh_from_db()
+    assert reservation.consumed_tokens == 22
