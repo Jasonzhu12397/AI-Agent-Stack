@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import json
 import re
 from typing import Any
@@ -20,8 +19,8 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not value:
         raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_POOLS_REQUIRED")
     normalized: dict[str, Any] = {}
-    seen_resources: set[tuple[str, str]] = set()
-    seen_devices: set[str] = set()
+    seen_configmaps: dict[str, dict[str, Any]] = {}
+    devices_by_configmap: dict[str, set[str]] = {}
 
     for pool_name, pool in value.items():
         if not isinstance(pool_name, str) or not re.fullmatch(r"pool[0-9]+", pool_name):
@@ -75,9 +74,6 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             ):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_INVALID")
             identity = (prefix, name)
-            if identity in seen_resources:
-                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_DUPLICATE")
-            seen_resources.add(identity)
             vendors = device_selectors.get("vendors")
             drivers = device_selectors.get("drivers")
             root_devices = device_selectors.get("rootDevices")
@@ -99,9 +95,8 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
             normalized_bdfs = [item.lower() for item in root_devices]
             if len(set(normalized_bdfs)) != len(normalized_bdfs):
                 raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_DUPLICATE")
-            if seen_devices.intersection(normalized_bdfs):
-                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_ASSIGNED_TO_MULTIPLE_RESOURCES")
-            seen_devices.update(normalized_bdfs)
+            if len({(prefix, name)}) != 1:
+                raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_RESOURCE_DUPLICATE")
             normalized_resources.append({
                 "resourceName": name,
                 "resourcePrefix": prefix,
@@ -139,13 +134,25 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
                 "operator": operator,
                 **({"value": toleration_value} if operator == "Equal" else {}),
             })
+        normalized_config = {"resourceList": normalized_resources}
+        previous_config = seen_configmaps.get(configmap_name)
+        if previous_config is not None and previous_config != normalized_config:
+            raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_CONFIGMAP_CONTENT_CONFLICT")
+        seen_configmaps[configmap_name] = normalized_config
+        devices = set(
+            device
+            for resource in normalized_resources
+            for device in resource["selectors"]["rootDevices"]
+        )
+        previous_devices = devices_by_configmap.setdefault(configmap_name, set())
+        if previous_devices.intersection(devices) and previous_config is None:
+            raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_ROOT_DEVICE_DUPLICATE")
+        previous_devices.update(devices)
         normalized[pool_name] = {
             "node_selectors": dict(selectors),
             "tolerations": normalized_tolerations,
             "sriov_network_device_plugin_configmap_name": configmap_name,
-            "sriov_network_device_plugin_configmap_data": {
-                "resourceList": normalized_resources,
-            },
+            "sriov_network_device_plugin_configmap_data": normalized_config,
         }
     return normalized
 
