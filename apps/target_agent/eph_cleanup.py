@@ -139,7 +139,11 @@ def execute_eph_cleanup(
         except (TypeError, ValueError) as exc:
             raise EphCleanupError("EPH_CLEANUP_TARGET_KUBECONFIG_SECRET_INVALID") from exc
         secret_metadata = secret_document.get("metadata")
-        secret_labels = secret_metadata.get("labels", {}) if isinstance(secret_metadata, dict) else None
+        secret_labels = (
+            secret_metadata.get("labels", {})
+            if isinstance(secret_metadata, dict)
+            else None
+        )
         secret_annotations = (
             secret_metadata.get("annotations", {}) if isinstance(secret_metadata, dict) else None
         )
