@@ -49,7 +49,7 @@ rules:
     resources: ["nodes", "namespaces", "pods", "events", "services"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources: ["deployments", "daemonsets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["secrets"]
@@ -84,6 +84,9 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["ipam.metal3.io"]
     resources: ["ippools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
