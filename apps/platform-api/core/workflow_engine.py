@@ -563,7 +563,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             messages,
             ensure_ascii=False,
             separators=(",", ":"),
-        ).encode("utf-8")
+        ).encode()
         if len(serialized_messages) > MAX_WORKFLOW_RUN_INPUT_BYTES:
             raise WorkflowValidationError("WORKFLOW_LLM_INPUT_BUDGET_EXCEEDED")
         estimated_input_tokens = (len(serialized_messages) + 1) // 2
