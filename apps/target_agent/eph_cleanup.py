@@ -134,62 +134,65 @@ def execute_eph_cleanup(
     for resource in RESOURCE_ORDER:
         if lease_lost_event is not None and lease_lost_event.is_set():
             raise EphCleanupError("EPH_CLEANUP_COMMAND_LEASE_LOST")
-        resource_namespace = (
-            "metal3" if resource in METAL3_NAMESPACE_RESOURCES else namespace
+        resource_namespaces = (
+            [namespace, "metal3"]
+            if resource in METAL3_NAMESPACE_RESOURCES and namespace != "metal3"
+            else [namespace]
         )
-        result = _run(
-            runner,
-            [
-                "get",
-                resource,
-                *_namespace_args(resource, resource_namespace),
-                "--selector",
-                selector,
-                "-o",
-                "json",
-            ],
-            source_kubeconfig,
-        )
-        try:
-            document = json.loads(result.get("stdout", ""))
-        except (TypeError, ValueError) as exc:
-            raise EphCleanupError("EPH_CLEANUP_INVENTORY_JSON_INVALID") from exc
-        items = document.get("items") if isinstance(document, dict) else None
-        if not isinstance(items, list):
-            raise EphCleanupError("EPH_CLEANUP_INVENTORY_SHAPE_INVALID")
-        for item in items:
-            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
-            annotations = metadata.get("annotations", {})
-            labels = metadata.get("labels", {})
-            name = metadata.get("name")
-            item_namespace = metadata.get("namespace")
-            expected_namespace = (
-                None if resource in CLUSTER_SCOPED_RESOURCES else resource_namespace
+        for resource_namespace in resource_namespaces:
+            result = _run(
+                runner,
+                [
+                    "get",
+                    resource,
+                    *_namespace_args(resource, resource_namespace),
+                    "--selector",
+                    selector,
+                    "-o",
+                    "json",
+                ],
+                source_kubeconfig,
             )
-            if (
-                not isinstance(annotations, dict)
-                or not isinstance(labels, dict)
-                or annotations.get(CLEANUP_ANNOTATION) != "true"
-                or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
-                or labels.get(CLEANUP_ANNOTATION) != "true"
-                or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
-                or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
-                or item_namespace != expected_namespace
-                or not isinstance(name, str)
-                or not isinstance(metadata.get("uid"), str)
-                or not metadata.get("uid")
-            ):
-                raise EphCleanupError("EPH_CLEANUP_RESOURCE_OWNERSHIP_MISMATCH")
-            inventory.append({
-                "resource": resource,
-                "name": _valid_name(name, "RESOURCE_NAME"),
-                "namespace": resource_namespace,
-                "uid": metadata.get("uid"),
-                "credential": (
-                    resource == "secrets"
-                    and annotations.get(CREDENTIAL_SCOPE_ANNOTATION) == "eph-agent"
-                ),
-            })
+            try:
+                document = json.loads(result.get("stdout", ""))
+            except (TypeError, ValueError) as exc:
+                raise EphCleanupError("EPH_CLEANUP_INVENTORY_JSON_INVALID") from exc
+            items = document.get("items") if isinstance(document, dict) else None
+            if not isinstance(items, list):
+                raise EphCleanupError("EPH_CLEANUP_INVENTORY_SHAPE_INVALID")
+            for item in items:
+                metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+                annotations = metadata.get("annotations", {})
+                labels = metadata.get("labels", {})
+                name = metadata.get("name")
+                item_namespace = metadata.get("namespace")
+                expected_namespace = (
+                    None if resource in CLUSTER_SCOPED_RESOURCES else resource_namespace
+                )
+                if (
+                    not isinstance(annotations, dict)
+                    or not isinstance(labels, dict)
+                    or annotations.get(CLEANUP_ANNOTATION) != "true"
+                    or annotations.get(SOURCE_UID_ANNOTATION) != proof["source_cluster_uid"]
+                    or labels.get(CLEANUP_ANNOTATION) != "true"
+                    or labels.get(DEPLOYMENT_ID_ANNOTATION) != deployment_id
+                    or labels.get("app.kubernetes.io/managed-by") != "ai-agent-stack"
+                    or item_namespace != expected_namespace
+                    or not isinstance(name, str)
+                    or not isinstance(metadata.get("uid"), str)
+                    or not metadata.get("uid")
+                ):
+                    raise EphCleanupError("EPH_CLEANUP_RESOURCE_OWNERSHIP_MISMATCH")
+                inventory.append({
+                    "resource": resource,
+                    "name": _valid_name(name, "RESOURCE_NAME"),
+                    "namespace": resource_namespace,
+                    "uid": metadata.get("uid"),
+                    "credential": (
+                        resource == "secrets"
+                        and annotations.get(CREDENTIAL_SCOPE_ANNOTATION) == "eph-agent"
+                    ),
+                })
 
     deleted: list[dict[str, Any]] = []
     side_effects = False
