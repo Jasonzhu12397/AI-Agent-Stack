@@ -46,6 +46,34 @@ def test_ensure_collection_is_idempotent_and_validates_input(monkeypatch):
         store.ensure_collection(768, distance="Hamming")
 
 
+def test_ping_service_uses_readyz_without_requiring_a_collection(monkeypatch):
+    store, calls = _store(monkeypatch)
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b"healthz check passed"
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, request.get_method(), timeout))
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "core.vector_store.build_opener",
+        lambda *args: FakeOpener(),
+    )
+
+    assert store.ping_service() is True
+    assert calls == [("http://qdrant:6333/readyz", "GET", 3)]
+
 def test_ping_reports_missing_and_unhealthy_collections(monkeypatch):
     store, _ = _store(monkeypatch)
     with pytest.raises(VectorStoreError, match="missing"):
@@ -112,10 +140,10 @@ def test_readiness_skips_the_vector_probe_when_unconfigured(monkeypatch):
 def test_readiness_fails_when_the_vector_store_is_unavailable(monkeypatch):
     monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
 
-    def failing_ping(self):
+    def failing_ping_service(self):
         raise VectorStoreError("Vector database is unavailable.")
 
-    monkeypatch.setattr(QdrantVectorStore, "ping", failing_ping)
+    monkeypatch.setattr(QdrantVectorStore, "ping_service", failing_ping_service)
     response = APIClient().get("/health/ready")
     assert response.status_code == 503
     assert response.json() == {
@@ -129,7 +157,7 @@ def test_readiness_fails_when_the_vector_store_is_unavailable(monkeypatch):
 @pytest.mark.django_db
 def test_readiness_reports_a_healthy_vector_store(monkeypatch):
     monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
-    monkeypatch.setattr(QdrantVectorStore, "ping", lambda self: True)
+    monkeypatch.setattr(QdrantVectorStore, "ping_service", lambda self: True)
     response = APIClient().get("/health/ready")
     assert response.status_code == 200
     assert response.json()["vector_store"] == "ok"
