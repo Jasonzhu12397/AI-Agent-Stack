@@ -119,27 +119,20 @@ def test_apply_rejects_a_bundle_without_hosts(monkeypatch, tmp_path):
         bridge.main(["apply", "--manifest", str(bundle), "--namespace", "metal3"])
 
 
-def test_vendored_scripts_do_not_touch_the_cluster_themselves():
+def test_vendored_scripts_do_not_touch_the_target_cluster():
     launch = (VENDOR / "03_launch_mgmt_cluster.sh").read_text(encoding="utf-8")
-    verify = (VENDOR / "04_verify.sh").read_text(encoding="utf-8")
 
-    assert "METAL3_LAB_DEPLOY_TOOL" in launch
-    assert 'python3 "${tool}" apply --dir' in launch
-    # no hand-rolled apply or jq probe survives in the bare metal branch
-    assert 'kubectl apply -f "${hosts_dir}"' not in launch
-
-    assert 'python3 "${tool}" verify --dir' in verify
-    # 04 is bare metal only now: no platform branch, no shell judgement at all
-    assert "NODES_PLATFORM" not in verify
-    assert "kubectl" not in verify
-    assert "jq" not in verify
-    assert "virsh" not in verify
-    assert "check_k8s_entity" not in verify
-    assert "check_k8s_rs" not in verify
+    # The management bootstrap stops after its controllers roll out. It neither
+    # renders nor applies BMHs, and it does not invoke another orchestrator.
+    assert "apply_bm_hosts" not in launch
+    assert "metal3_deploy" not in launch
+    assert "make-bm-worker" not in launch
+    assert not (VENDOR / "04_verify.sh").exists()
 
 
-def test_runner_exports_the_agent_bridge():
-    runner = (ROOT / "deploy" / "metal3-lab" / "run.sh").read_text(encoding="utf-8")
-    assert "tools/metal3_agent_bridge.py" in runner
-    assert 'export METAL3_LAB_AGENT_BRIDGE="${AGENT_BRIDGE}"' in runner
-    assert 'METAL3_LAB_BMH_DRIVER="${METAL3_LAB_BMH_DRIVER:-agent}"' in runner
+def test_python_orchestrator_calls_the_agent_deploy_pipeline_directly():
+    runner = (ROOT / "apps" / "eph_agent" / "metal3_lab.py").read_text(encoding="utf-8")
+    assert "from tools import metal3_deploy, vendor_import" in runner
+    assert "self.deploy(arguments)" in runner
+    assert "shell=True" not in runner
+    assert "metal3_agent_bridge" not in runner

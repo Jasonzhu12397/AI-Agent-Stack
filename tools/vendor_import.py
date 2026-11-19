@@ -45,8 +45,6 @@ REQUIRED_PATHS = (
     "01_prepare_host.sh",
     "02_configure_host.sh",
     "03_launch_mgmt_cluster.sh",
-    "04_verify.sh",
-    "Makefile",
     "ansible.cfg",
     "lib/common.sh",
     "vm-setup/inventory.ini",
@@ -78,6 +76,11 @@ PRUNE_PATHS = (
     # upstream VM-based e2e suite (the agent and pytest verify the lab now)
     "tests",
     "template",
+    # superseded lifecycle wrappers: tools/metal3_lab.py owns these actions
+    "04_verify.sh",
+    "cluster_cleanup.sh",
+    "host_cleanup.sh",
+    "Makefile",
     # upstream developer tooling and CI metadata
     "tilt-setup",
     "Tiltfile",

@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "deploy" / "metal3-lab" / "run.sh"
+RUNNER = ROOT / "apps" / "eph_agent" / "metal3_lab.py"
 VENDOR = ROOT / "deploy" / "metal3-lab" / "vendor" / "metal3-dev-env"
 EXAMPLE_INVENTORY = ROOT / "deploy" / "metal3-lab" / "hosts" / "baremetal-nodes.example.yaml"
 
@@ -157,43 +157,40 @@ def test_renderer_cli_count_and_output(tmp_path):
     assert (out / "bmhs.yaml").is_file()
 
 
-def test_runner_has_no_platform_switch_and_no_kvm_gate():
+def test_python_orchestrator_is_bare_metal_only_and_has_no_kvm_gate():
     source = RUNNER.read_text(encoding="utf-8")
     assert "METAL3_LAB_PLATFORM" not in source
-    assert "NODES_PLATFORM" not in source
-    assert "/dev/kvm" in source  # mentioned only to say it is unused
-    assert "KVM is irrelevant" in source or "never starts a virtual machine" in source
+    assert '"NODES_PLATFORM": "baremetal"' in source
+    assert "/dev/kvm" not in source
     assert "BARE_METAL_HOSTS_DIR" in source
-    assert "tools/metal3_deploy.py" in source
+    assert "metal3_deploy" in source
+    assert "shell=True" not in source
 
 
-def test_vendored_scripts_carry_no_virtualisation_path():
+def test_vendored_scripts_carry_no_virtualisation_or_bmh_path():
     configure = (VENDOR / "02_configure_host.sh").read_text(encoding="utf-8")
     launch = (VENDOR / "03_launch_mgmt_cluster.sh").read_text(encoding="utf-8")
-    verify = (VENDOR / "04_verify.sh").read_text(encoding="utf-8")
 
-    # no libvirt, no virtual BMC emulator, no VM creation playbook
-    assert "Skipping libvirt" not in configure
     assert "setup-playbook.yml" not in configure
     assert "virsh" not in configure
     assert "configure_minikube" not in configure
 
-    # BMHs are never generated in shell any more: the agent applies the plan
-    assert "apply_bm_hosts_from_dir" in launch
-    assert "BARE_METAL_HOSTS_DIR" in launch
+    # 03 only starts the management controllers; the python orchestrator applies
+    # and verifies the target cluster after this script returns.
+    assert "apply_bm_hosts" not in launch
+    assert "BARE_METAL_HOSTS_DIR" not in launch
     assert "make-bm-worker" not in launch
     assert "make_bm_hosts()" not in launch
     assert "list_nodes" not in launch
+    assert "metal3_deploy" not in launch
 
-    assert "check_bmhs_baremetal" in verify
-    assert "check_bm_hosts(" not in verify
-    assert "virsh" not in verify
-    assert 'EXPTD_CONTAINERS="httpd-infra registry"' in verify
+    for removed in ("04_verify.sh", "cluster_cleanup.sh", "host_cleanup.sh", "Makefile"):
+        assert not (VENDOR / removed).exists()
 
 
 def test_baremetal_documents_have_no_vm_creation_path():
     docs = (ROOT / "deploy" / "metal3-lab" / "README.md").read_text(encoding="utf-8")
     assert "physical machines" in docs
-    assert "not vendored" in docs
+    assert "deleted" in docs
     assert "PRUNE_PATHS" in docs
-    assert "bmh_from_inventory" in docs
+    assert "metal3_deploy" in docs

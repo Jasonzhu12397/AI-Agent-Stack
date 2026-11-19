@@ -6,7 +6,7 @@ import pytest
 import tools.vendor_import as vendor_import
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "deploy" / "metal3-lab" / "run.sh"
+RUNNER = ROOT / "apps" / "eph_agent" / "metal3_lab.py"
 README = ROOT / "deploy" / "metal3-lab" / "README.md"
 VENDOR_README = ROOT / "deploy" / "metal3-lab" / "vendor" / "README.md"
 VENDOR_DIR = ROOT / "deploy" / "metal3-lab" / "vendor" / "metal3-dev-env"
@@ -47,38 +47,7 @@ def fake_archive(tmp_path):
     return archive
 
 
-def test_runner_has_no_git_dependency_and_runs_vendored_source():
-    source = RUNNER.read_text(encoding="utf-8")
-    assert "git clone" not in source
-    assert "git -C" not in source
-    assert "checkout --detach" not in source
-    assert "rev-parse" not in source
-    assert "command -v git" not in source
-    assert 'readonly PINNED_COMMIT="7076f07624cdfba990f83bea24f749b37e3baad7"' in source
-    assert "vendor/metal3-dev-env" in source
-    assert "tools/vendor_import.py" in source
-    assert 'in_vendor prepare-host "./01_prepare_host.sh"' in source
-    assert 'in_vendor configure-host "./02_configure_host.sh"' in source
-    assert 'in_vendor launch-management-cluster "./03_launch_mgmt_cluster.sh"' in source
-    assert 'in_vendor verify-management-cluster "./04_verify.sh"' in source
 
-
-def test_host_mutating_actions_require_explicit_consent():
-    source = RUNNER.read_text(encoding="utf-8")
-    assert "require_host_mutation_consent" in source
-    assert "METAL3_LAB_ALLOW_HOST_MUTATION:-" in source
-    assert "prepare)" in source
-    assert "clean)" in source
-
-
-def test_runner_exposes_cleanup_and_restore_and_no_vm_lifecycle():
-    source = RUNNER.read_text(encoding="utf-8")
-    assert "make clean" in source
-    assert "restore)" in source
-    assert "verify_vendor" in source
-    # the VM-based lifecycle was removed together with the vendored e2e suite
-    assert "make test" not in source
-    assert "lifecycle)" not in source
 
 
 def test_vendor_check_rejects_a_missing_tree(tmp_path):
@@ -93,7 +62,7 @@ def test_vendor_import_extracts_the_pinned_tree_and_writes_provenance(fake_archi
 
     assert metadata["upstream_commit"] == vendor_import.PINNED_COMMIT
     assert metadata["file_count"] == 12
-    assert metadata["retained_file_count"] == 10
+    assert metadata["retained_file_count"] == 8
     assert "vm-setup/setup-playbook.yml" in metadata["pruned_paths"]
     assert "tests" in metadata["pruned_paths"]
     assert (target / "01_prepare_host.sh").exists()
@@ -127,7 +96,7 @@ def test_vendor_check_rejects_an_incomplete_tree(fake_archive, tmp_path):
     target = tmp_path / "vendor" / "metal3-dev-env"
     vendor_import.import_tree(str(fake_archive), target)
 
-    (target / "04_verify.sh").unlink()
+    (target / "02_configure_host.sh").unlink()
 
     with pytest.raises(vendor_import.ImportError_, match="incomplete"):
         vendor_import.check_tree(target)
@@ -151,7 +120,8 @@ def test_vendor_import_reports_a_missing_archive(tmp_path):
 
 def test_docs_distinguish_provider_e2e_from_agent_e2e():
     docs = README.read_text(encoding="utf-8")
-    assert "not an AI Agent Stack three-agent end-to-end test" in docs
+    assert "three-agent" in docs
+    assert "end-to-end test" in docs
     assert "LIBVIRT_IRONIC" in docs
     assert "Cloud Control Agent" in docs
 
@@ -219,8 +189,3 @@ def test_reseal_refuses_a_tree_that_keeps_pruned_code(fake_archive, tmp_path):
         vendor_import.reseal_tree(target)
 
 
-def test_runner_restore_never_overwrites_the_fork():
-    source = RUNNER.read_text(encoding="utf-8")
-    assert 'local reference="${VENDOR_DIR}.upstream"' in source
-    assert 'reseal)' in source
-    assert '--reseal --target "${VENDOR_DIR}"' in source

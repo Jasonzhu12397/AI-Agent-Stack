@@ -2,10 +2,10 @@
   "upstream_repo": "https://github.com/metal3-io/metal3-dev-env",
   "upstream_commit": "7076f07624cdfba990f83bea24f749b37e3baad7",
   "imported_source": "/tmp/m3dev-7076f07.tar.gz",
-  "imported_at": "2026-11-19T08:23:51+00:00",
-  "file_count": 38,
-  "total_bytes": 151991,
-  "manifest_sha256": "b9a10be7a356fbd327b2b140ecc661bf304740dcf21a1d1281b21e227b2b6ba7",
+  "imported_at": "2026-11-19T09:36:06+00:00",
+  "file_count": 34,
+  "total_bytes": 145448,
+  "manifest_sha256": "8c2e0133c6a9294598022cac77cf39006732b4518d244c96e1cf00ef9f14ceea",
   "note": "Forked vendored source: the libvirt/KVM half is deleted and the scripts call tools/metal3_deploy.py. Runtime never clones upstream; edit these files directly.",
   "pruned_paths": [
     "vm-setup/setup-playbook.yml",
@@ -20,6 +20,10 @@
     "PoCs",
     "tests",
     "template",
+    "04_verify.sh",
+    "cluster_cleanup.sh",
+    "host_cleanup.sh",
+    "Makefile",
     "tilt-setup",
     "Tiltfile",
     "Tiltfile.md",
@@ -38,6 +42,6 @@
     ".markdownlint-cli2.yaml",
     ".yamllint.yaml"
   ],
-  "retained_file_count": 38,
-  "resealed_at": "2026-11-19T08:23:51+00:00"
+  "retained_file_count": 34,
+  "resealed_at": "2026-11-19T09:36:06+00:00"
 }

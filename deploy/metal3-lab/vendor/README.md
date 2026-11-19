@@ -20,13 +20,11 @@ upstream archive, writes provenance, then deletes every path in its
 | `01_prepare_host.sh` | host package install, Ansible bootstrap, kind/kubectl/krew |
 | `02_configure_host.sh` | provisioning/external bridges on real NICs, firewall, registry, ironic httpd |
 | `03_launch_mgmt_cluster.sh` | kind management cluster, ironic/BMO/CAPI deploy, hands the plan to the agent |
-| `04_verify.sh` | one call to `tools/metal3_deploy.py verify`; no cluster judgement in shell |
 | `lib/*.sh` | shared helpers (common, network, download, releases, TLS, auth, images) |
-| `Makefile`, `ansible.cfg`, `config_example.sh` | entry points and defaults |
+| `ansible.cfg`, `config_example.sh` | Ansible and host-bootstrap defaults |
 | `vm-setup/inventory.ini`, `install-package-playbook.yml`, `requirements.yml`, `roles/packages_installation`, `roles/firewall` | the only Ansible that still runs (host packages and firewall) |
 | `ubuntu_bridge_network_configuration.sh` | `ip`/`brctl` bridge setup used by `02` |
 | `openstackclient.sh`, `clouds.yaml.j2` | ironic CLI wrapper rendered by `03` |
-| `cluster_cleanup.sh`, `host_cleanup.sh` | `make clean` |
 | `VENDOR.json` | provenance: upstream repo, commit, import source, file counts, pruned paths |
 | `MANIFEST.sha256` | per-file digest list used for integrity checks |
 
@@ -47,6 +45,7 @@ removed on every import:
 - `vbmc.sh`, `disable_apparmor_driver_libvirtd.sh`
 - `PoCs/` (Kamaji demo: libvirt domains, sushy-tools, shell-generated BMHs)
 - `tests/`, `template/` (VM-based e2e suite and its SARIF template)
+- `04_verify.sh`, `cluster_cleanup.sh`, `host_cleanup.sh`, `Makefile`
 - `tilt-setup/`, `Tiltfile`, `Tiltfile.md`, `hack/`, `ip_range_check.py`
 - upstream repository metadata: `README.md`, `AGENTS.md`, `CLAUDE.md`,
   `CONTRIBUTING.md`, `OWNERS`, `OWNERS_ALIASES`, `DCO`, `SECURITY_CONTACTS`,
@@ -69,11 +68,11 @@ python3 tools/vendor_import.py --source ./m3de.tar.gz
 python3 tools/vendor_import.py --check              # verify the tree
 python3 tools/vendor_import.py --print-url          # print the pinned archive URL
 python3 tools/vendor_import.py --reseal             # record the fork as the baseline
-bash deploy/metal3-lab/run.sh restore               # upstream reference into vendor/*.upstream
-bash deploy/metal3-lab/run.sh reseal                # same reseal, logged
+python3 tools/metal3_lab.py reference --vendor-source ./m3de.tar.gz
+python3 tools/metal3_lab.py reseal
 ```
 
-`restore` never overwrites the fork: it materialises upstream next to it
+`reference` never overwrites the fork: it materialises upstream next to it
 (`vendor/metal3-dev-env.upstream`) so a change can be compared against the
 pinned commit. Re-importing over the fork would restore scripts that call the
 deleted libvirt playbooks.
@@ -91,16 +90,15 @@ tree disagree.
 
 ## Editing rules
 
-1. Keep entry points and paths stable (`01..04` scripts, `make clean`) —
-   `deploy/metal3-lab/run.sh` invokes them by name.
-2. Put project-specific behaviour behind new flags or new files rather than
-   rewriting upstream lines that other tooling greps for.
-3. Record every intentional divergence in `PATCHES.md` (file, reason, commit).
-4. After a patch, run `python3 tools/vendor_import.py --check` and expect a
-   `local change:` line for the edited file.
-5. Re-importing with `restore` overwrites local patches — commit them first.
-6. To drop more upstream code, add the path to `PRUNE_PATHS` instead of deleting
-   it by hand: the next import must reproduce the same tree.
+1. Keep `01_prepare_host.sh`, `02_configure_host.sh` and
+   `03_launch_mgmt_cluster.sh` as host-bootstrap stages only.
+2. Put planning, BMH/CAPI rendering, apply, readiness and lifecycle behavior in
+   Python; do not add another shell wrapper.
+3. Record every intentional divergence in `PATCHES.md`.
+4. Run `tools/metal3_lab.py reseal` after deliberate edits, then
+   `python3 tools/vendor_import.py --check` and expect no problems.
+5. Add newly unwanted upstream paths to `PRUNE_PATHS`; a reference import must
+   reproduce the same prune decision.
 
 ## Generated files
 

@@ -11,7 +11,7 @@ Intentional divergences from upstream `metal3-io/metal3-dev-env` at commit
    below records the file, the reason and how to verify it.
 
 Local edits are allowed and expected; this file keeps them reviewable and
-re-appliable after `run.sh restore`.
+reviewable after `tools/metal3_lab.py reference`.
 
 Format:
 
@@ -33,6 +33,8 @@ Deleted by `tools/vendor_import.py` on every import, recorded in
 - `PoCs/` (Kamaji PoC: libvirt domains, `sushy-tools`, shell-generated BMHs)
 - `tests/`, `template/` (the VM-based e2e suite, now covered by the agent verify
   step plus this repository's pytest suite)
+- `04_verify.sh`, `cluster_cleanup.sh`, `host_cleanup.sh`, `Makefile`
+  (superseded by `apps/eph_agent/metal3_lab.py` and `metal3_readiness.py`)
 - `tilt-setup/`, `Tiltfile`, `Tiltfile.md`, `hack/`, `ip_range_check.py`
 - upstream repository metadata (`README.md`, `AGENTS.md`, `CLAUDE.md`,
   `CONTRIBUTING.md`, `OWNERS*`, `DCO`, `SECURITY_CONTACTS`, `renovate.json`,
@@ -65,78 +67,13 @@ Check: `python3 tools/vendor_import.py --check` prints one
 
 ### `03_launch_mgmt_cluster.sh`
 
-- Reason: BMH manifests are planned from the platform database and applied by
-  the agent; upstream generated them with `go run make-bm-worker` from
-  `ironic_nodes.json` and applied them with kubectl, which is exactly the work
-  `tools/metal3_deploy.py` now owns.
-- Change: `make_bm_hosts()`, `apply_bm_hosts()`, `launch_fake_ipa()`, the
-  minikube/tilt branches and the local-operator loops are removed;
-  `apply_bm_hosts_from_dir()` is the only BMH path and runs
-  `python3 tools/metal3_deploy.py apply --dir "$BARE_METAL_HOSTS_DIR"` with
-  retries. Launching BMO/Ironic/CAPI, the registry and kind are unchanged.
-- Check: `grep -n "apply_bm_hosts_from_dir\|make-bm-worker" deploy/metal3-lab/vendor/metal3-dev-env/03_launch_mgmt_cluster.sh` (second pattern found only in a comment).
-
-### `04_verify.sh`
-
-- Reason: there is no virtual machine and no BMC emulator to expect on bare
-  metal, and no judgement about the cluster belongs in shell: matching text out
-  of the cluster CLI turns a missing field into an empty string and a pass.
-- Change: `check_bm_hosts()`, `check_k8s_entity()`, `check_k8s_rs()`,
-  `check_container()`, the CRD grep loop, the bridge loop and the Ironic curl
-  probe are all removed. The script only calls `check_bmhs_baremetal()`, which
-  runs `tools/metal3_deploy.py verify`; that asks the agent's
-  `observe_baremetalhosts` about the hosts and
-  `apps/eph_agent/metal3_readiness.py` about CRDs, controllers, replica sets,
-  host bridges, infra containers and Ironic authentication.
-- Check: `grep -n "kubectl\|jq\|virsh" deploy/metal3-lab/vendor/metal3-dev-env/04_verify.sh` prints nothing.
-
-### `Makefile`
-
-- Reason: the VM lifecycle and lint targets invoked code that is no longer
-  vendored.
-- Change: `test`, `provision`, `pivot`, `repivot`, `deprovision`,
-  `verify_provision` and `lint` targets removed; `install/configure/launch/verify/clean/prepull_images` kept.
-- Check: `grep -c "make test\|shellcheck" deploy/metal3-lab/vendor/metal3-dev-env/Makefile` returns 0.
-
-### `lib/common.sh`
-
-- Reason: shared defaults still described the virtual lab.
-- Change: `NODES_PLATFORM` defaults to `baremetal`, `BOOTSTRAP_CLUSTER` defaults
-  to `kind`, and `list_nodes()`, `manage_libvirtd()`,
-  `get_disableCertificateVerification_from_verify_ca()`, the `NODES_FILE` /
-  `FAKE_NODES_FILE` paths, `LIBVIRT_DOMAIN_TYPE` / `LIBVIRT_DEFAULT_URI`,
-  `BMO_RUN_LOCAL` / `CAPM3_RUN_LOCAL` and the emulator image variables are
-  removed; `remove_ironic_containers` no longer sweeps vbmc/sushy-tools.
-- Check: `grep -n "list_nodes\|manage_libvirtd\|LIBVIRT" deploy/metal3-lab/vendor/metal3-dev-env/lib/common.sh` prints nothing.
-
-### `lib/download.sh`
-
-- Reason: minikube and its kvm2 driver are no longer providers.
-- Change: `download_and_install_minikube`, `download_and_install_kvm2_driver`
-  removed, together with their calls in the bulk installer.
-- Check: `grep -n "minikube" deploy/metal3-lab/vendor/metal3-dev-env/lib/download.sh` prints nothing.
-
-### `lib/network.sh`
-
-- Reason: the minikube IPv6 bridge address only existed for a minikube VM.
-- Change: the `MINIKUBE_BMNET_V6_IP` block is removed.
-- Check: `grep -n "MINIKUBE" deploy/metal3-lab/vendor/metal3-dev-env/lib/network.sh` prints nothing.
-
-### `cluster_cleanup.sh`
-
-- Reason: only kind is ever created.
-- Change: the tilt branch and the minikube deletion are removed; kind deletion
-  and the local ironic container removal remain.
-- Check: `grep -n "minikube\|tilt" deploy/metal3-lab/vendor/metal3-dev-env/cluster_cleanup.sh` prints nothing.
-
-### `host_cleanup.sh`
-
-- Reason: there is no fake-ipa container, no locally running operator and no
-  `teardown-playbook.yml` to replay.
-- Change: the fake-ipa removal, the `BMO_RUN_LOCAL`/`CAPM3_RUN_LOCAL` kill
-  blocks, the teardown playbook run and the libvirt serial-log/BMH-artifact
-  cleanup are removed; bridge teardown and firewall removal remain.
-- Check: `grep -n "teardown-playbook\|fake-ipa\|run-bmo-loop" deploy/metal3-lab/vendor/metal3-dev-env/host_cleanup.sh` prints nothing.
+- Reason: BMHs and target CAPI resources are planned and applied by the Python
+  agent, not by a management-bootstrap script.
+- Change: the libvirt/fake inventory renderers, shell BMH apply path, local
+  operator loops and the Python-wrapper BMH function are all removed. The script
+  ends after BMO/Ironic/CAPI roll out; `Metal3Lab.prepare()` then calls
+  `metal3_deploy.py apply` and `verify` directly.
+- Check: `grep -n "apply_bm_hosts\|metal3_deploy\|make-bm-worker" deploy/metal3-lab/vendor/metal3-dev-env/03_launch_mgmt_cluster.sh` prints nothing.
 
 ### `vm-setup/roles/firewall`
 
@@ -177,6 +114,6 @@ Check: `python3 tools/vendor_import.py --check` prints one
 - Change: the `openvswitch.openvswitch` collection is removed from the list.
 - Check: `grep -n "openvswitch" deploy/metal3-lab/vendor/metal3-dev-env/vm-setup/requirements.yml` prints nothing.
 
-Restore note: `run.sh restore` re-imports the upstream tree, applies
-`PRUNE_PATHS` again and therefore erases these file patches. Re-apply them (they
-are small, branch-scoped hunks) or keep the patched tree under version control.
+Reference note: `tools/metal3_lab.py reference` imports upstream into a sibling
+`.upstream` directory and never overwrites this fork. After deliberate edits,
+run `tools/metal3_lab.py reseal` to record the new baseline.

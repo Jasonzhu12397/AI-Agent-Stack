@@ -1,189 +1,147 @@
 # Metal3 Lab (physical machines)
 
-This runner executes **vendored** Metal3 dev-env source that lives in this
-repository under `deploy/metal3-lab/vendor/metal3-dev-env/`. The tree was imported
-from `metal3-io/metal3-dev-env` at commit
-`7076f07624cdfba990f83bea24f749b37e3baad7` and is pinned by
-`vendor/metal3-dev-env/VENDOR.json` plus a per-file `MANIFEST.sha256`.
+The lab is orchestrated by `tools/metal3_lab.py`. There is **no `run.sh`** and no
+`make` lifecycle above the agent. Python owns planning, BMH/CAPI rendering,
+target deployment, verification, cleanup, retries and evidence.
 
-There is no git dependency at run time: no remote clone, no `fetch`, no
-`checkout`, no submodule, no tracking branch. The code is ordinary repository
-files, so it can be edited, reviewed, patched and re-developed locally — or by an
-agent — exactly like the rest of this project.
+The host-bootstrap source is vendored under
+`deploy/metal3-lab/vendor/metal3-dev-env/`, imported from
+`metal3-io/metal3-dev-env` at commit
+`7076f07624cdfba990f83bea24f749b37e3baad7`. `VENDOR.json` and
+`MANIFEST.sha256` record provenance and the fork's integrity baseline. Runtime
+performs no clone, fetch, checkout or submodule operation.
 
 ## One platform: physical machines
 
 This lab provisions real hardware behind real BMCs (Redfish/IPMI). There is no
-platform switch, no virtual machine, no `/dev/kvm` requirement: the virtual half
-of upstream dev-env is not merely disabled, it is **not vendored**.
+platform switch, virtual machine, virtual BMC or `/dev/kvm` requirement. The
+virtual half of upstream dev-env is not disabled; it is deleted.
 
-`tools/vendor_import.py` imports the pinned upstream tree and then deletes the
-paths that no longer have a consumer here (`PRUNE_PATHS` in that file):
+`tools/vendor_import.py` records every refused upstream path in `PRUNE_PATHS`:
+libvirt/virtbmc roles and playbooks, BMC emulators, the Kamaji PoC, the VM e2e
+suite, tilt/developer tooling, and the superseded `04_verify.sh`, cleanup
+scripts and `Makefile`. The retained tree contains only the three host-bootstrap
+stages the Python lifecycle actually executes:
 
-| Removed | Why it cannot stay |
+| Stage | Responsibility |
 |---|---|
-| `vm-setup/roles/libvirt`, `virtbmc`, `ovs`, `setup-playbook.yml`, `teardown-playbook.yml`, `vbmc.sh`, `disable_apparmor_driver_libvirtd.sh` | create virtual bare metal hosts and emulate their BMCs |
-| `PoCs/` | a Kamaji demo built on libvirt domains, `sushy-tools` and shell-generated BMHs |
-| `tests/`, `template/` | the upstream VM-based e2e suite, replaced by the agent's verify step and this repository's pytest suite |
-| `hack/`, `tilt-setup/`, `Tiltfile*`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `OWNERS*`, `DCO`, `SECURITY_CONTACTS`, `renovate.json`, `.markdownlint*`, `.yamllint.yaml`, `README.md`, `vars.md` | upstream developer tooling, CI and repository metadata |
+| `01_prepare_host.sh` | Install host packages, Ansible, kind, kubectl and krew |
+| `02_configure_host.sh` | Configure real-NIC bridges, firewall, registry and ironic httpd |
+| `03_launch_mgmt_cluster.sh` | Start kind, Ironic/BMO and CAPI/CAPM3 controllers; stop there |
 
-What remains is the runtime skeleton the runner actually executes, and four
-deliberate, recorded edits (see `vendor/PATCHES.md`):
-
-- `02_configure_host.sh` creates the provisioning/external bridges with `ip` and
-  `brctl` on your real NICs and starts no BMC emulator.
-- `03_launch_mgmt_cluster.sh` generates no BMH from an inventory file and runs no
-  `go run make-bm-worker`: it hands the manifests the agent planned to
-  `tools/metal3_deploy.py`.
-- `04_verify.sh` has no `virsh` steps and no emulator containers; the agent judges
-  the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
-- `01_prepare_host.sh`/`Makefile`/`lib/*` only install and drive what is left.
+None of these scripts generates, applies or verifies a BMH, and none invokes
+another orchestrator.
 
 ## Python owns the pipeline, the agent owns the decisions
 
-Nothing in this path parses cluster data in shell. `run.sh` exports the inputs
-and `tools/metal3_deploy.py` does the rest:
-
 | Stage | Code |
 |---|---|
-| Read the fleet | `tools/metal3_fleet_source.py` -> `AgentMachine` rows (BMC endpoint, credential reference, reported CPU/RAM/disk/NICs) |
-| Reason about roles | `apps/eph_agent/fleet_planning.py`: explicit `ai-agent-stack.io/role` labels win, otherwise machines are ranked by reported capacity and identity status |
-| Render BMHs | `apps/eph_agent/capi_renderer.render_bmh_manifests` (the EPH agent's own template) |
-| Render the target cluster | `apps.eph_agent.capi_renderer.render_capi_metal3_manifests` with the control plane count and the worker pools the plan produced |
-| Apply | `apps/eph_agent/metal3_skill.apply_baremetalhosts` then `apply_capi_cluster_resources` |
-| Verify | `apps/eph_agent/metal3_skill.observe_baremetalhosts` |
+| Lifecycle and ordering | `apps/eph_agent/metal3_lab.py`, exposed by `tools/metal3_lab.py` |
+| Read the fleet | `tools/metal3_fleet_source.py` reads `AgentMachine` rows and resolves BMC credential references |
+| Reason about roles | `apps/eph_agent/fleet_planning.py`: explicit role/pool labels win; otherwise reported CPU, RAM, disk and identity determine the ranking |
+| Render BMHs and CAPI | `apps/eph_agent/capi_renderer.py`, including control-plane and worker-pool ownership |
+| Apply | `apps/eph_agent/metal3_skill.apply_baremetalhosts`, then `apply_capi_cluster_resources` |
+| Verify | `observe_baremetalhosts` plus `apps/eph_agent/metal3_readiness.py` for CRDs, controllers, replica sets, host bridges, infra containers and Ironic authentication |
+| Explain and audit | `plan.json` records every reason and missing fact; `--write-back` mirrors the decision into `AgentMachine` and writes `fleet.machine.role_planned` audit events |
 
-`plan.json` records every assignment with the sentence that justified it and the
-facts the plan had to do without, so a master that was chosen on weak data says
-so out loud.
-
-`METAL3_LAB_WRITE_BACK=1` (or `--write-back`) mirrors the plan into the
-platform: `AgentMachine.bmh_name` and `lifecycle_state` are set to what the
-planner decided and one `fleet.machine.role_planned` audit event is recorded per
-machine with the reason, score and control-plane size. The platform therefore
-never keeps a second, stale opinion about who is a master.
-
-How the layers stack:
+The deployment layers are:
 
 1. The EPH live-OS single-node cluster runs Cluster API and Metal3.
-2. `plan`/`apply` deploy the target cluster's **control plane** masters.
-3. The target agent then pivots the Metal3 data (`execute_capi_pivot`) and
-   provisions the **worker** machines - the data plane
-   (`execute_worker_provisioning`).
-4. The network stack adds the CNI and the data plane plugins
-   (`apps/target_agent/network_plugins.plan_network_stack`).
+2. The Python lab deploys the target cluster's control-plane masters.
+3. The target agent pivots Metal3 data (`execute_capi_pivot`) and provisions the
+   worker/data-plane machines (`execute_worker_provisioning`). These require the
+   platform's trusted deployment context; the lab never fabricates it.
+4. The target network stack installs the CNI and data-plane plugins.
 
-The lab CLI covers the first two stages; the pivot and worker stages are agent
-commands driven by the platform, not shell. `metal3_deploy.py stages` reports
-where the target cluster stands, and `metal3_deploy.py network` plans the CNI
-plus the data plane plugins through `plan_network_stack`:
+## Commands
+
+Plan without changing the host:
 
 ```bash
+python3 tools/metal3_lab.py plan \
+  --project <platform-project-id> \
+  --cluster-name target-cluster \
+  --control-plane-count 3 \
+  --control-plane-endpoint <api-vip> \
+  --image-url <eph-live-os-image-url> \
+  --data-template <metal3-data-template.yaml> \
+  --write-back
+```
+
+Prepare the management host and deploy the target control plane:
+
+```bash
+python3 tools/metal3_lab.py prepare \
+  --project <platform-project-id> \
+  --control-plane-endpoint <api-vip> \
+  --image-url <eph-live-os-image-url> \
+  --data-template <metal3-data-template.yaml> \
+  --allow-host-mutation
+```
+
+Inspect the recorded decisions, verify readiness, or plan the target network:
+
+```bash
+python3 tools/metal3_deploy.py explain --dir .metal3-lab/hosts
+python3 tools/metal3_lab.py verify
 python3 tools/metal3_deploy.py stages  --dir .metal3-lab/hosts
 python3 tools/metal3_deploy.py network --dir .metal3-lab/hosts --spec network.json
 ```
 
-## Bare metal workflow
-
-The machine list is generated data, not a file you maintain by hand: the
-platform database already holds each machine's BMC endpoint, the vault
-reference for its credentials and the NICs the agent reported.
-
-1. Register the machine in the platform (BMC endpoint, credential reference,
-   hardware inventory report). `AgentMachine` is the single source of truth.
-
-2. Render and apply:
-
-   ```bash
-   export METAL3_LAB_ALLOW_HOST_MUTATION=1
-   export METAL3_LAB_WORK_DIR=/var/lib/metal3-lab
-   export METAL3_LAB_PROJECT_ID=<platform project id>   # optional scope
-   bash deploy/metal3-lab/run.sh prepare
-   ```
-
-   `prepare` reads `AgentMachine` rows, resolves the BMC credentials through
-   `BMC_CREDENTIAL_RESOLVER`, derives the boot MAC from the reported inventory
-   and writes `.metal3-lab/hosts/bmhs.yaml` (plus one file per machine). Machines
-   missing a BMC endpoint, a credential reference or an unambiguous boot NIC are
-   reported and skipped, never guessed. The bundle is then handed to the agent.
-
-3. Inspect, then re-verify at any time:
-
-   ```bash
-   bash deploy/metal3-lab/run.sh verify
-   ```
-
-The renderer can also be used on its own:
+Clean the host through explicit argv-only Python stages (no cleanup script and
+no `make clean`):
 
 ```bash
-python3 tools/bmh_from_inventory.py --from-platform --project <id> --out-dir hosts
-python3 tools/bmh_from_inventory.py --from-platform --count
+python3 tools/metal3_lab.py clean --allow-host-mutation
 ```
 
-Offline, without a database, a static inventory is still supported:
+## Lifecycle behavior
+
+`prepare` performs these steps in order:
+
+1. Require explicit host-mutation consent and validate Ubuntu, CPU/RAM and host
+   commands before changing anything.
+2. Verify the vendored fork against its manifest.
+3. Read the platform fleet, reason about roles and render the plan/manifests.
+4. Execute `01`, `02` and `03` to create the management environment.
+5. Call the agent's apply pipeline directly, with bounded retries.
+6. Call the agent's BMH and management-cluster readiness checks directly.
+
+Logs are written under `.metal3-lab/artifacts` (or `--work-dir`). Every host
+command is an argument vector with `shell=False`; no command string is built for
+a shell to interpret.
+
+## Vendored fork workflow
 
 ```bash
-METAL3_LAB_INVENTORY_SOURCE=file \
-python3 tools/bmh_from_inventory.py --inventory hosts.yaml --out-dir hosts
+python3 tools/vendor_import.py --check
+python3 tools/metal3_lab.py reference --vendor-source ./metal3-dev-env.tar.gz
+python3 tools/metal3_lab.py reseal
 ```
 
-Both sources go through the same validation: duplicate names, duplicate boot
-MACs, non-DNS-label names and malformed MACs or BMC schemes are rejected, and
-only the files this tool wrote are ever deleted.
-
-Applying and verifying that bundle is the agent's job:
-
-```bash
-python3 tools/metal3_agent_bridge.py apply  --manifest hosts/bmhs.yaml --namespace metal3
-python3 tools/metal3_agent_bridge.py verify --expected 2
-```
-
-## Actions
-
-| Action | Vendored code |
-|---|---|
-| `prepare` | render BMHs, then `01_prepare_host.sh` -> `02_configure_host.sh` -> `03_launch_mgmt_cluster.sh` -> `04_verify.sh` |
-| `verify` | `04_verify.sh` |
-| `clean` | `make clean` |
-| `restore` | re-import the pinned tree from its archive, no git |
+- `reference` imports upstream into `vendor/metal3-dev-env.upstream` for
+  comparison. It never overwrites the running fork.
+- After a deliberate edit, record it in `vendor/PATCHES.md` and run `reseal` to
+  establish the new manifest baseline. Reseal refuses a tree that reintroduces
+  pruned code or loses a required bootstrap file.
+- `--check` reports subsequent local drift without treating intentional edits as
+  a different upstream commit.
 
 ## Safety and host requirements
 
-The scripts modify host networking, packages, firewall rules and cluster state.
-Point them at a host you are willing to reconfigure. `prepare` and `clean`
-require `METAL3_LAB_ALLOW_HOST_MUTATION=1`.
-
-Minimum documented size is 4 CPUs and 8 GiB RAM for the Ubuntu 22.04/24.04
-management host. KVM is irrelevant: nothing here starts a virtual machine.
-
-The runner records timestamped logs under `$METAL3_LAB_WORK_DIR/artifacts`,
-verifies the vendored tree before every action, and logs a warning when the
-vendored code contains local edits.
-
-## Editing the vendored code
-
-1. Edit files under `deploy/metal3-lab/vendor/metal3-dev-env/` directly.
-2. `python3 tools/vendor_import.py --check` reports edited files as `local change:`
-   and confirms the pruned paths are still absent.
-3. Record intentional divergences in `vendor/PATCHES.md`.
-4. To stop vendoring another upstream path, add it to `PRUNE_PATHS` in
-   `tools/vendor_import.py`; to keep one, remove it from that list.
-5. `run.sh restore` re-imports the pinned tree, applies the prune list again and
-   replaces local edits — re-apply your patches afterwards.
-
-See `vendor/README.md` for the full layout and the import rules.
+`prepare` and `clean` require `--allow-host-mutation` (or
+`METAL3_LAB_ALLOW_HOST_MUTATION=1`). They install packages and change networking,
+firewall rules and cluster state. The documented minimum management host is
+Ubuntu 22.04/24.04 with 4 CPUs and 8 GiB RAM. KVM is irrelevant.
 
 ## What this validates
 
-The runner validates real CAPI/Metal3 control plane deployment on physical
-machines: host preparation, BMH registration, introspection and readiness.
-It is a provider/environment validation tier. This is not an AI Agent Stack three-agent end-to-end test. It does not claim to have exercised
-Cloud Control Agent command scheduling, EPH Agent pivot execution, Target Agent
-handoff, the project's worker provisioning adapter, or the project's EPH cleanup.
-
-The repository's own agent integration must be layered onto this live environment:
-observe real Cluster/Machine/Metal3Machine/BMH objects, invoke the agents through
-the Cloud Control API and verify state transitions and durable attestations.
+The lab validates real CAPI/Metal3 control-plane deployment on physical
+machines: host preparation, BMH registration, introspection and readiness. It is
+a provider/environment validation tier, **not an AI Agent Stack three-agent
+end-to-end test**. It does not by itself prove Cloud Control Agent scheduling,
+EPH pivot execution, Target Agent handoff, worker provisioning or EPH cleanup.
+Those must be exercised through the Cloud Control API with durable attestations.
 Unit and mocked API tests must never be reported as `LIBVIRT_IRONIC` evidence.
 
 ## Upstream references
