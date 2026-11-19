@@ -1,11 +1,12 @@
 import uuid
 
-from core.models import KnowledgeDocument
-from core.rag_runtime import RagRuntimeError, ingest_text
-from core.vector_store import QdrantVectorStore, VectorStoreError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
+
+from core.models import KnowledgeDocument
+from core.rag_runtime import RagRuntimeError, ingest_text
+from core.vector_store import QdrantVectorStore, VectorStoreError
 
 MAX_LIMIT = 5000
 
@@ -28,8 +29,7 @@ def is_scope_current(document, store):
 
     if not document.vector_collection:
         return False
-    model_name = document.knowledge_base.embedding_model.model_name
-    prefix = collection_prefix_for_model(store, model_name)
+    prefix = collection_prefix_for_model(store, document.knowledge_base.embedding_model.model_name)
     return document.vector_collection.startswith(prefix)
 
 
