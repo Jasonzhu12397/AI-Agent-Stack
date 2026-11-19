@@ -1,9 +1,8 @@
 import pytest
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
-
 from core.audit import record_audit_event, verify_audit_chain, verify_global_audit_chain
 from core.models import AuditEvent, Tenant
+from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
 
 PASSWORD = "strong-test-password"
 
