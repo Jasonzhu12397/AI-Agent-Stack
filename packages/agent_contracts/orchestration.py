@@ -40,6 +40,7 @@ class DeploymentPhase(StrEnum):
     CONTROL_STACK_READY = "control_stack_ready"
     BMH_REGISTERED = "bmh_registered"
     BMH_READY = "bmh_ready"
+    TARGET_CONTROL_PLANE_APPLIED = "target_control_plane_applied"
     TARGET_CONTROL_PLANE_READY = "target_control_plane_ready"
     TARGET_AGENT_READY = "target_agent_ready"
     CAPI_PIVOT_VERIFIED = "capi_pivot_verified"
@@ -56,6 +57,7 @@ PHASE_ORDER: tuple[DeploymentPhase, ...] = (
     DeploymentPhase.CONTROL_STACK_READY,
     DeploymentPhase.BMH_REGISTERED,
     DeploymentPhase.BMH_READY,
+    DeploymentPhase.TARGET_CONTROL_PLANE_APPLIED,
     DeploymentPhase.TARGET_CONTROL_PLANE_READY,
     DeploymentPhase.TARGET_AGENT_READY,
     DeploymentPhase.CAPI_PIVOT_VERIFIED,
@@ -113,7 +115,8 @@ EPH_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
     "eph.controlstack.apply": DeploymentPhase.CONTROL_STACK_READY,
     "eph.metal3.bmh.apply": DeploymentPhase.BMH_REGISTERED,
     "eph.metal3.bmh.wait_ready": DeploymentPhase.BMH_READY,
-    "eph.capi.cluster.apply": DeploymentPhase.TARGET_CONTROL_PLANE_READY,
+    "eph.capi.cluster.apply": DeploymentPhase.TARGET_CONTROL_PLANE_APPLIED,
+    "eph.capi.cluster.wait_ready": DeploymentPhase.TARGET_CONTROL_PLANE_READY,
 }
 
 #: Checkpoint advanced by deterministic Target actions. ``target.handoff.evaluate``
@@ -163,6 +166,11 @@ _DISPATCH_TABLE: dict[DeploymentPhase, tuple[str, str, DeploymentPhase]] = {
     DeploymentPhase.BMH_READY: (
         "eph",
         "eph.capi.cluster.apply",
+        DeploymentPhase.TARGET_CONTROL_PLANE_APPLIED,
+    ),
+    DeploymentPhase.TARGET_CONTROL_PLANE_APPLIED: (
+        "eph",
+        "eph.capi.cluster.wait_ready",
         DeploymentPhase.TARGET_CONTROL_PLANE_READY,
     ),
     DeploymentPhase.TARGET_CONTROL_PLANE_READY: (

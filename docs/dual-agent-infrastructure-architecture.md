@@ -12,7 +12,7 @@ There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker fa
 
 ## 2. Ordered deployment lifecycle
 
-`eph_single_node_ready -> control_stack_ready -> bmh_registered -> bmh_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
+`eph_single_node_ready -> control_stack_ready -> bmh_registered -> bmh_ready -> target_control_plane_applied -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
 
 - EPH Agent first proves the temporary single-node environment and source inventory are healthy.
 - Cloud Control Agent coordinates and records the deployment, but does not own target adoption or approve EPH cleanup.

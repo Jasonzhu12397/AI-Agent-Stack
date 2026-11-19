@@ -71,7 +71,10 @@ def test_eph_agent_can_persist_bootstrap_and_metal3_checkpoints():
     _validate_checkpoint_actor_transition("eph", "eph_single_node_ready", "control_stack_ready")
     _validate_checkpoint_actor_transition("eph", "control_stack_ready", "bmh_registered")
     _validate_checkpoint_actor_transition("eph", "bmh_registered", "bmh_ready")
-    _validate_checkpoint_actor_transition("eph", "bmh_ready", "target_control_plane_ready")
+    _validate_checkpoint_actor_transition("eph", "bmh_ready", "target_control_plane_applied")
+    _validate_checkpoint_actor_transition(
+        "eph", "target_control_plane_applied", "target_control_plane_ready"
+    )
 
 
 @pytest.mark.parametrize(
@@ -105,6 +108,7 @@ def test_target_agent_can_advance_after_eph_control_plane_checkpoint():
     [
         ("not_started", "target_control_plane_ready"),
         ("bmh_ready", "target_control_plane_ready"),
+        ("bmh_ready", "target_control_plane_applied"),
         ("eph_single_node_ready", "bmh_registry_migrated"),
         ("bmh_ready", "capi_pivot_verified"),
         ("target_agent_ready", "eph_single_node_ready"),

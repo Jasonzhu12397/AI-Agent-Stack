@@ -43,6 +43,11 @@ def test_plan_deployment_command_hands_over_to_target_after_control_plane_ready(
     step = plan_deployment_command(uuid4(), "bmh_ready", {})["next_step"]
     assert step["role"] == "eph"
     assert step["action"] == "eph.capi.cluster.apply"
+    assert step["next_phase"] == "target_control_plane_applied"
+
+    step = plan_deployment_command(uuid4(), "target_control_plane_applied", {})["next_step"]
+    assert step["role"] == "eph"
+    assert step["action"] == "eph.capi.cluster.wait_ready"
     assert step["next_phase"] == "target_control_plane_ready"
 
     step = plan_deployment_command(uuid4(), "target_control_plane_ready", {})["next_step"]

@@ -23,7 +23,7 @@ def test_phase_index_matches_lifecycle_order():
     assert phase_index(DeploymentPhase.NOT_STARTED) == -1
     assert phase_index(DeploymentPhase.EPH_SINGLE_NODE_READY) == 0
     assert phase_index(DeploymentPhase.BMH_READY) == 3
-    assert phase_index(DeploymentPhase.COMPLETED) == 11
+    assert phase_index(DeploymentPhase.COMPLETED) == 12
 
 
 def test_terminal_phase_plans_no_next_step():
@@ -52,7 +52,8 @@ def test_full_lifecycle_dispatch_chain_is_monotonic():
         ("eph", "eph.controlstack.apply", "control_stack_ready"),
         ("eph", "eph.metal3.bmh.apply", "bmh_registered"),
         ("eph", "eph.metal3.bmh.wait_ready", "bmh_ready"),
-        ("eph", "eph.capi.cluster.apply", "target_control_plane_ready"),
+        ("eph", "eph.capi.cluster.apply", "target_control_plane_applied"),
+        ("eph", "eph.capi.cluster.wait_ready", "target_control_plane_ready"),
         ("target", "target.handoff.evaluate", "target_agent_ready"),
         ("target", "target.capi.pivot", "capi_pivot_verified"),
         ("target", "target.metal3.verify_ownership", "bmh_registry_migrated"),

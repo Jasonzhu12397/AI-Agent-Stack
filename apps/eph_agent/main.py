@@ -409,10 +409,13 @@ def execute(
         }
     if action == "eph.capi.cluster.wait_ready":
         checkpoint = command.get("deployment_checkpoint", {})
-        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "bmh_ready":
+        if (
+            not isinstance(checkpoint, dict)
+            or checkpoint.get("phase") != "target_control_plane_applied"
+        ):
             return {
                 "status": "blocked",
-                "error_code": "CAPI_CONTROL_PLANE_BMH_READY_CHECKPOINT_REQUIRED",
+                "error_code": "CAPI_CONTROL_PLANE_APPLIED_CHECKPOINT_REQUIRED",
                 "output": {},
                 "side_effects": False,
             }
