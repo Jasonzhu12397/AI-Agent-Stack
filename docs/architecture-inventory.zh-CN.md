@@ -43,7 +43,7 @@
 | Workflow Engine | 多步骤编排、状态流转 | `core/workflow_engine.py`：节点类型 `start / llm / condition / knowledge_search / tool / end`；`core/workflow_views.py`：validate / publish / runs | 【基础】 | 【待开发】并行分支、循环、人工审批节点与审批恢复；当前无 `parallel / loop / approval` 节点类型 |
 | Model Router | 国内外模型统一接入与路由 | `core/model_gateway.py`：`ProviderType` 仅 `fake` 与 `openai_compatible`；chat `/chat/completions`、embeddings `/embeddings` HTTP 调用；错误按 5xx/429 标记可重试 | 【基础】 | 【待开发】多供应商主备路由、故障降级链、fallback；国内供应商靠 OpenAI-compatible 接口接入，无原生 SDK；FAKE 仅供测试 |
 | Plugin / MCP Gateway | 插件、MCP Server、第三方系统集成 | `core/plugin_views.py`：连接器目录、审批、项目安装、显式授权、连接记录；`core/http_connector.py`：`register_connector_tool` 按连接器类型分发（`http` / `openapi` / `mcp`），并保留 `register_http_tool` 兼容别名；`core/mcp_connector.py`：面向 streamable HTTP 传输的 JSON-RPC 客户端（initialize / tools/list / tools/call、SSE 响应解析、协议版本协商、工具映射、1 MiB 响应上限、重定向与 host allowlist 拒绝）；`core/mcp_tool_sync.py` + `core/mcp_views.py`：`POST /api/v1/plugin-connections/<id>/sync-tools/` 发现并导入远端工具（新工具 `enabled=False` 待审，单连接上限 256） | 【基础】（HTTP / OpenAPI / MCP 三通道） | 【待验证】真实 MCP Server 联调与工具导入后的人工审批闭环；【待开发】stdio 传输、OAuth 授权码流程与 token 刷新（当前凭据仅解析 bearer / env 引用），MCP 服务端模式（平台自身作为 MCP Server 暴露） |
-| Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；集合按 embedding 模型和维度版本化（`collection_for_model` / `for_model`，如 `agent_knowledge__bge-m3-1024`）；首次 ingest 幂等建集合（`ensure_collection`）；ingest 结果回写 `vector_collection` / `vector_dimensions`，删除与重试按该集合清理；本地余弦相似度计算 | 【基础】 | 【待验证】真实 Qdrant 实例 + 嵌入模型的 ingest / retrieve 全链路；【待开发】切换模型后旧集合的 reindex / 迁移作业（当前旧集合不会再被新检索命中）、pgvector、S3-compatible 对象存储（见 §7.3） |
+| Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；集合按 embedding 模型和维度版本化（`collection_for_model` / `for_model`，如 `agent_knowledge__bge-m3-1024`）；首次 ingest 幂等建集合（`ensure_collection`）；ingest 结果回写 `vector_collection` / `vector_dimensions`，删除与重试按该集合清理；`core/management/commands/reindex_knowledge.py`：按当前模型重新嵌入（默认跳过已在目标集合的文档，`--force` 重嵌、`--dry-run` 只报告、`--document` 定向重试，单文档失败不中断整批）；本地余弦相似度计算 | 【基础】 | 【待验证】真实 Qdrant 实例 + 嵌入模型的 ingest / retrieve 全链路；【待开发】旧集合的容量回收 / 清理策略（保留历史数据，不自动删除）、pgvector、S3-compatible 对象存储（见 §7.3） |
 | Token Budget | 预算预留、用量结算、防超额消耗 | `core/token_budget.py`、`core/token_budget_views.py`：租户级预算预留、结算、幂等、超额保护；含回归测试 | 【待验证】 | 多轮修复后本地测试全绿；需在并发 worker 与真实模型上报用量下复核结算一致性 |
 | Task Queue / Scheduler | 缓存、任务队列、异步执行 | `apps/worker/worker_app/main.py` 轮询 `process_once`；任务认领与租约基于 PostgreSQL 记录；依赖含 `redis`，`settings.py` 仅定义 `REDIS_URL` | 【基础】（DB 队列） | 【待开发】Redis 实际作为缓存 / 队列 / 协调通道：代码中未见 `CACHES`、channel_layer 或 redis 客户端调用；队列故障恢复、积压与重放需继续验证 |
 | Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py`：租户链与全局链两套链式哈希（`verify_audit_chain` / `verify_global_audit_chain`），`tenant` 可空以承载无租户上下文的认证事件（迁移 `0024_audit_event_nullable_tenant`）；`core/auth_views.py` 登录成功 / 登录失败 / 登出三类事件写入全局链；落库覆盖 agent-node / agent-plugin / cluster-deployment / membership / plugin / tool-approval / model / knowledge / agent / workflow / task / token-budget / tenant / project 写接口 + 认证事件 | 【基础】 | 平台侧写接口与认证事件均已入链；【待开发】全局链的对外查询 / 校验 API（`audit_views.py` 目前只对租户链提供 list 与 verify）；策略闭环待完整覆盖 |
@@ -207,12 +207,13 @@
 - 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify（租户链 + 全局认证链）。
 - MCP 客户端运行时（streamable HTTP JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）与工具发现导入接口。
 - Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录。
+- `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 
 - MCP 的 stdio 传输、服务端模式与真实 MCP Server 联调（streamable HTTP 客户端与工具发现已落地）。
 - 完整第三方连接器与 OAuth 凭据授权、token 刷新流程。
-- 切换 embedding 模型后旧 Qdrant 集合的 reindex / 迁移作业；全局审计链（认证事件）的对外查询与校验 API。
+- 旧 Qdrant 集合的清理与容量回收策略（`reindex_knowledge` 已提供重新嵌入，默认不删除旧集合）；全局审计链（认证事件）的对外查询与校验 API。
 - Workflow 拖拽画布、并行、循环、人工审批恢复等高级节点。
 - 插件隔离执行、SSRF 防护的全量供应商集成验收。
 - 完整 GUI 与参考仓库逐页面、逐交互一致（按钮接真实 API、持久化、失败态）。
@@ -228,7 +229,7 @@
 
 1. **先统一口径**：按 §8 修订冲突文档与 README，把 Pivot 责任固定到 Target Agent；`docs/verification-matrix.md` 与前端 `DocsAndMatrixView` 的状态只填有测试/环境证据的项。
 2. **GUI 功能映射核对**：逐页面、逐按钮对照 §6 清单，确认 API 接线、持久化与失败态；把静态展示与 JSON 编辑区域标记为未完成。
-3. **后端补齐**：Redis 通道接入与故障恢复、全局审计链对外查询 API、旧向量集合 reindex、模型路由/降级、连接器 OAuth 与 MCP stdio 传输。
+3. **后端补齐**：Redis 通道接入与故障恢复、全局审计链对外查询 API、旧集合清理策略（reindex 命令已落地）、模型路由/降级、连接器 OAuth 与 MCP stdio 传输。
 4. **Agent 真实链路验收**：在选定的 CAPI / Metal3 / Ironic / OS 版本矩阵上，按 §5.1 七步状态机逐阶段补端到端证据；fail-closed 的预检逐步替换为真实执行适配器。
 5. **数据面与 Day-2**：Multus/SR-IOV/OVS/Calico/DPDK 安装回滚、真实 VF 与流量验证；扩容/缩容/升级/修复运维闭环。
 
