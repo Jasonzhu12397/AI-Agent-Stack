@@ -148,3 +148,113 @@ def test_apply_rejects_empty_plan():
     runner, _ = _make_runner(set(), [])
     with pytest.raises(NetworkStackAdapterError, match="NETWORK_STACK_PLAN_INVALID"):
         apply_network_stack([], NAMESPACE, runner)
+
+
+def _document_runner(document: dict[str, object] | None, calls: list[list[str]]):
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        calls.append(arguments)
+        if arguments[0] == "get":
+            if document is None:
+                return {"available": False, "returncode": 1, "stdout": "", "stderr": "NotFound"}
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(document),
+                "stderr": "",
+            }
+        if arguments[0] == "apply":
+            return {"available": True, "returncode": 0, "stdout": "applied", "stderr": ""}
+        return {"available": False, "returncode": 1, "stderr": "unknown"}
+
+    return runner
+
+
+def test_observe_plugin_rejects_zero_replica_deployment():
+    spec = {
+        "plugins": {
+            "calico": {
+                "config": {"resource_name": "calico-node", "resource_kind": "Deployment"}
+            },
+        }
+    }
+    plan = plan_network_stack(spec)
+    calico = plan[0]
+    document = {
+        "metadata": {"name": "calico-node"},
+        "spec": {"replicas": 0},
+        "status": {"availableReplicas": 0, "readyReplicas": 0},
+    }
+    from apps.target_agent.network_stack_adapter import observe_plugin
+
+    observed = observe_plugin(calico, NAMESPACE, _document_runner(document, []))
+
+    assert observed["desired"] == 0
+    assert observed["ready"] is False
+
+
+def test_observe_plugin_rejects_daemonset_scheduling_zero_nodes():
+    from apps.target_agent.network_stack_adapter import observe_plugin
+
+    plan = plan_network_stack(_spec())
+    sriov = next(plugin for plugin in plan if plugin.name == "sriov")
+    document = {
+        "metadata": {"name": "sriov-device-plugin"},
+        "spec": {},
+        "status": {"desiredNumberScheduled": 0, "numberReady": 0, "numberAvailable": 0},
+    }
+
+    observed = observe_plugin(sriov, NAMESPACE, _document_runner(document, []))
+
+    assert observed["ready"] is False
+
+
+def test_wait_ready_times_out_when_daemonset_scheduled_zero_nodes():
+    plan = plan_network_stack(_spec())
+    clock = {"now": 0.0}
+
+    def monotonic() -> float:
+        clock["now"] += 40.0
+        return clock["now"]
+
+    document = {
+        "metadata": {"name": "calico-node"},
+        "spec": {},
+        "status": {"desiredNumberScheduled": 0, "numberReady": 0, "numberAvailable": 0},
+    }
+    with pytest.raises(NetworkStackAdapterError, match="NETWORK_STACK_READY_TIMEOUT"):
+        wait_for_network_stack_ready(
+            plan,
+            NAMESPACE,
+            _document_runner(document, []),
+            sleep=lambda _seconds: None,
+            monotonic=monotonic,
+            timeout_seconds=60,
+        )
+
+
+def test_apply_fails_when_existence_check_hits_a_real_error():
+    plan = plan_network_stack(_spec())
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        calls.append(arguments)
+        return {"available": True, "returncode": 1, "stdout": "", "stderr": "forbidden"}
+
+    with pytest.raises(NetworkStackAdapterError, match="NETWORK_STACK_OPERATION_FAILED"):
+        apply_network_stack(plan, NAMESPACE, runner)
+    assert not any(call[0] == "apply" for call in calls)
+
+
+def test_apply_fails_when_existing_workload_document_is_unparsable():
+    plan = plan_network_stack(_spec())
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        calls.append(arguments)
+        if arguments[0] == "get":
+            return {"available": True, "returncode": 0, "stdout": "not json", "stderr": ""}
+        return {"available": True, "returncode": 0, "stdout": "applied", "stderr": ""}
+
+    with pytest.raises(NetworkStackAdapterError, match="NETWORK_STACK_WORKLOAD_JSON_INVALID"):
+        apply_network_stack(plan, NAMESPACE, runner)
+    assert not any(call[0] == "apply" for call in calls)
