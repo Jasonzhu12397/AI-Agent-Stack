@@ -32,11 +32,6 @@ if [[ ! "${PATH}" =~ .*(:|^)(${GOBINARY})(:|$).* ]]; then
     export PATH=${PATH}:${GOBINARY}
 fi
 
-# Allow local non-root-user access to libvirt
-# shellcheck disable=SC2312
-if ! id "${USER}" | grep -q libvirt; then
-    sudo usermod -a -G "libvirt" "${USER}"
-fi
 
 # Clean-up any old ironic containers
 remove_ironic_containers
@@ -55,18 +50,6 @@ case "${CONTAINER_RUNTIME}" in
         ;;
 esac
 
-# (workaround) disable tdp_mmu to avoid
-# kernel crashes with  NULL pointer dereference
-# note(elfosardo): run this only if we have kvm support
-if grep -q vmx /proc/cpuinfo; then
-    sudo modprobe -r -a kvm_intel kvm
-    sudo modprobe kvm tdp_mmu=0
-    sudo modprobe -a kvm kvm_intel
-elif grep -q svm /proc/cpuinfo; then
-    sudo modprobe -r -a kvm_amd kvm
-    sudo modprobe kvm tdp_mmu=0
-    sudo modprobe -a kvm kvm_amd
-fi
 
 # Clean, copy and extract local IPA
 if [[ "${USE_LOCAL_IPA}" == "true" ]]; then
@@ -78,112 +61,12 @@ if [[ "${USE_LOCAL_IPA}" == "true" ]]; then
     export USE_LOCAL_IPA="false"
 fi
 
-configure_minikube()
-{
-    minikube config set driver kvm2
-    minikube config set memory 4096
-}
 
-#
-# Create Minikube VM and add correct interfaces
-#
-init_minikube()
-{
-    #If the vm exists, it has already been initialized
-    if [[ ! "$(sudo virsh list --name --all)" =~ .*(minikube).* ]]; then
-        # Loop to ignore minikube issues
-        while /bin/true; do
-            minikube_error=0
-            # This method, defined in lib/common.sh, will either ensure sockets are up'n'running
-            # for CS9 and RHEL9, or restart the libvirtd.service for other DISTRO
-            manage_libvirtd
-            configure_minikube
-            #NOTE(elfosardo): workaround for https://bugzilla.redhat.com/show_bug.cgi?id=2057769
-            sudo mkdir -p "/etc/qemu/firmware"
-            sudo touch "/etc/qemu/firmware/50-edk2-ovmf-amdsev.json"
-            sudo su -l -c "minikube start --insecure-registry ${REGISTRY}" "${USER}" || minikube_error=1
-            if [[ ${minikube_error} -eq 0 ]]; then
-                break
-            fi
-            sudo su -l -c 'minikube delete --all --purge' "${USER}"
-            # NOTE (Mohammed): workaround for https://github.com/kubernetes/minikube/issues/9878
-            if ip link show virbr0 > /dev/null 2>&1; then
-                sudo ip link delete virbr0
-            fi
-        done
-        sudo su -l -c "minikube stop" "${USER}"
-    fi
 
-    MINIKUBE_IFACES="$(sudo virsh domiflist minikube)"
 
-    # The interface doesn't appear in the minikube VM with --live,
-    # so just attach it before next boot. As long as the
-    # 02_configure_host.sh script does not run, the provisioning network does
-    # not exist. Attempting to start Minikube will fail until it is created.
-    if ! echo "${MINIKUBE_IFACES}" | grep -w -q provisioning; then
-        sudo virsh attach-interface --domain minikube \
-            --model virtio --source provisioning \
-            --type network --config
-    fi
+# The BMHs describe hardware that already exists: no VM, veth, domain or
+# inventory file is generated here. tools/metal3_deploy.py renders the BMHs.
 
-    if ! echo "${MINIKUBE_IFACES}" | grep -w -q external; then
-        sudo virsh attach-interface --domain minikube \
-            --model virtio --source external \
-            --type network --config
-    fi
-}
-
-if [[ "${BOOTSTRAP_CLUSTER}" == "minikube" ]]; then
-    init_minikube
-fi
-
-# Root needs a private key to talk to libvirt
-# See tripleo-quickstart-config/roles/virtbmc/tasks/configure-vbmc.yml
-if ! sudo test -f /root/.ssh/id_rsa_virt_power; then
-    sudo ssh-keygen -f /root/.ssh/id_rsa_virt_power -P ""
-    sudo cat /root/.ssh/id_rsa_virt_power.pub | sudo tee -a /root/.ssh/authorized_keys
-fi
-
-# baremetal platform (local patch: see vendor/PATCHES.md): the BMHs describe
-# hardware that already exists, so the libvirt and virtbmc roles that create
-# virtual machines are skipped. Nothing here creates a VM, a veth or a domain.
-# Which platform runs is decided by the agent orchestrating this lab through
-# NODES_PLATFORM; the shell only honours that decision and never invents VMs.
-if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
-    echo "Skipping libvirt VM creation on baremetal platform"
-else
-    ANSIBLE_FORCE_COLOR=true "${ANSIBLE}-playbook" \
-        -e "working_dir=${WORKING_DIR}" \
-        -e "num_nodes=${NUM_NODES}" \
-        -e "extradisks=${VM_EXTRADISKS}" \
-        -e "virthost=${HOSTNAME}" \
-        -e "vm_platform=${NODES_PLATFORM}" \
-        -e "libvirt_firmware=${LIBVIRT_FIRMWARE}" \
-        -e "libvirt_secure_boot=${LIBVIRT_SECURE_BOOT}" \
-        -e "libvirt_domain_type=${LIBVIRT_DOMAIN_TYPE}" \
-        -e "default_memory=${TARGET_NODE_MEMORY}" \
-        -e "manage_external=${MANAGE_EXT_BRIDGE}" \
-        -e "provisioning_url_host=${BARE_METAL_PROVISIONER_URL_HOST}" \
-        -e "nodes_file=${NODES_FILE}" \
-        -e "fake_nodes_file=${FAKE_NODES_FILE}" \
-        -e "node_hostname_format=${NODE_HOSTNAME_FORMAT}" \
-        -i vm-setup/inventory.ini \
-        -b vm-setup/setup-playbook.yml
-fi
-
-# Usually virt-manager/virt-install creates this: https://www.redhat.com/archives/libvir-list/2008-August/msg00179.html
-if ! sudo virsh pool-uuid default > /dev/null 2>&1 ; then
-    sudo virsh pool-define /dev/stdin <<EOF
-<pool type='dir'>
-    <name>default</name>
-    <target>
-        <path>/var/lib/libvirt/images</path>
-    </target>
-</pool>
-EOF
-    sudo virsh pool-start default
-    sudo virsh pool-autostart default
-fi
 
 # When running kind ironic is running on the host, hence we need ironicendpoint
 # interface on the host.
@@ -219,146 +102,24 @@ EOF
     sudo ip link set ironic-peer up
 }
 
-# When running minikube, ironic is running inside the cluster, provisioning named
-# interface on the host is enough
-configure_minikube_network() {
-    if [[ "${BARE_METAL_PROVISIONER_SUBNET_IPV6_ONLY}" == "true" ]]; then
-        # Adding an IP address in the libvirt definition for this network results in
-        # dnsmasq being run, we don't want that as we have our own dnsmasq, so set
-        # the IP address here
-        sudo tee -a /etc/NetworkManager/system-connections/provisioning.nmconnection <<EOF
-[connection]
-id=provisioning
-type=bridge
-interface-name=provisioning
 
-[bridge]
-stp=false
-
-[ipv4]
-method=disabled
-
-[ipv6]
-addr-gen-mode=eui64
-address1=${BARE_METAL_PROVISIONER_IP}/${BARE_METAL_PROVISIONER_CIDR}
-method=manual
-EOF
-    else
-        sudo tee -a /etc/NetworkManager/system-connections/provisioning.nmconnection <<EOF
-[connection]
-id=provisioning
-type=bridge
-interface-name=provisioning
-
-[bridge]
-stp=false
-
-[ipv4]
-address1=${BARE_METAL_PROVISIONER_IP}/${BARE_METAL_PROVISIONER_CIDR}
-method=manual
-
-[ipv6]
-addr-gen-mode=eui64
-method=disabled
-EOF
-    fi
-    sudo chmod 600 /etc/NetworkManager/system-connections/provisioning.nmconnection
-    sudo nmcli con load /etc/NetworkManager/system-connections/provisioning.nmconnection
-    sudo nmcli con up provisioning
-}
-
-if [[ "${OS}" == "ubuntu" ]]; then
-    # source ubuntu_bridge_network_configuration.sh
-    # shellcheck disable=SC1091
-    source ubuntu_bridge_network_configuration.sh
-    # shellcheck disable=SC1091
-    source disable_apparmor_driver_libvirtd.sh
-else
-    if [[ "${MANAGE_PRO_BRIDGE}" == "y" ]]; then
-        if [[ ${BOOTSTRAP_CLUSTER} == "kind" ]]; then
-            configure_kind_network
-        else
-            configure_minikube_network
-        fi
-    fi
-
-    # Need to pass the provision interface for bare metal
-    if [[ -n "${PRO_IF}" ]]; then
-        sudo tee -a /etc/NetworkManager/system-connections/"${PRO_IF}".nmconnection <<EOF
-[connection]
-id=${PRO_IF}
-type=ethernet
-interface-name=${PRO_IF}
-master=provisioning
-slave-type=bridge
-EOF
-        sudo chmod 600 /etc/NetworkManager/system-connections/"${PRO_IF}".nmconnection
-        sudo nmcli con load /etc/NetworkManager/system-connections/"${PRO_IF}".nmconnection
-        sudo nmcli con up "${PRO_IF}"
-    fi
-
-    if [[ "${MANAGE_INT_BRIDGE}" == "y" ]]; then
-        if [[ "$(nmcli con show)" != *"external"* ]]; then
-            sudo tee /etc/NetworkManager/system-connections/external.nmconnection <<EOF
-[connection]
-id=external
-type=bridge
-interface-name=external
-autoconnect=true
-
-[bridge]
-stp=false
-
-[ipv6]
-addr-gen-mode=stable-privacy
-method=ignore
-EOF
-            sudo chmod 600 /etc/NetworkManager/system-connections/external.nmconnection
-            sudo nmcli con load /etc/NetworkManager/system-connections/external.nmconnection
-        fi
-    fi
-    sudo nmcli connection up external
-
-    # Add the internal interface to it if requests, this may also be the interface providing
-    # external access so we need to make sure we maintain dhcp config if its available
-    if [[ -n "${INT_IF}" ]]; then
-        sudo tee /etc/NetworkManager/system-connections/"${INT_IF}".nmconnection <<EOF
-[connection]
-id=${INT_IF}
-type=ethernet
-interface-name=${INT_IF}
-master=provisioning
-slave-type=bridge
-EOF
-
-        sudo chmod 600 /etc/NetworkManager/system-connections/"${INT_IF}".nmconnection
-        sudo nmcli con load /etc/NetworkManager/system-connections/"${INT_IF}".nmconnection
-        if sudo nmap --script broadcast-dhcp-discover -e "${INT_IF}" | grep "IP Offered" ; then
-            sudo nmcli connection modify external ipv4.method auto
-        fi
-        sudo nmcli connection up "${INT_IF}"
-    fi
-
-    # Restart the libvirt network so it applies an ip to the bridge
-    if [[ "${MANAGE_EXT_BRIDGE}" == "y" ]]; then
-        sudo virsh net-destroy external
-        sudo virsh net-start external
-        if [[ -n "${INT_IF}" ]]; then
-            # Need to bring UP the NIC after destroying the libvirt network
-            sudo nmcli connection up "${INT_IF}"
-        fi
-    fi
-fi
+# This lab runs on Ubuntu only (the runner refuses any other host). The
+# provisioning and external bridges are plain ip/brctl bridges on real NICs,
+# so there is no libvirt network to restart and no driver policy to patch.
+# shellcheck disable=SC1091
+source ubuntu_bridge_network_configuration.sh
 
 ANSIBLE_FORCE_COLOR=true "${ANSIBLE}-playbook" \
     -e "use_firewalld=${USE_FIREWALLD}" \
     -i vm-setup/inventory.ini \
     -b vm-setup/firewall.yml
 
-# FIXME(stbenjam): ansbile firewalld module doesn't seem to be doing the right thing
+# The ansible firewalld module does not always move the interface into the
+# zone, so do it explicitly. The zone is the host's own public zone: there
+# is no libvirt zone on a machine that runs no virtual machines.
 if [[ "${USE_FIREWALLD}" == "True" ]]; then
-    sudo firewall-cmd --zone=libvirt --change-interface=provisioning
-    sudo firewall-cmd --zone=libvirt --change-interface=external
+    sudo firewall-cmd --zone=public --change-interface=provisioning
+    sudo firewall-cmd --zone=public --change-interface=external
 fi
 
 # Need to route traffic from the provisioning host.
@@ -497,10 +258,6 @@ if [[ "${BUILD_IRONIC_IMAGE_LOCALLY:-}" == "true" ]] || [[ -n "${IRONIC_LOCAL_IM
     IRONIC_IMAGE="${REGISTRY}/localimages/$(basename "${IRONIC_LOCAL_IMAGE}")"
     export IRONIC_IMAGE
 fi
-VBMC_IMAGE="${VBMC_LOCAL_IMAGE:-${VBMC_IMAGE}}"
-SUSHY_TOOLS_IMAGE="${SUSHY_TOOLS_LOCAL_IMAGE:-${SUSHY_TOOLS_IMAGE}}"
-FAKE_IPA_IMAGE="${FAKE_IPA_LOCAL_IMAGE:-${FAKE_IPA_IMAGE}}"
-FKAS_IMAGE="${FKAS_LOCAL_IMAGE:-${FKAS_IMAGE}}"
 
 # Pushing images to local registry
 for IMAGE_VAR in $(env | grep -v "_LOCAL_IMAGE=" | grep "_IMAGE=" | grep -o "^[^=]*") ; do
@@ -537,42 +294,6 @@ else
         -v "${IRONIC_DATA_DIR}":/shared --entrypoint /bin/runhttpd "${IRONIC_IMAGE}"
 fi
 
-# baremetal platform (local patch: see vendor/PATCHES.md): vbmc and sushy-tools
-# exist only to emulate IPMI/Redfish for libvirt VMs. Real hardware exposes its
-# own BMC, so these containers are not started and nothing here talks to libvirt.
-if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
-    echo "Skipping vbmc and sushy-tools containers on baremetal platform"
-    sudo "${CONTAINER_RUNTIME}" rm -f vbmc sushy-tools 2>/dev/null || true
-else
-# Start vbmc and sushy containers
-# Mount the libvirt socket directly to avoid SSH-based qemu+ssh:// connections
-# which are prone to transient failures causing power-on commands to be acked
-# by vbmc but not executed by libvirt (observed as VMs stuck powered off after
-# cleaning in CI, e.g. pivoting test flakiness).
-# shellcheck disable=SC2086
-sudo "${CONTAINER_RUNTIME}" run -d --net host --name vbmc ${POD_NAME_INFRA} \
-    -v "${WORKING_DIR}/virtualbmc/vbmc":/root/.vbmc -v "/root/.ssh":/root/ssh \
-    -v /var/run/libvirt:/var/run/libvirt \
-    "${VBMC_IMAGE}"
-
-# shellcheck disable=SC2086
-sudo "${CONTAINER_RUNTIME}" run -d --net host --name sushy-tools ${POD_NAME_INFRA} \
-    -v "${WORKING_DIR}/virtualbmc/sushy-tools":/root/sushy -v "/root/.ssh":/root/ssh \
-    -v /var/run/libvirt:/var/run/libvirt \
-    "${SUSHY_TOOLS_IMAGE}"
-fi
-
-# Installing the openstack/ironic clients on the host is optional
-# if not installed, we copy a wrapper to OPENSTACKCLIENT_PATH which
-# runs the clients in a container (metal3-io/ironic-client)
-OPENSTACKCLIENT_PATH="${OPENSTACKCLIENT_PATH:-/usr/local/bin/openstack}"
-if ! command -v openstack | grep -v "${OPENSTACKCLIENT_PATH}"; then
-    sudo ln -sf "${SCRIPTDIR}/openstackclient.sh" "${OPENSTACKCLIENT_PATH}"
-    sudo ln -sf "${SCRIPTDIR}/openstackclient.sh" "$(dirname "${OPENSTACKCLIENT_PATH}")/baremetal"
-fi
-
-# Same for the vbmc CLI when not locally installed
-VBMC_PATH="${VBMC_PATH:-/usr/local/bin/vbmc}"
-if ! command -v vbmc | grep -v "${VBMC_PATH}"; then
-    sudo ln -sf "${SCRIPTDIR}/vbmc.sh" "${VBMC_PATH}"
-fi
+# Physical machines expose their own BMC: no libvirt, no vbmc, no sushy-tools.
+# Remove an emulator left behind by an older run of the upstream tree.
+sudo "${CONTAINER_RUNTIME}" rm -f vbmc sushy-tools 2>/dev/null || true

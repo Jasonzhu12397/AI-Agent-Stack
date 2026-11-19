@@ -9,20 +9,12 @@ packages:
       - curl
       - dnsmasq
       - nmap
-      - ovmf
       - patch
       - psmisc
-      - libvirt-clients
-      - libvirt-dev
       - bridge-utils
       - jq
       - unzip
       - genisoimage
-      - qemu-kvm
-      - libguestfs-tools
-      - gir1.2-polkit-1.0
-      - libpolkit-agent-1-0
-      - libpolkit-gobject-1-0
       - apache2-utils
     podman:
       packages:
@@ -35,8 +27,6 @@ packages:
       - apparmor
       - apparmor-profiles-extra
       - apparmor-utils
-      - libvirt-daemon
-      - libvirt-daemon-system
       - libssl-dev
       - netcat
     noble:
@@ -44,18 +34,14 @@ packages:
       - apparmor
       - apparmor-profiles-extra
       - apparmor-utils
-      - libvirt-daemon
-      - libvirt-daemon-system
       - libssl-dev
       - netcat-traditional
     pip3:
     - python-apt
     - kubernetes==25.3.0
     - pyYAML
-    - virtualbmc
     - lxml
     - netaddr
-    - libvirt-python
     - six
     - docker-py
     - jmespath
@@ -66,31 +52,20 @@ packages:
       - bind-utils
       - curl
       - dnsmasq
-      - edk2-ovmf
       - firewalld
       - httpd-tools
       - jq
-      - libguestfs-tools
-      - libguestfs-tools
-      - libvirt
-      - libvirt-daemon-kvm
-      - libvirt-devel
       - NetworkManager
       - nmap
       - patch
       - podman
-      - polkit-pkla-compat
       - psmisc
-      - python3-libvirt
       - python3-lxml
       - python3-netaddr
       - python3-requests-oauthlib
       - python3-six
-      - qemu-img
-      - qemu-kvm
       - unzip
       - vim-enhanced
-      - virt-install
       - wget
     el9:
       packages:
@@ -108,11 +83,7 @@ packages:
     common:
       packages:
       - jq
-      - qemu-img
-      - libvirt
-      - libvirt-devel
       - dnsmasq
-      - virt-install
       - unzip
       - nmap
       - docker
@@ -120,10 +91,8 @@ packages:
       - python311-setuptools
       - python311-lxml
       - python311-netaddr
-      - python311-libvirt-python
       - python311-passlib
       - python311-cryptography
-      - qemu-hw-display-virtio-gpu
       - apache2-utils
     pip3:
     - jmespath

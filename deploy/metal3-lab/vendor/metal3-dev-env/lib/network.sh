@@ -140,10 +140,6 @@ else
 fi
 export CLUSTER_APIENDPOINT_PORT=${CLUSTER_APIENDPOINT_PORT:-"6443"}
 
-if [[ "${BOOTSTRAP_CLUSTER}" == "minikube" ]] && [[ -n "${EXTERNAL_SUBNET_V6}" ]]; then
-    network_address MINIKUBE_BMNET_V6_IP "${EXTERNAL_SUBNET_V6}" 9
-fi
-
 if [[ -n "${PROVISIONING_SUBNET_V4}" ]]; then
     network_address PROVISIONING_DHCP_V4_START "${PROVISIONING_SUBNET_V4}" 1
     network_address PROVISIONING_DHCP_V4_END "${PROVISIONING_SUBNET_V4}" 99
@@ -156,7 +152,7 @@ if [[ -n "${EXTERNAL_SUBNET_V4}" ]]; then
     network_address EXTERNAL_SUBNET_V4_HOST "$EXTERNAL_SUBNET_V4" 1
   fi
 
-  # Calculate DHCP range for baremetal network (20 to 60 is the libvirt dhcp)
+  # Calculate the DHCP range for the baremetal network (20 to 60 is reserved)
   network_address EXTERNAL_DHCP_V4_START "$EXTERNAL_SUBNET_V4" 20
   network_address EXTERNAL_DHCP_V4_END "$EXTERNAL_SUBNET_V4" 60
   network_address IPAM_EXTERNALV4_POOL_RANGE_START "$EXTERNAL_SUBNET_V4" 100
@@ -179,7 +175,7 @@ if [[ -n "${EXTERNAL_SUBNET_V6}" ]]; then
     network_address EXTERNAL_SUBNET_V6_HOST "$EXTERNAL_SUBNET_V6" 1
   fi
 
-  # Calculate DHCP range for baremetal network (20 to 60 is the libvirt dhcp) IPv6
+  # Calculate the DHCP range for the baremetal network (20 to 60 is reserved) IPv6
   network_address EXTERNAL_DHCP_V6_START "$EXTERNAL_SUBNET_V6" 20
   network_address EXTERNAL_DHCP_V6_END "$EXTERNAL_SUBNET_V6" 60
   network_address IPAM_EXTERNALV6_POOL_RANGE_START "$EXTERNAL_SUBNET_V6" 100

@@ -5,7 +5,7 @@
     enabled: yes
 
 - ansible.posix.firewalld:
-    zone: libvirt
+    zone: public
     interface: "{{ item }}"
     permanent: yes
     state: "{{ firewalld_rule_state }}"
@@ -17,7 +17,7 @@
 
 - name: "firewalld: Provisioning host ports"
   ansible.posix.firewalld:
-    zone: libvirt
+    zone: public
     port: "{{ item }}/tcp"
     permanent: yes
     state: "{{ firewalld_rule_state }}"
@@ -26,7 +26,7 @@
 
 - name: "firewalld: Ironic Ports"
   ansible.posix.firewalld:
-    zone: libvirt
+    zone: public
     port: "{{ item }}/tcp"
     permanent: yes
     state: "{{ firewalld_rule_state }}"
@@ -35,25 +35,9 @@
 
 - name: "firewalld: PXE Ports"
   ansible.posix.firewalld:
-    zone: libvirt
+    zone: public
     port: "{{ item }}/udp"
     permanent: yes
     state: "{{ firewalld_rule_state }}"
     immediate: yes
   loop: "{{ pxe_udp_ports }}"
-
-- name: "firewalld: VBMC Ports"
-  ansible.posix.firewalld:
-    zone: libvirt
-    port: "{{ vbmc_port_range | regex_replace(':', '-') }}/udp"
-    permanent: yes
-    state: "{{ firewalld_rule_state }}"
-    immediate: yes
-
-- name: "firewalld: sushy Port"
-  ansible.posix.firewalld:
-    zone: libvirt
-    port: "{{ sushy_port }}/tcp"
-    permanent: yes
-    state: "{{ firewalld_rule_state }}"
-    immediate: yes

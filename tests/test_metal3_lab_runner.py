@@ -31,7 +31,14 @@ def fake_archive(tmp_path):
         (source / name).write_text(f"# {name}\n", encoding="utf-8")
     (source / "lib" / "common.sh").write_text("# common\n", encoding="utf-8")
     (source / "vm-setup" / "inventory.ini").write_text("[all]\n", encoding="utf-8")
+    (source / "vm-setup" / "install-package-playbook.yml").write_text(
+        "- hosts: all\n", encoding="utf-8"
+    )
+    (source / "vm-setup" / "firewall.yml").write_text("- hosts: all\n", encoding="utf-8")
+    # pruned by PRUNE_PATHS: a libvirt playbook and the VM-based e2e suite
     (source / "vm-setup" / "setup-playbook.yml").write_text("- hosts: all\n", encoding="utf-8")
+    (source / "tests").mkdir(parents=True)
+    (source / "tests" / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (source / ".github" / "workflow.yml").write_text("name: ci\n", encoding="utf-8")
 
     archive = tmp_path / "upstream.tar.gz"
@@ -61,16 +68,17 @@ def test_host_mutating_actions_require_explicit_consent():
     assert "require_host_mutation_consent" in source
     assert "METAL3_LAB_ALLOW_HOST_MUTATION:-" in source
     assert "prepare)" in source
-    assert "lifecycle)" in source
     assert "clean)" in source
 
 
-def test_runner_exposes_full_lifecycle_cleanup_and_restore():
+def test_runner_exposes_cleanup_and_restore_and_no_vm_lifecycle():
     source = RUNNER.read_text(encoding="utf-8")
-    assert "make test" in source
     assert "make clean" in source
     assert "restore)" in source
     assert "verify_vendor" in source
+    # the VM-based lifecycle was removed together with the vendored e2e suite
+    assert "make test" not in source
+    assert "lifecycle)" not in source
 
 
 def test_vendor_check_rejects_a_missing_tree(tmp_path):
@@ -84,11 +92,18 @@ def test_vendor_import_extracts_the_pinned_tree_and_writes_provenance(fake_archi
     metadata = vendor_import.import_tree(str(fake_archive), target)
 
     assert metadata["upstream_commit"] == vendor_import.PINNED_COMMIT
-    assert metadata["file_count"] == 9
+    assert metadata["file_count"] == 12
+    assert metadata["retained_file_count"] == 10
+    assert "vm-setup/setup-playbook.yml" in metadata["pruned_paths"]
+    assert "tests" in metadata["pruned_paths"]
     assert (target / "01_prepare_host.sh").exists()
     assert (target / "lib" / "common.sh").exists()
+    assert not (target / "vm-setup" / "setup-playbook.yml").exists()
+    assert not (target / "tests").exists()
     assert not (target / ".github").exists()
-    assert vendor_import.check_tree(target)["problems"] == []
+    report = vendor_import.check_tree(target)
+    assert report["problems"] == []
+    assert "tests/run.sh" in report["pruned"]
 
 
 def test_vendor_check_reports_local_edits_without_failing(fake_archive, tmp_path):
@@ -153,6 +168,59 @@ def test_vendored_tree_matches_its_manifest_when_present():
     if not VENDOR_DIR.exists():
         pytest.skip("vendored Metal3 tree is not materialised in this checkout")
     report = vendor_import.check_tree(VENDOR_DIR)
-    assert report["metadata"]["upstream_commit"] == vendor_import.PINNED_COMMIT
-    assert report["metadata"]["file_count"] > 200
-    assert [item for item in report["problems"] if item.startswith("missing")] == []
+    metadata = report["metadata"]
+    assert metadata["upstream_commit"] == vendor_import.PINNED_COMMIT
+    # the tree is a fork now: upstream's virtual half, VM e2e suite and developer
+    # tooling are deleted, so only the physical-machine path remains
+    assert metadata["file_count"] < 60
+    assert metadata["retained_file_count"] == metadata["file_count"]
+    assert report["problems"] == []
+    assert "vm-setup/roles/libvirt" in metadata["pruned_paths"]
+    assert "tests" in metadata["pruned_paths"]
+    for pruned in ("vm-setup/roles/libvirt", "vm-setup/roles/virtbmc", "vbmc.sh", "tests"):
+        assert not (VENDOR_DIR / pruned).exists()
+
+
+def test_vendor_check_rejects_a_pruned_path_that_came_back(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target)
+
+    (target / "vm-setup" / "setup-playbook.yml").write_text("- hosts: all\n", encoding="utf-8")
+
+    problems = vendor_import.check_tree(target)["problems"]
+    assert any(
+        problem.startswith("unexpected vm-setup/setup-playbook.yml") for problem in problems
+    )
+
+
+def test_reseal_records_the_fork_as_the_baseline(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target)
+    (target / "lib" / "common.sh").write_text(
+        "# rewritten for physical machines\n", encoding="utf-8"
+    )
+
+    assert vendor_import.check_tree(target)["problems"] == ["modified lib/common.sh"]
+
+    metadata = vendor_import.reseal_tree(target)
+
+    assert metadata["upstream_commit"] == vendor_import.PINNED_COMMIT
+    assert metadata["resealed_at"]
+    assert "tests" in metadata["pruned_paths"]
+    assert vendor_import.check_tree(target)["problems"] == []
+
+
+def test_reseal_refuses_a_tree_that_keeps_pruned_code(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target)
+    (target / "vm-setup" / "roles" / "libvirt").mkdir(parents=True)
+
+    with pytest.raises(vendor_import.ImportError_, match="must not be vendored"):
+        vendor_import.reseal_tree(target)
+
+
+def test_runner_restore_never_overwrites_the_fork():
+    source = RUNNER.read_text(encoding="utf-8")
+    assert 'local reference="${VENDOR_DIR}.upstream"' in source
+    assert 'reseal)' in source
+    assert '--reseal --target "${VENDOR_DIR}"' in source

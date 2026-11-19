@@ -14,7 +14,9 @@ Commands:
   ``capi.yaml``.
 * ``apply``   - hand the rendered bundle to the agent: Secrets, then BMHs, then
   the CAPI/Metal3 cluster resources.
-* ``verify``  - ask the agent to judge the BMHs against the planned host count.
+* ``verify``  - ask the agent to judge the BMHs against the planned host count
+  and judge the management cluster (CRDs, controllers, host bridges, infra
+  containers, Ironic authentication) in python, never by grepping kubectl.
 * ``explain`` - print the recorded reasoning, one line per machine.
 
 The sequence this supports is the one the platform uses: the EPH live-OS single
@@ -42,7 +44,12 @@ for _path in (ROOT, ROOT / "apps" / "platform-api"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from apps.eph_agent import capi_renderer, fleet_planning, metal3_skill  # noqa: E402
+from apps.eph_agent import (  # noqa: E402
+    capi_renderer,
+    fleet_planning,
+    metal3_readiness,
+    metal3_skill,
+)
 from apps.target_agent import network_plugins  # noqa: E402
 from tools.metal3_fleet_source import load_platform_fleet  # noqa: E402
 
@@ -89,6 +96,53 @@ class KubectlRunner:
 
 def _plain_runner() -> KubectlRunner:
     return KubectlRunner(None)
+
+
+def local_command_runner(arguments: list[str], timeout: int = 30, **_: Any) -> dict[str, Any]:
+    """Run a host command (ip, podman/docker) and return its raw result."""
+
+    try:
+        completed = subprocess.run(
+            list(arguments),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "error": type(exc).__name__}
+    return {
+        "available": True,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-MAX_OUTPUT_BYTES:],
+        "stderr": completed.stderr[-4000:],
+    }
+
+
+def http_status_probe(url: str) -> int | None:
+    """Return the HTTP status of an endpoint, or None when it cannot be reached.
+
+    Ironic serves a self-signed certificate in this lab, so verification is
+    deliberately off for this probe only: the question is whether the API
+    demands authentication, not whether its certificate is trusted.
+    """
+
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=15, context=context) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except (OSError, ValueError):
+        return None
 
 
 # ----------------------------------------------------------------------------- plan
@@ -284,6 +338,20 @@ def command_verify(args: argparse.Namespace) -> int:
         if not ok:
             failures.append(f"{name} is not ready (status={status}, state={state})")
 
+    if not args.bmh_only:
+        findings = metal3_readiness.verify_management_cluster(
+            _plain_runner(),
+            kubeconfig=args.kubeconfig,
+            host_runner=None if args.no_host_checks else local_command_runner,
+            container_runtime=args.container_runtime,
+            http_probe=None if args.no_host_checks else http_status_probe,
+            ironic_url=args.ironic_url,
+        )
+        for finding in findings:
+            print(finding.render())
+            if not finding.ok:
+                failures.append(finding.name)
+
     for failure in failures:
         sys.stderr.write(f"ERROR: {failure}\n")
     return 1 if failures else 0
@@ -421,10 +489,25 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--namespace", default="metal3")
     apply.set_defaults(func=command_apply)
 
-    verify = sub.add_parser("verify", help="ask the agent to judge the BMHs")
+    verify = sub.add_parser(
+        "verify", help="judge the BMHs and the management cluster in python"
+    )
     verify.add_argument("--dir", type=Path, required=True)
     verify.add_argument("--namespace", default="metal3")
     verify.add_argument("--expected", type=int)
+    verify.add_argument("--kubeconfig")
+    verify.add_argument(
+        "--container-runtime", default=os.environ.get("CONTAINER_RUNTIME", "docker")
+    )
+    verify.add_argument("--ironic-url", default=os.environ.get("IRONIC_URL"))
+    verify.add_argument(
+        "--bmh-only", action="store_true", help="judge the BMHs and nothing else"
+    )
+    verify.add_argument(
+        "--no-host-checks",
+        action="store_true",
+        help="skip the provisioning-host bridges, containers and Ironic probe",
+    )
     verify.set_defaults(func=command_verify)
 
     explain = sub.add_parser("explain", help="print the recorded reasoning")

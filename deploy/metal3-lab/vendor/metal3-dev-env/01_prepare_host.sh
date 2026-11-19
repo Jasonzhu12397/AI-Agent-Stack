@@ -98,25 +98,11 @@ if ! kubectl krew > /dev/null 2>&1; then
     download_and_install_krew
 fi
 
-if [[ "${BOOTSTRAP_CLUSTER}" = "minikube" ]]; then
-    # shellcheck disable=SC2312
-    if ! command -v minikube &>/dev/null || [[ "$(minikube version --short)" != "${MINIKUBE_VERSION}" ]]; then
-        download_and_install_minikube
-        download_and_install_kvm2_driver
-    fi
-
-    if ! command -v docker-machine-driver-kvm2 &>/dev/null ; then
-        download_and_install_kvm2_driver
-    fi
-# Install Kind for both Kind and tilt
-else
-    # shellcheck disable=SC2312
-    if ! command -v kind &>/dev/null || [[ "v$(kind version -q)" != "${KIND_VERSION}" ]]; then
-        download_and_install_kind
-    fi
-    if [[ "${BOOTSTRAP_CLUSTER}" = "tilt" ]]; then
-        download_and_install_tilt
-    fi
+# Kind is the only management-cluster provider: minikube and tilt are not
+# part of this lab, so only kind is installed.
+# shellcheck disable=SC2312
+if ! command -v kind &>/dev/null || [[ "v$(kind version -q)" != "${KIND_VERSION}" ]]; then
+    download_and_install_kind
 fi
 
 # shellcheck disable=SC2312
@@ -134,11 +120,4 @@ if [[ ! -r "${BASH_COMPLETION}" ]]; then
     kubectl completion bash | sudo tee "${BASH_COMPLETION}" >/dev/null
 fi
 
-# TODO (mboukhalfa) fake images
-if [[ "${NODES_PLATFORM}" = "fake" ]]; then
-    echo "Skipping image prepulling on fake nodes platform"
-else
-    # pre-pull node and container images
-    # shellcheck disable=SC1091
     source lib/image_prepull.sh
-fi

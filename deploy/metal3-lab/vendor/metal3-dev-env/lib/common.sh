@@ -51,7 +51,7 @@ ADDN_DNS="${ADDN_DNS:-}"
 EXT_IF="${EXT_IF:-}"
 # Provisioning interface
 PRO_IF="${PRO_IF:-}"
-# Does libvirt manage the external bridge (including DNS and DHCP)
+# Does this host manage the external bridge (including DNS and DHCP)
 MANAGE_EXT_BRIDGE="${MANAGE_EXT_BRIDGE:-y}"
 # Only manage bridges if is set
 MANAGE_PRO_BRIDGE="${MANAGE_PRO_BRIDGE:-y}"
@@ -260,13 +260,9 @@ if [[ "${BUILD_IRSO_LOCALLY}" == "true" ]]; then
   export IRSO_LOCAL_IMAGE="${IRSOPATH}"
 fi
 
-export BMO_RUN_LOCAL="${BMO_RUN_LOCAL:-false}"
-export CAPM3_RUN_LOCAL="${CAPM3_RUN_LOCAL:-false}"
 
 export WORKING_DIR="${WORKING_DIR:-/opt/metal3-dev-env}"
-export NODES_FILE="${NODES_FILE:-${WORKING_DIR}/ironic_nodes.json}"
-export FAKE_NODES_FILE="${FAKE_NODES_FILE:-${WORKING_DIR}/fake_nodes.json}"
-export NODES_PLATFORM="${NODES_PLATFORM:-libvirt}"
+export NODES_PLATFORM="${NODES_PLATFORM:-baremetal}"
 export ANSIBLE_VENV="${ANSIBLE_VENV:-"${WORKING_DIR}/venv"}"
 # shellcheck disable=SC2034
 ANSIBLE="${ANSIBLE_VENV}/bin/ansible"
@@ -276,9 +272,6 @@ export NAMESPACE="${NAMESPACE:-metal3}"
 export NUM_NODES="${NUM_NODES:-2}"
 export CONTROL_PLANE_MACHINE_COUNT="${CONTROL_PLANE_MACHINE_COUNT:-1}"
 export WORKER_MACHINE_COUNT="${WORKER_MACHINE_COUNT:-1}"
-export VM_EXTRADISKS="${VM_EXTRADISKS:-false}"
-export VM_EXTRADISKS_FILE_SYSTEM="${VM_EXTRADISKS_FILE_SYSTEM:-ext4}"
-export VM_EXTRADISKS_MOUNT_DIR="${VM_EXTRADISKS_MOUNT_DIR:-/mnt/disk2}"
 export MAX_SURGE_VALUE="${MAX_SURGE_VALUE:-1}"
 export IRONIC_TAG="${IRONIC_TAG:-latest}"
 export BARE_METAL_OPERATOR_TAG="${BARE_METAL_OPERATOR_TAG:-latest}"
@@ -301,11 +294,6 @@ export DOCKER_REGISTRY_IMAGE="${DOCKER_REGISTRY_IMAGE:-${DOCKER_HUB_PROXY}/${DOC
 export CONTAINER_REGISTRY="${CONTAINER_REGISTRY:-quay.io}"
 export LOCAL_CONTAINER_PLATFORM="${LOCAL_CONTAINER_PLATFORM:-linux/amd64}"
 
-# BMC emulator images
-export VBMC_IMAGE="${VBMC_IMAGE:-${CONTAINER_REGISTRY}/metal3-io/vbmc}"
-export SUSHY_TOOLS_IMAGE="${SUSHY_TOOLS_IMAGE:-${CONTAINER_REGISTRY}/metal3-io/sushy-tools}"
-export FAKE_IPA_IMAGE="${FAKE_IPA_IMAGE:-${CONTAINER_REGISTRY}/metal3-io/fake-ipa}"
-export FKAS_IMAGE="${FKAS_IMAGE:-${CONTAINER_REGISTRY}/metal3-io/metal3-fkas}"
 
 # CAPM3 and IPAM controller images
 if [[ "${CAPM3RELEASEBRANCH}" = "release-1.11" ]]; then
@@ -393,12 +381,9 @@ export KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.37.0}"
 export KUBERNETES_BINARIES_VERSION="${KUBERNETES_BINARIES_VERSION:-${KUBERNETES_VERSION}}"
 export KUBERNETES_BINARIES_CONFIG_VERSION=${KUBERNETES_BINARIES_CONFIG_VERSION:-"v0.15.1"}
 
-# Bootstrap Cluster
-if [[ "${CONTAINER_RUNTIME}" = "docker" ]]; then
-  export BOOTSTRAP_CLUSTER=${BOOTSTRAP_CLUSTER:-"kind"}
-else
-  export BOOTSTRAP_CLUSTER="minikube"
-fi
+# Bootstrap Cluster: kind only. minikube needed libvirt and tilt was an
+# upstream live-reload workflow; neither exists in this lab.
+export BOOTSTRAP_CLUSTER=${BOOTSTRAP_CLUSTER:-"kind"}
 
 # Kubectl version - SHA256 is downloaded and verified
 export KUBECTL_VERSION="${KUBECTL_VERSION:-${KUBERNETES_BINARIES_VERSION}}"
@@ -410,17 +395,11 @@ export KREW_SHA256="${KREW_SHA256:-5df32eaa0e888a2566439c4ccb2ef3a3e6e89522f2f21
 # Kustomize version
 export KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION:-v5.4.1}"
 
-# Minikube version (if BOOTSTRAP_CLUSTER=minikube)
-export MINIKUBE_VERSION="${MINIKUBE_VERSION:-v1.37.0}"
-
 # Kind, kind node image versions (if BOOTSTRAP_CLUSTER=kind)
 export KIND_VERSION="${KIND_VERSION:-v0.33.0}"
 export KIND_NODE_IMAGE_VERSION="${KIND_NODE_IMAGE_VERSION:-v1.37.0}"
 export KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-${DOCKER_HUB_PROXY}/kindest/node:${KIND_NODE_IMAGE_VERSION}}"
 
-# Tilt
-export TILT_VERSION="${TILT_VERSION:-v0.32.3}"
-export TILT_SHA256="${TILT_SHA256:-b30ebbba68d4fd04f8afa11efc439515241dbcc2582eac2ced3e9fad09ce8318}"
 
 # Ansible 13 requires Python 3.12+ on the control node. Upgrade the CI-tested
 # Ubuntu 24.04 and CentOS Stream 10 hosts; leave the existing default elsewhere.
@@ -450,13 +429,6 @@ if [[ "${NUM_NODES}" -lt "$((CONTROL_PLANE_MACHINE_COUNT + WORKER_MACHINE_COUNT)
     exit 1
 fi
 
-# Set default libvirt_domain_type to kvm
-# Accepted values are kvm or qemu
-export LIBVIRT_DOMAIN_TYPE="${LIBVIRT_DOMAIN_TYPE:-kvm}"
-
-# Verify requisites/permissions
-# Connect to system libvirt
-export LIBVIRT_DEFAULT_URI=qemu:///system
 if [[ "${USER}" != "root" ]] && [[ "${XDG_RUNTIME_DIR:-}" = "/run/user/0" ]] ; then
     echo "Please use a non-root user, WITH a login shell (e.g. su - USER)"
     exit 1
@@ -501,28 +473,6 @@ fi
 # Ensure all files in the working directory are owned by the current user
 sudo chown -R "${USER}:${USER}" "${WORKING_DIR}"
 
-list_nodes() {
-    # Includes -machine and -machine-namespace
-    # shellcheck disable=SC2002
-    cat "${NODES_FILE}" | \
-        jq '.nodes[] | {
-           name,
-           driver,
-           address:.driver_info.address,
-           port:.driver_info.port,
-           user:.driver_info.username,
-           password:.driver_info.password,
-           verify_ca:.driver_info.redfish_verify_ca,
-           mac: .ports[0].address
-           } | if .verify_ca == null then .verify_ca="True" else . end |
-           .name + " " +
-           .address + " " +
-           .user + " " +
-           .password + " " +
-           .mac + " " +
-           .verify_ca' \
-       | sed 's/"//g'
-}
 
 #
 # Iterate a command until it runs successfully or exceeds the maximum retries
@@ -663,7 +613,7 @@ differs(){
 #
 remove_ironic_containers() {
   #shellcheck disable=SC2015
-  for name in ipa-downloader vbmc sushy-tools httpd-infra ipxe-builder registry; do
+  for name in ipa-downloader httpd-infra ipxe-builder registry; do
     if sudo "${CONTAINER_RUNTIME}" ps | grep -w -q "${name}$"; then
         sudo "${CONTAINER_RUNTIME}" kill "${name}" || true
     fi
@@ -673,33 +623,4 @@ remove_ironic_containers() {
   done
 }
 
-#
-# Manage libvirtd services based on OS
-#
-manage_libvirtd() {
-  case ${DISTRO} in
-      centos9|rhel9|centos10|rhel10)
-          for i in qemu network nodedev nwfilter secret storage interface; do
-              sudo systemctl enable --now virt${i}d.socket
-              sudo systemctl enable --now virt${i}d-ro.socket
-              sudo systemctl enable --now virt${i}d-admin.socket
-          done
-          ;;
-      *)
-          sudo systemctl restart libvirtd.service
-        ;;
-esac
-}
 
-#
-# Translate verify_ca, which is True or False and coming from ironic nodes,
-# to disableCertificateVerification, which is true or false, and is set in BMH
-#
-get_disableCertificateVerification_from_verify_ca() {
-  local VERIFY_CA="$1"
-  if [[ ${VERIFY_CA} == "False" ]]; then
-    echo "true"
-  else
-    echo "false"
-  fi
-}

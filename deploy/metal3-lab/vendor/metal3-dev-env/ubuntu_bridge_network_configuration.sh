@@ -10,9 +10,8 @@ source lib/common.sh
 source lib/network.sh
 
 if [[ "${MANAGE_PRO_BRIDGE}" = "y" ]]; then
-    # Adding an IP address in the libvirt definition for this network results in
-    # dnsmasq being run, we don't want that as we have our own dnsmasq, so set
-    # the IP address here.
+    # The bridge itself carries no address: this lab runs its own dnsmasq, so
+    # the address is placed on ironicendpoint below.
     # Create a veth iterface peer.
     sudo ip link add ironicendpoint type veth peer name ironic-peer
     # Create provisioning bridge, if the user allowed bridged provisioning network.
@@ -56,15 +55,5 @@ if [[ "${MANAGE_INT_BRIDGE}" = "y" ]]; then
     # external access so we need to make sure we maintain dhcp config if its available
     if [[ -n "${INT_IF}" ]]; then
         sudo brctl addif "${INT_IF}"
-    fi
-fi
-
-# restart the libvirt network so it applies an ip to the bridge
-if [[ "${MANAGE_EXT_BRIDGE}" = "y" ]]; then
-    sudo virsh net-destroy external
-    sudo virsh net-start external
-    # Need to bring UP the NIC after destroying the libvirt network
-    if [[ -n "${INT_IF}" ]]; then
-        sudo ifup "${INT_IF}"
     fi
 fi

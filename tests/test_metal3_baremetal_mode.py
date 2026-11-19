@@ -157,40 +157,43 @@ def test_renderer_cli_count_and_output(tmp_path):
     assert (out / "bmhs.yaml").is_file()
 
 
-def test_runner_defaults_to_baremetal_and_skips_kvm_requirement():
+def test_runner_has_no_platform_switch_and_no_kvm_gate():
     source = RUNNER.read_text(encoding="utf-8")
-    assert 'METAL3_LAB_PLATFORM:-baremetal' in source
-    assert "NODES_PLATFORM" in source
-    assert "bmh_from_inventory.py" in source
+    assert "METAL3_LAB_PLATFORM" not in source
+    assert "NODES_PLATFORM" not in source
+    assert "/dev/kvm" in source  # mentioned only to say it is unused
+    assert "KVM is irrelevant" in source or "never starts a virtual machine" in source
     assert "BARE_METAL_HOSTS_DIR" in source
-    # the KVM gate is an elif of the baremetal branch, so it never runs there
-    baremetal_branch = source.index('"${PLATFORM}" == "baremetal"')
-    kvm_gate = source.index("/dev/kvm")
-    assert baremetal_branch < kvm_gate
-    assert 'elif [[ ! -e /dev/kvm' in source
+    assert "tools/metal3_deploy.py" in source
 
 
-def test_vendored_scripts_skip_virtualisation_on_baremetal():
+def test_vendored_scripts_carry_no_virtualisation_path():
     configure = (VENDOR / "02_configure_host.sh").read_text(encoding="utf-8")
     launch = (VENDOR / "03_launch_mgmt_cluster.sh").read_text(encoding="utf-8")
     verify = (VENDOR / "04_verify.sh").read_text(encoding="utf-8")
 
-    assert 'if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then' in configure
-    assert "Skipping libvirt VM creation on baremetal platform" in configure
-    assert "Skipping vbmc and sushy-tools containers on baremetal platform" in configure
-    # the VM creation playbook is still reachable for the libvirt platform
-    assert "vm-setup/setup-playbook.yml" in configure
-    assert "vm-setup/teardown-playbook.yml" not in configure
+    # no libvirt, no virtual BMC emulator, no VM creation playbook
+    assert "Skipping libvirt" not in configure
+    assert "setup-playbook.yml" not in configure
+    assert "virsh" not in configure
+    assert "configure_minikube" not in configure
 
+    # BMHs are never generated in shell any more: the agent applies the plan
     assert "apply_bm_hosts_from_dir" in launch
     assert "BARE_METAL_HOSTS_DIR" in launch
+    assert "make-bm-worker" not in launch
+    assert "make_bm_hosts()" not in launch
+    assert "list_nodes" not in launch
 
     assert "check_bmhs_baremetal" in verify
+    assert "check_bm_hosts(" not in verify
+    assert "virsh" not in verify
     assert 'EXPTD_CONTAINERS="httpd-infra registry"' in verify
 
 
 def test_baremetal_documents_have_no_vm_creation_path():
     docs = (ROOT / "deploy" / "metal3-lab" / "README.md").read_text(encoding="utf-8")
-    assert "baremetal" in docs.lower()
-    assert "No libvirt" in docs or "no libvirt" in docs
+    assert "physical machines" in docs
+    assert "not vendored" in docs
+    assert "PRUNE_PATHS" in docs
     assert "bmh_from_inventory" in docs

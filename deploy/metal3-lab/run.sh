@@ -12,15 +12,10 @@ readonly VENDOR_DIR="${METAL3_LAB_VENDOR_DIR:-${SCRIPT_DIR}/vendor/metal3-dev-en
 readonly WORK_DIR="${METAL3_LAB_WORK_DIR:-${REPO_ROOT}/.metal3-lab}"
 readonly LOG_DIR="${WORK_DIR}/artifacts"
 readonly VENDOR_TOOL="${REPO_ROOT}/tools/vendor_import.py"
-readonly BMH_TOOL="${REPO_ROOT}/tools/bmh_from_inventory.py"
 readonly AGENT_BRIDGE="${REPO_ROOT}/tools/metal3_agent_bridge.py"
 readonly DEPLOY_TOOL="${REPO_ROOT}/tools/metal3_deploy.py"
 readonly CLUSTER_NAME="${METAL3_LAB_CLUSTER_NAME:-target-cluster}"
 readonly CONTROL_PLANE_COUNT="${METAL3_LAB_CONTROL_PLANE_COUNT:-3}"
-# Platform selects which half of the vendored tree is exercised:
-#   baremetal (default) - the BMHs describe physical machines, no VM is created
-#   libvirt             - upstream demo mode, virtual bare metal hosts on the host
-readonly PLATFORM="${METAL3_LAB_PLATFORM:-baremetal}"
 readonly INVENTORY="${METAL3_LAB_INVENTORY:-${SCRIPT_DIR}/hosts/baremetal-nodes.yaml}"
 readonly HOSTS_DIR="${METAL3_LAB_HOSTS_DIR:-${WORK_DIR}/hosts}"
 readonly ACTION="${1:-}"
@@ -36,7 +31,7 @@ die() {
 
 require_host_mutation_consent() {
     [[ "${METAL3_LAB_ALLOW_HOST_MUTATION:-}" == "1" ]] ||
-        die "This action changes host networking, packages, libvirt and Kubernetes state. Set METAL3_LAB_ALLOW_HOST_MUTATION=1 only inside a disposable Ubuntu VM."
+        die "This action changes host networking, packages and Kubernetes state. Set METAL3_LAB_ALLOW_HOST_MUTATION=1 only on a host you are willing to reconfigure."
 }
 
 verify_vendor() {
@@ -48,6 +43,9 @@ verify_vendor() {
         die "Vendored tree failed verification: ${report}"
     if grep -q 'local change:' <<<"${report}"; then
         log "WARNING: the vendored tree contains local edits; running the edited code on purpose"
+    fi
+    if grep -q 'intentionally not vendored:' <<<"${report}"; then
+        log "Vendored tree is pruned: upstream virtualisation, VM e2e and dev tooling are not vendored"
     fi
     printf '%s\n' "${report}" | sed -n '1,3p'
 }
@@ -69,33 +67,25 @@ preflight() {
     (( cpus >= 4 )) || die "At least 4 CPUs are required; found ${cpus}"
     (( memory_kib >= 8 * 1024 * 1024 )) || die "At least 8 GiB RAM is required"
 
-    if [[ "${PLATFORM}" == "baremetal" ]]; then
-        log "Platform: baremetal (physical machines, no libvirt, no vbmc/sushy)"
-    elif [[ ! -e /dev/kvm && "${LIBVIRT_DOMAIN_TYPE:-kvm}" != "qemu" ]]; then
-        die "/dev/kvm is unavailable. Enable nested virtualization or explicitly set LIBVIRT_DOMAIN_TYPE=qemu (experimental upstream mode), or switch to METAL3_LAB_PLATFORM=baremetal for physical hardware."
+    # Physical machines only: no /dev/kvm, no libvirt, no nested virtualization.
+    if [[ -e /dev/kvm ]]; then
+        log "Note: /dev/kvm exists but is unused; this lab never starts a virtual machine"
     fi
 
-    [[ "${PLATFORM}" == "baremetal" || "${PLATFORM}" == "libvirt" ]] ||
-        die "METAL3_LAB_PLATFORM must be baremetal or libvirt; got ${PLATFORM}"
-
     mkdir -p "${LOG_DIR}"
-    log "Host preflight passed: Ubuntu ${VERSION_ID:-unknown}, CPUs=${cpus}, RAM_KiB=${memory_kib}, KVM=$([[ -e /dev/kvm ]] && echo available || echo unavailable)"
+    log "Host preflight passed: Ubuntu ${VERSION_ID:-unknown}, CPUs=${cpus}, RAM_KiB=${memory_kib}"
     log "Vendored Metal3 dev-env: ${VENDOR_DIR} (pinned ${PINNED_COMMIT})"
 }
 
-# Export what the vendored scripts read. NODES_PLATFORM is the upstream
-# extension point: baremetal adds a third value next to libvirt and fake.
+# Export what the vendored scripts read.
 platform_env() {
-    export NODES_PLATFORM="${PLATFORM}"
     # BMH registration and readiness judgement run through the agent bridge,
     # never through kubectl calls embedded in the vendored scripts.
     export METAL3_LAB_AGENT_BRIDGE="${AGENT_BRIDGE}"
     export METAL3_LAB_DEPLOY_TOOL="${DEPLOY_TOOL}"
     export METAL3_LAB_BMH_DRIVER="${METAL3_LAB_BMH_DRIVER:-agent}"
-    if [[ "${PLATFORM}" == "baremetal" ]]; then
-        export BARE_METAL_HOSTS_DIR="${HOSTS_DIR}"
-    fi
-    log "NODES_PLATFORM=${NODES_PLATFORM}${BARE_METAL_HOSTS_DIR:+ BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR}} BMH_DRIVER=${METAL3_LAB_BMH_DRIVER}"
+    export BARE_METAL_HOSTS_DIR="${HOSTS_DIR}"
+    log "BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR} BMH_DRIVER=${METAL3_LAB_BMH_DRIVER}"
 }
 
 # Build the target cluster plan and the manifests the agent will apply.
@@ -106,7 +96,6 @@ platform_env() {
 # records the reasoning in plan.json. This function only decides where the
 # output goes and how many machines the plan owns.
 render_bmh_manifests() {
-    [[ "${PLATFORM}" == "baremetal" ]] || return 0
     command -v python3 >/dev/null || die "python3 is required to render BMH manifests"
 
     local -a args=(plan --cluster-name "${CLUSTER_NAME}" --namespace metal3 --out-dir "${HOSTS_DIR}")
@@ -150,14 +139,6 @@ verify() {
     in_vendor verify-management-cluster "./04_verify.sh"
 }
 
-lifecycle() {
-    require_host_mutation_consent
-    preflight
-    verify_vendor
-    platform_env
-    in_vendor lifecycle "make test"
-}
-
 clean() {
     require_host_mutation_consent
     preflight
@@ -167,10 +148,22 @@ clean() {
 }
 
 restore() {
-    # Development-only helper: re-materialise the pinned upstream tree from its
-    # own archive, never from a git remote. Local edits are replaced on purpose.
+    # Development-only helper: materialise the pinned UPSTREAM tree into a
+    # scratch directory for comparison, never from a git remote and never over
+    # the fork. The vendored tree in this repository is the code that runs; it
+    # has no libvirt half and its scripts call python, so overwriting it with
+    # upstream would break the lab.
     preflight
-    run_logged restore-vendor python3 "${VENDOR_TOOL}" --target "${VENDOR_DIR}" --commit "${PINNED_COMMIT}"
+    local reference="${VENDOR_DIR}.upstream"
+    run_logged restore-vendor python3 "${VENDOR_TOOL}" --target "${reference}" --commit "${PINNED_COMMIT}"
+    log "Upstream reference tree: ${reference} (the lab keeps running ${VENDOR_DIR})"
+}
+
+reseal() {
+    # After a deliberate edit to the vendored fork, record the new baseline so
+    # --check reports future drift instead of the edits already made on purpose.
+    command -v python3 >/dev/null || die "python3 is required"
+    run_logged reseal-vendor python3 "${VENDOR_TOOL}" --reseal --target "${VENDOR_DIR}"
 }
 
 case "${ACTION}" in
@@ -180,35 +173,35 @@ case "${ACTION}" in
     verify)
         verify
         ;;
-    lifecycle)
-        lifecycle
-        ;;
     clean)
         clean
         ;;
     restore)
         restore
         ;;
+    reseal)
+        reseal
+        ;;
     *)
         cat <<'USAGE'
-Usage: bash deploy/metal3-lab/run.sh <prepare|verify|lifecycle|clean|restore>
+Usage: bash deploy/metal3-lab/run.sh <prepare|verify|clean|restore|reseal>
 
 Actions:
   prepare    Run the vendored 01/02/03/04 scripts to install the host, configure
              networking, launch the management cluster and verify it.
   verify     Run the vendored 04_verify.sh against the existing environment.
-  lifecycle  Run the vendored `make test` provision/pivot/re-provision lifecycle.
   clean      Run the vendored `make clean`.
-  restore    Re-materialise the pinned upstream tree from its archive (no git).
+  restore    Materialise the pinned upstream tree into vendor/*.upstream for
+             comparison (no git). The forked tree that runs is never overwritten.
+  reseal     Record the current vendored fork as the manifest baseline after a
+             deliberate edit, so `verify` reports only new drift.
 
-Platforms:
-  METAL3_LAB_PLATFORM=baremetal (default)
-      Physical machines. The inventory at deploy/metal3-lab/hosts/baremetal-nodes.yaml
-      is rendered into BMH manifests by tools/bmh_from_inventory.py, then applied.
-      No libvirt, no vbmc, no sushy-tools, no VM is created and /dev/kvm is not required.
-  METAL3_LAB_PLATFORM=libvirt
-      Upstream demo mode: the vendored vm-setup roles create virtual bare metal
-      hosts on this host, with vbmc/sushy-tools emulating their BMCs.
+Platform:
+  Physical machines only. The plan in deploy/metal3-lab/hosts (or in
+  METAL3_LAB_HOSTS_DIR) is rendered from the platform fleet by
+  tools/metal3_deploy.py, then applied through the agent. The vendored tree
+  contains no libvirt roles, no vbmc/sushy-tools and no VM-based test suite:
+  upstream's virtual half is deleted by tools/vendor_import.py on every import.
 
 Bare metal inputs:
   METAL3_LAB_PROJECT_ID  Platform project to read the fleet from.
@@ -236,12 +229,10 @@ Vendored source:
   Local edits to the vendored tree are registered in vendor/PATCHES.md.
 
 Safety:
-  prepare, lifecycle and clean require METAL3_LAB_ALLOW_HOST_MUTATION=1.
+  prepare and clean require METAL3_LAB_ALLOW_HOST_MUTATION=1.
   Run host-mutating actions only on a host you are willing to reconfigure:
   they install packages, rewrite bridges and firewall rules.
   Set METAL3_LAB_WORK_DIR to choose an artifact directory outside the repository.
-  Set LIBVIRT_DOMAIN_TYPE=qemu only in libvirt mode when KVM is unavailable;
-  upstream documents QEMU mode as experimental.
 USAGE
         exit 2
         ;;

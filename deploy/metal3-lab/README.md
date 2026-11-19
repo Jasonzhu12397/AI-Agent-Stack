@@ -11,30 +11,38 @@ There is no git dependency at run time: no remote clone, no `fetch`, no
 files, so it can be edited, reviewed, patched and re-developed locally — or by an
 agent — exactly like the rest of this project.
 
-## Two platforms, one code base
+## One platform: physical machines
 
-`METAL3_LAB_PLATFORM` decides which half of the vendored tree runs:
+This lab provisions real hardware behind real BMCs (Redfish/IPMI). There is no
+platform switch, no virtual machine, no `/dev/kvm` requirement: the virtual half
+of upstream dev-env is not merely disabled, it is **not vendored**.
 
-| Platform | What happens | Who it is for |
-|---|---|---|
-| `baremetal` (default) | BMH manifests are rendered from your inventory and applied. No libvirt, no `vbmc`, no `sushy-tools`, no VM, no `/dev/kvm`. | Real hardware behind a real BMC (Redfish/IPMI). |
-| `libvirt` | Upstream demo: the `vm-setup` roles create virtual bare metal hosts on this host, with `vbmc`/`sushy-tools` emulating their BMCs. | Demos, CI, a laptop without hardware. |
+`tools/vendor_import.py` imports the pinned upstream tree and then deletes the
+paths that no longer have a consumer here (`PRUNE_PATHS` in that file):
 
-The bare metal path is not a fork of the workflow — it is the same `01/02/03/04`
-chain with three deliberate, recorded patches (see `vendor/PATCHES.md`):
+| Removed | Why it cannot stay |
+|---|---|
+| `vm-setup/roles/libvirt`, `virtbmc`, `ovs`, `setup-playbook.yml`, `teardown-playbook.yml`, `vbmc.sh`, `disable_apparmor_driver_libvirtd.sh` | create virtual bare metal hosts and emulate their BMCs |
+| `PoCs/` | a Kamaji demo built on libvirt domains, `sushy-tools` and shell-generated BMHs |
+| `tests/`, `template/` | the upstream VM-based e2e suite, replaced by the agent's verify step and this repository's pytest suite |
+| `hack/`, `tilt-setup/`, `Tiltfile*`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `OWNERS*`, `DCO`, `SECURITY_CONTACTS`, `renovate.json`, `.markdownlint*`, `.yamllint.yaml`, `README.md`, `vars.md` | upstream developer tooling, CI and repository metadata |
 
-- `02_configure_host.sh` skips the `vm-setup/setup-playbook.yml` run (libvirt +
-  virtbmc roles) and does not start `vbmc`/`sushy-tools`; the provisioning bridge
-  is attached to your real NIC instead of a veth pair.
-- `03_launch_mgmt_cluster.sh` never generates BMHs from a libvirt inventory; it
-  hands the manifests you rendered from your own machine list to the agent.
-- `04_verify.sh` has no `virsh` steps and no BMC emulator containers; the agent
-  judges the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
+What remains is the runtime skeleton the runner actually executes, and four
+deliberate, recorded edits (see `vendor/PATCHES.md`):
+
+- `02_configure_host.sh` creates the provisioning/external bridges with `ip` and
+  `brctl` on your real NICs and starts no BMC emulator.
+- `03_launch_mgmt_cluster.sh` generates no BMH from an inventory file and runs no
+  `go run make-bm-worker`: it hands the manifests the agent planned to
+  `tools/metal3_deploy.py`.
+- `04_verify.sh` has no `virsh` steps and no emulator containers; the agent judges
+  the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
+- `01_prepare_host.sh`/`Makefile`/`lib/*` only install and drive what is left.
 
 ## Python owns the pipeline, the agent owns the decisions
 
-Nothing in this path parses cluster data in shell. `run.sh` picks the platform
-and exports the inputs; `tools/metal3_deploy.py` does the rest:
+Nothing in this path parses cluster data in shell. `run.sh` exports the inputs
+and `tools/metal3_deploy.py` does the rest:
 
 | Stage | Code |
 |---|---|
@@ -136,20 +144,17 @@ python3 tools/metal3_agent_bridge.py verify --expected 2
 |---|---|
 | `prepare` | render BMHs, then `01_prepare_host.sh` -> `02_configure_host.sh` -> `03_launch_mgmt_cluster.sh` -> `04_verify.sh` |
 | `verify` | `04_verify.sh` |
-| `lifecycle` | `make test` (provision, pivot, re-provision, deprovision) |
 | `clean` | `make clean` |
 | `restore` | re-import the pinned tree from its archive, no git |
 
 ## Safety and host requirements
 
 The scripts modify host networking, packages, firewall rules and cluster state.
-Point them at a host you are willing to reconfigure. `prepare`, `lifecycle` and
-`clean` require `METAL3_LAB_ALLOW_HOST_MUTATION=1`.
+Point them at a host you are willing to reconfigure. `prepare` and `clean`
+require `METAL3_LAB_ALLOW_HOST_MUTATION=1`.
 
 Minimum documented size is 4 CPUs and 8 GiB RAM for the Ubuntu 22.04/24.04
-management host. In `baremetal` mode KVM is irrelevant and is not required; in
-`libvirt` mode KVM (or explicitly selected QEMU, which upstream documents as
-experimental) is required.
+management host. KVM is irrelevant: nothing here starts a virtual machine.
 
 The runner records timestamped logs under `$METAL3_LAB_WORK_DIR/artifacts`,
 verifies the vendored tree before every action, and logs a warning when the
@@ -158,17 +163,20 @@ vendored code contains local edits.
 ## Editing the vendored code
 
 1. Edit files under `deploy/metal3-lab/vendor/metal3-dev-env/` directly.
-2. `python3 tools/vendor_import.py --check` reports edited files as `local change:`.
+2. `python3 tools/vendor_import.py --check` reports edited files as `local change:`
+   and confirms the pruned paths are still absent.
 3. Record intentional divergences in `vendor/PATCHES.md`.
-4. `run.sh restore` re-imports the pinned upstream tree and replaces local edits —
-   re-apply your patches afterwards.
+4. To stop vendoring another upstream path, add it to `PRUNE_PATHS` in
+   `tools/vendor_import.py`; to keep one, remove it from that list.
+5. `run.sh restore` re-imports the pinned tree, applies the prune list again and
+   replaces local edits — re-apply your patches afterwards.
 
 See `vendor/README.md` for the full layout and the import rules.
 
 ## What this validates
 
-The lifecycle validates virtualized CAPI/Metal3 provisioning and pivot
-behaviour and, on the bare metal path, real BMH registration and introspection.
+The runner validates real CAPI/Metal3 control plane deployment on physical
+machines: host preparation, BMH registration, introspection and readiness.
 It is a provider/environment validation tier. This is not an AI Agent Stack three-agent end-to-end test. It does not claim to have exercised
 Cloud Control Agent command scheduling, EPH Agent pivot execution, Target Agent
 handoff, the project's worker provisioning adapter, or the project's EPH cleanup.

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #
-# Choose whether the "external" libvirt network will use IPv4, IPv6, or IPv4+IPv6.
+# Choose whether the "external" network will use IPv4, IPv6, or IPv4+IPv6.
 # This network is the primary network interface for the virtual bare metal hosts.
 #
 # Note that this only sets up the underlying network, and fully provisioning IPv6
@@ -15,7 +15,7 @@
 #export IP_STACK=v4
 
 #
-# This is the subnet used on the "external" libvirt network, created as the
+# This is the subnet used on the "external" network, created as the
 # primary network interface for the virtual bare metal hosts.
 #
 # V4 default of 192.168.111.0/24 set in lib/network.sh
@@ -110,13 +110,7 @@
 #export TEST_MAX_TIME=240
 
 #
-# Set the driver. The default value is 'mixed' (alternate nodes between ipmi
-# and redfish). Can also be set explicitly to ipmi/redfish/redfish-virtualmedia/redfish-uefihttp.
-#
-#export BMC_DRIVER="mixed"
-
-#
-# Set libvirt firmware and BMC bootMode
+# Set the firmware boot mode reported by the physical BMC
 # Choose "legacy" (bios), "UEFI", or "UEFISecureBoot"
 # Defaults to UEFI
 # export BOOT_MODE="UEFI"
@@ -167,14 +161,6 @@
 #
 #export IRONIC_IMAGE="${CONTAINER_REGISTRY}/metal3-io/ironic"
 
-# Container image for vbmc container
-#
-#export VBMC_IMAGE="${CONTAINER_REGISTRY}/metal3-io/vbmc"
-
-# Container image for sushy-tools container
-#
-#export SUSHY_TOOLS_IMAGE="${CONTAINER_REGISTRY}/metal3-io/sushy-tools"
-
 # APIEndpoint IP for target cluster
 #export CLUSTER_APIENDPOINT_IP="192.168.111.249"
 
@@ -189,13 +175,9 @@
 # of the node.
 #export NODE_HOSTNAME_FORMAT="node-%d"
 
-# Bootstrap cluster used as management cluster for cluster API
-# (can be "kind", "minikube" or "tilt"). Only "minikube" is supported with
-# CentOS
-# Selecting "tilt" does not deploy a management cluster, it is left up to the
-# user
-# Default is "kind" when CONTAINER_RUNTIME="docker", otherwise it is "minikube"
-#export BOOTSTRAP_CLUSTER=minikube
+# Bootstrap cluster used as management cluster for cluster API. Only "kind" is
+# supported here: minikube needed libvirt and tilt was an upstream workflow.
+#export BOOTSTRAP_CLUSTER=kind
 
 # Secure Ironic deployment with TLS ("true" or "false")
 #export IRONIC_TLS_SETUP="true"
@@ -207,16 +189,9 @@
 # Uncomment the line below to build ironic-image from source
 # export IRONIC_FROM_SOURCE="true"
 
-# Skip applying BMHs
-# export SKIP_APPLY_BMH="true"
-
 # Skip node image download and preparation - useful for CAPM3 e2e tests (default: false)
 # Container images will still be pulled
 # export SKIP_NODE_IMAGE_PREPULL="true"
-
-# To enable FakeIPA and run dev-env on a fake platform
-# export NODES_PLATFORM="fake"
-# export FAKE_IPA_IMAGE=192.168.111.1:5000/localimages/fake-ipa
 
 # Whether to use ironic-standalone-operator to deploy Ironic.
 # export USE_IRSO="true"

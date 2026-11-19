@@ -58,7 +58,6 @@ launch_baremetal_operator()
     safe_pushd "${BMOPATH}"
 
     # Deploy BMO using deploy.sh script
-    if [[ "${BOOTSTRAP_CLUSTER}" != "tilt" ]]; then
         # Update container images to use local ones
         if [[ -n "${BARE_METAL_OPERATOR_LOCAL_IMAGE:-}" ]]; then
             update_component_image BMO "${BARE_METAL_OPERATOR_LOCAL_IMAGE}"
@@ -70,7 +69,6 @@ launch_baremetal_operator()
         else
             update_component_image Keepalived "${IRONIC_KEEPALIVED_IMAGE}"
         fi
-    fi
 
     # Update Configmap parameters with correct urls
     cat << EOF | sudo tee "${BMOPATH}/config/default/ironic.env"
@@ -84,25 +82,6 @@ EOF
     # Deploy BMO using deploy.sh script
     "${BMOPATH}/tools/deploy.sh" -b "${BMO_IRONIC_ARGS[@]}"
 
-    # If BMO should run locally, scale down the deployment and run BMO
-    if [[ "${BMO_RUN_LOCAL}" = "true" ]]; then
-        if [[ "${IRONIC_TLS_SETUP}" = "true" ]]; then
-            sudo mkdir -p /opt/metal3/certs/ca/
-            cp "${IRONIC_CACERT_FILE}" /opt/metal3/certs/ca/crt
-        fi
-
-        sudo mkdir -p /opt/metal3/auth/ironic
-        sudo chown "${USER}":"${USER}" /opt/metal3/auth/ironic
-        cp "${IRONIC_USERNAME_FILE}" /opt/metal3/auth/ironic/username
-        cp "${IRONIC_PASSWORD_FILE}" /opt/metal3/auth/ironic/password
-
-        export IRONIC_ENDPOINT=${IRONIC_URL}
-
-        touch bmo.out.log
-        touch bmo.err.log
-        kubectl scale deployment baremetal-operator-controller-manager -n "${IRONIC_NAMESPACE}" --replicas=0
-        nohup "${SCRIPTDIR}/hack/run-bmo-loop.sh" >> bmo.out.log 2>> bmo.err.log &
-    fi
     popd
 }
 
@@ -168,14 +147,6 @@ EOF
         echo "DEPLOY_ISO_URL=${DEPLOY_ISO_URL}" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
     fi
 
-    if [[ "${NODES_PLATFORM}" = "libvirt" ]] ; then
-        echo "IRONIC_KERNEL_PARAMS=console=ttyS0" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-    fi
-
-    # TODO (mboukhalfa) enable heartbeating and ironic TLS when sushy-tools release v1.3.1
-    if [[ "${NODES_PLATFORM}" = "fake" ]]; then
-        echo "OS_AGENT__REQUIRE_TLS=false" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-    fi
 
     if [[ -n "${DHCP_IGNORE:-}" ]]; then
         echo "DHCP_IGNORE=${DHCP_IGNORE}" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
@@ -210,16 +181,11 @@ EOF
         update_component_image IPA-downloader "${IPA_DOWNLOADER_IMAGE}"
     fi
 
-    if [[ "${BOOTSTRAP_CLUSTER}" != "minikube" ]]; then
         update_images
         ${RUN_LOCAL_IRONIC_SCRIPT}
         # Wait for ironic to become ready
         echo "Waiting for Ironic to become ready"
         retry sudo "${CONTAINER_RUNTIME}" exec ironic /bin/ironic-readiness
-    else
-        # Deploy Ironic using deploy.sh script
-        "${BMOPATH}/tools/deploy.sh" -i "${BMO_IRONIC_ARGS[@]}"
-    fi
     popd
 }
 
@@ -268,11 +234,6 @@ spec:
     sshKey: "${SSH_PUB_KEY_CONTENT}"
 EOF
 
-    if [[ "${NODES_PLATFORM}" = "libvirt" ]]; then
-        cat >> "${ironic}" <<EOF
-    extraKernelParams: "console=ttyS0"
-EOF
-    fi
 
     if [[ -r "${IRONIC_CERT_FILE}" ]] && [[ -r "${IRONIC_KEY_FILE}" ]]; then
         kubectl create secret tls ironic-cert -n "${IRONIC_NAMESPACE}" --key="${IRONIC_KEY_FILE}" --cert="${IRONIC_CERT_FILE}"
@@ -324,99 +285,8 @@ EOF
     fi
 }
 
-#
-# Launch and configure fakeIPA
-#
-launch_fake_ipa()
-{
-    # Create a folder to host fakeIPA config and certs
-    mkdir -p "${WORKING_DIR}/fake-ipa"
-    if [[ "${BOOTSTRAP_CLUSTER}" = "kind" ]] && [[ "${IRONIC_TLS_SETUP}" = "true" ]]; then
-        cp "${IRONIC_CACERT_FILE}" "${WORKING_DIR}/fake-ipa/ironic-ca.crt"
-    elif [[ "${IRONIC_TLS_SETUP}" = "true" ]]; then
-        # wait for ironic to be running to ensure ironic-cert is created
-        kubectl -n baremetal-operator-system wait --for=condition=available deployment/baremetal-operator-ironic --timeout=900s
-        # Extract ironic-cert to be used inside fakeIPA for TLS
-        kubectl get secret -n baremetal-operator-system ironic-cert -o json -o=jsonpath="{.data.ca\.crt}" | base64 -d > "${WORKING_DIR}/fake-ipa/ironic-ca.crt"
-    fi
-
-    # Create fake IPA custom config
-    cat <<EOF > "${WORKING_DIR}/fake-ipa/config.py"
-FAKE_IPA_API_URL = "https://${CLUSTER_BARE_METAL_PROVISIONER_IP}:${IRONIC_API_PORT}"
-FAKE_IPA_INSPECTION_CALLBACK_URL = "${IRONIC_URL}/continue_inspection"
-FAKE_IPA_ADVERTISE_ADDRESS_IP = "${EXTERNAL_SUBNET_V4_HOST}"
-FAKE_IPA_INSECURE = ${FAKE_IPA_INSECURE:-False}
-FAKE_IPA_CAFILE = "${FAKE_IPA_CAFILE:-/root/cert/ironic-ca.crt}"
-FAKE_IPA_MIN_BOOT_TIME = ${FAKE_IPA_MIN_BOOT_TIME:-20}
-FAKE_IPA_MAX_BOOT_TIME = ${FAKE_IPA_MAX_BOOT_TIME:-30}
-EOF
-
-    # shellcheck disable=SC2086
-    sudo "${CONTAINER_RUNTIME}" run -d --net host --name fake-ipa ${POD_NAME_INFRA} \
-        -v "/opt/metal3-dev-env/fake-ipa":/root/cert -v "/root/.ssh":/root/ssh \
-        -e CONFIG='/root/cert/config.py' \
-        "${FAKE_IPA_IMAGE}"
-}
 
 
-# ------------
-# BMH Creation
-# ------------
-
-#
-# Create the BMH CRs
-#
-make_bm_hosts()
-{
-    mkdir -p "${WORKING_DIR}/bmhs"
-
-    local i=0
-    while read -r name address user password mac verify_ca; do
-        go run "${BMOPATH}"/cmd/make-bm-worker/main.go \
-            -address="${address}" \
-            -disableCertificateVerification="$(get_disableCertificateVerification_from_verify_ca "${verify_ca}")" \
-            -password="${password}" \
-            -user="${user}" \
-            -boot-mac="${mac}" \
-            -boot-mode="${BOOT_MODE}" \
-            "${name}" | \
-            tee "${WORKING_DIR}/bmhs/node_${i}.yaml" >> "${WORKING_DIR}/bmhosts_crs.yaml"
-        i=$((i+1))
-    done
-}
-
-#
-# Apply the BMH CRs
-#
-apply_bm_hosts()
-{
-    local namespace="$1"
-    safe_pushd "${BMOPATH}"
-
-    local retry=10
-    local retry_interval=60
-    while [[ "${retry}" -gt 0 ]]; do
-        echo "bmhosts_crs.yaml is applying"
-        list_nodes | make_bm_hosts
-        # check if we have a not empty manifests file
-        local bmh_file="${WORKING_DIR}/bmhosts_crs.yaml"
-        if [[ -s "${bmh_file}" ]]; then
-            kubectl apply -f "${bmh_file}" -n "${namespace}" && break
-        else
-            echo "bmhosts_crs.yaml does not exist or is empty"
-        fi
-        echo "retrying in ${retry_interval} seconds"
-        sleep "${retry_interval}"
-        retry=$((retry - 1))
-    done
-
-    popd
-
-    if [[ "${retry}" -eq 0 ]]; then
-        echo >&2 "ERROR: failed to create and apply BMH manifests"
-        exit 1
-    fi
-}
 
 
 # --------------------------
@@ -623,12 +493,6 @@ launch_cluster_api_provider_metal3()
             --control-plane kubeadm:"${CAPIRELEASE}" --infrastructure=metal3:"${CAPM3RELEASE}" -v5 --ipam=metal3:"${IPAMRELEASE}"
     fi
 
-    if [[ "${CAPM3_RUN_LOCAL}" = true ]]; then
-        touch capm3.out.log
-        touch capm3.err.log
-        kubectl scale -n capm3-system deployment.v1.apps capm3-controller-manager --replicas 0
-        nohup make run >> capm3.out.log 2>> capm3.err.log &
-    fi
 
     popd
 }
@@ -714,35 +578,10 @@ EOF
 #
 start_management_cluster()
 {
+    # Kind is the only management cluster this lab starts: minikube needed
+    # libvirt and tilt needed a live-reload workflow for upstream developers.
     if [[ "${BOOTSTRAP_CLUSTER}" = "kind" ]]; then
         launch_kind
-    elif [[ "${BOOTSTRAP_CLUSTER}" = "minikube" ]]; then
-        # This method, defined in lib/common.sh, will either ensure sockets are up'n'running
-        # for CS9 and RHEL9, or restart the libvirtd.service for other DISTRO
-        manage_libvirtd
-
-        if ! retry timeout --kill-after=30s "${MINIKUBE_START_TIMEOUT:-600s}" \
-            sudo su -l -c 'minikube start' "${USER}"; then
-            echo >&2 "ERROR: minikube failed to start after multiple attempts"
-            exit 1
-        fi
-
-        if [[ -n "${MINIKUBE_BMNET_V6_IP:-}" ]]; then
-            sudo su -l -c "minikube ssh -- sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0" "${USER}"
-            sudo su -l -c "minikube ssh -- sudo ip addr add ${MINIKUBE_BMNET_V6_IP}/64 dev eth3" "${USER}"
-        fi
-
-        sudo su -l -c "minikube ssh -- sudo brctl addbr ${BARE_METAL_PROVISIONER_INTERFACE}" "${USER}"
-        sudo su -l -c "minikube ssh -- sudo ip link set ${BARE_METAL_PROVISIONER_INTERFACE} up" "${USER}"
-        sudo su -l -c "minikube ssh -- sudo brctl addif ${BARE_METAL_PROVISIONER_INTERFACE} eth2" "${USER}"
-
-        if [[ "${BARE_METAL_PROVISIONER_SUBNET_IPV6_ONLY:-}" = "true" ]]; then
-            sudo su -l -c "minikube ssh -- sudo sysctl -w net.ipv6.conf.all.forwarding=1" "${USER}"
-            sudo su -l -c "minikube ssh -- sudo sysctl -w net.ipv6.conf.default.forwarding=1" "${USER}"
-            sudo su -l -c "minikube ssh -- sudo ip -6 addr add ${CLUSTER_BARE_METAL_PROVISIONER_IP}/${BARE_METAL_PROVISIONER_CIDR} dev ${BARE_METAL_PROVISIONER_INTERFACE}" "${USER}"
-        else
-            sudo su -l -c "minikube ssh -- sudo ip addr add ${INITIAL_BARE_METAL_PROVISIONER_BRIDGE_IP}/${BARE_METAL_PROVISIONER_CIDR} dev ${BARE_METAL_PROVISIONER_INTERFACE}" "${USER}"
-        fi
     fi
 }
 
@@ -807,11 +646,6 @@ build_ipxe_firmware()
 "${BMOPATH}"/tools/remove_local_ironic.sh
 create_clouds_yaml
 
-if [[ "${BOOTSTRAP_CLUSTER}" = "tilt" ]]; then
-    # shellcheck disable=SC1091
-    . tilt-setup/deploy_tilt_env.sh
-    exit 0
-fi
 
 build_ipxe_firmware
 start_management_cluster
@@ -834,26 +668,19 @@ else
     launch_ironic
 fi
 
-if [[ "${BMO_RUN_LOCAL}" != true ]]; then
-    if ! kubectl rollout status deployment "${BMO_NAME_PREFIX}"-controller-manager -n "${IRONIC_NAMESPACE}" --timeout="${BMO_ROLLOUT_WAIT}"m; then
-        echo >&2 "ERROR: baremetal-operator-controller-manager deployment can not be rollout"
-        exit 1
-    fi
-else
-    # There is no certificate to run validation webhook on local.
-    # Thus we are deleting validatingwebhookconfiguration resource if exists
-    # to let BMO is working properly on local runs.
-    kubectl delete validatingwebhookconfiguration/"${BMO_NAME_PREFIX}"-validating-webhook-configuration --ignore-not-found=true
+if ! kubectl rollout status deployment "${BMO_NAME_PREFIX}"-controller-manager -n "${IRONIC_NAMESPACE}" --timeout="${BMO_ROLLOUT_WAIT}"m; then
+    echo >&2 "ERROR: baremetal-operator-controller-manager deployment can not be rollout"
+    exit 1
 fi
 
 # Hand the BMH bundle that describes physical hardware to the AI agent
 #
-# baremetal platform (local patch: see vendor/PATCHES.md): nothing is generated
-# from libvirt inventory, and this script neither parses nor applies anything.
-# tools/metal3_deploy.py owns the target cluster deployment end to end: it reads
-# the plan the agent reasoned about, creates the BMC Secrets, applies the BMHs
-# through apps/eph_agent/metal3_skill.apply_baremetalhosts and then applies the
-# Cluster API resources for the control plane. Only the irreversible
+# This script neither generates nor applies BMH manifests: upstream derived them
+# from a libvirt inventory with a generator binary and kubectl, and that code is
+# gone. tools/metal3_deploy.py owns the target cluster deployment end to end:
+# it reads the plan the agent reasoned about, creates the BMC Secrets, applies
+# the BMHs through apps/eph_agent/metal3_skill.apply_baremetalhosts and then
+# applies the Cluster API resources for the control plane. Only the irreversible
 # host-preparation keystrokes stay in the shell.
 #
 apply_bm_hosts_from_dir()
@@ -888,23 +715,5 @@ apply_bm_hosts_from_dir()
     exit 1
 }
 
-# baremetal: the BMH manifests describe real hardware and are supplied by the
-# operator; nothing is generated from libvirt inventory in this mode.
-if [[ "${NODES_PLATFORM}" = "baremetal" ]]; then
-    apply_bm_hosts_from_dir "${NAMESPACE}"
-# Tests might want to apply bmh inside the test scipt
-# then dev-env will create the bmh files but do not apply them
-elif [[ "${SKIP_APPLY_BMH:-false}" = "true" ]]; then
-    safe_pushd "${BMOPATH}"
-    list_nodes | make_bm_hosts
-    popd
-else
-    # this is coming from lib/common.sh
-    # shellcheck disable=SC2153
-    apply_bm_hosts "${NAMESPACE}"
-fi
+apply_bm_hosts_from_dir "${NAMESPACE}"
 
-# if fake platform (no VMs) run FakeIPA
-if [[ "${NODES_PLATFORM}" = "fake" ]]; then
-    launch_fake_ipa
-fi

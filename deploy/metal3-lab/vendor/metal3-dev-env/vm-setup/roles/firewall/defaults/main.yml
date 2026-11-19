@@ -13,8 +13,6 @@ kind_subnet: "{{ '172.18.0.0/24' if ip_stack == 'v4' else 'fc00:f853:ccd:e793::/
 registry_port: "{{ lookup('env', 'REGISTRY_PORT') | default('5000', true) }}"
 http_port: "{{ lookup('env', 'HTTP_PORT') | default('6180', true) }}"
 ironic_api_port: "{{ lookup('env', 'IRONIC_API_PORT') | default('6385', true) }}"
-vbmc_port_range: "6230:6235"
-sushy_port: 8000
 cluster_api_port: "{{ lookup('env', 'CLUSTER_APIENDPOINT_PORT') | default('6443', true) }}"
 firewall_rule_state: present
 ironic_ports:

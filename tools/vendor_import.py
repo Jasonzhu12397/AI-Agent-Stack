@@ -49,9 +49,79 @@ REQUIRED_PATHS = (
     "Makefile",
     "ansible.cfg",
     "lib/common.sh",
-    "vm-setup/setup-playbook.yml",
     "vm-setup/inventory.ini",
+    "vm-setup/install-package-playbook.yml",
+    "vm-setup/firewall.yml",
 )
+
+# Upstream paths this repository deliberately does not vendor.
+#
+# The lab runs physical machines and an AI agent owns provisioning, so the
+# libvirt/KVM half of dev-env, its BMC emulators, the VM-based e2e suite and the
+# upstream developer tooling have no consumer here. Keeping them would mean
+# keeping dead code that nobody executes and that nobody should patch.
+# ``prune_tree`` deletes them after every import, ``check_tree`` treats their
+# absence as expected and their presence as a bug.
+PRUNE_PATHS = (
+    # virtual machines, virtual BMCs and the libvirt network plumbing
+    "vm-setup/setup-playbook.yml",
+    "vm-setup/teardown-playbook.yml",
+    "vm-setup/library",
+    "vm-setup/roles/common",
+    "vm-setup/roles/libvirt",
+    "vm-setup/roles/ovs",
+    "vm-setup/roles/virtbmc",
+    "vbmc.sh",
+    "disable_apparmor_driver_libvirtd.sh",
+    # Kamaji PoC: libvirt domains, sushy-tools and shell-generated BMHs
+    "PoCs",
+    # upstream VM-based e2e suite (the agent and pytest verify the lab now)
+    "tests",
+    "template",
+    # upstream developer tooling and CI metadata
+    "tilt-setup",
+    "Tiltfile",
+    "Tiltfile.md",
+    "hack",
+    "ip_range_check.py",
+    "vars.md",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "DCO",
+    "OWNERS",
+    "OWNERS_ALIASES",
+    "SECURITY_CONTACTS",
+    "renovate.json",
+    ".markdownlint-cli2.yaml",
+    ".yamllint.yaml",
+)
+
+
+def is_pruned(relative: str) -> bool:
+    """Return True when this path is one the repository refuses to vendor."""
+
+    for entry in PRUNE_PATHS:
+        if relative == entry or relative.startswith(f"{entry}/"):
+            return True
+    return False
+
+
+def prune_tree(target: Path) -> list[str]:
+    """Delete PRUNE_PATHS from an imported tree and report what was removed."""
+
+    removed: list[str] = []
+    for entry in PRUNE_PATHS:
+        path = target / entry
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        removed.append(entry)
+    return removed
 
 
 class ImportError_(RuntimeError):
@@ -165,6 +235,46 @@ def write_manifest(target: Path, commit: str, source: str) -> dict:
     return metadata
 
 
+def reseal_tree(target: Path) -> dict:
+    """Record the current tree as this repository's own baseline.
+
+    The vendored tree is a fork, not a mirror: the virtual half is deleted and
+    the remaining scripts are rewritten to call python. Resealing recomputes the
+    manifest so ``--check`` reports future edits instead of permanently listing
+    the deliberate ones, and keeps the upstream commit as provenance.
+    """
+
+    meta_path = target / META_NAME
+    if not meta_path.exists():
+        raise ImportError_(f"{target} is not a vendored tree (missing {META_NAME})")
+    previous = json.loads(meta_path.read_text(encoding="utf-8"))
+    for entry in PRUNE_PATHS:
+        path = target / entry
+        if path.exists():
+            raise ImportError_(f"refusing to reseal: {entry} must not be vendored")
+    for required in REQUIRED_PATHS:
+        if not (target / required).exists():
+            raise ImportError_(f"vendored tree is incomplete: missing {required}")
+    metadata = write_manifest(
+        target,
+        previous.get("upstream_commit", PINNED_COMMIT),
+        previous.get("imported_source", ARCHIVE_URL),
+    )
+    metadata["pruned_paths"] = list(PRUNE_PATHS)
+    metadata["retained_file_count"] = metadata["file_count"]
+    metadata["resealed_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+    metadata["note"] = (
+        "Forked vendored source: the libvirt/KVM half is deleted and the scripts call "
+        "tools/metal3_deploy.py. Runtime never clones upstream; edit these files directly."
+    )
+    (target / META_NAME).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    _log(
+        f"resealed {metadata['file_count']} files ({metadata['total_bytes']} bytes) "
+        f"against upstream {metadata['upstream_commit']}"
+    )
+    return metadata
+
+
 def check_tree(target: Path, expected_commit: str | None = PINNED_COMMIT) -> dict:
     meta_path = target / META_NAME
     manifest_path = target / MANIFEST_NAME
@@ -187,16 +297,23 @@ def check_tree(target: Path, expected_commit: str | None = PINNED_COMMIT) -> dic
         if not (target / required).exists():
             raise ImportError_(f"vendored tree is incomplete: missing {required}")
     problems = []
+    pruned = []
     for line in manifest_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         digest, _, relative = line.partition("  ")
         path = target / relative
         if not path.exists():
-            problems.append(f"missing {relative}")
+            if is_pruned(relative):
+                pruned.append(relative)
+            else:
+                problems.append(f"missing {relative}")
         elif _sha256(path) != digest:
             problems.append(f"modified {relative}")
-    return {"metadata": metadata, "problems": problems}
+    for entry in PRUNE_PATHS:
+        if (target / entry).exists():
+            problems.append(f"unexpected {entry}: this path must not be vendored")
+    return {"metadata": metadata, "problems": problems, "pruned": pruned}
 
 
 def import_tree(source: str, target: Path = DEFAULT_TARGET, commit: str = PINNED_COMMIT) -> dict:
@@ -224,9 +341,15 @@ def import_tree(source: str, target: Path = DEFAULT_TARGET, commit: str = PINNED
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(root, target, symlinks=False)
     metadata = write_manifest(target, commit, source)
+    pruned = prune_tree(target)
+    retained = len(_tree_files(target))
+    metadata["pruned_paths"] = pruned
+    metadata["retained_file_count"] = retained
+    (target / META_NAME).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     _log(
-        f"vendored {metadata['file_count']} files ({metadata['total_bytes']} bytes) "
-        f"from commit {commit} into {target}"
+        f"vendored {metadata['file_count']} files ({metadata['total_bytes']} bytes) from "
+        f"commit {commit}; dropped {len(pruned)} upstream paths, kept {retained} files "
+        f"in {target}"
     )
     return metadata
 
@@ -238,6 +361,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default=PINNED_COMMIT)
     parser.add_argument("--check", action="store_true", help="verify the vendored tree only")
     parser.add_argument(
+        "--reseal",
+        action="store_true",
+        help="record the current (forked) tree as the baseline manifest",
+    )
+    parser.add_argument(
         "--print-url",
         action="store_true",
         help="print the pinned archive URL and exit",
@@ -248,6 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         print(ARCHIVE_URL)
         return 0
     try:
+        if args.reseal:
+            reseal_tree(args.target)
+            return 0
         if args.check:
             result = check_tree(args.target, args.commit)
             metadata = result["metadata"]
@@ -257,6 +388,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             for problem in result["problems"]:
                 _log(f"local change: {problem}")
+            if result["pruned"]:
+                _log(
+                    f"intentionally not vendored: {len(result['pruned'])} upstream files "
+                    f"({', '.join(sorted(PRUNE_PATHS))})"
+                )
             return 0
         import_tree(args.source or ARCHIVE_URL, args.target, args.commit)
         return 0

@@ -129,10 +129,13 @@ def test_vendored_scripts_do_not_touch_the_cluster_themselves():
     assert 'kubectl apply -f "${hosts_dir}"' not in launch
 
     assert 'python3 "${tool}" verify --dir' in verify
-    marker = 'if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then'
-    branch = verify.split(marker, 1)[1].split("else", 1)[0]
-    assert "kubectl" not in branch
-    assert "jq" not in branch
+    # 04 is bare metal only now: no platform branch, no shell judgement at all
+    assert "NODES_PLATFORM" not in verify
+    assert "kubectl" not in verify
+    assert "jq" not in verify
+    assert "virsh" not in verify
+    assert "check_k8s_entity" not in verify
+    assert "check_k8s_rs" not in verify
 
 
 def test_runner_exports_the_agent_bridge():
