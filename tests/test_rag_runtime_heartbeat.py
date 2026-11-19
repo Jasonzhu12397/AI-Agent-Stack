@@ -100,3 +100,73 @@ def test_ingestion_rejects_non_callable_heartbeat(monkeypatch):
             overlap=0,
             heartbeat=True,
         )
+
+
+def test_ingestion_and_retrieval_use_the_model_scoped_collection(monkeypatch):
+    class ScopedStore:
+        def __init__(self, collection, inner):
+            self.collection = collection
+            self.inner = inner
+            self.ensure_calls = []
+
+        def ensure_collection(self, vector_size, distance="Cosine"):
+            self.ensure_calls.append(vector_size)
+            return {"created": True}
+
+        def upsert(self, tenant_id, project_id, records):
+            self.inner.upsert(tenant_id, project_id, records)
+            return {"stored": len(records)}
+
+        def search(self, tenant_id, project_id, vector, limit=5, **kwargs):
+            self.inner.search_vectors.append(vector)
+            return []
+
+    class Router:
+        def __init__(self):
+            self.bindings = []
+            self.upsert_calls = []
+            self.search_vectors = []
+            self.base_collection = "agent_knowledge"
+
+        def for_model(self, model_name, vector_size):
+            binding = ScopedStore(f"{self.base_collection}__{model_name}-{vector_size}", self)
+            self.bindings.append(binding)
+            return binding
+
+        def upsert(self, tenant_id, project_id, records):
+            self.upsert_calls.append(records)
+
+        def search(self, *args, **kwargs):
+            raise AssertionError("retrieval must use the model scoped collection")
+
+    gateway = FakeGateway()
+    store = Router()
+    model = SimpleNamespace(model_name="bge-m3")
+
+    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda: gateway)
+
+    result = rag_runtime.ingest_text(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        document_id="document-4",
+        text="x" * 200,
+        embedding_model=model,
+        vector_store=store,
+        chunk_size=200,
+        overlap=0,
+    )
+    assert result["collection"] == "agent_knowledge__bge-m3-2"
+    assert result["dimensions"] == 2
+    assert len(store.bindings) == 1
+    assert store.bindings[0].ensure_calls == [2]
+
+    rag_runtime.retrieve_context(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        query="edge",
+        embedding_model=model,
+        vector_store=store,
+    )
+    assert len(store.bindings) == 2
+    assert store.bindings[1].collection == "agent_knowledge__bge-m3-2"
