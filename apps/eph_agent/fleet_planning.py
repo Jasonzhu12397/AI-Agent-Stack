@@ -292,7 +292,7 @@ def cluster_spec(
     *,
     control_plane_endpoint: str,
     image_url: str,
-    k8s_version: str = "v1.31.0",
+    k8s_version: str = "v1.37.2",
     data_template: dict[str, Any] | None = None,
     worker_node_labels: dict[str, list[str]] | None = None,
     registry_endpoint: str | None = None,

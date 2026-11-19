@@ -91,7 +91,7 @@ metadata:
   namespace: {{ cluster.namespace }}
 spec:
   replicas: {{ cluster.control_plane_count | default(3) }}
-  version: {{ cluster.k8s_version | default('v1.29.0') }}
+  version: {{ cluster.k8s_version | default('v1.37.2') }}
   machineTemplate:
     spec:
       infrastructureRef:
@@ -240,7 +240,7 @@ spec:
   template:
     spec:
       clusterName: {{ cluster.name }}
-      version: {{ cluster.k8s_version | default('v1.29.0') }}
+      version: {{ cluster.k8s_version | default('v1.37.2') }}
       bootstrap:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io

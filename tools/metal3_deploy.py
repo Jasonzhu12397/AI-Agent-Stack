@@ -708,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--out-dir", type=Path, required=True)
     plan.add_argument("--control-plane-endpoint", help="VIP or DNS name of the target API server")
     plan.add_argument("--image-url", help="live-OS image the machines boot into")
-    plan.add_argument("--k8s-version", default="v1.31.0")
+    plan.add_argument("--k8s-version", default="v1.37.2")
     plan.add_argument(
         "--data-template", type=Path, help="Metal3DataTemplate content for the machines"
     )

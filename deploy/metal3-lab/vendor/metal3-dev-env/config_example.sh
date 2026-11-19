@@ -121,8 +121,8 @@
 #
 #export CAPI_VERSION=v1beta2
 
-#export KUBERNETES_VERSION="v1.37.0"
-#export UPGRADED_K8S_VERSION="v1.37.0"
+#export KUBERNETES_VERSION="v1.37.2"
+#export UPGRADED_K8S_VERSION="v1.37.2"
 
 # Version of kubelet, kubeadm and kubectl binaries
 #export KUBERNETES_BINARIES_VERSION="${KUBERNETES_BINARIES_VERSION:-${KUBERNETES_VERSION}}"
@@ -137,7 +137,7 @@
 
 # Image for target hosts deployment
 #
-#export IMAGE_NAME="CENTOS_10_NODE_IMAGE_K8S_v1.37.0.qcow2"
+#export IMAGE_NAME="CENTOS_10_NODE_IMAGE_K8S_v1.37.2.qcow2"
 
 # Location of the image to download
 #

@@ -168,7 +168,7 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
         raise Metal3SkillError("CAPI_CONTROL_PLANE_PORT_INVALID")
     cluster["control_plane_port"] = port
-    version = cluster.get("k8s_version", "v1.31.0")
+    version = cluster.get("k8s_version", "v1.37.2")
     if not isinstance(version, str) or not _VERSION_PATTERN.fullmatch(version):
         raise Metal3SkillError("CAPI_KUBERNETES_VERSION_INVALID")
     cluster["k8s_version"] = version
