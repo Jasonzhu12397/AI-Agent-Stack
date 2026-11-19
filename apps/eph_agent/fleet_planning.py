@@ -185,11 +185,19 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
         raise PlanningError(
             f"control_plane_count must be one of {VALID_CONTROL_PLANE_COUNTS}"
         )
+    worker_count = payload.get("worker_replicas")
+    if worker_count is not None and (
+        not isinstance(worker_count, int)
+        or isinstance(worker_count, bool)
+        or worker_count < 0
+    ):
+        raise PlanningError("worker_replicas must be a non-negative integer")
     plan = plan_fleet(
         [machine_spec_from_mapping(item) for item in fleet],
         cluster_name=cluster_name,
         namespace=namespace,
         control_plane_count=control_plane_count,
+        worker_count=worker_count,
     )
     workers = plan.by_role(ROLE_WORKER)
     evidence: dict[str, Any] = {
@@ -278,6 +286,7 @@ def plan_fleet(
     cluster_name: str,
     namespace: str = "metal3",
     control_plane_count: int = 3,
+    worker_count: int | None = None,
 ) -> FleetPlan:
     """Decide the role of every machine and explain each decision."""
 
@@ -288,6 +297,12 @@ def plan_fleet(
             f"control_plane_count must be one of {VALID_CONTROL_PLANE_COUNTS}, "
             f"got {control_plane_count}"
         )
+    if worker_count is not None and (
+        not isinstance(worker_count, int)
+        or isinstance(worker_count, bool)
+        or worker_count < 0
+    ):
+        raise PlanningError("worker_count must be a non-negative integer")
 
     fleet = list(machines)
     if not fleet:
@@ -312,7 +327,14 @@ def plan_fleet(
     unlabelled = [machine for machine in usable if _explicit_role(machine) is None]
 
     effective_count = _closest_valid_count(control_plane_count, len(usable))
-    if effective_count != control_plane_count:
+    if worker_count is not None:
+        if len(usable) < control_plane_count:
+            raise PlanningError(
+                f"fleet has {len(usable)} usable machine(s); the requested "
+                f"control plane needs {control_plane_count}"
+            )
+        effective_count = control_plane_count
+    elif effective_count != control_plane_count:
         warnings.append(
             f"requested a control plane of {control_plane_count}, but only "
             f"{len(usable)} machine(s) can serve; planning with {effective_count}"
@@ -361,7 +383,28 @@ def plan_fleet(
                 ),
             )
         )
-    for machine in sorted(labelled_workers + remaining, key=lambda item: item.name):
+    worker_candidates = sorted(labelled_workers + remaining, key=lambda item: item.name)
+    if worker_count is not None:
+        if len(labelled_workers) > worker_count:
+            raise PlanningError(
+                f"{len(labelled_workers)} machine(s) are labelled worker, but only "
+                f"{worker_count} worker(s) were requested"
+            )
+        if len(worker_candidates) < worker_count:
+            raise PlanningError(
+                f"fleet has {len(worker_candidates)} machine(s) left for workers, "
+                f"but {worker_count} were requested"
+            )
+        selected_workers = worker_candidates[:worker_count]
+        spare = worker_candidates[worker_count:]
+        if spare:
+            warnings.append(
+                "excluded from this deployment as spare capacity: "
+                + ", ".join(machine.name for machine in spare)
+            )
+    else:
+        selected_workers = worker_candidates
+    for machine in selected_workers:
         pool = machine.labels.get(POOL_LABEL, "").strip() or DEFAULT_WORKER_POOL
         reason = (
             f"labelled {ROLE_LABEL}={ROLE_WORKER} by the platform"

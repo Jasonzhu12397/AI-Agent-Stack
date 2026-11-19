@@ -311,3 +311,56 @@ def test_fleet_request_derives_a_data_template_from_the_physical_network():
     template = evidence["cluster_spec"]["control_plane_data_template"]
     assert template["network_data"]["links"]["ethernets"][0]["id"] == "eno1"
     assert template["network_data"]["services"]["dns"] == ["10.0.0.53"]
+
+
+def test_worker_count_selects_exact_workers_and_reports_spares():
+    fleet = [
+        spec("cp-1", cpu=32, ram_gib=128, disk=800),
+        spec("w-1", cpu=8, ram_gib=16, disk=100),
+        spec("w-2", cpu=8, ram_gib=16, disk=100),
+        spec("w-3", cpu=8, ram_gib=16, disk=100),
+        spec("w-4", cpu=8, ram_gib=16, disk=100),
+    ]
+    plan = fp.plan_fleet(
+        fleet,
+        cluster_name="target",
+        control_plane_count=1,
+        worker_count=2,
+    )
+    workers = [item.machine.name for item in plan.by_role(fp.ROLE_WORKER)]
+    assert workers == ["w-1", "w-2"]
+    assert any("spare capacity" in warning for warning in plan.warnings)
+
+
+def test_worker_count_fails_when_fleet_capacity_is_short():
+    fleet = [
+        spec("cp-1"),
+        spec("cp-2"),
+        spec("cp-3"),
+        spec("w-1"),
+    ]
+    with pytest.raises(fp.PlanningError, match="worker"):
+        fp.plan_fleet(
+            fleet,
+            cluster_name="target",
+            control_plane_count=3,
+            worker_count=2,
+        )
+
+
+def test_fleet_request_honours_requested_worker_replicas():
+    payload = {
+        "cluster_name": "target",
+        "control_plane_count": 1,
+        "worker_replicas": 2,
+        "fleet": [
+            _request_machine("strong", cpu_cores=32, ram_mib=128 * 1024),
+            _request_machine("w-1"),
+            _request_machine("w-2"),
+            _request_machine("w-3"),
+        ],
+    }
+    evidence = fp.plan_fleet_request(payload)
+    assert evidence["worker_replicas"] == 2
+    assert {item["node_type"] for item in evidence["hosts"]} == {"controlplane", "worker"}
+    assert any("spare capacity" in warning for warning in evidence["fleet_plan"]["warnings"])

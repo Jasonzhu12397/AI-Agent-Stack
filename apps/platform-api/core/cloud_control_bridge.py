@@ -28,6 +28,10 @@ class FleetInventoryEmpty(CloudControlBridgeError):
     code = "FLEET_INVENTORY_EMPTY"
 
 
+class FleetInventoryInsufficient(CloudControlBridgeError):
+    code = "FLEET_INVENTORY_INSUFFICIENT"
+
+
 _ID_NAMESPACE = uuid.UUID("7f1c3b52-9d0a-5a2e-8f7b-5f2a6d4c9e11")
 
 
@@ -87,6 +91,14 @@ def build_cloud_control_spec(
         raise FleetInventoryEmpty()
     if not all(isinstance(item, dict) for item in fleet):
         raise FleetInventoryEmpty()
+    control_plane_count = spec.get("control_plane_count")
+    worker_replicas = spec.get("worker_replicas")
+    if isinstance(control_plane_count, int) and isinstance(worker_replicas, int):
+        required = control_plane_count + worker_replicas
+        if len(fleet) < required:
+            raise FleetInventoryInsufficient(
+                f"fleet has {len(fleet)} machine(s), but the request needs {required}"
+            )
     spec["fleet"] = fleet
     return spec
 

@@ -20,6 +20,7 @@ from core.cloud_control_bridge import (
     CloudControlBridgeError,
     CloudControlNotConfigured,
     FleetInventoryEmpty,
+    FleetInventoryInsufficient,
     build_cloud_control_spec,
     control_identity,
     dispatch_deployment,
@@ -222,13 +223,14 @@ class ClusterDeploymentListCreateView(APIView):
                     project_id=project.id,
                     cluster_name=cluster_name,
                 )
-            except FleetInventoryEmpty:
+            except (FleetInventoryEmpty, FleetInventoryInsufficient) as exc:
                 if created:
                     deployment.delete()
+                code = exc.code
                 return Response(
                     {
-                        "detail": "No complete bare-metal fleet is available for this project.",
-                        "code": "FLEET_INVENTORY_EMPTY",
+                        "detail": str(exc) or "No complete bare-metal fleet is available.",
+                        "code": code,
                     },
                     status=409,
                 )

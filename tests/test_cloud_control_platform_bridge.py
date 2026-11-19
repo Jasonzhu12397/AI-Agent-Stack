@@ -121,7 +121,7 @@ def test_control_identity_is_stable_and_scoped():
 @pytest.mark.django_db
 def test_build_spec_uses_platform_inventory(bridge_workspace):
     user, tenant, project, node, client = bridge_workspace
-    for index in range(1, 4):
+    for index in range(1, 6):
         _machine(tenant, project, node, index)
     spec = build_cloud_control_spec(
         _cluster_spec(),
@@ -130,7 +130,7 @@ def test_build_spec_uses_platform_inventory(bridge_workspace):
     )
     assert spec["control_plane_count"] == 3
     assert spec["k8s_version"] == "v1.37.2"
-    assert len(spec["fleet"]) == 3
+    assert len(spec["fleet"]) == 5
     assert spec["fleet"][0]["secret_ref"]
 
 
@@ -148,7 +148,7 @@ def test_build_spec_fails_on_empty_fleet(bridge_workspace):
 @pytest.mark.django_db
 def test_create_dispatches_to_cloud_control_idempotently(bridge_workspace, monkeypatch):
     user, tenant, project, node, client = bridge_workspace
-    for index in range(1, 4):
+    for index in range(1, 6):
         _machine(tenant, project, node, index)
     calls = []
 
@@ -172,7 +172,7 @@ def test_create_dispatches_to_cloud_control_idempotently(bridge_workspace, monke
     deployment = ClusterDeployment.objects.get(id=first.data["id"])
     assert deployment.status == ClusterDeployment.Status.PROVISIONING
     control = deployment.plan_result["cloud_control"]
-    assert len(control["spec"]["fleet"]) == 3
+    assert len(control["spec"]["fleet"]) == 5
     assert len(calls) == 2
     assert calls[0]["deployment_id"] == deployment.id
     assert calls[0]["spec"] == calls[1]["spec"]
@@ -190,11 +190,22 @@ def test_create_without_fleet_creates_no_deployment(bridge_workspace):
 @pytest.mark.django_db
 def test_create_reports_unconfigured_cloud_control(bridge_workspace):
     user, tenant, project, node, client = bridge_workspace
-    for index in range(1, 4):
+    for index in range(1, 6):
         _machine(tenant, project, node, index)
     response = _post(client, tenant, project, node)
     assert response.status_code == 503
     assert response.data["code"] == "CLOUD_CONTROL_NOT_CONFIGURED"
+
+
+@pytest.mark.django_db
+def test_create_rejects_insufficient_fleet(bridge_workspace):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 4):
+        _machine(tenant, project, node, index)
+    response = _post(client, tenant, project, node)
+    assert response.status_code == 409
+    assert response.data["code"] == "FLEET_INVENTORY_INSUFFICIENT"
+    assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
 
 
 def test_legacy_handoff_and_checkpoint_routes_are_gone():
