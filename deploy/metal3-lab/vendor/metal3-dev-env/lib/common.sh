@@ -90,8 +90,8 @@ else
   export POD_NAME_INFRA=""
 fi
 
-export SSH_KEY=${SSH_KEY:-"${HOME}/.ssh/id_rsa}"}
-export SSH_PUB_KEY=${SSH_PUB_KEY:-"${SSH_KEY}.pub}"}
+export SSH_KEY=${SSH_KEY:-"${HOME}/.ssh/id_rsa"}
+export SSH_PUB_KEY=${SSH_PUB_KEY:-"${SSH_KEY}.pub"}
 # Generate user ssh key
 if [[ ! -f "${SSH_KEY}" ]]; then
   mkdir -p "$(dirname "$SSH_KEY")"
