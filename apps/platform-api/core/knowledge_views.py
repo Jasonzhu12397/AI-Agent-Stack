@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.models import (
     KnowledgeBase,
     KnowledgeDocument,
@@ -200,6 +201,18 @@ class KnowledgeBaseListCreateView(APIView):
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
+        record_audit_event(
+            request,
+            tenant,
+            "knowledge.base.created",
+            "knowledge_base",
+            item.id,
+            metadata={
+                "slug": item.slug,
+                "name": item.name,
+                "embedding_model_id": str(item.embedding_model_id),
+            },
+        )
         return Response(_knowledge_base_data(item), status=status.HTTP_201_CREATED)
 
 
@@ -280,6 +293,18 @@ class KnowledgeBaseDocumentListCreateView(APIView):
                 idempotency_key=f"knowledge-ingest:{document.id}",
                 available_at=timezone.now(),
             )
+        record_audit_event(
+            request,
+            item.tenant,
+            "knowledge.document.created",
+            "knowledge_document",
+            document.id,
+            metadata={
+                "knowledge_base_id": str(item.id),
+                "title": document.title,
+                "checksum": document.checksum,
+            },
+        )
         return Response(_document_data(document), status=status.HTTP_202_ACCEPTED)
 
 
@@ -333,6 +358,18 @@ class KnowledgeDocumentDetailView(APIView):
                     tenant_id=str(knowledge_base.tenant_id),
                     project_id=str(knowledge_base.project_id),
                     document_id=str(document.id),
+                )
+                record_audit_event(
+                    request,
+                    knowledge_base.tenant,
+                    "knowledge.document.deleted",
+                    "knowledge_document",
+                    document.id,
+                    metadata={
+                        "knowledge_base_id": str(knowledge_base.id),
+                        "title": document.title,
+                        "checksum": document.checksum,
+                    },
                 )
                 document.delete()
         except VectorStoreError:
@@ -406,6 +443,17 @@ class KnowledgeDocumentRetryView(APIView):
                     payload={"knowledge_document_id": str(document.id)},
                     idempotency_key=f"knowledge-ingest-retry:{document.id}:{uuid.uuid4()}",
                     available_at=timezone.now(),
+                )
+                record_audit_event(
+                    request,
+                    knowledge_base.tenant,
+                    "knowledge.document.retried",
+                    "knowledge_document",
+                    document.id,
+                    metadata={
+                        "knowledge_base_id": str(knowledge_base.id),
+                        "title": document.title,
+                    },
                 )
         except VectorStoreError:
             return Response(
