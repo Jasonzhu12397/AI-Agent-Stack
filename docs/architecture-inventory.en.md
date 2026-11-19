@@ -119,4 +119,116 @@ Acceptance bar: every button connects to a real API, can persist data, execute t
 
 | Page | Component | Code state | State | Gaps |
 |---|---|---|---|---|
-| Login | `LoginView.vue` | Calls `/api/v1/auth/csrf
+| Login | `LoginView.vue` | Calls `/api/v1/auth/csrf\|login\|logout\|me` | 【Baseline】 | Full auth experience, error states, session recovery to be checked |
+| Dashboard | `DashboardView.vue` | Pulls real tasks / nodes pagination; computed derives active/succeeded/online metrics | 【Baseline】 | Metrics come from task/node tables, not independent monitoring signals; trends and realtime refresh to be added |
+| Agent Studio | `AgentStudioView.vue` | Calls agents / publish / runs / model test | 【Baseline】 | Multi-step tool-call progress display and failure recovery to be improved |
+| Workflow Studio | `WorkflowStudioView.vue` | JSON text editing (`JSON.parse` draft); parses nodes/edges for read-only node display | 【Baseline】 (editing/validation) | 【To develop】 Drag-and-drop canvas, parallel/loop/approval nodes, visual edge editing |
+| Model Manager | `ModelManagerView.vue` | Calls model-providers / models / model-configs test | 【Baseline】 | Provider coverage, routing and fallback strategy UI to be added |
+| Integration Hub | `IntegrationHubView.vue` | Calls connectors / installations / connections / test / status | 【Baseline】 | Real connectors, OAuth flow, and connection health loop to be completed |
+| Knowledge Base | `KnowledgeBaseView.vue` | Calls knowledge-bases / documents / retry | 【Baseline】 | Full RAG chain (embedding/retrieval/recall quality) to be checked |
+| Infrastructure Agents | `InfrastructureAgentsView.vue` | Calls agent-nodes / commands / approve | 【Baseline】 | Real deployment loop, phase evidence, and failure states pending validation |
+| Metal3 Fleet | `Metal3FleetView.vue` | Calls fleet machines / BMC config / lifecycle-review | 【Baseline】 | Physical device operations and hardware acceptance pending validation |
+| Governance | `GovernanceView.vue` | Calls tool-approvals / approve / reject | 【Baseline】 | Full policy loop (approval rules, override interception) to be completed |
+| Audit | `AuditView.vue` | Calls audit-events / verify | 【Baseline】 | All platform-side write endpoints are covered; authentication events need a separate design |
+| Organization | `OrganizationView.vue` | Calls tenants / projects / members | 【Baseline】 | Invitation flow, role-change notifications, etc. still to be improved |
+| Docs & Matrix | `DocsAndMatrixView.vue` | Static phase matrix + external verification-matrix links; no API calls | 【Baseline】 (documentation display) | Matrix status must be driven by real acceptance evidence and kept up to date |
+| SR-IOV Editor | `SriovDevicePluginEditor.vue` | Child component referenced by the deployment view; does not import api.ts directly | 【Baseline】 | End-to-end check of config to backend persistence to be verified |
+| Workspace | `WorkspaceView.vue` | Workspace container / navigation | 【Baseline】 | — |
+
+> 15 `.vue` components in total; 13 import `services/api.ts` directly. `DocsAndMatrixView` is a static matrix page; `SriovDevicePluginEditor` is an editing child component reused by a parent view.
+
+## 7. Backend services and data architecture
+
+### 7.1 Service catalog
+
+| Service | Directory | Role | State |
+|---|---|---|---|
+| Platform API | `apps/platform-api` | Django REST API, authentication, permissions, data management | 【Baseline】 |
+| Worker | `apps/worker/worker_app` | Async tasks, general Agent execution, Workflow execution (`tasks.py` / `main.py`) | 【Baseline】 |
+| Cloud Control Agent | `apps/cloud_control_agent` | Cloud deployment control plane (protocol validation / status aggregation) | 【Baseline】; real cloud orchestration 【To develop】 |
+| EPH Agent | `apps/eph_agent` | Bootstrap cluster operations and source-side observation | 【Baseline/Pending validation】 |
+| Target Agent | `apps/target_agent` | Target cluster takeover, pivot, cleanup, worker deployment | 【Baseline/Pending validation】 |
+| Agent Contracts | `packages/agent_contracts`, `apps/agent_contracts` | Agent identity/command/lease/heartbeat/checkpoint contracts; SR-IOV config validation contract | 【Baseline】 |
+| Agent Transport | `packages/agent_transport` | mTLS communication, lease renewal, transport client | 【Baseline】 |
+
+Note: `worker_app/capi_pivot.py` is a reserved/leftover module not referenced by `tasks.py` / `main.py` / tests and does not participate in the execution chain; the production pivot adapter is `apps/target_agent/capi_pivot.py`.
+
+### 7.2 Deployment manifests
+
+- `deploy/agents/`: K8s manifests for the three Agents (cloud-control / eph / target-cluster-agent), namespaces, build and deploy scripts.
+- `deploy/cloud-control-plane/agent-mtls/`: haproxy / nginx mTLS config and deployment docs.
+- `deploy/docker-compose.yml`, `deploy/docker-compose.cloud.yml`: local and cloud compose configs (CI runs `config` validation only).
+
+### 7.3 Data layer status
+
+| Store | Role | Code state | State |
+|---|---|---|---|
+| PostgreSQL | Business data, tasks, Agent state, deployment records, checkpoints | `DATABASES` configured via `dj-database-url`; business models and checkpoint persistence landed | 【Baseline】 |
+| Redis | Cache and coordination; must not be the sole persistence source | `settings.py` only defines `REDIS_URL`; no actual cache/queue/channel call found in business code | 【To develop】 (wire it in and validate failure recovery) |
+| pgvector | Planned vector retrieval store | Code does not use pgvector; the current vector integration talks to the Qdrant HTTP API | 【To develop】 (planned item; do not record as already wired) |
+| S3-compatible | Planned document/object storage | No boto3 / S3 client found in code | 【To develop】 (planned item) |
+| Secret Manager / Vault | Credential custody, rotation, authorization resolution | Credential reference resolution (env reference / bearer), BMC credentials, Agent certificate issuance and rotation endpoint; positive-number validation for `BMC_VAULT_TIMEOUT_SECONDS` | 【Baseline】; full production-grade key custody, automatic rotation, fine-grained authorization resolution 【To complete】 |
+
+## 8. Documentation–code responsibility conflict list (to align to §4.2)
+
+**Code facts**: the CAPI pivot adapter lives in `apps/target_agent/capi_pivot.py`, wired by line 25 of `apps/target_agent/main.py` via `from .capi_pivot import execute_capi_pivot`; Cloud Control dispatches actions `target.capi.pivot.dry_run` / `target.capi.pivot`; `capi_pivot.py` does not exist under `apps/eph_agent/`.
+
+> **Status (aligned 2026-11-18)**: the old wording listed below has been reconciled to the §4.2 responsibility boundary in this documentation pass; the "Conflicting wording" column retains the previous wording for traceability only, and the "Should be" column states the current wording.
+
+The following documents previously followed the old wording that "the EPH performs the source-side Pivot", which did not match the code; they have now been reconciled:
+
+| File | Location | Conflicting wording | Should be |
+|---|---|---|---|
+| `README.md` | "Authoritative three-Agent" item 2 | EPH Agent owns source-side CAPI Pivot operation | EPH only does Bootstrap / source precheck / bootstrap the target CP; Pivot belongs to the Target Agent |
+| `README.md` | "Not yet production-complete" section | "a new EPH CAPI Pivot adapter" | The pivot adapter is in the Target Agent; there is no pivot adapter on the EPH side |
+| `docs/adr/0004-separate-cloud-and-node-agent-runtimes.md` | Line 17 | EPH owns source-side CAPI Pivot operation | Same as above; align to Target ownership |
+| `docs/adr/0005-three-agent-fresh-runtime.md` | Line 17 | EPH owns … source-side CAPI Pivot operation | Same as above; note lines 36 and 40 of the same file already use the Target wording, so the document is internally contradictory and needs alignment |
+| `docs/capi-pivot-contract.md` | Title, lines 3, 7, 8 | "EPH CAPI Pivot contract"; claims implementation by `apps/eph_agent/capi_pivot.py`, actions `eph.capi.pivot.dry_run` / `eph.capi.pivot` | Adapter path should be `apps/target_agent/capi_pivot.py`; actions should be `target.capi.pivot(.dry_run)` |
+| `docs/dual-agent-infrastructure-architecture.md` | Line 8 | EPH performs … approved source-side CAPI Pivot operation | Same as above; align to Target ownership |
+| `docs/eph-node-lifecycle.md` | Lines 42, 44, 68 | EPH Pivot adapter runs `clusterctl move`; references `apps/eph_agent/capi_pivot.py` | The pivot step belongs to the Target Agent; EPH keeps only Bootstrap / pre-cleanup observation |
+| `docs/agent-command-api.md` | Line 25 | "The Node Agent runs `clusterctl move --dry-run`" (Node Agent retired) | The dry-run simulation and read-only checks belong to the Target Agent; the Node Agent wording is removed |
+
+> Revision principle: code and new documentation follow the §4.2 responsibility boundary; historical ADRs that retain the old decision should be marked superseded so old and new wording do not coexist.
+
+## 9. Capabilities already in place vs. not yet production-complete
+
+### 9.1 Implemented in code (with unit/mock coverage; this does not mean real-environment acceptance passed)
+
+- Independent runtime, Dockerfile, and deployment manifests for the three Agents.
+- Agent identity, command, lease, heartbeat, checkpoint, and result protocol (contracts + transport).
+- Agent mTLS communication; certificate identity bound to the registered Agent UUID.
+- Target Agent multi-replica deployment, pod anti-affinity, PDB, Kubernetes Lease Leader Election.
+- CAPI pivot prechecks and security gates (cluster identity, controller readiness, version compatibility, BMH identity set, approval digest binding).
+- BMH inventory, ownership, and EPH cleanup-scope validation.
+- Worker provisioning and internal Ironic NTP address validation / attestation.
+- SR-IOV Device Plugin config validation and resource-matching check.
+- Token budget reservation, settlement, idempotency, and overspend protection.
+- Agent, Workflow, plugin, knowledge-base related APIs and frontend page baseline.
+- Tenant/project member isolation, role validation, chained-hash audit records and verify.
+
+### 9.2 Not yet production-complete (needs further development or real-environment acceptance)
+
+- A full real MCP protocol runtime (jsonrpc / stdio / SSE / tool discovery).
+- Full third-party connectors and OAuth credential authorization, token refresh flow.
+- Advanced Workflow nodes: drag-and-drop canvas, parallel, loop, human-approval resume.
+- Isolated plugin execution and full provider integration acceptance with SSRF protection.
+- Full GUI parity with the reference repository, page by page and interaction by interaction (buttons on real APIs, persistence, failure states).
+- Network plugins (Multus / SR-IOV CNI·Device Plugin / OVS / Calico / DPDK) full install, upgrade, and rollback.
+- Full CAPI / Metal3 / Ironic deployment, pivot, and BMH takeover in a real environment.
+- Real EPH cleanup, physical worker deployment, and hardware acceptance.
+- Real SR-IOV / DPDK data-plane traffic validation.
+- Full cluster upgrade, scale-out, scale-in, repair, and Day-2 operations.
+- Redis cache/queue/coordination channel landing and failure recovery; pgvector and S3 object storage integration.
+- Multi-provider model routing, primary/standby fallback, and native adaptation to domestic/foreign providers.
+
+## 10. Suggested cleanup and completion order
+
+1. **Align the wording first**: revise the conflicting docs and README per §8, fixing pivot responsibility to the Target Agent; fill the status in `docs/verification-matrix.md` and the frontend `DocsAndMatrixView` only with items backed by test/environment evidence.
+2. **GUI feature-mapping review**: page by page and button by button against the §6 checklist; confirm API wiring, persistence, and failure states; mark static display and JSON-editing areas as incomplete.
+3. **Backend completion**: wire in the Redis channel and validate failure recovery, authentication audit events (they need a tenant-independent chain), model routing/fallback, connector OAuth, and the MCP runtime.
+4. **Real Agent-chain acceptance**: on a selected CAPI / Metal3 / Ironic / OS version matrix, add end-to-end evidence phase by phase per the §5.1 seven-step state machine; gradually replace fail-closed prechecks with real execution adapters.
+5. **Data plane and Day-2**: Multus/SR-IOV/OVS/Calico/DPDK install/rollback, real VF and traffic validation; scale-out/scale-in/upgrade/repair operations loop.
+
+---
+
+*This inventory is a review of the current code state and does not constitute a production-readiness claim; any external statement that something "is supported" should carry the specific environment, operation, and observable post-conditions as evidence.*
