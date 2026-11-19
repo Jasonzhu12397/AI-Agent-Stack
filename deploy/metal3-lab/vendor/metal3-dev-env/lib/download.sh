@@ -69,7 +69,7 @@ wget_and_verify()
         done <<< "${checksum}"
     fi
 
-    calculated="$(sha256sum "${target}" | awk '{print $1;}').strip()"
+    calculated="$(sha256sum "${target}" | awk '{print $1;}')"
     if [[ "${SKIP_INSTALLATION}" != "false" ]]; then
         echo "info: sha256(${target/*\/}): ${calculated}"
         rm -f "${target?:}"
@@ -92,7 +92,7 @@ download_and_install_krew()
     tmp_dir="$(mktemp -d)"
 
     KERNEL_OS="$(uname | tr '[:upper:]' '[:lower:]')"
-    ARCH="$(uname -m | sed -e 's/x86_64/amd64/' -e 's/\(arm\)(64)?.*/\1\2/' -e 's/aarch64$/arm64/')"
+    ARCH="$(uname -m | sed -e 's/x86_64/amd64/' -e 's/\(arm\)\(64\)\?.*/\1\2/' -e 's/aarch64$/arm64/')"
     KREW="krew-${KERNEL_OS}_${ARCH}"
     KREW_URL="https://github.com/kubernetes-sigs/krew/releases/download/${KREW_VERSION}/${KREW}.tar.gz"
     wget_and_verify "${KREW_URL}" "${KREW_SHA256}" "${tmp_dir}/${KREW}.tar.gz"
