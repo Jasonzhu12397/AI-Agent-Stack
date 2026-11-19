@@ -3,7 +3,7 @@
 > 语言：中文 · [English](./architecture-inventory.en.md)
 
 > 盘点口径：本清单只依据仓库 `Jasonzhu12397/AI-Agent-Stack` main 分支当前代码核对，不把设计目标、文档规划或前端模板冒充成已完成功能。
-> 盘点日期：2026-11-19；复核基线 HEAD：`fa14aad8601e5a266f4caeb2f223a64ae56925ed`。
+> 盘点日期：2026-11-19；复核基线 HEAD：`901892603807e268410b5398228b9106ea2ad270`。
 
 ## 0. 三态定义（本清单统一口径）
 
@@ -17,7 +17,7 @@
 
 - 本地基线：**878 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移；工作区干净。
 - 测试环境：本地无 PostgreSQL/Redis，测试以内联 `DATABASE_URL=sqlite://` 覆盖运行；CI 使用 PostgreSQL 16 服务容器。
-- 规模：`apps/` + `packages/` Python 源码与测试合计约 27.6k 行；测试文件 63 个。
+- 规模：`apps/` + `packages/` Python 源码与测试合计约 27.6k 行；测试文件 69 个（`tests/` 68 个，`apps/platform-api/core/tests/` 1 个）。
 - CI 工作流：`.github/workflows/ci.yml` 三个 job —— `python`（ruff / system check / 迁移漂移 / migrate / pytest）、`web`（npm test / Vite build）、`compose`（两份 compose 配置校验）。
 - 历史记录：此前 Python CI 因 `tests/test_worker_tasks.py` 三处 ruff import 排序失败（非测试逻辑失败），已由 commit `5ba685b` 修复；远端 CI 重跑结果本次未再复核。
 
