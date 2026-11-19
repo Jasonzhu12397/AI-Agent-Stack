@@ -38,7 +38,7 @@ class QdrantVectorStore:
             raise VectorStoreError("Qdrant API key is not configured in the runtime.")
         return value
 
-    def _request(self, method, path, body=None):
+    def _request(self, method, path, body=None, allow_missing=False):
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -56,6 +56,8 @@ class QdrantVectorStore:
             ) as response:
                 raw = response.read()
         except HTTPError as exc:
+            if allow_missing and exc.code == 404:
+                return None
             raise VectorStoreError(f"Vector database returned HTTP {exc.code}.") from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise VectorStoreError("Vector database is unavailable.") from exc
@@ -79,15 +81,37 @@ class QdrantVectorStore:
         return values
 
     def ensure_collection(self, vector_size, distance="Cosine"):
+        """Create the configured collection when it does not exist yet."""
+
         if not isinstance(vector_size, int) or vector_size <= 0:
             raise VectorStoreError("Vector size must be a positive integer.")
         if distance not in {"Cosine", "Dot", "Euclid"}:
             raise VectorStoreError("Unsupported vector distance.")
+        existing = self._request(
+            "GET",
+            f"/collections/{self.collection}",
+            allow_missing=True,
+        )
+        if existing is not None:
+            return {"created": False}
         self._request(
             "PUT",
             f"/collections/{self.collection}",
             {"vectors": {"size": vector_size, "distance": distance}},
         )
+        return {"created": True}
+
+    def ping(self):
+        """Return True when the vector database answers a collection read."""
+
+        payload = self._request(
+            "GET",
+            f"/collections/{self.collection}",
+            allow_missing=True,
+        )
+        if payload is None:
+            raise VectorStoreError("Vector database collection is missing.")
+        return payload.get("status") == "ok"
 
     def upsert(self, tenant_id, project_id, records):
         if not tenant_id or not project_id or not isinstance(records, list) or not records:

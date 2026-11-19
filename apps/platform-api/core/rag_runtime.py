@@ -61,6 +61,7 @@ def ingest_text(
     chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
     store = vector_store or QdrantVectorStore()
     records = []
+    collection_ready = False
     gateway = ModelGateway()
     try:
         for batch_start in range(0, len(chunks), 128):
@@ -68,6 +69,9 @@ def ingest_text(
                 heartbeat()
             batch = chunks[batch_start : batch_start + 128]
             embedded = gateway.embed(embedding_model, batch)
+            if not collection_ready:
+                store.ensure_collection(len(embedded.vectors[0]))
+                collection_ready = True
             for offset, (content, vector) in enumerate(zip(batch, embedded.vectors, strict=True)):
                 chunk_index = batch_start + offset
                 digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]

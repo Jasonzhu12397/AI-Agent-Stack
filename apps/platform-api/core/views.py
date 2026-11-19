@@ -1,3 +1,5 @@
+import os
+
 from django.db import connection, transaction
 from django.db.utils import DatabaseError
 from django.http import JsonResponse
@@ -11,6 +13,7 @@ from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from core.pagination import TenantPagination
 from core.permissions import IsTenantAdmin
 from core.serializers import ProjectSerializer, TenantSerializer
+from core.vector_store import QdrantVectorStore, VectorStoreError
 
 
 @require_GET
@@ -26,7 +29,18 @@ def readiness(request):
             cursor.fetchone()
     except DatabaseError:
         return JsonResponse({"status": "not_ready", "database": "unavailable"}, status=503)
-    return JsonResponse({"status": "ready", "database": "ok"})
+    vector_store = "not_configured"
+    if os.getenv("QDRANT_URL"):
+        try:
+            vector_store = "ok" if QdrantVectorStore().ping() else "unavailable"
+        except VectorStoreError:
+            vector_store = "unavailable"
+        if vector_store != "ok":
+            return JsonResponse(
+                {"status": "not_ready", "database": "ok", "vector_store": vector_store},
+                status=503,
+            )
+    return JsonResponse({"status": "ready", "database": "ok", "vector_store": vector_store})
 
 
 class TenantListView(ListCreateAPIView):
