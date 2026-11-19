@@ -3,7 +3,7 @@
 > 语言：中文 · [English](./architecture-inventory.en.md)
 
 > 盘点口径：本清单只依据仓库 `Jasonzhu12397/AI-Agent-Stack` main 分支当前代码核对，不把设计目标、文档规划或前端模板冒充成已完成功能。
-> 盘点日期：2026-11-19；复核基线 HEAD：`fa14aad8601e5a266f4caeb2f223a64ae56925ed`。
+> 盘点日期：2026-11-19；复核基线 HEAD：`d52e50bdbb8d53f31eb7b5d3f80b42c901dfa5ee`。
 
 ## 0. 三态定义（本清单统一口径）
 
@@ -15,9 +15,9 @@
 
 ## 1. 基线证据（本次复核）
 
-- 本地基线（2026-11-19 复核）：**935 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移。
+- 本地基线（2026-11-19 复核）：**964 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移。
 - 测试环境：本地无 PostgreSQL/Redis，测试以内联 `DATABASE_URL=sqlite://` 覆盖运行；CI 使用 PostgreSQL 16 服务容器。
-- 规模：`apps/` + `packages/` Python 源码与测试合计约 30.5k 行；`tests/test_*.py` 74 个。
+- 规模：`apps/` + `packages/` Python 源码与测试合计约 31.3k 行；`tests/test_*.py` 78 个。
 - CI 工作流：`.github/workflows/ci.yml` 三个 job —— `python`（ruff / system check / 迁移漂移 / migrate / pytest）、`web`（npm test / Vite build）、`compose`（两份 compose 配置校验）。
 - 历史记录：此前 Python CI 因 `tests/test_worker_tasks.py` 三处 ruff import 排序失败（非测试逻辑失败），已由 commit `5ba685b` 修复；远端 CI 重跑结果本次未再复核。
 
@@ -28,7 +28,7 @@
 | 分层 | 目标组件 | 真实代码位置 | 现状 |
 |---|---|---|---|
 | 用户入口 | Web UI / Chat / Workflow / Agent 管理 / 插件市场 / 运维控制台 | `apps/web-studio/src/components/`、`src/services/api.ts` | 【基础】页面与 API 接线已存在；逐交互验收待核对（见 §6） |
-| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/` | 【基础】大部分模块有实现；实时推送、模型路由降级、MCP 运行时等待开发（见 §3） |
+| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/` | 【基础】大部分模块有实现；实时推送、模型路由降级、MCP stdio 传输等待开发（见 §3） |
 | 基础设施 Agent 控制面 | Cloud Control / EPH / Target 三 Agent | `apps/cloud_control_agent/`、`apps/eph_agent/`、`apps/target_agent/` | 【基础】三 Agent 独立入口、协议与状态机已存在；真实裸金属链路待验证（见 §4） |
 | Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/`、`apps/agent_contracts/` | 【基础】契约与传输已实现（见 §7） |
 | 执行层 | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | 由三 Agent 内 skill / adapter 模块调用 `kubectl` / `clusterctl` / Ironic HTTP 客户端 | 【待验证】执行适配器以只读观察 + fail-closed 校验为主；真实安装/迁移/数据面转发待验收（见 §5） |
@@ -42,13 +42,13 @@
 | Agent Runtime | Agent 生命周期、上下文、工具调用 | `apps/worker/worker_app/tasks.py`：DB 任务记录、原子认领、lease token/过期、心跳续约、有限重试、协作取消；`core/agent_views.py`：Agent 定义 / 版本 / 发布 / 运行记录 | 【基础】 | 多步工具调用的上下文保持、失败恢复待在真实模型链路复核 |
 | Workflow Engine | 多步骤编排、状态流转 | `core/workflow_engine.py`：节点类型 `start / llm / condition / knowledge_search / tool / end`；`core/workflow_views.py`：validate / publish / runs | 【基础】 | 【待开发】并行分支、循环、人工审批节点与审批恢复；当前无 `parallel / loop / approval` 节点类型 |
 | Model Router | 国内外模型统一接入与路由 | `core/model_gateway.py`：`ProviderType` 仅 `fake` 与 `openai_compatible`；chat `/chat/completions`、embeddings `/embeddings` HTTP 调用；错误按 5xx/429 标记可重试 | 【基础】 | 【待开发】多供应商主备路由、故障降级链、fallback；国内供应商靠 OpenAI-compatible 接口接入，无原生 SDK；FAKE 仅供测试 |
-| Plugin / MCP Gateway | 插件、MCP Server、第三方系统集成 | `core/plugin_views.py`：连接器目录、审批、项目安装、显式授权、连接记录；`core/http_connector.py`：仅注册 `http` / `openapi` 工具；`core/models.py` 连接器枚举含 `mcp` | 【基础】（HTTP/OpenAPI 部分） | 【待开发】完整 MCP 协议运行时：代码中未见 jsonrpc / stdio / SSE / `tools/list` 实现；OAuth 授权码流程与 token 刷新未实现（当前凭据仅解析 bearer / env 引用）；真实供应商集成待验收 |
-| Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；本地余弦相似度计算 | 【基础】 | 【待验证】真实 Qdrant 实例 + 嵌入模型的 ingest / retrieve 全链路；【待开发】pgvector、S3-compatible 对象存储在代码中尚未接入（见 §7.3） |
+| Plugin / MCP Gateway | 插件、MCP Server、第三方系统集成 | `core/plugin_views.py`：连接器目录、审批、项目安装、显式授权、连接记录；`core/http_connector.py`：`register_connector_tool` 按连接器类型分发（`http` / `openapi` / `mcp`），并保留 `register_http_tool` 兼容别名；`core/mcp_connector.py`：面向 streamable HTTP 传输的 JSON-RPC 客户端（initialize / tools/list / tools/call、SSE 响应解析、协议版本协商、工具映射、1 MiB 响应上限、重定向与 host allowlist 拒绝）；`core/mcp_tool_sync.py` + `core/mcp_views.py`：`POST /api/v1/plugin-connections/<id>/sync-tools/` 发现并导入远端工具（新工具 `enabled=False` 待审，单连接上限 256） | 【基础】（HTTP / OpenAPI / MCP 三通道） | 【待验证】真实 MCP Server 联调与工具导入后的人工审批闭环；【待开发】stdio 传输、OAuth 授权码流程与 token 刷新（当前凭据仅解析 bearer / env 引用），MCP 服务端模式（平台自身作为 MCP Server 暴露） |
+| Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；集合按 embedding 模型和维度版本化（`collection_for_model` / `for_model`，如 `agent_knowledge__bge-m3-1024`）；首次 ingest 幂等建集合（`ensure_collection`）；ingest 结果回写 `vector_collection` / `vector_dimensions`，删除与重试按该集合清理；本地余弦相似度计算 | 【基础】 | 【待验证】真实 Qdrant 实例 + 嵌入模型的 ingest / retrieve 全链路；【待开发】切换模型后旧集合的 reindex / 迁移作业（当前旧集合不会再被新检索命中）、pgvector、S3-compatible 对象存储（见 §7.3） |
 | Token Budget | 预算预留、用量结算、防超额消耗 | `core/token_budget.py`、`core/token_budget_views.py`：租户级预算预留、结算、幂等、超额保护；含回归测试 | 【待验证】 | 多轮修复后本地测试全绿；需在并发 worker 与真实模型上报用量下复核结算一致性 |
 | Task Queue / Scheduler | 缓存、任务队列、异步执行 | `apps/worker/worker_app/main.py` 轮询 `process_once`；任务认领与租约基于 PostgreSQL 记录；依赖含 `redis`，`settings.py` 仅定义 `REDIS_URL` | 【基础】（DB 队列） | 【待开发】Redis 实际作为缓存 / 队列 / 协调通道：代码中未见 `CACHES`、channel_layer 或 redis 客户端调用；队列故障恢复、积压与重放需继续验证 |
-| Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py` 链式哈希审计记录与 verify；落库覆盖 agent-node / agent-plugin / cluster-deployment / membership / plugin / tool-approval / model / knowledge / agent / workflow / task / token-budget / tenant / project 写接口 | 【基础】 | 登录/登出等无租户上下文的认证事件尚未入链（哈希链按租户建立，需单独设计）；策略闭环待完整覆盖 |
+| Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py`：租户链与全局链两套链式哈希（`verify_audit_chain` / `verify_global_audit_chain`），`tenant` 可空以承载无租户上下文的认证事件（迁移 `0024_audit_event_nullable_tenant`）；`core/auth_views.py` 登录成功 / 登录失败 / 登出三类事件写入全局链；落库覆盖 agent-node / agent-plugin / cluster-deployment / membership / plugin / tool-approval / model / knowledge / agent / workflow / task / token-budget / tenant / project 写接口 + 认证事件 | 【基础】 | 平台侧写接口与认证事件均已入链；【待开发】全局链的对外查询 / 校验 API（`audit_views.py` 目前只对租户链提供 list 与 verify）；策略闭环待完整覆盖 |
 | Realtime Logs / Events | Agent、Workflow、部署过程实时日志 | 前端 `api.ts` 以请求拉取为主；代码中未见 channels consumer / `group_send` / channel_layer 实现 | 【待开发】 | 实时推送通道（WebSocket/SSE）尚未落地；当前为轮询体验 |
-| Multi-Agent 接入 | 外部 AI Agent 以插件方式接入协同工作 | 现有接入形态：第三方能力封装为连接器工具（HTTP/OpenAPI schema），经 tool router 权限/审批后由 Agent/Workflow 调用 | 【基础】（工具级接入） | 【待开发】把外部 AI Agent 作为可编排节点、可返回结构化结果并参与状态流转的完整接入协议；MCP Agent 接入待运行时落地 |
+| Multi-Agent 接入 | 外部 AI Agent 以插件方式接入协同工作 | 现有接入形态：第三方能力封装为连接器工具（HTTP / OpenAPI schema / MCP 远端工具），经 tool router 权限/审批后由 Agent/Workflow 调用；MCP 工具可经 `sync-tools` 发现导入后人工启用 | 【基础】（工具级接入，含 MCP 工具导入） | 【待开发】把外部 AI Agent 作为可编排节点、可返回结构化结果并参与状态流转的完整接入协议；MCP Agent 的会话级接入（A2A 类协议）待设计 |
 
 ### 3.1 计划支持的插件与模型接入（当前真实状态）
 
@@ -58,7 +58,7 @@
 | 天气 | 天气 API / 天气服务 | 模板含 open-meteo（HTTP，无需 key） | 【基础】（模板）；真实连接器待验收 |
 | 研发协作 | GitHub、Jira | 模板含 `github-readonly`（HTTP）；无 Jira 模板或专用执行器 | GitHub 只读【基础/待验证】；Jira【待开发】 |
 | 办公协作 | Microsoft 365、Teams | 模板含 `microsoft-graph-readonly`（HTTP）；无 Teams 专用连接器 | 【基础】（只读模板）；完整 Graph 范围、OAuth 与 Teams 集成【待开发】 |
-| 扩展能力 | MCP、第三方 API、自定义插件 | 连接器目录/安装/授权/连接测试框架存在；执行器仅 HTTP/OpenAPI；MCP 为枚举占位 | 框架【基础】；MCP 运行时与自定义插件隔离执行【待开发】 |
+| 扩展能力 | MCP、第三方 API、自定义插件 | 连接器目录/安装/授权/连接测试框架存在；执行器支持 HTTP / OpenAPI / MCP（streamable HTTP + 工具发现导入） | 框架【基础】；MCP 运行时【基础/待验证】（stdio 与 OAuth【待开发】）；自定义插件隔离执行【待开发】 |
 | 模型 | 国内外供应商、OpenAI-compatible、路由与降级 | 网关仅 `openai_compatible` + `fake`；OpenAI-compatible 通道可复用接入各家兼容端点 | 【基础】（兼容通道）；供应商覆盖、显式路由、主备降级【待开发】 |
 
 > 以上连接器模板属于产品规划与元数据声明，不代表对应 OAuth 流程、真实供应商联调和生产级凭据托管已经完成。
@@ -129,7 +129,7 @@
 | Infrastructure Agents | `InfrastructureAgentsView.vue` | 接 agent-nodes / commands / approve | 【基础】 | 真实部署闭环、阶段证据与失败态待验证 |
 | Metal3 Fleet | `Metal3FleetView.vue` | 接 fleet machines / BMC 配置 / lifecycle-review | 【基础】 | 物理设备操作与硬件验收待验证 |
 | Governance | `GovernanceView.vue` | 接 tool-approvals / approve / reject | 【基础】 | 完整策略闭环（审批规则、越权拦截）待补 |
-| Audit | `AuditView.vue` | 接 audit-events / verify | 【基础】 | 平台侧写接口已全量覆盖；认证类事件待单独设计 |
+| Audit | `AuditView.vue` | 接 audit-events / verify | 【基础】 | 平台侧写接口与认证事件均已入链；【待开发】全局链（认证事件）的查询与校验 API，前端尚无对应展示 |
 | Organization | `OrganizationView.vue` | 接 tenants / projects / members | 【基础】 | 邀请流程、角色变更通知等仍需完善 |
 | Docs & Matrix | `DocsAndMatrixView.vue` | 静态阶段矩阵 + 外链 verification-matrix，不调 API | 【基础】（文档展示） | 矩阵状态必须由真实验收证据驱动，需持续更新 |
 | SR-IOV Editor | `SriovDevicePluginEditor.vue` | 子组件，被部署视图引用；不直接 import api.ts | 【基础】 | 配置与后端持久化的端到端校验待核对 |
@@ -204,12 +204,15 @@
 - SR-IOV Device Plugin 配置校验与资源匹配检查。
 - Token 预算预留、结算、幂等与超额保护。
 - Agent、Workflow、插件、知识库相关 API 与前端页面基础。
-- 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify。
+- 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify（租户链 + 全局认证链）。
+- MCP 客户端运行时（streamable HTTP JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）与工具发现导入接口。
+- Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 
-- 完整真实 MCP 协议运行时（jsonrpc / stdio / SSE / 工具发现）。
+- MCP 的 stdio 传输、服务端模式与真实 MCP Server 联调（streamable HTTP 客户端与工具发现已落地）。
 - 完整第三方连接器与 OAuth 凭据授权、token 刷新流程。
+- 切换 embedding 模型后旧 Qdrant 集合的 reindex / 迁移作业；全局审计链（认证事件）的对外查询与校验 API。
 - Workflow 拖拽画布、并行、循环、人工审批恢复等高级节点。
 - 插件隔离执行、SSRF 防护的全量供应商集成验收。
 - 完整 GUI 与参考仓库逐页面、逐交互一致（按钮接真实 API、持久化、失败态）。
@@ -225,7 +228,7 @@
 
 1. **先统一口径**：按 §8 修订冲突文档与 README，把 Pivot 责任固定到 Target Agent；`docs/verification-matrix.md` 与前端 `DocsAndMatrixView` 的状态只填有测试/环境证据的项。
 2. **GUI 功能映射核对**：逐页面、逐按钮对照 §6 清单，确认 API 接线、持久化与失败态；把静态展示与 JSON 编辑区域标记为未完成。
-3. **后端补齐**：Redis 通道接入与故障恢复、认证类审计事件（需租户无关的独立链）、模型路由/降级、连接器 OAuth 与 MCP 运行时。
+3. **后端补齐**：Redis 通道接入与故障恢复、全局审计链对外查询 API、旧向量集合 reindex、模型路由/降级、连接器 OAuth 与 MCP stdio 传输。
 4. **Agent 真实链路验收**：在选定的 CAPI / Metal3 / Ironic / OS 版本矩阵上，按 §5.1 七步状态机逐阶段补端到端证据；fail-closed 的预检逐步替换为真实执行适配器。
 5. **数据面与 Day-2**：Multus/SR-IOV/OVS/Calico/DPDK 安装回滚、真实 VF 与流量验证；扩容/缩容/升级/修复运维闭环。
 
