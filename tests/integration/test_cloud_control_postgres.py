@@ -144,10 +144,11 @@ def _identity(agent_id: UUID, installation_id: UUID, role: str = "eph") -> dict:
 
 
 def _tls_client(base_url: str, tls, certificate) -> httpx.Client:
+    context = ssl.create_default_context(cafile=str(tls["ca"]))
+    context.load_cert_chain(str(certificate[0]), str(certificate[1]))
     return httpx.Client(
         base_url=base_url,
-        verify=str(tls["ca"]),
-        cert=(str(certificate[0]), str(certificate[1])),
+        verify=context,
         timeout=10.0,
     )
 
