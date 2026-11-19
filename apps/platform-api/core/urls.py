@@ -65,6 +65,7 @@ from core.plugin_views import (
     PluginInstallationListCreateView,
     PluginInstallationStatusView,
 )
+from core.mcp_views import PluginConnectionToolSyncView
 from core.model_views import (
     ModelConfigListCreateView,
     ModelProviderListCreateView,
@@ -158,6 +159,11 @@ urlpatterns = [
         "api/v1/plugin-connections/<uuid:connection_id>/test/",
         PluginConnectionTestView.as_view(),
         name="plugin-connection-test",
+    ),
+    path(
+        "api/v1/plugin-connections/<uuid:connection_id>/sync-tools/",
+        PluginConnectionToolSyncView.as_view(),
+        name="plugin-connection-sync-tools",
     ),
     path(
         "api/v1/plugin-connections/<uuid:connection_id>/status/",
