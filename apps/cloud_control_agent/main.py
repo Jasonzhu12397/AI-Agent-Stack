@@ -127,6 +127,89 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
         CREATE INDEX IF NOT EXISTS agent_control_agents_last_seen_idx
         ON agent_control_agents (last_seen)
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_projects (
+            project_id UUID PRIMARY KEY,
+            installation_id UUID NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (installation_id, name)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_skills (
+            skill_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            manifest JSONB NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (project_id, name, version)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_plugins (
+            plugin_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('connector', 'tool', 'runtime')),
+            description TEXT NOT NULL DEFAULT '',
+            config_ref TEXT NOT NULL DEFAULT '',
+            manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (project_id, name, version)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_work_items (
+            work_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (
+                kind IN ('deployment', 'maintenance', 'inspection', 'diagnostic')
+            ),
+            status TEXT NOT NULL DEFAULT 'queued' CHECK (
+                status IN ('queued', 'leased', 'succeeded', 'failed', 'cancelled')
+            ),
+            priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 9),
+            required_role TEXT CHECK (
+                required_role IS NULL OR required_role IN ('eph', 'target')
+            ),
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            result JSONB,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            assigned_agent_id UUID REFERENCES agent_control_agents(agent_id),
+            lease_token_hash TEXT,
+            lease_expires_at TIMESTAMPTZ,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_work_claim_idx
+        ON agent_control_work_items (status, priority DESC, created_at)
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_skills_project_idx
+        ON agent_control_skills (project_id, enabled)
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_plugins_project_idx
+        ON agent_control_plugins (project_id, enabled)
+    """)
 
 
 def check_store(database_url: str) -> None:

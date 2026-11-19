@@ -19,6 +19,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | Usage governance | Per-tenant token budget reservation, settlement and overspend protection | Pending validation under real concurrency |
 | Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
 | Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
+| Control workspace | Installation-scoped projects with versioned skills, referenced plugins and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
 
 External subscription billing and plan management are **not implemented**. The platform currently provides the multi-tenant and usage-governance foundations above; it does not claim to be a production-complete commercial SaaS.
 
@@ -40,7 +41,7 @@ Platform Agents and Workflows execute in the Platform Worker. They are separate 
 
 ### 2. Infrastructure multi-Agent control system
 
-1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination.
+1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination. It also hosts installation-scoped project workspaces (projects, versioned skills, referenced plugins and leased work items); see `docs/cloud-control-workspace.md`.
 2. **EPH Agent** — runs in the temporary EPH Live OS / single-node Kubernetes cluster. Renders bootstrap configuration, applies CAPI/BMO/Ironic/CAPM3, creates BMH and target-CAPI resources, and records source-side identity evidence.
 3. **Target Agent** — runs as three replicas on the target Control Plane with Kubernetes Lease leader election. Owns Target takeover, CAPI Pivot (`clusterctl move`), BMH migration, EPH cleanup, worker provisioning, NTP attestation and data-plane readiness.
 

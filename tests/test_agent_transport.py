@@ -241,3 +241,74 @@ def test_eph_agent_client_persists_only_initial_bootstrap_checkpoint(tmp_path, m
         assert result["persisted"] is True
     finally:
         client.close()
+
+
+def test_agent_client_claims_work_with_project_skills_and_plugins(tmp_path, monkeypatch):
+    from packages.agent_transport.client import AgentControlClient
+
+    ca, cert, key = _write_cert_files(tmp_path)
+    agent_id = uuid4()
+    installation_id = uuid4()
+    values = {
+        "AGENT_CONTROL_URL": "https://control.example.test",
+        "AGENT_ID": str(agent_id),
+        "AGENT_INSTALLATION_ID": str(installation_id),
+        "AGENT_INSTANCE_ID": "eph-pod-0",
+        "AGENT_ROLE": "eph",
+        "AGENT_TLS_CA_FILE": ca,
+        "AGENT_TLS_CERT_FILE": cert,
+        "AGENT_TLS_KEY_FILE": key,
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    settings = AgentSettings.from_environment("eph")
+
+    def handler(request):
+        assert request.url.path == "/api/v1/agent-control/work/claim"
+        payload = json.loads(request.content)
+        assert payload["agent_id"] == str(agent_id)
+        assert payload["installation_id"] == str(installation_id)
+        return httpx.Response(200, json={
+            "work": {"work_id": str(uuid4()), "kind": "inspection", "payload": {}},
+            "skills": [{"name": "metal3-prep", "version": "1.0.0"}],
+            "plugins": [{"name": "vault", "kind": "connector"}],
+            "lease_token": "w" * 40,
+            "lease_seconds": 90,
+        })
+
+    client = AgentControlClient(settings, transport=httpx.MockTransport(handler))
+    try:
+        claimed = client.claim_work()
+        assert claimed is not None
+        assert claimed["work"]["kind"] == "inspection"
+        assert claimed["skills"][0]["name"] == "metal3-prep"
+        assert claimed["lease_token"] == "w" * 40
+    finally:
+        client.close()
+
+
+def test_agent_client_returns_none_when_no_work_is_queued(tmp_path, monkeypatch):
+    from packages.agent_transport.client import AgentControlClient
+
+    ca, cert, key = _write_cert_files(tmp_path)
+    values = {
+        "AGENT_CONTROL_URL": "https://control.example.test",
+        "AGENT_ID": str(uuid4()),
+        "AGENT_INSTALLATION_ID": str(uuid4()),
+        "AGENT_INSTANCE_ID": "eph-pod-0",
+        "AGENT_ROLE": "eph",
+        "AGENT_TLS_CA_FILE": ca,
+        "AGENT_TLS_CERT_FILE": cert,
+        "AGENT_TLS_KEY_FILE": key,
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    settings = AgentSettings.from_environment("eph")
+    client = AgentControlClient(
+        settings,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"work": None})),
+    )
+    try:
+        assert client.claim_work() is None
+    finally:
+        client.close()

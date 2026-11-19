@@ -69,6 +69,66 @@ class AgentControlClient:
             "capabilities": capabilities,
         })
 
+    def _identity(self) -> dict[str, Any]:
+        return {
+            "agent_id": str(self.settings.agent_id),
+            "role": self.settings.role,
+            "installation_id": str(self.settings.installation_id),
+            "cluster_id": str(self.settings.cluster_id) if self.settings.cluster_id else None,
+            "instance_id": self.settings.instance_id,
+        }
+
+    def claim_work(self) -> dict[str, Any] | None:
+        response = self._post("/api/v1/agent-control/work/claim", {
+            "schema_version": "v1",
+            **self._identity(),
+        })
+        if response.get("work") is None:
+            return None
+        work = response["work"]
+        if not isinstance(work, dict):
+            raise AgentTransportError("Control API work must be an object or null")
+        token = response.get("lease_token")
+        if not isinstance(token, str) or not token:
+            raise AgentTransportError("Control API work lease token is missing")
+        skills = response.get("skills")
+        plugins = response.get("plugins")
+        return {
+            "work": work,
+            "skills": skills if isinstance(skills, list) else [],
+            "plugins": plugins if isinstance(plugins, list) else [],
+            "lease_token": token,
+            "lease_seconds": response.get("lease_seconds"),
+        }
+
+    def renew_work_lease(self, work: dict[str, Any], lease_token: str) -> dict[str, Any]:
+        response = self._post("/api/v1/agent-control/work/lease/renew", {
+            "schema_version": "v1",
+            **self._identity(),
+            "work_id": work["work_id"],
+            "lease_token": lease_token,
+        })
+        if response.get("renewed") is not True:
+            raise AgentTransportError("Work lease renewal was not confirmed")
+        return response
+
+    def report_work_result(
+        self,
+        work: dict[str, Any],
+        status: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = self._post("/api/v1/agent-control/work/result", {
+            "schema_version": "v1",
+            **self._identity(),
+            "work_id": work["work_id"],
+            "status": status,
+            "result": result,
+        })
+        if response.get("accepted") is not True:
+            raise AgentTransportError("Work result was not accepted")
+        return response
+
     def claim(self) -> dict[str, Any] | None:
         response = self._post("/api/v1/agent-control/commands/claim", {
             "schema_version": "v1",
