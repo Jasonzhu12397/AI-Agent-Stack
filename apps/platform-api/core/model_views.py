@@ -6,13 +6,20 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.model_serializers import (
     ModelConfigSerializer,
     ModelProviderReadSerializer,
     ModelProviderWriteSerializer,
 )
-from core.models import ModelConfig, ModelProvider, Tenant, TenantMembership
+from core.models import (
+    AuditEvent,
+    ModelConfig,
+    ModelProvider,
+    Tenant,
+    TenantMembership,
+)
 
 
 def get_tenant(request, tenant_id):
@@ -59,6 +66,14 @@ class ModelProviderListCreateView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         provider = serializer.save(tenant=tenant, created_by=request.user)
+        record_audit_event(
+            request,
+            tenant,
+            "model.provider.created",
+            "model_provider",
+            provider.id,
+            metadata={"name": provider.name},
+        )
         return Response(
             ModelProviderReadSerializer(provider).data,
             status=status.HTTP_201_CREATED,
@@ -113,6 +128,18 @@ class ModelConfigListCreateView(APIView):
                 provider=provider,
                 version=(latest_version or 0) + 1,
             )
+        record_audit_event(
+            request,
+            tenant,
+            "model.config.created",
+            "model_config",
+            model_config.id,
+            metadata={
+                "provider_id": str(provider.id),
+                "model_name": model_config.model_name,
+                "version": model_config.version,
+            },
+        )
         return Response(
             ModelConfigSerializer(model_config).data,
             status=status.HTTP_201_CREATED,
@@ -144,6 +171,15 @@ class ModelTestView(APIView):
         try:
             result = ModelGateway().complete(model_config, messages)
         except ModelGatewayError as exc:
+            record_audit_event(
+                request,
+                tenant,
+                "model.config.tested",
+                "model_config",
+                model_config.id,
+                outcome=AuditEvent.Outcome.FAILURE,
+                metadata={"error_code": exc.code, "retryable": exc.retryable},
+            )
             return Response(
                 {
                     "error": {
@@ -154,4 +190,15 @@ class ModelTestView(APIView):
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+        record_audit_event(
+            request,
+            tenant,
+            "model.config.tested",
+            "model_config",
+            model_config.id,
+            metadata={
+                "provider_id": str(model_config.provider_id),
+                "model_name": model_config.model_name,
+            },
+        )
         return Response(result.as_dict())
