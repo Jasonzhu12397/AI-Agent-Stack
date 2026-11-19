@@ -11,6 +11,25 @@ The host-bootstrap source is vendored under
 `MANIFEST.sha256` record provenance and the fork's integrity baseline. Runtime
 performs no clone, fetch, checkout or submodule operation.
 
+
+## Physical acceptance evidence
+
+Read-only acceptance checks live in `tools/metal3_acceptance.py`. They never
+mutate BMCs, BMHs, Ironic or Kubernetes:
+
+~~~bash
+python tools/metal3_acceptance.py preflight --project <project-id> --out evidence/preflight.json
+python tools/metal3_acceptance.py redfish --project <project-id> --out evidence/redfish.json
+python tools/metal3_acceptance.py verify --project <project-id> \
+  --kubeconfig /secure/eph.kubeconfig --target-kubeconfig /secure/target.kubeconfig \
+  --control-plane-replicas 3 --worker-replicas 4 --redfish \
+  --out evidence/acceptance.json
+~~~
+
+Every command exits non-zero when a check fails and writes evidence without BMC
+credentials. See `docs/metal3-acceptance.md`; mock/unit tests are not physical
+deployment proof.
+
 ## Pre-provision BMC credentials (required before the first BMH)
 
 BMC passwords are intentionally kept out of Cloud Control. Resolve them from the
