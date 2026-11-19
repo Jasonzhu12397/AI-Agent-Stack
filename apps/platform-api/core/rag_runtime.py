@@ -62,6 +62,7 @@ def ingest_text(
     store = vector_store or QdrantVectorStore()
     records = []
     collection_ready = False
+    collection = None
     gateway = ModelGateway()
     try:
         for batch_start in range(0, len(chunks), 128):
@@ -70,7 +71,12 @@ def ingest_text(
             batch = chunks[batch_start : batch_start + 128]
             embedded = gateway.embed(embedding_model, batch)
             if not collection_ready:
-                store.ensure_collection(len(embedded.vectors[0]))
+                dimension = len(embedded.vectors[0])
+                binder = getattr(store, "for_model", None)
+                if callable(binder):
+                    store = binder(embedding_model.model_name, dimension)
+                store.ensure_collection(dimension)
+                collection = getattr(store, "collection", None)
                 collection_ready = True
             for offset, (content, vector) in enumerate(zip(batch, embedded.vectors, strict=True)):
                 chunk_index = batch_start + offset
@@ -97,6 +103,8 @@ def ingest_text(
         "document_id": document_id,
         "chunks": len(records),
         "embedding_model": embedding_model.model_name,
+        "collection": collection,
+        "dimensions": len(records[0]["vector"]) if records else None,
         **result,
     }
 
@@ -118,6 +126,10 @@ def retrieve_context(
     store = vector_store or QdrantVectorStore()
     try:
         embedded = ModelGateway().embed(embedding_model, [query])
+        vector = embedded.vectors[0]
+        binder = getattr(store, "for_model", None)
+        if callable(binder):
+            store = binder(embedding_model.model_name, len(vector))
         search_options = {
             "limit": limit,
             "score_threshold": score_threshold,
@@ -127,7 +139,7 @@ def retrieve_context(
         matches = store.search(
             tenant_id,
             project_id,
-            embedded.vectors[0],
+            vector,
             **search_options,
         )
     except (ModelGatewayError, VectorStoreError) as exc:

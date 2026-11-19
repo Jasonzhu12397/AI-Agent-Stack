@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import NAMESPACE_URL, uuid5
@@ -100,6 +101,31 @@ class QdrantVectorStore:
             {"vectors": {"size": vector_size, "distance": distance}},
         )
         return {"created": True}
+
+    def collection_for_model(self, model_name, vector_size):
+        """Return the per-embedding-model collection name for a vector size."""
+
+        if not isinstance(vector_size, int) or vector_size <= 0:
+            raise VectorStoreError("Vector size must be a positive integer.")
+        slug = re.sub(r"[^a-z0-9]+", "-", str(model_name or "").strip().lower()).strip("-")
+        slug = slug[:40]
+        if not slug:
+            raise VectorStoreError("Embedding model name cannot be derived into a collection.")
+        name = f"{self.collection}__{slug}-{vector_size}"
+        if len(name) > 200:
+            raise VectorStoreError("Derived collection name is too long.")
+        return name
+
+    def for_model(self, model_name, vector_size):
+        """Return a store bound to the collection owned by an embedding model."""
+
+        clone = QdrantVectorStore(
+            base_url=self.base_url,
+            collection=self.collection_for_model(model_name, vector_size),
+            timeout_seconds=self.timeout_seconds,
+        )
+        clone.api_key = self.api_key
+        return clone
 
     def ping(self):
         """Return True when the vector database answers a collection read."""

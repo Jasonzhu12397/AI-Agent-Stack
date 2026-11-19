@@ -75,6 +75,8 @@ class KnowledgeDocument(models.Model):
         default=Status.PENDING,
     )
     chunk_count = models.PositiveIntegerField(default=0)
+    vector_collection = models.CharField(max_length=200, blank=True)
+    vector_dimensions = models.PositiveIntegerField(null=True, blank=True)
     error = models.JSONField(null=True, blank=True)
     ingested_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
