@@ -81,11 +81,15 @@ def _workload_state(kind: str, document: dict[str, Any]) -> dict[str, Any]:
         available = 0
     if not isinstance(ready, int) or isinstance(ready, bool):
         ready = 0
+    # A workload scaled to zero (or a DaemonSet that scheduled no node) satisfies
+    # the numeric comparison below without serving a single pod. Treat it as not
+    # ready so the idempotent apply path never reports success on an empty stack.
+    running = desired >= 1
     return {
         "desired": desired,
         "available": available,
         "ready_replicas": ready,
-        "ready": ready >= desired and available >= desired,
+        "ready": running and ready >= desired and available >= desired,
     }
 
 
@@ -155,19 +159,26 @@ def _existing_workload(
         max_output_bytes=MAX_MANIFEST_BYTES,
     )
     if not isinstance(result, dict):
-        return None
+        raise NetworkStackAdapterError("NETWORK_STACK_API_UNAVAILABLE")
+    error = str(result.get("stderr", "")).lower()
+    not_found = "notfound" in error or "not found" in error
     if result.get("available") is False:
-        error = str(result.get("stderr", "")).lower()
-        if "notfound" in error or "not found" in error:
+        if not_found:
             return None
         raise NetworkStackAdapterError("NETWORK_STACK_API_UNAVAILABLE")
     if result.get("returncode") != 0:
-        return None
+        # A timeout, RBAC denial or apiserver hiccup must not be mistaken for an
+        # absent workload: that would re-apply over an object we never inspected.
+        if not_found:
+            return None
+        raise NetworkStackAdapterError("NETWORK_STACK_OPERATION_FAILED")
     try:
         document = yaml.safe_load(result.get("stdout", ""))
-    except (TypeError, ValueError, yaml.YAMLError):
-        return None
-    return document if isinstance(document, dict) else None
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        raise NetworkStackAdapterError("NETWORK_STACK_WORKLOAD_JSON_INVALID") from exc
+    if not isinstance(document, dict):
+        raise NetworkStackAdapterError("NETWORK_STACK_WORKLOAD_JSON_INVALID")
+    return document
 
 
 def _apply_manifest(
