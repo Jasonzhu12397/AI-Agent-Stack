@@ -39,7 +39,7 @@ lease, field manager and audit trail apply:
 
 | Step | Driver |
 |---|---|
-| Render BMHs | `tools/bmh_from_inventory.py` (pure YAML, no cluster access) |
+| Render BMHs | `tools/bmh_from_inventory.py --from-platform` reads `AgentMachine` rows through `tools/bmh_from_platform.py` (pure YAML, no cluster access) |
 | Register BMHs | `tools/metal3_agent_bridge.py apply` -> `apps/eph_agent/metal3_skill.apply_baremetalhosts` |
 | Verify readiness | `tools/metal3_agent_bridge.py verify` -> `apps/eph_agent/metal3_skill.observe_baremetalhosts` |
 
@@ -50,29 +50,27 @@ the Kubernetes runner exactly the way the agent process does.
 
 ## Bare metal workflow
 
-1. Describe your machines once:
+The machine list is generated data, not a file you maintain by hand: the
+platform database already holds each machine's BMC endpoint, the vault
+reference for its credentials and the NICs the agent reported.
 
-   ```bash
-   cp deploy/metal3-lab/hosts/baremetal-nodes.example.yaml \
-      deploy/metal3-lab/hosts/baremetal-nodes.yaml
-   $EDITOR deploy/metal3-lab/hosts/baremetal-nodes.yaml
-   ```
-
-   Each entry needs `name`, `bmc_address`, `username`, `password`, `boot_mac`
-   and optionally `boot_mode`, `verify_bmc_ca`, `online`, `root_device_hints`,
-   `labels`. The BMC password lives in a Secret rendered next to the BMH; the
-   filled-in inventory should stay out of version control.
+1. Register the machine in the platform (BMC endpoint, credential reference,
+   hardware inventory report). `AgentMachine` is the single source of truth.
 
 2. Render and apply:
 
    ```bash
    export METAL3_LAB_ALLOW_HOST_MUTATION=1
    export METAL3_LAB_WORK_DIR=/var/lib/metal3-lab
+   export METAL3_LAB_PROJECT_ID=<platform project id>   # optional scope
    bash deploy/metal3-lab/run.sh prepare
    ```
 
-   `prepare` renders `.metal3-lab/hosts/bmhs.yaml` (also one file per machine),
-   exports `BARE_METAL_HOSTS_DIR`, then runs the vendored `01/02/03/04`.
+   `prepare` reads `AgentMachine` rows, resolves the BMC credentials through
+   `BMC_CREDENTIAL_RESOLVER`, derives the boot MAC from the reported inventory
+   and writes `.metal3-lab/hosts/bmhs.yaml` (plus one file per machine). Machines
+   missing a BMC endpoint, a credential reference or an unambiguous boot NIC are
+   reported and skipped, never guessed. The bundle is then handed to the agent.
 
 3. Inspect, then re-verify at any time:
 
@@ -83,12 +81,21 @@ the Kubernetes runner exactly the way the agent process does.
 The renderer can also be used on its own:
 
 ```bash
-python3 tools/bmh_from_inventory.py --inventory hosts.yaml --out-dir hosts
-python3 tools/bmh_from_inventory.py --inventory hosts.yaml --count
+python3 tools/bmh_from_inventory.py --from-platform --project <id> --out-dir hosts
+python3 tools/bmh_from_inventory.py --from-platform --count
 ```
 
-It rejects duplicate names, duplicate boot MACs, non-DNS-label names and
-malformed MACs or BMC schemes, and only ever deletes the files it wrote itself.
+Offline, without a database, a static inventory is still supported:
+
+```bash
+METAL3_LAB_INVENTORY_SOURCE=file \
+python3 tools/bmh_from_inventory.py --inventory hosts.yaml --out-dir hosts
+```
+
+Both sources go through the same validation: duplicate names, duplicate boot
+MACs, non-DNS-label names and malformed MACs or BMC schemes are rejected, and
+only the files this tool wrote are ever deleted.
+
 Applying and verifying that bundle is the agent's job:
 
 ```bash

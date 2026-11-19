@@ -25,6 +25,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+ROOT_PATH = Path(__file__).resolve().parents[1]
+if str(ROOT_PATH) not in sys.path:
+    sys.path.insert(0, str(ROOT_PATH))
+
 try:
     import yaml
 except ModuleNotFoundError:  # pragma: no cover - PyYAML is a declared dependency
@@ -240,7 +244,9 @@ def write_manifests(machines: Sequence[Machine], out_dir: Path) -> tuple[Path, P
         per_machine = out_dir / f"{machine.name}-{MANIFEST_NAME}"
         per_machine.write_text(
             yaml.safe_dump_all(
-                render_documents([machine]), sort_keys=False, default_flow_style=False,
+                render_documents([machine]),
+                sort_keys=False,
+                default_flow_style=False,
             ),
             encoding="utf-8",
         )
@@ -248,7 +254,9 @@ def write_manifests(machines: Sequence[Machine], out_dir: Path) -> tuple[Path, P
     combined = out_dir / CLUSTER_ARTIFACT_NAME
     combined.write_text(
         yaml.safe_dump_all(
-            render_documents(machines), sort_keys=False, default_flow_style=False,
+            render_documents(machines),
+            sort_keys=False,
+            default_flow_style=False,
         ),
         encoding="utf-8",
     )
@@ -259,21 +267,62 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render BareMetalHost manifests for physical machines (no libvirt, no VMs).",
     )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--inventory", type=Path, help="YAML or JSON inventory of physical machines"
+    )
+    source.add_argument(
+        "--from-platform",
+        action="store_true",
+        help="generate the inventory from the platform database (AgentMachine rows)",
+    )
+    parser.add_argument("--project", help="platform project id to read machines from")
     parser.add_argument(
-        "--inventory", required=True, type=Path,
-        help="YAML or JSON inventory of physical machines",
+        "--django-settings",
+        default="platform_api.settings",
+        help="Django settings module used for --from-platform",
+    )
+    parser.add_argument(
+        "--redfish-systems-path",
+        default="/redfish/v1/Systems/1",
+        help="path appended to a bare BMC origin when rendering the BMC address",
     )
     parser.add_argument("--out-dir", type=Path, help="directory where BMH manifests are written")
     parser.add_argument(
-        "--count", action="store_true", help="print the number of machines and exit",
+        "--count",
+        action="store_true",
+        help="print the number of machines and exit",
     )
     return parser
+
+
+def _load(args: argparse.Namespace) -> list[Machine]:
+    if args.from_platform:
+        try:
+            from tools.bmh_from_platform import load_platform_machines, summarise_skips
+        except ImportError:  # pragma: no cover - direct script execution
+            from bmh_from_platform import load_platform_machines, summarise_skips
+
+        skipped: list[str] = []
+        machines = load_platform_machines(
+            project_id=args.project,
+            settings_module=args.django_settings,
+            systems_path=args.redfish_systems_path,
+            skipped=skipped,
+        )
+        summary = summarise_skips(skipped)
+        if summary:
+            sys.stderr.write(f"WARNING: skipped machine(s): {summary}\n")
+        if not machines:
+            raise InventoryError("the platform has no machine ready for a BMH manifest")
+        return machines
+    return load_inventory(args.inventory)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        machines = load_inventory(args.inventory)
+        machines = _load(args)
         if args.count:
             print(len(machines))
             return 0

@@ -94,18 +94,38 @@ platform_env() {
     log "NODES_PLATFORM=${NODES_PLATFORM}${BARE_METAL_HOSTS_DIR:+ BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR}} BMH_DRIVER=${METAL3_LAB_BMH_DRIVER}"
 }
 
-# Turn the physical-host inventory into BMH manifests plus BMC credential
-# secrets. Nothing here talks to libvirt: it is a pure inventory -> YAML step.
+# Build the BMH bundle the agent will apply. By default the machine list comes
+# from the platform database (AgentMachine rows: BMC endpoint, vault credential
+# reference, reported boot NIC), so no inventory file has to be maintained by
+# hand. METAL3_LAB_INVENTORY_SOURCE=file keeps the static YAML path available.
 render_bmh_manifests() {
     [[ "${PLATFORM}" == "baremetal" ]] || return 0
-    [[ -r "${INVENTORY}" ]] ||
-        die "Bare metal inventory not found: ${INVENTORY}. Copy deploy/metal3-lab/hosts/baremetal-nodes.example.yaml, fill in the BMC details and point METAL3_LAB_INVENTORY at it."
     command -v python3 >/dev/null || die "python3 is required to render BMH manifests"
-    run_logged render-bmh python3 "${BMH_TOOL}" --inventory "${INVENTORY}" --out-dir "${HOSTS_DIR}"
-    NUM_NODES="$(python3 "${BMH_TOOL}" --inventory "${INVENTORY}" --count)"
+
+    local source="${METAL3_LAB_INVENTORY_SOURCE:-platform}"
+    local -a args=()
+    case "${source}" in
+        platform)
+            args=(--from-platform)
+            [[ -n "${METAL3_LAB_PROJECT_ID:-}" ]] && args+=(--project "${METAL3_LAB_PROJECT_ID}")
+            [[ -n "${METAL3_LAB_DJANGO_SETTINGS:-}" ]] && args+=(--django-settings "${METAL3_LAB_DJANGO_SETTINGS}")
+            ;;
+        file)
+            [[ -r "${INVENTORY}" ]] ||
+                die "Inventory not found: ${INVENTORY}. Copy deploy/metal3-lab/hosts/baremetal-nodes.example.yaml or use METAL3_LAB_INVENTORY_SOURCE=platform."
+            args=(--inventory "${INVENTORY}")
+            ;;
+        *)
+            die "METAL3_LAB_INVENTORY_SOURCE must be platform or file; got ${source}"
+            ;;
+    esac
+
+    log "Rendering BMH manifests from ${source}"
+    run_logged render-bmh python3 "${BMH_TOOL}" "${args[@]}" --out-dir "${HOSTS_DIR}"
+    NUM_NODES="$(python3 "${BMH_TOOL}" "${args[@]}" --count)"
     export NUM_NODES
-    (( NUM_NODES >= 1 )) || die "The inventory must list at least one machine"
-    log "Rendered ${NUM_NODES} BareMetalHost manifest(s) from ${INVENTORY}"
+    (( NUM_NODES >= 1 )) || die "The inventory source produced no machines"
+    log "Rendered ${NUM_NODES} BareMetalHost manifest(s) from ${source}"
 }
 
 run_logged() {
@@ -212,7 +232,10 @@ Platforms:
       hosts on this host, with vbmc/sushy-tools emulating their BMCs.
 
 Bare metal inputs:
-  METAL3_LAB_INVENTORY  Path to the physical-host inventory
+  METAL3_LAB_INVENTORY_SOURCE  platform (default) reads AgentMachine rows from
+                        the platform database; file reads a static YAML list.
+  METAL3_LAB_PROJECT_ID  Platform project to take machines from.
+  METAL3_LAB_INVENTORY  YAML inventory path, used only when the source is file
                         (default deploy/metal3-lab/hosts/baremetal-nodes.yaml).
   METAL3_LAB_HOSTS_DIR  Where generated BMH manifests land
                         (default .metal3-lab/hosts).
