@@ -169,6 +169,22 @@ PLANNING_ARTIFACT_KEYS = (
 )
 
 
+def _validate_checkpoint_command_transition(
+    command: dict[str, Any],
+    expected_phase: str,
+    next_phase: str,
+    role: str,
+) -> None:
+    """Bind a checkpoint to the exact leased command that owns the transition."""
+
+    if command.get("required_role") != role:
+        raise ControlApiError("CHECKPOINT_COMMAND_ROLE_MISMATCH")
+    if command.get("from_phase") != expected_phase:
+        raise ControlApiError("CHECKPOINT_COMMAND_FROM_PHASE_MISMATCH")
+    if command.get("next_phase") != next_phase:
+        raise ControlApiError("CHECKPOINT_COMMAND_NEXT_PHASE_MISMATCH")
+
+
 def _merge_planning_artifacts(
     previous_state: Any,
     evidence: dict[str, Any],
@@ -1009,7 +1025,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("CHECKPOINT_TARGET_CLUSTER_MISMATCH")
                     leased_command = connection.execute(
                         """
-                        SELECT deployment_id FROM agent_control_commands
+                        SELECT deployment_id, required_role, from_phase, next_phase
+                        FROM agent_control_commands
                         WHERE command_id = %s AND deployment_id = %s
                           AND target_agent_id = %s AND lease_id = %s
                           AND lease_token_hash = %s AND status = 'leased'
@@ -1026,6 +1043,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     if leased_command is None:
                         raise ControlApiError("CHECKPOINT_COMMAND_LEASE_INVALID")
+                    _validate_checkpoint_command_transition(
+                        leased_command,
+                        expected_phase,
+                        next_phase,
+                        identity["role"],
+                    )
                     state = {
                         "state_digest": state_digest.lower(),
                         "evidence": evidence,

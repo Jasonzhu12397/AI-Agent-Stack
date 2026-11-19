@@ -83,6 +83,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             payload JSONB NOT NULL,
             from_phase TEXT,
             next_phase TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL CHECK (
                 status IN ('queued', 'leased', 'succeeded', 'failed', 'blocked', 'cancelled')
             ),
@@ -113,6 +114,10 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     )
     connection.execute(
         "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS next_phase TEXT"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands "
+        "ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0"
     )
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_commands_claim_idx

@@ -3,6 +3,7 @@ from uuid import uuid4
 from apps.cloud_control_agent.deployment_controller import (
     advance_after_command,
     reconcile_deployments,
+    requeue_retryable_commands,
 )
 
 
@@ -180,3 +181,62 @@ def test_reconcile_skips_a_deployment_with_an_active_command():
     assert summary["queued"] == 0
     assert summary["results"][0]["status"] == "active_command"
     assert connection.inserted == []
+
+
+class _RetryResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return self.rows
+
+
+class _RetryConnection:
+    def __init__(self, rows, update_succeeds=True):
+        self.rows = rows
+        self.update_succeeds = update_succeeds
+        self.updates = 0
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT command_id, attempts, result"):
+            return _RetryResult([
+                row for row in self.rows if row["attempts"] < params[0]
+            ])
+        if normalized.startswith("UPDATE agent_control_commands"):
+            self.updates += 1
+            command_id = params[0]
+            match = next(
+                (row for row in self.rows if row["command_id"] == command_id),
+                None,
+            )
+            return _RetryResult(
+                [{"command_id": command_id}]
+                if self.update_succeeds and match and match["attempts"] == params[1]
+                else []
+            )
+        raise AssertionError(normalized)
+
+
+def test_retryable_failures_are_requeued_but_non_retryable_are_not():
+    connection = _RetryConnection([
+        {"command_id": uuid4(), "attempts": 1, "result": {"retryable": True}},
+        {"command_id": uuid4(), "attempts": 0, "result": {"retryable": False}},
+    ])
+    summary = requeue_retryable_commands(connection, limit=10)
+    assert summary["scanned"] == 2
+    assert summary["requeued"] == 1
+    assert summary["skipped"] == 1
+    assert connection.updates == 1
+
+
+def test_retry_attempt_cap_is_enforced():
+    connection = _RetryConnection([
+        {"command_id": uuid4(), "attempts": 3, "result": {"retryable": True}},
+    ])
+    summary = requeue_retryable_commands(connection, limit=10, max_attempts=3)
+    assert summary["scanned"] == 0
+    assert summary["requeued"] == 0

@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from packages.agent_contracts.orchestration import TARGET_CHECKPOINT_PHASES
+from packages.agent_contracts.outcomes import is_retryable_outcome
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -1495,7 +1496,7 @@ def _result(
         "completed_at": now.isoformat(),
         "output": outcome["output"],
         "error_code": outcome["error_code"],
-        "retryable": False,
+        "retryable": is_retryable_outcome(outcome),
         "side_effects": outcome["side_effects"],
         "evidence_digest": hashlib.sha256(payload).hexdigest(),
     }

@@ -23,6 +23,8 @@ from packages.agent_contracts.orchestration import (
     plan_next_step,
 )
 
+MAX_COMMAND_ATTEMPTS = 3
+
 LOG = logging.getLogger("cloud-control-agent")
 
 
@@ -213,6 +215,70 @@ def _has_active_command(
     return row is not None
 
 
+def requeue_retryable_commands(
+    connection: psycopg.Connection[Any],
+    limit: int = 100,
+    max_attempts: int = MAX_COMMAND_ATTEMPTS,
+) -> dict[str, Any]:
+    """Requeue failed commands only when the Agent declared them retryable.
+
+    A failed action with side effects is not automatically repeated: the Agent
+    must say ``retryable: true``. The same command row is reused, its stale lease
+    is cleared, and the attempt counter is capped so a broken deployment cannot
+    spin forever.
+    """
+
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not 1 <= limit <= 1000
+        or not isinstance(max_attempts, int)
+        or isinstance(max_attempts, bool)
+        or not 1 <= max_attempts <= 10
+    ):
+        return {"status": "invalid_limit", "requeued": 0}
+    rows = connection.execute(
+        """
+        SELECT command_id, attempts, result
+        FROM agent_control_commands
+        WHERE status = 'failed' AND attempts < %s
+        ORDER BY updated_at
+        LIMIT %s
+        """,
+        (max_attempts, limit),
+    ).fetchall()
+    requeued = 0
+    skipped = 0
+    for row in rows:
+        result = row["result"] if isinstance(row["result"], dict) else {}
+        if result.get("retryable") is not True:
+            skipped += 1
+            continue
+        updated = connection.execute(
+            """
+            UPDATE agent_control_commands
+            SET status = 'queued', attempts = attempts + 1,
+                lease_id = NULL, lease_token_hash = NULL,
+                lease_expires_at = NULL, issued_at = NULL,
+                deadline = NULL, updated_at = NOW()
+            WHERE command_id = %s AND status = 'failed'
+              AND attempts = %s
+            RETURNING command_id
+            """,
+            (row["command_id"], row["attempts"]),
+        ).fetchone()
+        if updated is not None:
+            requeued += 1
+        else:
+            skipped += 1
+    return {
+        "status": "completed",
+        "scanned": len(rows),
+        "requeued": requeued,
+        "skipped": skipped,
+    }
+
+
 def reconcile_deployments(
     connection: psycopg.Connection[Any],
     limit: int = 100,
@@ -227,6 +293,7 @@ def reconcile_deployments(
 
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         return {"status": "invalid_limit"}
+    retry = requeue_retryable_commands(connection, limit=limit)
     deployments = connection.execute(
         """
         SELECT deployment_id FROM agent_control_deployments
@@ -241,6 +308,7 @@ def reconcile_deployments(
         "scanned": 0,
         "queued": 0,
         "skipped": 0,
+        "retry_requeued": retry["requeued"],
         "results": [],
     }
     for row in deployments:

@@ -11,6 +11,7 @@ from apps.cloud_control_agent.api import (
     _parse_uuid,
     _validate_action_role,
     _validate_checkpoint_actor_transition,
+    _validate_checkpoint_command_transition,
     _validate_checkpoint_evidence,
     _validate_reported_capabilities,
     _validated_eph_pivot_attestation,
@@ -377,3 +378,30 @@ def test_claimed_command_payload_exposes_the_authoritative_next_phase():
     assert _command_payload_for_claim(payload, "network_ready")["next_phase"] == "network_ready"
     assert payload == {"cluster_name": "target"}
     assert "next_phase" not in _command_payload_for_claim(None, None)
+
+
+def test_checkpoint_must_match_the_exact_leased_command():
+    command = {
+        "required_role": "target",
+        "from_phase": "workers_ready",
+        "next_phase": "network_ready",
+    }
+    _validate_checkpoint_command_transition(
+        command,
+        "workers_ready",
+        "network_ready",
+        "target",
+    )
+    for field, value, error in (
+        ("required_role", "eph", "CHECKPOINT_COMMAND_ROLE_MISMATCH"),
+        ("from_phase", "bmh_ready", "CHECKPOINT_COMMAND_FROM_PHASE_MISMATCH"),
+        ("next_phase", "completed", "CHECKPOINT_COMMAND_NEXT_PHASE_MISMATCH"),
+    ):
+        forged = {**command, field: value}
+        with pytest.raises(ControlApiError, match=error):
+            _validate_checkpoint_command_transition(
+                forged,
+                "workers_ready",
+                "network_ready",
+                "target",
+            )
