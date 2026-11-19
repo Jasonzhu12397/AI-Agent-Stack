@@ -27,7 +27,7 @@ def _registry():
                 "source": f"{name}:local",
                 "target": f"{ENDPOINT}/ai-agent-stack/{name}:bootstrap",
             }
-            for name in ("eph-agent", "target-agent", "vbmc", "sushy-tools")
+            for name in ("eph-agent", "target-agent", "vbmc", "sushy-tools", "httpd-infra")
         ],
         "services": {
             "vbmc": {
@@ -40,6 +40,17 @@ def _registry():
                 "container": {
                     "image": _image("sushy-tools", "d"),
                     "ports": [{"containerPort": 8000, "hostPort": 8000}],
+                },
+            },
+            "httpd-infra": {
+                "container": {
+                    "image": _image("httpd-infra", "e"),
+                    "ports": [{"containerPort": 80, "hostPort": 80}],
+                    "volumeMounts": [{"name": "shared", "mountPath": "/shared"}],
+                },
+                "pod": {
+                    "hostNetwork": True,
+                    "volumes": [{"name": "shared", "hostPath": {"path": "/opt/metal3-data"}}],
                 },
             },
         },
@@ -79,10 +90,14 @@ def test_cloud_init_runs_registry_and_eph_bmc_services_as_pods_after_kubeadm():
     assert registry["spec"]["template"]["spec"]["hostNetwork"] is True
     service_docs = list(yaml.safe_load_all(files["/etc/ai-agent-stack/eph-bmc-services.yaml"]))
     assert {item["kind"] for item in service_docs} == {"Deployment"}
-    assert {item["metadata"]["name"] for item in service_docs} == {"vbmc", "sushy-tools"}
+    assert {item["metadata"]["name"] for item in service_docs} == {
+        "vbmc",
+        "sushy-tools",
+        "httpd-infra",
+    }
     config = json.loads(files["/etc/ai-agent-stack/registry.json"])
     assert config["target_agent_image"] == _image("target-agent", "b")
-    assert len(config["images"]) == 4
+    assert len(config["images"]) == 5
     hosts = files[f"/etc/containerd/certs.d/{ENDPOINT}/hosts.toml"]
     assert f'server = "http://{ENDPOINT}"' in hosts
 
@@ -133,9 +148,9 @@ def test_runtime_imports_pushes_and_waits_for_all_local_pods(monkeypatch):
     imports = [command for command in commands if command[3:5] == ["images", "import"]]
     rollouts = [command for command in commands if "rollout" in command]
     applies = [command for command in commands if command[-2] == "-f"]
-    assert len(pushes) == 4
-    assert len(imports) == 5
-    assert len(rollouts) == 3
+    assert len(pushes) == 5
+    assert len(imports) == 6
+    assert len(rollouts) == 4
     assert [command[-1] for command in applies] == [
         config["registry_manifest"],
         config["services_manifest"],

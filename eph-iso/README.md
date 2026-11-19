@@ -88,17 +88,19 @@ The renderer writes Kubernetes Deployment manifests and
 script at `/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image
 archives; there is no Docker Compose stack or external registry pull.
 
-`registry`, `vbmc` and `sushy-tools` are Deployments in namespace
-`ai-agent-system`. The registry Pod uses host networking on the provisioning NIC
+`registry`, `vbmc`, `sushy-tools` and `httpd-infra` are Deployments in namespace
+`ai-agent-system`. The EPH Agent is a Deployment in the same cluster, and BMH,
+CAPI, BMO and Ironic resources are queried from that cluster directly. Target
+Agent is a Deployment in the target Kubernetes cluster. The registry Pod uses host networking on the provisioning NIC
 and a hostPath data volume. The BMC Pod container and Pod specs come from the
 seed. The runtime performs this sequence:
 
 1. Wait for the EPH API, import the registry archive into containerd, apply the
    registry Deployment and wait for rollout and `/v2/` readiness.
-2. Import, tag and push the EPH Agent, Target Agent, vbmc and sushy-tools
-   archives to the registry Pod.
+2. Import, tag and push the EPH Agent, Target Agent, vbmc, sushy-tools and
+   httpd-infra archives to the registry Pod.
 3. Read each published manifest digest and require an exact pinned match.
-4. Apply the vbmc and sushy-tools Deployments and wait for both rollouts.
+4. Apply the vbmc, sushy-tools and httpd-infra Deployments and wait for all rollouts.
 
 The same registry endpoint is written into the target control-plane and worker
 Kubeadm `files` as containerd `hosts.toml`. Remote nodes therefore pull Agent and
@@ -111,7 +113,7 @@ the isolated provisioning network; no public registry is required.
    root ownership and `0600` permissions.
 2. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
 3. The registry Pod starts, all ISO image archives are published and digest
-   checked, and the vbmc/sushy-tools Pods become ready.
+   checked, and the vbmc/sushy-tools/httpd-infra Pods become ready.
 4. `bootstrap.py` waits for `kubectl get --raw=/readyz` to return `ok`, then
    waits for the node to report `Ready`.
 5. The three TLS files are copied into a temporary directory, verified locally,

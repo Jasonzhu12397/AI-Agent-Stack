@@ -75,21 +75,6 @@ if [[ ! "${SUPPORTED_DISTROS[*]}" =~ ${DISTRO} ]]; then
   exit 1
 fi
 
-# Container runtime
-if [[ "${OS}" = "ubuntu" ]]; then
-  export CONTAINER_RUNTIME=${CONTAINER_RUNTIME:-"docker"}
-else
-  export CONTAINER_RUNTIME=${CONTAINER_RUNTIME:-"podman"}
-fi
-# Pod names
-if [[ "${CONTAINER_RUNTIME}" = "podman" ]]; then
-  export POD_NAME="--pod ironic-pod"
-  export POD_NAME_INFRA="--pod infra-pod"
-else
-  export POD_NAME=""
-  export POD_NAME_INFRA=""
-fi
-
 export SSH_KEY=${SSH_KEY:-"${HOME}/.ssh/id_rsa"}
 export SSH_PUB_KEY=${SSH_PUB_KEY:-"${SSH_KEY}.pub"}
 # Generate user ssh key
@@ -381,10 +366,6 @@ export KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.37.0}"
 export KUBERNETES_BINARIES_VERSION="${KUBERNETES_BINARIES_VERSION:-${KUBERNETES_VERSION}}"
 export KUBERNETES_BINARIES_CONFIG_VERSION=${KUBERNETES_BINARIES_CONFIG_VERSION:-"v0.15.1"}
 
-# Bootstrap Cluster: kind only. minikube needed libvirt and tilt was an
-# upstream live-reload workflow; neither exists in this lab.
-export BOOTSTRAP_CLUSTER=${BOOTSTRAP_CLUSTER:-"kind"}
-
 # Kubectl version - SHA256 is downloaded and verified
 export KUBECTL_VERSION="${KUBECTL_VERSION:-${KUBERNETES_BINARIES_VERSION}}"
 
@@ -394,12 +375,6 @@ export KREW_SHA256="${KREW_SHA256:-5df32eaa0e888a2566439c4ccb2ef3a3e6e89522f2f21
 
 # Kustomize version
 export KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION:-v5.4.1}"
-
-# Kind, kind node image versions (if BOOTSTRAP_CLUSTER=kind)
-export KIND_VERSION="${KIND_VERSION:-v0.33.0}"
-export KIND_NODE_IMAGE_VERSION="${KIND_NODE_IMAGE_VERSION:-v1.37.0}"
-export KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-${DOCKER_HUB_PROXY}/kindest/node:${KIND_NODE_IMAGE_VERSION}}"
-
 
 # Ansible 13 requires Python 3.12+ on the control node. Upgrade the CI-tested
 # Ubuntu 24.04 and CentOS Stream 10 hosts; leave the existing default elsewhere.
@@ -607,20 +582,4 @@ differs(){
   fi
   return ${RET_CODE}
 }
-
-#
-# Kill and remove the infra containers
-#
-remove_ironic_containers() {
-  #shellcheck disable=SC2015
-  for name in ipa-downloader httpd-infra ipxe-builder registry; do
-    if sudo "${CONTAINER_RUNTIME}" ps | grep -w -q "${name}$"; then
-        sudo "${CONTAINER_RUNTIME}" kill "${name}" || true
-    fi
-    if sudo "${CONTAINER_RUNTIME}" ps --all | grep -w -q "${name}$"; then
-        sudo "${CONTAINER_RUNTIME}" rm "${name}" -f || true
-    fi
-  done
-}
-
 

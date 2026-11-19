@@ -1,7 +1,7 @@
 """Judge the management cluster in python instead of parsing kubectl in bash.
 
-The lab used to grep ``kubectl get crds``, jq the deployment status and pipe
-``podman ps`` through grep. Every one of those steps re-implemented a judgement
+The lab used to grep ``kubectl get crds``, jq the deployment status and inspect
+host containers through shell pipelines. Every one of those steps re-implemented
 in shell, where a missing field silently became an empty string and a passing
 check. Here the same evidence is read once, as structured data, and turned into
 explicit findings the agent (and a human) can read.
@@ -39,6 +39,7 @@ PROVIDER_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
     ("ai-agent-system", "registry"),
     ("ai-agent-system", "vbmc"),
     ("ai-agent-system", "sushy-tools"),
+    ("ai-agent-system", "httpd-infra"),
 )
 
 # (label key, label value, namespace, expected replica set count)
@@ -50,9 +51,8 @@ PROVIDER_REPLICASETS: tuple[tuple[str, str, str, int], ...] = (
     ("cluster.x-k8s.io/provider", "ipam-metal3", "metal3-ipam-system", 1),
 )
 
-# Only httpd-infra remains a host container. Registry and BMC services are Pods.
+# All EPH infrastructure services are Pods; only network links remain host-side.
 REQUIRED_BRIDGES: tuple[str, ...] = ("provisioning", "external")
-REQUIRED_CONTAINERS: tuple[str, ...] = ("httpd-infra",)
 
 Runner = Callable[..., dict[str, Any]]
 
@@ -182,21 +182,6 @@ def check_bridges(host_runner: Runner) -> list[Finding]:
     ]
 
 
-def check_containers(host_runner: Runner, container_runtime: str) -> list[Finding]:
-    result = host_runner(["sudo", container_runtime, "ps", "--format", "{{.Names}}"], 30)
-    if not result.get("available") or result.get("returncode") != 0:
-        return [Finding("container inventory", False, f"{container_runtime} ps failed")]
-    names = {line.strip() for line in (result.get("stdout") or "").splitlines()}
-    return [
-        Finding(
-            f"container {name}",
-            name in names,
-            "" if name in names else "not running",
-        )
-        for name in REQUIRED_CONTAINERS
-    ]
-
-
 def check_ironic_auth(http_probe: Callable[[str], int | None], ironic_url: str) -> list[Finding]:
     """Ironic must refuse anonymous reads; 200 means the API is wide open."""
 
@@ -222,7 +207,6 @@ def verify_management_cluster(
     *,
     kubeconfig: str | None = None,
     host_runner: Runner | None = None,
-    container_runtime: str = "docker",
     http_probe: Callable[[str], int | None] | None = None,
     ironic_url: str | None = None,
 ) -> list[Finding]:
@@ -234,7 +218,6 @@ def verify_management_cluster(
     findings.extend(check_replicasets(runner, kubeconfig))
     if host_runner is not None:
         findings.extend(check_bridges(host_runner))
-        findings.extend(check_containers(host_runner, container_runtime))
     if http_probe is not None and ironic_url:
         findings.extend(check_ironic_auth(http_probe, ironic_url))
     return findings

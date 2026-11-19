@@ -111,21 +111,6 @@ download_and_install_krew()
     popd || return 1
 }
 
-download_and_install_kind()
-{
-    KIND_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-$(uname)-amd64"
-    KIND_SHA256="${KIND_SHA256:-https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-$(uname)-amd64.sha256sum}"
-    KIND_BINARY="kind"
-
-    wget_and_verify "${KIND_URL}" "${KIND_SHA256}" "${KIND_BINARY}"
-    if [[ "${SKIP_INSTALLATION}" != "false" ]]; then
-        return 0
-    fi
-
-    chmod +x "${KIND_BINARY}"
-    sudo mv "${KIND_BINARY}" /usr/local/bin/
-}
-
 # TODO: kubectl shouldd not be latest (same as k8s latest version), but
 # use kubernetes version - 1, so the version skew from the latest to the
 # old one used in upgrades is within +/- 1 version.
@@ -191,7 +176,6 @@ _download_and_print_checksums()
     SKIP_INSTALLATION=true
 
     # download_and_install_clusterctl
-    download_and_install_kind
     download_and_install_krew
     download_and_install_kubectl
     download_and_install_kustomize

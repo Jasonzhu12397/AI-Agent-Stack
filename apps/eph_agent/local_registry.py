@@ -1,7 +1,7 @@
 """Render the EPH local registry and BMC services as Kubernetes workloads.
 
-The registry, vbmc, and sushy-tools all run as Pods in the EPH single-node
-cluster. Images arrive in Live ISO archives, are imported into containerd, and
+The registry, vbmc, sushy-tools, and httpd-infra all run as Pods in the EPH
+single-node cluster. Images arrive in Live ISO archives, are imported into containerd, and
 are published only to the registry on the EPH provisioning NIC. No Docker
 Compose stack, virtual machine, or external registry is involved.
 """
@@ -18,7 +18,7 @@ _DIGEST_IMAGE = re.compile(
     r"^(?P<endpoint>[A-Za-z0-9.-]+:[0-9]{1,5})/(?P<repository>[a-z0-9._/-]+)@sha256:[a-f0-9]{64}$"
 )
 _ENDPOINT = re.compile(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
-_REQUIRED_SERVICES = ("vbmc", "sushy-tools")
+_REQUIRED_SERVICES = ("vbmc", "sushy-tools", "httpd-infra")
 _NAMESPACE = "ai-agent-system"
 
 

@@ -56,7 +56,7 @@ elif [[ "${OS}" = "opensuse-leap" ]]; then
     sudo zypper refresh
     sudo zypper -n in python311 python311-pip jq bash-completion apparmor-utils update-alternatives
     sudo update-alternatives --install /usr/bin/python python3.11 /usr/bin/python3.11 20
-    # Disable apparmor, it causes troubles when running dnsmasq with kind
+    # Disable apparmor, it causes troubles when running dnsmasq with EPH networking
     # sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.6 10
     # sudo aa-disable dnsmasq
     sudo aa-teardown
@@ -98,13 +98,8 @@ if ! kubectl krew > /dev/null 2>&1; then
     download_and_install_krew
 fi
 
-# Kind is the only management-cluster provider: minikube and tilt are not
-# part of this lab, so only kind is installed.
-# shellcheck disable=SC2312
-if ! command -v kind &>/dev/null || [[ "v$(kind version -q)" != "${KIND_VERSION}" ]]; then
-    download_and_install_kind
-fi
-
+# The EPH live-OS already provides its single-node Kubernetes cluster. No kind,
+# minikube, or second management cluster is installed or started here.
 # shellcheck disable=SC2312
 if ! command -v kubectl &>/dev/null || [[ "$(kubectl version --client -o json|jq -r '.clientVersion.gitVersion')" != "${KUBECTL_VERSION}" ]]; then
     download_and_install_kubectl
@@ -119,5 +114,3 @@ if [[ ! -r "${BASH_COMPLETION}" ]]; then
     # shellcheck disable=SC2312
     kubectl completion bash | sudo tee "${BASH_COMPLETION}" >/dev/null
 fi
-
-    source lib/image_prepull.sh

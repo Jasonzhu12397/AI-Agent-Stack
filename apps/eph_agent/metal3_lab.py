@@ -37,7 +37,6 @@ HOST_BOOTSTRAP_SCRIPTS = (
     "02_configure_host.sh",
     "03_launch_mgmt_cluster.sh",
 )
-INFRA_CONTAINERS = ("ipa-downloader", "httpd-infra", "ipxe-builder")
 HOST_LINKS = ("ironic-peer", "ironicendpoint", "provisioning", "external")
 
 
@@ -71,7 +70,6 @@ class LabSettings:
     apply_retries: int = 10
     retry_interval: float = 60.0
     kubeconfig: str | None = None
-    container_runtime: str = "docker"
     ironic_url: str | None = None
     vendor_source: str | None = None
 
@@ -217,6 +215,7 @@ class Metal3Lab:
 
     def host_environment(self) -> dict[str, str]:
         environment = dict(os.environ)
+        environment.pop("CONTAINER_RUNTIME", None)
         environment.update(
             {
                 "NODES_PLATFORM": "baremetal",
@@ -224,7 +223,8 @@ class Metal3Lab:
                 "CAPM3_VERSION": environment.get("CAPM3_VERSION", "v1beta1"),
                 "CAPI_VERSION": environment.get("CAPI_VERSION", "v1beta2"),
                 "IMAGE_OS": environment.get("IMAGE_OS", "ubuntu"),
-                "CONTAINER_RUNTIME": self.settings.container_runtime,
+                "KUBECONFIG": self.settings.kubeconfig or "/etc/kubernetes/admin.conf",
+                "USE_IRSO": "true",
             }
         )
         if environment["IMAGE_OS"] != "ubuntu":
@@ -369,8 +369,6 @@ class Metal3Lab:
             str(self.settings.hosts_dir),
             "--namespace",
             self.settings.namespace,
-            "--container-runtime",
-            self.settings.container_runtime,
         ]
         if self.settings.kubeconfig:
             arguments.extend(("--kubeconfig", self.settings.kubeconfig))
@@ -411,7 +409,6 @@ class Metal3Lab:
 
     def cleanup_stages(self) -> list[HostStage]:
         settings = self.settings
-        runtime = settings.container_runtime
         working_dir = Path(os.environ.get("WORKING_DIR", "/opt/metal3-dev-env"))
         ansible = (
             Path(os.environ.get("ANSIBLE_VENV", str(working_dir / "venv")))
@@ -420,24 +417,19 @@ class Metal3Lab:
         )
         stages = [
             HostStage(
-                "delete-kind-cluster",
-                ("sudo", "-u", os.environ.get("USER", "root"), "kind", "delete", "cluster"),
+                "delete-eph-infrastructure-pods",
+                (
+                    "kubectl",
+                    "--kubeconfig",
+                    settings.kubeconfig or "/etc/kubernetes/admin.conf",
+                    "delete",
+                    "namespace",
+                    "ai-agent-system",
+                    "--ignore-not-found",
+                ),
                 allow_failure=True,
-            ),
-            HostStage(
-                "remove-infra-containers",
-                ("sudo", runtime, "rm", "-f", *INFRA_CONTAINERS),
-                allow_failure=True,
-            ),
-        ]
-        if runtime == "podman":
-            stages.append(
-                HostStage(
-                    "remove-infra-pods",
-                    ("sudo", runtime, "pod", "rm", "-f", "ironic-pod", "infra-pod"),
-                    allow_failure=True,
-                )
             )
+        ]
         stages.append(
             HostStage(
                 "remove-firewall-rules",
@@ -542,7 +534,6 @@ def settings_from_namespace(args: Any) -> LabSettings:
         apply_retries=args.apply_retries,
         retry_interval=args.retry_interval,
         kubeconfig=args.kubeconfig,
-        container_runtime=args.container_runtime,
         ironic_url=args.ironic_url or os.environ.get("IRONIC_URL"),
         vendor_source=args.vendor_source,
     )
@@ -553,8 +544,6 @@ def validate_settings(settings: LabSettings) -> None:
         raise LabError(
             f"control plane size must be one of {fleet_planning.VALID_CONTROL_PLANE_COUNTS}"
         )
-    if settings.container_runtime not in {"docker", "podman"}:
-        raise LabError("container runtime must be docker or podman")
     if settings.retry_interval < 0:
         raise LabError("retry interval cannot be negative")
     if settings.auto_network:

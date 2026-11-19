@@ -90,6 +90,9 @@ def test_prepare_orders_agent_and_host_stages(tmp_path, monkeypatch):
     def executor(stage, environment):
         host_stages.append(stage.name)
         assert environment["NODES_PLATFORM"] == "baremetal"
+        assert environment["USE_IRSO"] == "true"
+        assert environment["KUBECONFIG"] == "/etc/kubernetes/admin.conf"
+        assert "CONTAINER_RUNTIME" not in environment
 
     lab = metal3_lab.Metal3Lab(settings(tmp_path), executor=executor, deploy=deploy)
     monkeypatch.setattr(lab, "verify_vendor", lambda: {})
@@ -159,14 +162,15 @@ def test_apply_failure_is_not_hidden(tmp_path):
         lab.apply_target()
 
 
-def test_cleanup_uses_argv_and_never_calls_cleanup_scripts(tmp_path):
-    lab = metal3_lab.Metal3Lab(settings(tmp_path, container_runtime="podman"))
+def test_cleanup_uses_kubernetes_and_argv_without_host_containers(tmp_path):
+    lab = metal3_lab.Metal3Lab(settings(tmp_path))
     stages = lab.cleanup_stages()
     rendered = [" ".join(stage.argv) for stage in stages]
 
-    assert any("kind delete cluster" in command for command in rendered)
-    assert any("podman pod rm -f" in command for command in rendered)
+    assert any("kubectl" in command and "ai-agent-system" in command for command in rendered)
     assert any("vm-setup/firewall.yml" in command for command in rendered)
+    assert not any("kind" in command for command in rendered)
+    assert not any("podman" in command or "docker" in command for command in rendered)
     assert not any(command.endswith(".sh") for command in rendered)
     assert not any("make clean" in command for command in rendered)
 
@@ -190,6 +194,20 @@ def test_reference_import_does_not_overwrite_the_running_fork(tmp_path, monkeypa
 def test_invalid_control_plane_size_is_rejected(tmp_path):
     with pytest.raises(metal3_lab.LabError, match="control plane size"):
         metal3_lab.validate_settings(settings(tmp_path, control_plane_count=2))
+
+
+def test_vendor_has_no_host_container_or_second_cluster_bootstrap():
+    root = Path(__file__).resolve().parents[1]
+    vendor = root / "deploy" / "metal3-lab" / "vendor" / "metal3-dev-env"
+    for name in ("01_prepare_host.sh", "02_configure_host.sh", "03_launch_mgmt_cluster.sh"):
+        content = (vendor / name).read_text(encoding="utf-8")
+        assert "CONTAINER_RUNTIME" not in content
+        assert "docker-compose" not in content
+        assert "docker compose" not in content
+    third = (vendor / "03_launch_mgmt_cluster.sh").read_text(encoding="utf-8")
+    assert "launch_kind" not in third
+    assert "launch_ironic\n" not in third
+    assert "launch_ironic_via_irso" in third
 
 
 def test_run_sh_is_gone_and_python_entry_point_exists():

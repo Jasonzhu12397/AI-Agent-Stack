@@ -115,7 +115,7 @@ def _plain_runner(kubeconfig: Path | None = None) -> KubectlRunner:
 
 
 def local_command_runner(arguments: list[str], timeout: int = 30, **_: Any) -> dict[str, Any]:
-    """Run a host command (ip, podman/docker) and return its raw result."""
+    """Run a host network command and return its raw result."""
 
     try:
         completed = subprocess.run(
@@ -368,7 +368,6 @@ def command_verify(args: argparse.Namespace) -> int:
             _plain_runner(),
             kubeconfig=args.kubeconfig,
             host_runner=None if args.no_host_checks else local_command_runner,
-            container_runtime=args.container_runtime,
             http_probe=None if args.no_host_checks else http_status_probe,
             ironic_url=args.ironic_url,
         )
@@ -697,15 +696,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--namespace", default="metal3")
     verify.add_argument("--expected", type=int)
     verify.add_argument("--kubeconfig")
-    verify.add_argument(
-        "--container-runtime", default=os.environ.get("CONTAINER_RUNTIME", "docker")
-    )
     verify.add_argument("--ironic-url", default=os.environ.get("IRONIC_URL"))
     verify.add_argument("--bmh-only", action="store_true", help="judge the BMHs and nothing else")
     verify.add_argument(
         "--no-host-checks",
         action="store_true",
-        help="skip the provisioning-host bridges, containers and Ironic probe",
+        help="skip the provisioning-host bridges and Ironic probe",
     )
     verify.set_defaults(func=command_verify)
 

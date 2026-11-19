@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the EPH registry and BMC Pods and publish the ISO's pinned images.
+"""Run the EPH registry, BMC, and HTTP infrastructure Pods with pinned images.
 
 All workloads run in the EPH single-node Kubernetes cluster. Images are loaded
 into containerd and pushed only to the EPH Pod registry; no Docker Compose or

@@ -13,21 +13,25 @@ performs no clone, fetch, checkout or submodule operation.
 
 ## One platform: physical machines
 
-This lab provisions real hardware behind real BMCs (Redfish/IPMI). There is no
-platform switch, virtual machine, virtual BMC or `/dev/kvm` requirement. The
-virtual half of upstream dev-env is not disabled; it is deleted.
+This lab provisions real hardware and never requires libvirt, KVM, a VM domain,
+or a second kind/minikube management cluster. The EPH single-node Kubernetes
+cluster directly contains the BMH/CAPI resources, EPH Agent, Ironic/BMO,
+registry, vbmc, sushy-tools and httpd-infra Pods. Target Agent is likewise a
+Kubernetes Deployment in the target cluster. None of these workloads uses
+Docker Compose or a host container lifecycle. The upstream VM creation path is
+deleted rather than toggled off.
 
 `tools/vendor_import.py` records every refused upstream path in `PRUNE_PATHS`:
-libvirt/virtbmc roles and playbooks, BMC emulators, the Kamaji PoC, the VM e2e
+libvirt/virtbmc roles and playbooks, host-side emulator containers, the Kamaji PoC, the VM e2e
 suite, tilt/developer tooling, and the superseded `04_verify.sh`, cleanup
 scripts and `Makefile`. The retained tree contains only the three host-bootstrap
 stages the Python lifecycle actually executes:
 
 | Stage | Responsibility |
 |---|---|
-| `01_prepare_host.sh` | Install host packages, Ansible, kind, kubectl and krew |
-| `02_configure_host.sh` | Configure real-NIC bridges, firewall, registry and ironic httpd |
-| `03_launch_mgmt_cluster.sh` | Start kind, Ironic/BMO and CAPI/CAPM3 controllers; stop there |
+| `01_prepare_host.sh` | Install host packages, Ansible, kubectl and krew; reuse the EPH single-node cluster |
+| `02_configure_host.sh` | Configure real-NIC bridges, firewall and ISO-provided IPA files; start no host containers |
+| `03_launch_mgmt_cluster.sh` | Install Ironic/BMO and CAPI/CAPM3 controllers into the existing EPH cluster; stop there |
 
 None of these scripts generates, applies or verifies a BMH, and none invokes
 another orchestrator.
@@ -42,7 +46,7 @@ another orchestrator.
 | Render BMHs and CAPI | `apps/eph_agent/capi_renderer.py`; when `--data-template` is absent, `data_template.py` derives `Metal3DataTemplate` from the declared physical control-plane interface |
 | Apply | `apps/eph_agent/metal3_skill.apply_baremetalhosts`, then `apply_capi_cluster_resources` |
 | Configure target networking | `network_stack_adapter.py` applies local plugin manifests idempotently and waits for the declared Deployment/DaemonSet readiness |
-| Verify | `observe_baremetalhosts` plus `apps/eph_agent/metal3_readiness.py` for CRDs, controllers, replica sets, host bridges, infra containers and Ironic authentication |
+| Verify | `observe_baremetalhosts` plus `apps/eph_agent/metal3_readiness.py` for CRDs, controllers, replica sets, registry/BMC/httpd Deployments, host bridges and Ironic authentication |
 | Explain and audit | `plan.json` records every reason and missing fact; `--write-back` mirrors the decision into `AgentMachine` and writes `fleet.machine.role_planned` audit events |
 
 The deployment layers are:

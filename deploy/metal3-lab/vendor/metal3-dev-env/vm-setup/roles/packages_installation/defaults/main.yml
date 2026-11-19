@@ -16,12 +16,6 @@ packages:
       - unzip
       - genisoimage
       - apache2-utils
-    podman:
-      packages:
-      - apt-transport-https
-      - ca-certificates
-      - gnupg-agent
-      - software-properties-common
     jammy:
       packages:
       - apparmor
@@ -43,66 +37,10 @@ packages:
     - lxml
     - netaddr
     - six
-    - docker-py
     - jmespath
     - passlib
-  centos:
-    common:
-      packages:
-      - bind-utils
-      - curl
-      - dnsmasq
-      - firewalld
-      - httpd-tools
-      - jq
-      - NetworkManager
-      - nmap
-      - patch
-      - podman
-      - psmisc
-      - python3-lxml
-      - python3-netaddr
-      - python3-requests-oauthlib
-      - python3-six
-      - unzip
-      - vim-enhanced
-      - wget
-    el9:
-      packages:
-      - genisoimage
-      - python3-bcrypt
-    el10:
-      packages:
-      - xorriso
-    pip3:
-    - flask_oauthlib==0.9.6
-    - jmespath
-    - kubernetes==25.3.0
-    - passlib
-  suse:
-    common:
-      packages:
-      - jq
-      - dnsmasq
-      - unzip
-      - nmap
-      - docker
-      - podman
-      - python311-setuptools
-      - python311-lxml
-      - python311-netaddr
-      - python311-passlib
-      - python311-cryptography
-      - apache2-utils
-    pip3:
-    - jmespath
-    - pyYAML
-    - kubernetes==25.3.0
-DAEMON_JSON_PATH: "{{ metal3_dir }}/vm-setup/roles/packages_installation/files"
-CONTAINER_RUNTIME: "{{ lookup('env', 'CONTAINER_RUNTIME') }}"
 OS_VERSION_ID: "{{ lookup('env', 'OS_VERSION_ID') }}"
 REGISTRY: "{{ lookup('env', 'REGISTRY') }}"
-DOCKER_IPV6_SUPPORT: "{{ lookup('env', 'DOCKER_USE_IPV6_INTERNALLY') | default('false', true) }}"
 ANSIBLE_VENV: "{{ lookup('env', 'ANSIBLE_VENV') | default('/usr', true) }}"
 # Go related variables, expected to be updated when new versions are released:
 go_version: "1.25.14"

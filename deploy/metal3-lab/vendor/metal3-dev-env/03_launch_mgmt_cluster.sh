@@ -114,81 +114,6 @@ update_images()
     done
 }
 
-#
-# Launch Ironic locally for Kind and Tilt, in cluster for Minikube
-#
-launch_ironic()
-{
-    safe_pushd "${BMOPATH}"
-
-    # Update Configmap parameters with correct urls
-    # Variable names inserted into the configmap might have different
-    # naming conventions than the dev-env e.g. PROVISIONING_IP and CIDR are
-    # called PROVISIONER_IP and CIDR in dev-env
-    cat << EOF | sudo tee "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-HTTP_PORT=${HTTP_PORT}
-PROVISIONING_IP=${CLUSTER_BARE_METAL_PROVISIONER_IP}
-PROVISIONING_CIDR=${BARE_METAL_PROVISIONER_CIDR}
-PROVISIONING_INTERFACE=${BARE_METAL_PROVISIONER_INTERFACE}
-DHCP_RANGE=${CLUSTER_DHCP_RANGE}
-DEPLOY_KERNEL_URL=${DEPLOY_KERNEL_URL}
-DEPLOY_RAMDISK_URL=${DEPLOY_RAMDISK_URL}
-IRONIC_ENDPOINT=${IRONIC_URL}
-CACHEURL=http://${BARE_METAL_PROVISIONER_URL_HOST}/images
-RESTART_CONTAINER_CERTIFICATE_UPDATED="${RESTART_CONTAINER_CERTIFICATE_UPDATED}"
-IRONIC_RAMDISK_SSH_KEY=${SSH_PUB_KEY_CONTENT}
-IRONIC_USE_MARIADB=${IRONIC_USE_MARIADB:-false}
-IPA_BASEURI=${IPA_BASEURI}
-IPA_BRANCH=${IPA_BRANCH}
-IPA_FLAVOR=${IPA_FLAVOR}
-EOF
-
-    if [[ -n "${DEPLOY_ISO_URL}" ]]; then
-        echo "DEPLOY_ISO_URL=${DEPLOY_ISO_URL}" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-    fi
-
-
-    if [[ -n "${DHCP_IGNORE:-}" ]]; then
-        echo "DHCP_IGNORE=${DHCP_IGNORE}" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-    fi
-
-    if [[ -n "${DHCP_HOSTS:-}" ]]; then
-        echo "DHCP_HOSTS=${DHCP_HOSTS}" | sudo tee -a "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env"
-    fi
-
-    # Copy the generated configmap for ironic deployment
-    cp "${IRONIC_DATA_DIR}/ironic_bmo_configmap.env" "${BMOPATH}/ironic-deployment/components/keepalived/ironic_bmo_configmap.env"
-
-    # Update manifests to use the correct images.
-    # Note: Even though the manifests are not used for local deployment we need
-    # to do this since Ironic will no longer run locally after pivot.
-    # The workload cluster will use these images after pivoting.
-    if [[ -n "${IRONIC_LOCAL_IMAGE:-}" ]]; then
-        update_component_image Ironic "${IRONIC_LOCAL_IMAGE}"
-    else
-        update_component_image Ironic "${IRONIC_IMAGE}"
-    fi
-
-    if [[ -n "${IRONIC_KEEPALIVED_LOCAL_IMAGE:-}" ]]; then
-        update_component_image Keepalived "${IRONIC_KEEPALIVED_LOCAL_IMAGE}"
-    else
-        update_component_image Keepalived "${IRONIC_KEEPALIVED_IMAGE}"
-    fi
-
-    if [[ -n "${IPA_DOWNLOADER_LOCAL_IMAGE:-}" ]]; then
-        update_component_image IPA-downloader "${IPA_DOWNLOADER_LOCAL_IMAGE}"
-    else
-        update_component_image IPA-downloader "${IPA_DOWNLOADER_IMAGE}"
-    fi
-
-        update_images
-        ${RUN_LOCAL_IRONIC_SCRIPT}
-        # Wait for ironic to become ready
-        echo "Waiting for Ironic to become ready"
-        retry sudo "${CONTAINER_RUNTIME}" exec ironic /bin/ironic-readiness
-    popd
-}
-
 launch_ironic_standalone_operator()
 {
     # shellcheck disable=SC2311
@@ -382,24 +307,6 @@ EOF
 EOF
     fi
 
-    if [[ "${GINKGO_FOCUS:-}" = "in-place-upgrade" ]]; then
-        export TEST_EXTENSION_MANIFEST_IMG="${REGISTRY}/metal3-io/test-extension:latest"
-        make docker-build-test-extension TEST_EXTENSION_IMG="${TEST_EXTENSION_MANIFEST_IMG}"
-        "${CONTAINER_RUNTIME}" push --tls-verify=false "${TEST_EXTENSION_MANIFEST_IMG}"
-        make set-manifest-image-test-extension TEST_EXTENSION_IMG="${TEST_EXTENSION_MANIFEST_IMG}"
-        make test-extension-manifests
-
-        rm -rf "${CAPI_CONFIG_DIR}"/overrides/runtime-extension-test-extension/"${CAPM3RELEASE}"
-        mkdir -p "${CAPI_CONFIG_DIR}"/overrides/runtime-extension-test-extension/"${CAPM3RELEASE}"
-        cp out/runtime-extension-test-extension/*.yaml "${CAPI_CONFIG_DIR}"/overrides/runtime-extension-test-extension/"${CAPM3RELEASE}"
-
-        cat << EOF >> "${CAPI_CONFIG_DIR}"/clusterctl.yaml
-- name: test-extension
-  type: RuntimeExtensionProvider
-  url: "${CAPI_CONFIG_DIR}/overrides/runtime-extension-test-extension/${CAPM3RELEASE}/components.yaml"
-EOF
-    fi
-
     # At this point the images variables have been updated with update_images
     # Reflect the change in components files
     if [[ -n "${CAPM3_LOCAL_IMAGE:-}" ]]; then
@@ -483,15 +390,8 @@ launch_cluster_api_provider_metal3()
 {
     safe_pushd "${CAPM3PATH}"
 
-    # shellcheck disable=SC2153
-    if [[ "${GINKGO_FOCUS:-}" = "in-place-upgrade" ]]; then
-        clusterctl init --core cluster-api:"${CAPIRELEASE}" --bootstrap kubeadm:"${CAPIRELEASE}" \
-            --control-plane kubeadm:"${CAPIRELEASE}" --infrastructure=metal3:"${CAPM3RELEASE}" -v5 --ipam=metal3:"${IPAMRELEASE}" \
-            --runtime-extension=test-extension:"${CAPM3RELEASE}"
-    else
-        clusterctl init --core cluster-api:"${CAPIRELEASE}" --bootstrap kubeadm:"${CAPIRELEASE}" \
-            --control-plane kubeadm:"${CAPIRELEASE}" --infrastructure=metal3:"${CAPM3RELEASE}" -v5 --ipam=metal3:"${IPAMRELEASE}"
-    fi
+    clusterctl init --core cluster-api:"${CAPIRELEASE}" --bootstrap kubeadm:"${CAPIRELEASE}" \
+        --control-plane kubeadm:"${CAPIRELEASE}" --infrastructure=metal3:"${CAPM3RELEASE}" -v5 --ipam=metal3:"${IPAMRELEASE}"
 
 
     popd
@@ -525,131 +425,15 @@ create_clouds_yaml()
 # Management cluster infra
 # ------------------------
 
-#
-# Start a KinD management cluster
-#
-launch_kind()
-{
-    if [[ "${IP_STACK}" = "v6" ]]; then
-        # If registry is IPv6 address, '[', ']' are not allowed in kind configuration.
-        # We need to create config files for the containerd patches.
-        # Notice that having '[' and ']' in the key requires containerd 2.0 or newer.
-        cat <<EOF | tee /tmp/hosts.toml
-[host."http://${REGISTRY}/v2"]
-  capabilities = ["pull", "resolve", "push"]
-  skip_verify = true
-EOF
-
-        cat <<EOF | sudo su -l -c "kind create cluster --name kind --image=${KIND_NODE_IMAGE} --config=- " "${USER}"
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  extraMounts:
-  - hostPath: /tmp/hosts.toml
-    containerPath: /hosts.toml
-containerdConfigPatches:
-- |-
-  [plugins."io.containerd.grpc.v1.cri".registry]
-    config_path = "/etc/containerd/certs.d"
-networking:
-  ipFamily: ipv6
-EOF
-
-        # Copy config to correct place. Mounting it directly does not work
-        # because the filepath contains colons.
-        docker exec kind-control-plane mkdir -p /etc/containerd/certs.d/"${REGISTRY}"
-        docker exec kind-control-plane cp /hosts.toml /etc/containerd/certs.d/"${REGISTRY}"/hosts.toml
-
-    else
-        cat <<EOF | sudo su -l -c "kind create cluster --name kind --image=${KIND_NODE_IMAGE} --config=- " "${USER}"
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-containerdConfigPatches:
-- |-
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."${REGISTRY}"]
-    endpoint = ["http://${REGISTRY}"]
-EOF
-    fi
-}
-
-#
-# Create a management cluster
-#
-start_management_cluster()
-{
-    # Kind is the only management cluster this lab starts: minikube needed
-    # libvirt and tilt needed a live-reload workflow for upstream developers.
-    if [[ "${BOOTSTRAP_CLUSTER}" = "kind" ]]; then
-        launch_kind
-    fi
-}
-
-build_ipxe_firmware()
-{
-    # Build iPXE firmware during deployment (only available on ubuntu)
-    # vars with CENV_ARG postfix are container environment variable arguments
-    # and only used to pass the env var to the containers
-    local ipxe_builder_image="${REGISTRY}/localimages/ipxe-builder:latest"
-    local ipxe_tmp_source="/tmp/ipxe-source"
-    export IPXE_ENABLE_TLS_CENV_ARG="IPXE_ENABLE_TLS='false'"
-    export IPXE_ENABLE_IPV6_CENV_ARG="IPXE_ENABLE_IPV6='false'"
-    declare -a certs_mounts=()
-
-    if [[ "${BUILD_IPXE}" != "true" ]]; then
-        return 0
-    fi
-
-    if [[ ! -r "${IPXE_SOURCE_DIR}" ]]; then
-        git clone --depth 1 --branch "${IPXE_RELEASE_BRANCH}" \
-            "https://github.com/ipxe/ipxe.git" "${IPXE_SOURCE_DIR}"
-        chmod -R 777 "${IPXE_SOURCE_DIR}"
-    elif [[ "${IPXE_SOURCE_FORCE_UPDATE}" = "true" ]]; then
-        rm -rf "${ipxe_tmp_source}"
-        # shellcheck disable=SC2086
-        git clone --depth 1 --branch "${IPXE_RELEASE_BRANCH}" \
-            "https://github.com/ipxe/ipxe.git" "${ipxe_tmp_source}"
-        rm -rf "${IPXE_SOURCE_DIR}"
-        mv "${ipxe_tmp_source}" "${IPXE_SOURCE_DIR}"
-        rm -rf "${ipxe_tmp_source}"
-    fi
-
-    if [[ "${IPXE_ENABLE_TLS}" = "true" ]]; then
-        export IPXE_ENABLE_TLS_CENV_ARG="IPXE_ENABLE_TLS=true"
-        certs_mounts+=("-v ${IPXE_CACERT_FILE}:/certs/ca/ipxe/tls.crt")
-        certs_mounts+=("-v ${IPXE_CERT_FILE}:/certs/ipxe/tls.crt")
-        certs_mounts+=("-v ${IPXE_KEY_FILE}:/certs/ipxe/tls.key ")
-    fi
-
-    if [[ "${IPXE_ENABLE_IPV6}" = "true" ]]; then
-        export IPXE_ENABLE_IPV6_CENV_ARG="IPXE_ENABLE_IPV6=true"
-    fi
-
-    # shellcheck disable=SC2086,SC2068
-    sudo "${CONTAINER_RUNTIME}" run \
-        --net host \
-        --name ipxe-builder ${POD_NAME} \
-        -e "${IPXE_ENABLE_TLS_CENV_ARG}" \
-        -e "${IPXE_ENABLE_IPV6_CENV_ARG}" \
-        -e "IPXE_CHAIN_HOST=${IRONIC_HOST_IP}" \
-        ${certs_mounts[@]} \
-        -v "${IRONIC_DATA_DIR}":/shared \
-        "${ipxe_builder_image}"
-}
-
-
 # -----------------------------
 # Deploy the management cluster
 # -----------------------------
 
-# Kill and remove the running ironic containers
-"${BMOPATH}"/tools/remove_local_ironic.sh
+# Reuse the EPH single-node cluster. No kind cluster or host Ironic is created.
+export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
+kubectl get --raw=/readyz
 create_clouds_yaml
-
-
-build_ipxe_firmware
-start_management_cluster
-kubectl create namespace metal3
+kubectl create namespace metal3 --dry-run=client -o yaml | kubectl apply -f -
 
 patch_clusterctl
 
@@ -665,7 +449,8 @@ if [[ "${USE_IRSO}" = true ]]; then
     launch_ironic_standalone_operator
     launch_ironic_via_irso
 else
-    launch_ironic
+    echo "USE_IRSO=true is required: Ironic must run in the EPH Kubernetes cluster" >&2
+    exit 1
 fi
 
 if ! kubectl rollout status deployment "${BMO_NAME_PREFIX}"-controller-manager -n "${IRONIC_NAMESPACE}" --timeout="${BMO_ROLLOUT_WAIT}"m; then

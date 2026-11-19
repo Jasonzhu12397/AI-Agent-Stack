@@ -19,7 +19,6 @@ Examples::
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -62,9 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--apply-retries", type=int, default=10)
     parser.add_argument("--retry-interval", type=float, default=60.0)
     parser.add_argument("--kubeconfig")
-    parser.add_argument(
-        "--container-runtime", default=os.environ.get("CONTAINER_RUNTIME", "docker")
-    )
     parser.add_argument("--ironic-url")
     return parser
 

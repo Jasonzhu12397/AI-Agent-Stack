@@ -101,15 +101,10 @@ def test_bridges_are_read_from_json_not_grep():
     assert not by_name["bridge external"].ok
 
 
-def test_only_httpd_infra_is_a_host_container():
-    def host(args, timeout=30, **_):
-        return {"available": True, "returncode": 0, "stdout": "httpd-infra\nregistry-mirror\n"}
-
-    findings = readiness.check_containers(host, "podman")
-    assert findings == [readiness.Finding("container httpd-infra", True, "")]
-    assert ("ai-agent-system", "registry") in readiness.PROVIDER_DEPLOYMENTS
-    assert ("ai-agent-system", "vbmc") in readiness.PROVIDER_DEPLOYMENTS
-    assert ("ai-agent-system", "sushy-tools") in readiness.PROVIDER_DEPLOYMENTS
+def test_all_eph_infrastructure_is_checked_as_kubernetes_deployments():
+    assert not hasattr(readiness, "check_containers")
+    for name in ("registry", "vbmc", "sushy-tools", "httpd-infra"):
+        assert ("ai-agent-system", name) in readiness.PROVIDER_DEPLOYMENTS
 
 
 def test_ironic_must_refuse_anonymous_reads():
@@ -159,7 +154,6 @@ def test_verify_management_cluster_collects_every_layer():
     findings = readiness.verify_management_cluster(
         runner,
         host_runner=host,
-        container_runtime="podman",
         http_probe=lambda url: 401,
         ironic_url="https://10.0.0.5:6385/v1",
     )
@@ -167,7 +161,6 @@ def test_verify_management_cluster_collects_every_layer():
     assert any(item.name.startswith("CRD ") for item in findings)
     assert any(item.name.startswith("deployment ") for item in findings)
     assert any(item.name.startswith("bridge ") for item in findings)
-    assert any(item.name.startswith("container ") for item in findings)
     assert any("Ironic" in item.name for item in findings)
 
 

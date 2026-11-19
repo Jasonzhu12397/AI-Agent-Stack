@@ -51,12 +51,6 @@
 #export MAX_SURGE_VALUE=1
 
 #
-# Select the Container Runtime, can be "podman" or "docker"
-# Defaults to "docker" on ubuntu and "podman" otherwise
-#
-#export CONTAINER_RUNTIME="podman"
-
-#
 # Set the Baremetal Operator repository to clone
 #
 #export BMOREPO="${BMOREPO:-https://github.com/metal3-io/baremetal-operator.git}"
@@ -174,10 +168,6 @@
 # %d format field that will be replaced with an integer representing the number
 # of the node.
 #export NODE_HOSTNAME_FORMAT="node-%d"
-
-# Bootstrap cluster used as management cluster for cluster API. Only "kind" is
-# supported here: minikube needed libvirt and tilt was an upstream workflow.
-#export BOOTSTRAP_CLUSTER=kind
 
 # Secure Ironic deployment with TLS ("true" or "false")
 #export IRONIC_TLS_SETUP="true"
