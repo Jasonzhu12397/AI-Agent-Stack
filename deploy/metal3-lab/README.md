@@ -27,9 +27,26 @@ chain with three deliberate, recorded patches (see `vendor/PATCHES.md`):
   virtbmc roles) and does not start `vbmc`/`sushy-tools`; the provisioning bridge
   is attached to your real NIC instead of a veth pair.
 - `03_launch_mgmt_cluster.sh` never generates BMHs from a libvirt inventory; it
-  applies the manifests you rendered from your own machine list.
-- `04_verify.sh` has no `virsh` steps and no BMC emulator containers; it verifies
-  the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
+  hands the manifests you rendered from your own machine list to the agent.
+- `04_verify.sh` has no `virsh` steps and no BMC emulator containers; the agent
+  judges the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
+
+## The agent performs the cluster actions
+
+`02/03/04` only prepare the host and make decisions; the cluster mutations and
+readiness judgement run inside the project's own agent skill so the agent's
+lease, field manager and audit trail apply:
+
+| Step | Driver |
+|---|---|
+| Render BMHs | `tools/bmh_from_inventory.py` (pure YAML, no cluster access) |
+| Register BMHs | `tools/metal3_agent_bridge.py apply` -> `apps/eph_agent/metal3_skill.apply_baremetalhosts` |
+| Verify readiness | `tools/metal3_agent_bridge.py verify` -> `apps/eph_agent/metal3_skill.observe_baremetalhosts` |
+
+`METAL3_LAB_BMH_DRIVER` selects the driver: `agent` (default) or `local` (a
+direct `kubectl apply`, explicitly logged as a bypass because it steps outside
+the agent). The bridge is invoked by the scripts, never by you, and it injects
+the Kubernetes runner exactly the way the agent process does.
 
 ## Bare metal workflow
 
@@ -72,6 +89,12 @@ python3 tools/bmh_from_inventory.py --inventory hosts.yaml --count
 
 It rejects duplicate names, duplicate boot MACs, non-DNS-label names and
 malformed MACs or BMC schemes, and only ever deletes the files it wrote itself.
+Applying and verifying that bundle is the agent's job:
+
+```bash
+python3 tools/metal3_agent_bridge.py apply  --manifest hosts/bmhs.yaml --namespace metal3
+python3 tools/metal3_agent_bridge.py verify --expected 2
+```
 
 ## Actions
 

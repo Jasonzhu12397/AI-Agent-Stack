@@ -13,6 +13,7 @@ readonly WORK_DIR="${METAL3_LAB_WORK_DIR:-${REPO_ROOT}/.metal3-lab}"
 readonly LOG_DIR="${WORK_DIR}/artifacts"
 readonly VENDOR_TOOL="${REPO_ROOT}/tools/vendor_import.py"
 readonly BMH_TOOL="${REPO_ROOT}/tools/bmh_from_inventory.py"
+readonly AGENT_BRIDGE="${REPO_ROOT}/tools/metal3_agent_bridge.py"
 # Platform selects which half of the vendored tree is exercised:
 #   baremetal (default) - the BMHs describe physical machines, no VM is created
 #   libvirt             - upstream demo mode, virtual bare metal hosts on the host
@@ -83,10 +84,14 @@ preflight() {
 # extension point: baremetal adds a third value next to libvirt and fake.
 platform_env() {
     export NODES_PLATFORM="${PLATFORM}"
+    # BMH registration and readiness judgement run through the agent bridge,
+    # never through kubectl calls embedded in the vendored scripts.
+    export METAL3_LAB_AGENT_BRIDGE="${AGENT_BRIDGE}"
+    export METAL3_LAB_BMH_DRIVER="${METAL3_LAB_BMH_DRIVER:-agent}"
     if [[ "${PLATFORM}" == "baremetal" ]]; then
         export BARE_METAL_HOSTS_DIR="${HOSTS_DIR}"
     fi
-    log "NODES_PLATFORM=${NODES_PLATFORM}${BARE_METAL_HOSTS_DIR:+ BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR}}"
+    log "NODES_PLATFORM=${NODES_PLATFORM}${BARE_METAL_HOSTS_DIR:+ BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR}} BMH_DRIVER=${METAL3_LAB_BMH_DRIVER}"
 }
 
 # Turn the physical-host inventory into BMH manifests plus BMC credential

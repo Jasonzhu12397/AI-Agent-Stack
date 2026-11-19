@@ -147,6 +147,8 @@ fi
 # baremetal platform (local patch: see vendor/PATCHES.md): the BMHs describe
 # hardware that already exists, so the libvirt and virtbmc roles that create
 # virtual machines are skipped. Nothing here creates a VM, a veth or a domain.
+# Which platform runs is decided by the agent orchestrating this lab through
+# NODES_PLATFORM; the shell only honours that decision and never invents VMs.
 if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
     echo "Skipping libvirt VM creation on baremetal platform"
 else

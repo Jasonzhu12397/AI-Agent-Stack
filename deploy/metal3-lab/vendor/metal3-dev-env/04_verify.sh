@@ -188,30 +188,27 @@ check_container(){
 # only source of truth: every host registered by the operator must be present,
 # reachable through its BMC and past introspection.
 # shellcheck disable=SC2329
+# baremetal platform (local patch: see vendor/PATCHES.md)
+#
+# There is no libvirt, no virsh and no virtualbmc here. Judging whether the
+# physical hosts came up is agent work: this script asks
+# tools/metal3_agent_bridge.py, which drives the agent's own
+# observe_baremetalhosts skill, and only turns its exit code into a result.
+# The agent decides presence, operationalStatus and provisioning state, so the
+# verification evidence and the agent's audit trail are the same object.
+# shellcheck disable=SC2329
 check_bmhs_baremetal(){
   local FAILS_CHECK="${FAILS}"
-  local BMH_JSON COUNT NAME STATUS PROVISIONING
 
-  RESULT_STR="Fetch Baremetalhosts"
-  BMH_JSON="$(kubectl --kubeconfig "${KUBECONFIG}" get baremetalhosts -n metal3 -o json)"
+  RESULT_STR="Agent verified the Baremetalhosts"
+  if [[ -z "${METAL3_LAB_AGENT_BRIDGE:-}" ]]; then
+    echo >&2 "ERROR: METAL3_LAB_AGENT_BRIDGE is unset; it must point to tools/metal3_agent_bridge.py"
+    FAILS=$((FAILS+1))
+    return 1
+  fi
+
+  python3 "${METAL3_LAB_AGENT_BRIDGE}" verify --expected "${NUM_NODES}"
   process_status $?
-
-  COUNT="$(echo "${BMH_JSON}" | jq -r '.items | length' 2>/dev/null || echo 0)"
-  RESULT_STR="Baremetalhosts registered"
-  equals "${COUNT}" "${NUM_NODES}"
-
-  for i in $(seq 0 $((COUNT-1))); do
-    [[ "${COUNT}" -gt 0 ]] || break
-    NAME="$(echo "${BMH_JSON}" | jq -r ".items[${i}].metadata.name")"
-    STATUS="$(echo "${BMH_JSON}" | jq -r ".items[${i}].status.operationalStatus")"
-    PROVISIONING="$(echo "${BMH_JSON}" | jq -r ".items[${i}].status.provisioning.state")"
-
-    RESULT_STR="${NAME} Baremetalhost status OK"
-    equals "${STATUS}" "OK"
-
-    RESULT_STR="${NAME} Baremetalhost introspecting completed"
-    is_in "${PROVISIONING}" "ready available"
-  done
 
   echo ""
   return "$((FAILS-FAILS_CHECK))"

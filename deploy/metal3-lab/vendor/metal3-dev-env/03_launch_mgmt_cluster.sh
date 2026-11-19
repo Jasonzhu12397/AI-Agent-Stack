@@ -846,38 +846,49 @@ else
     kubectl delete validatingwebhookconfiguration/"${BMO_NAME_PREFIX}"-validating-webhook-configuration --ignore-not-found=true
 fi
 
-# Apply the BMH manifests that describe physical hardware
+# Hand the BMH bundle that describes physical hardware to the AI agent
 #
 # baremetal platform (local patch: see vendor/PATCHES.md): nothing is generated
-# from libvirt inventory. The operator (or tools/bmh_from_inventory.py) writes
-# one BareMetalHost per machine into BARE_METAL_HOSTS_DIR and this function only
-# applies them, retrying while the webhook comes up.
+# from libvirt inventory, and this script does not touch the cluster itself.
+# Registering bare metal hosts is agent work: the bundle rendered by
+# tools/bmh_from_inventory.py is passed to tools/metal3_agent_bridge.py, which
+# calls apps/eph_agent/metal3_skill.apply_baremetalhosts. Only the irreversible
+# host-preparation keystrokes stay in the shell; the cluster mutations belong to
+# the agent, so its lease, field manager and audit trail apply.
 #
 apply_bm_hosts_from_dir()
 {
     local namespace="$1"
     local hosts_dir="${BARE_METAL_HOSTS_DIR:-${WORKING_DIR}/hosts}"
+    local manifest="${hosts_dir}/bmhs.yaml"
+    local driver="${METAL3_LAB_BMH_DRIVER:-agent}"
     local retry=10
     local retry_interval=60
 
-    if [[ ! -d "${hosts_dir}" ]]; then
-        echo >&2 "ERROR: BMH manifest directory not found: ${hosts_dir}"
+    if [[ ! -f "${manifest}" ]]; then
+        echo >&2 "ERROR: BMH bundle not found: ${manifest}"
         echo >&2 "Generate it with: python3 tools/bmh_from_inventory.py --inventory deploy/metal3-lab/hosts/baremetal-nodes.yaml --out-dir ${hosts_dir}"
         exit 1
     fi
 
     while [[ "${retry}" -gt 0 ]]; do
-        echo "applying BMH manifests from ${hosts_dir}"
-        if kubectl apply -f "${hosts_dir}" -n "${namespace}"; then
-            echo "BMH manifests applied"
-            return 0
+        echo "handing ${manifest} to the ${driver} BMH driver"
+        if [[ "${driver}" = "agent" ]]; then
+            if [[ -z "${METAL3_LAB_AGENT_BRIDGE:-}" ]]; then
+                echo >&2 "ERROR: METAL3_LAB_AGENT_BRIDGE is unset; it must point to tools/metal3_agent_bridge.py"
+                exit 1
+            fi
+            python3 "${METAL3_LAB_AGENT_BRIDGE}" apply --manifest "${manifest}" --namespace "${namespace}" && return 0
+        else
+            echo "WARNING: METAL3_LAB_BMH_DRIVER=local bypasses the agent and applies the bundle directly"
+            kubectl apply -f "${hosts_dir}" -n "${namespace}" && return 0
         fi
         echo "retrying in ${retry_interval} seconds"
         sleep "${retry_interval}"
         retry=$((retry - 1))
     done
 
-    echo >&2 "ERROR: failed to apply BMH manifests from ${hosts_dir}"
+    echo >&2 "ERROR: failed to register BMH manifests from ${manifest}"
     exit 1
 }
 
