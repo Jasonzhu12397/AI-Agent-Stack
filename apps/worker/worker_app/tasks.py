@@ -1053,12 +1053,16 @@ def execute_knowledge_ingest(task):
         raise
     document.status = KnowledgeDocument.Status.READY
     document.chunk_count = result["chunks"]
+    document.vector_collection = result.get("collection") or ""
+    document.vector_dimensions = result.get("dimensions")
     document.error = None
     document.ingested_at = timezone.now()
     document.save(
         update_fields=[
             "status",
             "chunk_count",
+            "vector_collection",
+            "vector_dimensions",
             "error",
             "ingested_at",
             "updated_at",
