@@ -9,7 +9,8 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | SaaS capability | What the platform provides | Current state |
 | --- | --- | --- |
 | Agent management | Agent definitions, versions, publishing and run records | Code baseline |
-| Multi-step orchestration | Workflow nodes: `start`, `llm`, `condition`, `knowledge_search`, `tool`, `end` | Code baseline; parallel/loop/approval nodes pending |
+| Multi-Agent teams | Team definitions, ordered specialists, optional coordinator, published team snapshots and team runs | Code baseline; sequential and coordinator strategies |
+| Multi-step orchestration | Workflow nodes: `start`, `llm`, `agent`, `condition`, `knowledge_search`, `tool`, `end` | Code baseline; parallel/loop/approval nodes pending |
 | Model access | OpenAI-compatible model gateway, chat and embeddings | Code baseline; multi-provider routing/fallback pending |
 | Tools and integrations | HTTP, OpenAPI and MCP streamable-HTTP tools, review and permission grants | Code baseline; OAuth and stdio MCP pending |
 | Knowledge and RAG | Knowledge bases, Qdrant collections versioned per embedding model and dimension | Code baseline; real Qdrant chain pending validation |
@@ -29,7 +30,8 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 
 - **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
 - **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio, Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet, Governance, Audit and Organization.
-- **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent and Workflow tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
+- **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent, Workflow and Agent Team tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
+- **Agent Teams**: a project-scoped team publishes a versioned roster of specialist Agents plus an optional coordinator. Publishing materializes an immutable Workflow version made of `agent` nodes, so every team run reuses the same lease, token-budget, retry and audit machinery as ordinary Workflows. Runs are idempotent by `Idempotency-Key` and expose per-member step records. See `docs/agent-teams.md`; members with plugin tools are rejected until per-member tool approvals exist.
 - **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.
 - **Integration Hub**: connector catalog, project installation, explicit grants, credential references, HTTP/OpenAPI tools and MCP tool discovery/import. Newly discovered MCP tools remain disabled until reviewed.
 - **Knowledge/RAG**: document ingestion, embeddings and Qdrant retrieval. Collections are versioned by embedding model and dimension; `reindex_knowledge` supports dry-run and targeted re-embedding.
@@ -208,7 +210,7 @@ npm run build
 ## Repository layout
 
 - `apps/platform-api`: Django SaaS API, tenancy, Agents, Workflows, audit and deployment records.
-- `apps/worker`: asynchronous Agent and Workflow executor.
+- `apps/worker`: asynchronous Agent, Agent Team and Workflow executor.
 - `apps/cloud_control_agent`: cloud-side infrastructure control plane.
 - `apps/eph_agent`: temporary EPH bootstrap Agent.
 - `apps/target_agent`: Target takeover, CAPI Pivot and data-plane Agent.
@@ -218,7 +220,7 @@ npm run build
 - `deploy/agents`: three-Agent images and Kubernetes deployment assets.
 - `deploy/offline`: offline image factory and version manifest.
 - `eph-iso`: Debian 12 EPH Live OS bootstrap assets.
-- `docs`: architecture, threat model, verification matrix and delivery plans.
+- `docs`: architecture, Agent Teams, threat model, verification matrix and delivery plans.
 
 ## Security baseline
 

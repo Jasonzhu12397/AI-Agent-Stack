@@ -8,6 +8,7 @@ from time import sleep
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
     AgentRun,
+    AgentTeamRun,
     AuditEvent,
     KnowledgeBase,
     KnowledgeDocument,
@@ -97,6 +98,9 @@ def claim_next_task(worker_id, lease_seconds=150):
                 AgentRun.objects.filter(task=task).update(finished_at=now)
             if task.task_type == "workflow.run":
                 WorkflowRun.objects.filter(task=task).update(finished_at=now)
+            if task.task_type == "team.run":
+                WorkflowRun.objects.filter(task=task).update(finished_at=now)
+                AgentTeamRun.objects.filter(workflow_run__task=task).update(finished_at=now)
             return None
         if task.status == Task.Status.RUNNING and task.attempts >= task.max_attempts:
             task.status = Task.Status.FAILED
@@ -124,6 +128,9 @@ def claim_next_task(worker_id, lease_seconds=150):
                 AgentRun.objects.filter(task=task).update(finished_at=now)
             if task.task_type == "workflow.run":
                 WorkflowRun.objects.filter(task=task).update(finished_at=now)
+            if task.task_type == "team.run":
+                WorkflowRun.objects.filter(task=task).update(finished_at=now)
+                AgentTeamRun.objects.filter(workflow_run__task=task).update(finished_at=now)
             return None
         task.status = Task.Status.RUNNING
         task.attempts += 1
@@ -205,6 +212,22 @@ def finish_task(task_id, lease_token, result):
             )
         elif task.task_type == "workflow.run":
             WorkflowRun.objects.filter(task=task).update(finished_at=now)
+        if task.task_type == "team.run":
+            if task.status == Task.Status.SUCCEEDED:
+                output = result.get("output")
+                output_text = output.get("content", "") if isinstance(output, dict) else ""
+                WorkflowRun.objects.filter(task=task).update(
+                    output_data=result["output"],
+                    state=result["state"],
+                    finished_at=now,
+                )
+                AgentTeamRun.objects.filter(workflow_run__task=task).update(
+                    output_text=output_text if isinstance(output_text, str) else "",
+                    finished_at=now,
+                )
+            else:
+                WorkflowRun.objects.filter(task=task).update(finished_at=now)
+                AgentTeamRun.objects.filter(workflow_run__task=task).update(finished_at=now)
         if task.task_type == "agent.run":
             run_update = {"finished_at": now}
             if task.status == Task.Status.SUCCEEDED:
@@ -269,6 +292,12 @@ def fail_task(task_id, lease_token, error, retryable=True):
             Task.Status.CANCELLED,
         }:
             WorkflowRun.objects.filter(task=task).update(finished_at=now)
+        if task.task_type == "team.run" and task.status in {
+            Task.Status.FAILED,
+            Task.Status.CANCELLED,
+        }:
+            WorkflowRun.objects.filter(task=task).update(finished_at=now)
+            AgentTeamRun.objects.filter(workflow_run__task=task).update(finished_at=now)
         return True
 
 
@@ -1071,13 +1100,30 @@ def execute_knowledge_ingest(task):
     return result
 
 
+def execute_team_run(task, worker_id):
+    try:
+        team_run = AgentTeamRun.objects.select_related(
+            "team_version",
+            "team_version__team",
+            "workflow_run",
+        ).get(workflow_run__task=task)
+    except AgentTeamRun.DoesNotExist as exc:
+        raise PermanentTaskError("Agent team run record is missing") from exc
+    team = team_run.team_version.team
+    if team.tenant_id != task.tenant_id or team.project_id != task.project_id:
+        raise PermanentTaskError("Agent team run scope does not match its task")
+    return execute_workflow_run(task, worker_id, renew_lease)
+
+
 def execute_task(task, worker_id):
     if task.task_type == "knowledge.ingest":
         return execute_knowledge_ingest(task)
     if task.task_type == "agent.run":
         return execute_agent_run(task)
-    if task.task_type == "workflow.run":
+    if task.task_type in {"workflow.run", "team.run"}:
         try:
+            if task.task_type == "team.run":
+                return execute_team_run(task, worker_id)
             return execute_workflow_run(
                 task,
                 worker_id,

@@ -295,6 +295,87 @@ class AgentRun(models.Model):
         ordering = ["-created_at"]
 
 
+
+class AgentTeam(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="agent_teams")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="agent_teams")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_agent_teams",
+    )
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=80)
+    description = models.TextField(blank=True)
+    draft_config = models.JSONField(default=dict)
+    current_version = models.PositiveIntegerField(default=0)
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "slug"],
+                name="uniq_agent_team_slug_per_project",
+            )
+        ]
+
+
+class AgentTeamVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team = models.ForeignKey(
+        AgentTeam,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version = models.PositiveIntegerField()
+    definition_snapshot = models.JSONField()
+    workflow_version = models.ForeignKey(
+        "WorkflowVersion",
+        on_delete=models.PROTECT,
+        related_name="agent_team_versions",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="published_agent_team_versions",
+    )
+    published_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "version"],
+                name="uniq_agent_team_version_number",
+            )
+        ]
+
+
+class AgentTeamRun(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team_version = models.ForeignKey(
+        AgentTeamVersion,
+        on_delete=models.PROTECT,
+        related_name="runs",
+    )
+    workflow_run = models.OneToOneField(
+        "WorkflowRun",
+        on_delete=models.CASCADE,
+        related_name="agent_team_run",
+    )
+    input_text = models.TextField()
+    output_text = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class TenantTokenBudget(models.Model):
     tenant = models.OneToOneField(Tenant, on_delete=models.CASCADE, related_name="token_budget")
     daily_limit = models.PositiveBigIntegerField(default=100_000)

@@ -31,6 +31,13 @@ from core.agent_plugin_views import (
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
 )
+from core.agent_team_views import (
+    AgentTeamDetailView,
+    AgentTeamListCreateView,
+    AgentTeamPublishView,
+    AgentTeamRunDetailView,
+    AgentTeamRunListCreateView,
+)
 from core.agent_views import (
     AgentDetailView,
     AgentListCreateView,
@@ -311,6 +318,31 @@ urlpatterns = [
         "api/v1/runs/<uuid:run_id>/",
         AgentRunDetailView.as_view(),
         name="agent-run-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-teams/",
+        AgentTeamListCreateView.as_view(),
+        name="agent-team-list-create",
+    ),
+    path(
+        "api/v1/agent-teams/<uuid:team_id>/",
+        AgentTeamDetailView.as_view(),
+        name="agent-team-detail",
+    ),
+    path(
+        "api/v1/agent-teams/<uuid:team_id>/publish/",
+        AgentTeamPublishView.as_view(),
+        name="agent-team-publish",
+    ),
+    path(
+        "api/v1/agent-teams/<uuid:team_id>/runs/",
+        AgentTeamRunListCreateView.as_view(),
+        name="agent-team-run-list-create",
+    ),
+    path(
+        "api/v1/agent-team-runs/<uuid:run_id>/",
+        AgentTeamRunDetailView.as_view(),
+        name="agent-team-run-detail",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/workflows/",
