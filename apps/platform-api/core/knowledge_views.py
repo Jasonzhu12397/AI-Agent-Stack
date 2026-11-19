@@ -354,7 +354,10 @@ class KnowledgeDocumentDetailView(APIView):
                     lease_token=None,
                     lease_expires_at=None,
                 )
-                QdrantVectorStore().delete_document(
+                store = QdrantVectorStore()
+                if document.vector_collection:
+                    store = QdrantVectorStore(collection=document.vector_collection)
+                store.delete_document(
                     tenant_id=str(knowledge_base.tenant_id),
                     project_id=str(knowledge_base.project_id),
                     document_id=str(document.id),
@@ -417,7 +420,10 @@ class KnowledgeDocumentRetryView(APIView):
                         {"detail": "A document ingestion task is already active."},
                         status=status.HTTP_409_CONFLICT,
                     )
-                QdrantVectorStore().delete_document(
+                store = QdrantVectorStore()
+                if document.vector_collection:
+                    store = QdrantVectorStore(collection=document.vector_collection)
+                store.delete_document(
                     tenant_id=str(knowledge_base.tenant_id),
                     project_id=str(knowledge_base.project_id),
                     document_id=str(document.id),
