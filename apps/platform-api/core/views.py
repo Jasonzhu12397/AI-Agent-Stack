@@ -1,5 +1,6 @@
 import os
 
+from django.conf import settings
 from django.db import connection, transaction
 from django.db.utils import DatabaseError
 from django.http import JsonResponse
@@ -9,6 +10,7 @@ from rest_framework.generics import ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from core.audit import record_audit_event
+from core.cache_runtime import cache_health
 from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from core.pagination import TenantPagination
 from core.permissions import IsTenantAdmin
@@ -29,18 +31,41 @@ def readiness(request):
             cursor.fetchone()
     except DatabaseError:
         return JsonResponse({"status": "not_ready", "database": "unavailable"}, status=503)
+    cache_state = cache_health()
     vector_store = "not_configured"
     if os.getenv("QDRANT_URL"):
         try:
             vector_store = "ok" if QdrantVectorStore().ping() else "unavailable"
         except VectorStoreError:
             vector_store = "unavailable"
-        if vector_store != "ok":
-            return JsonResponse(
-                {"status": "not_ready", "database": "ok", "vector_store": vector_store},
-                status=503,
-            )
-    return JsonResponse({"status": "ready", "database": "ok", "vector_store": vector_store})
+    if vector_store == "unavailable":
+        return JsonResponse(
+            {
+                "status": "not_ready",
+                "database": "ok",
+                "vector_store": vector_store,
+                "cache": cache_state,
+            },
+            status=503,
+        )
+    if cache_state == "unavailable" and getattr(settings, "CACHE_REQUIRED", False):
+        return JsonResponse(
+            {
+                "status": "not_ready",
+                "database": "ok",
+                "vector_store": vector_store,
+                "cache": cache_state,
+            },
+            status=503,
+        )
+    return JsonResponse(
+        {
+            "status": "ready",
+            "database": "ok",
+            "vector_store": vector_store,
+            "cache": cache_state,
+        }
+    )
 
 
 class TenantListView(ListCreateAPIView):
