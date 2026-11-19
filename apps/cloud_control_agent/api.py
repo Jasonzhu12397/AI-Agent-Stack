@@ -1459,7 +1459,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND (t.workflow_run_id IS NULL OR r.status = 'running')
                           AND (t.required_role IS NULL OR t.required_role = %(role)s)
                         ORDER BY t.priority DESC, t.created_at
-                        FOR UPDATE SKIP LOCKED
+                        FOR UPDATE OF t SKIP LOCKED
                         LIMIT 1
                         """,
                         {"installation_id": agent["installation_id"], "role": agent["role"]},
