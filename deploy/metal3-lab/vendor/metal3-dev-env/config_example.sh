@@ -132,8 +132,8 @@
 #export BARE_METAL_PROVISIONER_SUBNET_IPV6_ONLY=false
 
 # Image OS (can be "Cirros", "Ubuntu", "Centos", overriden by IMAGE_* if set)
-# Default: Centos
-#export IMAGE_OS="centos"
+# Default: Ubuntu
+#export IMAGE_OS="ubuntu"
 
 # Image for target hosts deployment
 #

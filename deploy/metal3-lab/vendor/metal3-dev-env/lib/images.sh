@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Image name and location
-IMAGE_OS="$(echo "${IMAGE_OS:-centos}" | tr '[:upper:]' '[:lower:]')"
+IMAGE_OS="$(echo "${IMAGE_OS:-ubuntu}" | tr '[:upper:]' '[:lower:]')"
 export "${IMAGE_OS?}"
 if [[ "${IMAGE_OS}" == "ubuntu" ]]; then
   export IMAGE_NAME="${IMAGE_NAME:-UBUNTU_24.04_NODE_IMAGE_K8S_v1.37.2.qcow2}"
