@@ -404,3 +404,49 @@ def test_task_lease_is_bound_to_the_claiming_agent(control_server, tls_material)
             second_client.close()
     finally:
         platform_client.close()
+
+
+def test_work_item_claim_and_result_round_trip(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        work_id = uuid4()
+        created = _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
+            "work_id": str(work_id),
+            "kind": "inspection",
+            "priority": 4,
+            "required_role": "eph",
+            "payload": {"cluster": "edge-02"},
+            "idempotency_key": f"work-{work_id}",
+        })
+        assert created["work"]["status"] == "queued"
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            claimed = _post(agent_client, "/api/v1/agent-control/work/claim", identity)
+            assert claimed["work"]["work_id"] == str(work_id)
+            assert claimed["work"]["kind"] == "inspection"
+            assert claimed["lease_seconds"] == 90
+
+            _post(agent_client, "/api/v1/agent-control/work/result", {
+                **identity,
+                "work_id": str(work_id),
+                "lease_token": claimed["lease_token"],
+                "status": "succeeded",
+                "result": {"findings": 2},
+            })
+        finally:
+            agent_client.close()
+
+        work = _get(platform_client, f"/api/v1/control/work/{work_id}")
+        assert work["work"]["status"] == "succeeded"
+        assert work["work"]["result"] == {"findings": 2}
+        assert work["work"]["assigned_agent_id"] == str(agent_id)
+    finally:
+        platform_client.close()
