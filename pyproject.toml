@@ -37,6 +37,6 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# Vendored third-party source must stay byte-identical to upstream for provenance
+# and for the MANIFEST.sha256 integrity check, so it is not reformatted here.
+extend-exclude = ["deploy/metal3-lab/vendor"]
