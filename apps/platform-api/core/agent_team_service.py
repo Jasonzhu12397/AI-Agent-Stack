@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 
 from django.db import transaction
@@ -14,7 +15,8 @@ from core.models import (
 
 MAX_TEAM_MEMBERS = 6
 MAX_INSTRUCTIONS_CHARS = 4000
-TEAM_STRATEGIES = {"sequential", "coordinator"}
+TEAM_STRATEGIES = {"sequential", "coordinator", "parallel", "router"}
+ROUTE_LABEL_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
 
 class AgentTeamConfigurationError(ValueError):
@@ -87,6 +89,38 @@ def _resolve_agent(team: AgentTeam, agent_id, field: str, project_agents):
     return agent, version
 
 
+def _resolve_actor(team, project_agents, payload, field, excluded_agent_ids):
+    if not isinstance(payload, dict):
+        raise AgentTeamConfigurationError(
+            "TEAM_ACTOR_MISSING",
+            f"{field} must be an object.",
+            [field],
+        )
+    agent_field = f"{field}.agent_id"
+    agent_id = _parse_uuid(payload.get("agent_id"), agent_field)
+    if agent_id in excluded_agent_ids:
+        raise AgentTeamConfigurationError(
+            "TEAM_AGENT_DUPLICATE",
+            f"{field} must reference an agent that is not already used.",
+            [agent_field],
+        )
+    agent, version = _resolve_agent(team, agent_id, agent_field, project_agents)
+    instructions = _clean_instructions(payload.get("instructions"), f"{field}.instructions")
+    if not instructions:
+        raise AgentTeamConfigurationError(
+            "TEAM_INSTRUCTIONS_MISSING",
+            f"{field}.instructions must describe its task.",
+            [f"{field}.instructions"],
+        )
+    return {
+        "agent_id": str(agent.id),
+        "agent_version_id": str(version.id),
+        "agent_name": agent.name,
+        "agent_version": version.version,
+        "instructions": instructions,
+    }
+
+
 def normalize_team_definition(team: AgentTeam, draft_config):
     if not isinstance(draft_config, dict):
         raise AgentTeamConfigurationError(
@@ -97,7 +131,7 @@ def normalize_team_definition(team: AgentTeam, draft_config):
     if strategy not in TEAM_STRATEGIES:
         raise AgentTeamConfigurationError(
             "TEAM_STRATEGY_INVALID",
-            "strategy must be sequential or coordinator.",
+            "strategy must be sequential, coordinator, parallel or router.",
             ["strategy"],
         )
     members = draft_config.get("members")
@@ -116,6 +150,7 @@ def normalize_team_definition(team: AgentTeam, draft_config):
     }
     normalized_members = []
     seen_agent_ids = set()
+    seen_labels = set()
     for index, member in enumerate(members):
         field = f"members[{index}].agent_id"
         if not isinstance(member, dict):
@@ -150,6 +185,29 @@ def normalize_team_definition(team: AgentTeam, draft_config):
                 f"members[{index}].instructions must describe the member's task.",
                 [f"members[{index}].instructions"],
             )
+        route_label = ""
+        if strategy == "router":
+            label_field = f"members[{index}].route_label"
+            raw_label = member.get("route_label")
+            if not isinstance(raw_label, str) or not ROUTE_LABEL_PATTERN.fullmatch(
+                raw_label.strip()
+            ):
+                raise AgentTeamConfigurationError(
+                    "TEAM_ROUTE_LABEL_INVALID",
+                    (
+                        f"{label_field} must be 1 to 40 characters using letters, "
+                        "numbers, underscore or hyphen."
+                    ),
+                    [label_field],
+                )
+            route_label = raw_label.strip().lower()
+            if route_label in seen_labels:
+                raise AgentTeamConfigurationError(
+                    "TEAM_ROUTE_LABEL_DUPLICATE",
+                    "Every router member needs a unique route_label.",
+                    [label_field],
+                )
+            seen_labels.add(route_label)
         normalized_members.append(
             {
                 "agent_id": str(agent.id),
@@ -158,94 +216,176 @@ def normalize_team_definition(team: AgentTeam, draft_config):
                 "agent_version": version.version,
                 "role": role.strip(),
                 "instructions": instructions,
+                "route_label": route_label,
                 "order": index,
             }
         )
     coordinator = None
     coordinator_config = draft_config.get("coordinator")
-    if strategy == "coordinator":
-        if not isinstance(coordinator_config, dict):
-            raise AgentTeamConfigurationError(
-                "TEAM_COORDINATOR_MISSING",
-                "coordinator strategy requires a coordinator object.",
-                ["coordinator"],
-            )
-        field = "coordinator.agent_id"
-        agent_id = _parse_uuid(coordinator_config.get("agent_id"), field)
-        if agent_id in seen_agent_ids:
-            raise AgentTeamConfigurationError(
-                "TEAM_COORDINATOR_IS_MEMBER",
-                "The coordinator must be a separate agent from the team members.",
-                [field],
-            )
-        agent, version = _resolve_agent(team, agent_id, field, project_agents)
-        instructions = _clean_instructions(
-            coordinator_config.get("instructions"),
-            "coordinator.instructions",
+    if strategy in {"coordinator", "parallel"} and coordinator_config is None:
+        raise AgentTeamConfigurationError(
+            "TEAM_COORDINATOR_MISSING",
+            f"{strategy} strategy requires a coordinator object.",
+            ["coordinator"],
         )
-        if not instructions:
-            raise AgentTeamConfigurationError(
-                "TEAM_INSTRUCTIONS_MISSING",
-                "coordinator.instructions must describe the synthesis task.",
-                ["coordinator.instructions"],
-            )
-        coordinator = {
-            "agent_id": str(agent.id),
-            "agent_version_id": str(version.id),
-            "agent_name": agent.name,
-            "agent_version": version.version,
-            "role": "coordinator",
-            "instructions": instructions,
-            "order": len(normalized_members),
-        }
-    elif coordinator_config not in (None, {}, []):
+    if strategy == "sequential" and coordinator_config not in (None, {}, []):
         raise AgentTeamConfigurationError(
             "TEAM_COORDINATOR_NOT_ALLOWED",
             "sequential strategy cannot define a coordinator.",
             ["coordinator"],
         )
+    if coordinator_config not in (None, {}, []):
+        coordinator = _resolve_actor(
+            team,
+            project_agents,
+            coordinator_config,
+            "coordinator",
+            seen_agent_ids,
+        )
+        coordinator["role"] = "coordinator"
+        coordinator["order"] = len(normalized_members)
+        seen_agent_ids.add(uuid.UUID(coordinator["agent_id"]))
+    router = None
+    if strategy == "router":
+        router_config = draft_config.get("router")
+        if router_config is None:
+            raise AgentTeamConfigurationError(
+                "TEAM_ROUTER_MISSING",
+                "router strategy requires a router object.",
+                ["router"],
+            )
+        router = _resolve_actor(
+            team,
+            project_agents,
+            router_config,
+            "router",
+            seen_agent_ids,
+        )
+        router["role"] = "router"
+        router["order"] = -1
+        seen_agent_ids.add(uuid.UUID(router["agent_id"]))
+    elif draft_config.get("router") not in (None, {}, []):
+        raise AgentTeamConfigurationError(
+            "TEAM_ROUTER_NOT_ALLOWED",
+            "router is only valid with the router strategy.",
+            ["router"],
+        )
     return {
         "strategy": strategy,
         "members": normalized_members,
         "coordinator": coordinator,
+        "router": router,
     }
 
 
+def _member_node(index, member, input_from=None):
+    config = {
+        "agent_version_id": member["agent_version_id"],
+        "instructions": (f"Role: {member['role']}.\\n" if member["role"] else "")
+        + member["instructions"],
+    }
+    if input_from is not None:
+        config["input_from"] = input_from
+    return {"id": f"member_{index}", "type": "agent", "config": config}
+
+
 def build_team_graph(normalized):
+    strategy = normalized["strategy"]
     nodes = [{"id": "start", "type": "start", "config": {}}]
     edges = []
-    previous = "start"
-    for index, member in enumerate(normalized["members"], start=1):
-        node_id = f"member_{index}"
-        config = {
-            "agent_version_id": member["agent_version_id"],
-            "instructions": (
-                f"Role: {member['role']}.\\n" if member["role"] else ""
-            )
-            + member["instructions"],
-        }
-        if previous != "start":
-            config["input_from"] = previous
-        nodes.append({"id": node_id, "type": "agent", "config": config})
-        edges.append({"source": previous, "target": node_id})
-        previous = node_id
+    members = normalized["members"]
     coordinator = normalized.get("coordinator")
-    if coordinator is not None:
+
+    if strategy in {"sequential", "coordinator"}:
+        previous = "start"
+        for index, member in enumerate(members, start=1):
+            node = _member_node(index, member, None if previous == "start" else previous)
+            nodes.append(node)
+            edges.append({"source": previous, "target": node["id"]})
+            previous = node["id"]
+    elif strategy == "parallel":
+        for index, member in enumerate(members, start=1):
+            node = _member_node(index, member)
+            nodes.append(node)
+            edges.append({"source": "start", "target": node["id"]})
+        previous = "start"
+    else:
+        router = normalized["router"]
+        labels = [member["route_label"] for member in members]
+        router_instructions = (
+            "Role: router.\\n"
+            + router["instructions"]
+            + "\\n\\nReply with exactly one route label and no other text. "
+            + "Allowed labels: "
+            + ", ".join(labels)
+            + "."
+        )
         nodes.append(
             {
-                "id": "coordinator",
+                "id": "router",
                 "type": "agent",
                 "config": {
-                    "agent_version_id": coordinator["agent_version_id"],
-                    "instructions": "Role: coordinator.\\n" + coordinator["instructions"],
-                    "input_from": previous,
+                    "agent_version_id": router["agent_version_id"],
+                    "instructions": router_instructions,
                 },
             }
         )
-        edges.append({"source": previous, "target": "coordinator"})
+        edges.append({"source": "start", "target": "router"})
+        previous = "router"
+        if len(members) == 1:
+            previous = "router"
+        else:
+            for index in range(1, len(members)):
+                condition_id = f"route_{index}"
+                nodes.append(
+                    {
+                        "id": condition_id,
+                        "type": "condition",
+                        "config": {
+                            "input_from": "router",
+                            "equals": members[index - 1]["route_label"],
+                            "normalize": True,
+                        },
+                    }
+                )
+                edges.append({"source": previous, "target": condition_id})
+                previous = condition_id
+        for index, member in enumerate(members, start=1):
+            node = _member_node(index, member)
+            nodes.append(node)
+            if len(members) == 1:
+                edges.append({"source": "router", "target": node["id"]})
+            elif index == len(members):
+                edges.append(
+                    {"source": f"route_{index - 1}", "target": node["id"], "when": False}
+                )
+            else:
+                edges.append(
+                    {"source": f"route_{index}", "target": node["id"], "when": True}
+                )
+
+    if coordinator is not None:
+        gather_from = [f"member_{index}" for index in range(1, len(members) + 1)]
+        coordinator_config = {
+            "agent_version_id": coordinator["agent_version_id"],
+            "instructions": "Role: coordinator.\\n" + coordinator["instructions"],
+            "gather_from": gather_from,
+        }
+        nodes.append({"id": "coordinator", "type": "agent", "config": coordinator_config})
+        for index in range(1, len(members) + 1):
+            edges.append({"source": f"member_{index}", "target": "coordinator"})
         previous = "coordinator"
-    nodes.append({"id": "end", "type": "end", "config": {"source_node": previous}})
-    edges.append({"source": previous, "target": "end"})
+        end_config = {"source_node": "coordinator"}
+    else:
+        end_config = {
+            "gather_from": [f"member_{index}" for index in range(1, len(members) + 1)]
+        }
+    nodes.append({"id": "end", "type": "end", "config": end_config})
+    if coordinator is not None:
+        edges.append({"source": "coordinator", "target": "end"})
+    else:
+        for index in range(1, len(members) + 1):
+            edges.append({"source": f"member_{index}", "target": "end"})
     return {"nodes": nodes, "edges": edges}
 
 

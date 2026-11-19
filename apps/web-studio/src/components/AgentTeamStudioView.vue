@@ -19,13 +19,14 @@ type MemberDraft = {
   agent_id: string;
   role: string;
   instructions: string;
+  route_label: string;
 };
 
 const teams = ref<AgentTeamDraft[]>([]);
 const agents = ref<AgentDraft[]>([]);
 const runs = ref<AgentTeamRun[]>([]);
 const selectedTeamId = ref("");
-const strategy = ref<"sequential" | "coordinator">("sequential");
+const strategy = ref<"sequential" | "coordinator" | "parallel" | "router">("sequential");
 const teamName = ref("New agent team");
 const teamSlug = ref("new-agent-team");
 const teamDescription = ref("");
@@ -34,8 +35,13 @@ const coordinatorAgentId = ref("");
 const coordinatorInstructions = ref(
   "Combine teammate outputs into one final answer.",
 );
+const routerAgentId = ref("");
+const routerInstructions = ref(
+  "Choose the single specialist that owns this request.",
+);
 const newMemberAgentId = ref("");
 const newMemberRole = ref("specialist");
+const newMemberRouteLabel = ref("");
 const newMemberInstructions = ref(
   "Handle your part of the task and return a concise result.",
 );
@@ -57,6 +63,7 @@ const availableAgents = computed(() =>
     (agent) =>
       agent.current_version > 0 &&
       agent.id !== coordinatorAgentId.value &&
+      agent.id !== routerAgentId.value &&
       !members.value.some((member) => member.agent_id === agent.id),
   ),
 );
@@ -64,6 +71,16 @@ const coordinatorCandidates = computed(() =>
   agents.value.filter(
     (agent) =>
       agent.current_version > 0 &&
+      agent.id !== routerAgentId.value &&
+      !members.value.some((member) => member.agent_id === agent.id),
+  ),
+);
+const routerCandidates = computed(() =>
+  agents.value.filter(
+    (agent) =>
+      agent.current_version > 0 &&
+      agent.id !== coordinatorAgentId.value &&
+      agent.id !== routerAgentId.value &&
       !members.value.some((member) => member.agent_id === agent.id),
   ),
 );
@@ -75,13 +92,20 @@ function draftConfig(): Record<string, unknown> {
       agent_id: member.agent_id,
       role: member.role,
       instructions: member.instructions,
+      route_label: member.route_label,
       order: index,
     })),
   };
-  if (strategy.value === "coordinator") {
+  if (strategy.value === "coordinator" || strategy.value === "parallel") {
     config.coordinator = {
       agent_id: coordinatorAgentId.value,
       instructions: coordinatorInstructions.value,
+    };
+  }
+  if (strategy.value === "router") {
+    config.router = {
+      agent_id: routerAgentId.value,
+      instructions: routerInstructions.value,
     };
   }
   return config;
@@ -90,21 +114,32 @@ function draftConfig(): Record<string, unknown> {
 function hydrateTeam(team: AgentTeamDraft | null): void {
   if (!team) return;
   const config = (team.draft_config ?? {}) as {
-    strategy?: "sequential" | "coordinator";
+    strategy?: "sequential" | "coordinator" | "parallel" | "router";
     members?: MemberDraft[];
     coordinator?: { agent_id?: string; instructions?: string };
+    router?: { agent_id?: string; instructions?: string };
   };
   strategy.value =
-    config.strategy === "coordinator" ? "coordinator" : "sequential";
+    config.strategy === "coordinator" ||
+    config.strategy === "parallel" ||
+    config.strategy === "router"
+      ? config.strategy
+      : "sequential";
   members.value = (config.members ?? []).map((member) => ({
     agent_id: String(member.agent_id),
     role: String(member.role ?? ""),
     instructions: String(member.instructions ?? ""),
+    route_label: String(member.route_label ?? ""),
   }));
   coordinatorAgentId.value = String(config.coordinator?.agent_id ?? "");
   coordinatorInstructions.value = String(
     config.coordinator?.instructions ??
       "Combine teammate outputs into one final answer.",
+  );
+  routerAgentId.value = String(config.router?.agent_id ?? "");
+  routerInstructions.value = String(
+    config.router?.instructions ??
+      "Choose the single specialist that owns this request.",
   );
   teamName.value = team.name;
   teamSlug.value = team.slug;
@@ -118,6 +153,7 @@ async function loadWorkspace(): Promise<void> {
   selectedTeamId.value = "";
   members.value = [];
   coordinatorAgentId.value = "";
+  routerAgentId.value = "";
   if (!props.tenantId || !props.projectId) return;
   error.value = "";
   try {
@@ -166,9 +202,11 @@ function addMember(): void {
       agent_id: newMemberAgentId.value,
       role: newMemberRole.value.trim() || "specialist",
       instructions: newMemberInstructions.value.trim(),
+      route_label: newMemberRouteLabel.value.trim().toLowerCase(),
     },
   ];
   newMemberAgentId.value = "";
+  newMemberRouteLabel.value = "";
   newMemberInstructions.value =
     "Handle your part of the task and return a concise result.";
 }
@@ -181,14 +219,35 @@ function validateDraft(): string {
   if (!teamName.value.trim() || !teamSlug.value.trim())
     return "Team name and slug are required.";
   if (members.value.length === 0) return "Add at least one specialist agent.";
-  if (strategy.value === "coordinator" && !coordinatorAgentId.value) {
+  if (
+    (strategy.value === "coordinator" || strategy.value === "parallel") &&
+    !coordinatorAgentId.value
+  ) {
     return "Coordinator strategy requires a coordinator agent.";
   }
   if (
-    strategy.value === "coordinator" &&
+    (strategy.value === "coordinator" || strategy.value === "parallel") &&
     !coordinatorInstructions.value.trim()
   ) {
     return "Coordinator instructions are required.";
+  }
+  if (strategy.value === "router" && !routerAgentId.value) {
+    return "Router strategy requires a router agent.";
+  }
+  if (strategy.value === "router") {
+    const labels = members.value.map((member) => member.route_label).filter(Boolean);
+    if (labels.some((label) => !/^[A-Za-z0-9_-]{1,40}$/.test(label))) {
+      return "Every route label must use letters, numbers, underscore or hyphen.";
+    }
+    if (labels.length !== members.value.length) {
+      return "Every member needs a route label in router mode.";
+    }
+    if (new Set(labels).size !== labels.length) {
+      return "Route labels must be unique.";
+    }
+    if (members.value.some((member) => member.route_label === "sequential")) {
+      return "Route label is reserved.";
+    }
   }
   return "";
 }
@@ -342,6 +401,8 @@ onUnmounted(() => {
           <el-select v-model="strategy" class="full-width">
             <el-option label="Sequential pipeline" value="sequential" />
             <el-option label="Coordinator synthesis" value="coordinator" />
+            <el-option label="Parallel fan-out" value="parallel" />
+            <el-option label="Router dispatch" value="router" />
           </el-select>
           <div class="team-member-list">
             <div
@@ -416,6 +477,28 @@ onUnmounted(() => {
               :rows="2"
               placeholder="Synthesis instructions"
             />
+          </template>
+          <template v-if="strategy === 'router'">
+            <el-divider />
+            <h4>Router</h4>
+            <el-select v-model="routerAgentId" placeholder="Select router agent" class="full-width">
+              <el-option
+                v-for="agent in routerCandidates"
+                :key="agent.id"
+                :label="`${agent.name} · v${agent.current_version}`"
+                :value="agent.id"
+              />
+            </el-select>
+            <el-input
+              v-model="routerInstructions"
+              type="textarea"
+              :rows="2"
+              placeholder="Routing instructions"
+            />
+            <p class="task-note">
+              The router must reply with exactly one member route label. The engine normalizes case
+              and whitespace before choosing the branch.
+            </p>
           </template>
           <p class="task-note">
             Completing a team creates real Agent, LLM and step records. Members

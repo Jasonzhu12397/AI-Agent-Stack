@@ -1076,3 +1076,80 @@ def test_workflow_output_budget_uses_conservative_input_ceiling():
         0,
         15000,
     ) == 1000
+
+
+
+def test_workflow_gather_and_normalized_condition_validation():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "left",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "{{input}}",
+                },
+            },
+            {
+                "id": "right",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "{{input}}",
+                },
+            },
+            {
+                "id": "route",
+                "type": "condition",
+                "config": {
+                    "input_from": "left",
+                    "equals": "billing",
+                    "normalize": True,
+                },
+            },
+            {
+                "id": "fallback",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "{{input}}",
+                },
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "config": {
+                    "gather_from": ["right", "left"],
+                    "source_node": "left",
+                },
+            },
+        ],
+        "edges": [
+            {"source": "start", "target": "left"},
+            {"source": "start", "target": "right"},
+            {"source": "left", "target": "route"},
+            {"source": "route", "target": "end", "when": True},
+            {"source": "route", "target": "fallback", "when": False},
+            {"source": "right", "target": "end"},
+            {"source": "fallback", "target": "end"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="cannot combine gather_from"):
+        validate_workflow_definition(definition)
+    del definition["nodes"][5]["config"]["source_node"]
+    validate_workflow_definition(definition)
+    condition = {
+        "id": "route",
+        "type": "condition",
+        "config": {"input_from": "router", "equals": "billing", "normalize": True},
+    }
+    output = _execute_node(
+        condition,
+        {"router": {"content": "  Billing "}, "input": {}},
+        {},
+        None,
+        None,
+        None,
+    )
+    assert output == {"matched": True}

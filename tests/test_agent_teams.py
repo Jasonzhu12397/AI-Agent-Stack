@@ -52,6 +52,23 @@ def team_workspace(db):
     return user, tenant, project, model
 
 
+def make_model(user, tenant, name, response):
+    provider = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name=f"{name} provider",
+        provider_type=ModelProvider.ProviderType.FAKE,
+        config={"response": response},
+    )
+    return ModelConfig.objects.create(
+        provider=provider,
+        model_name=name.lower().replace(" ", "-"),
+        display_name=name,
+        capabilities=["chat"],
+        max_output_tokens=512,
+    )
+
+
 def make_agent(user, tenant, project, model, name, tool_allowlist=None):
     agent = AgentDefinition.objects.create(
         tenant=tenant,
@@ -281,3 +298,180 @@ def test_team_detail_is_scoped_to_project_membership(team_workspace):
     client.force_authenticate(user=outsider)
     response = client.get(f"/api/v1/agent-teams/{team.id}/")
     assert response.status_code == 404
+
+
+def parallel_payload(members, coordinator):
+    return {
+        "strategy": "parallel",
+        "members": [
+            {
+                "agent_id": str(member.id),
+                "role": "specialist",
+                "instructions": "Answer independently.",
+            }
+            for member in members
+        ],
+        "coordinator": {
+            "agent_id": str(coordinator.id),
+            "instructions": "Merge the independent answers.",
+        },
+    }
+
+
+@pytest.mark.django_db
+def test_parallel_team_fans_out_and_coordinator_gathers(team_workspace):
+    user, tenant, project, model = team_workspace
+    first = make_agent(user, tenant, project, model, "Risk Agent")
+    second = make_agent(user, tenant, project, model, "Cost Agent")
+    coordinator = make_agent(user, tenant, project, model, "Lead Agent")
+    client = APIClient()
+    client.force_authenticate(user=user)
+    created = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-teams/",
+        {
+            "name": "Independent analysis",
+            "slug": "independent-analysis",
+            "draft_config": parallel_payload([first, second], coordinator),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    published = client.post(
+        f"/api/v1/agent-teams/{created.data['id']}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    snapshot = AgentTeamVersion.objects.get(pk=published.data["id"]).definition_snapshot
+    assert snapshot["strategy"] == "parallel"
+    version = AgentTeamVersion.objects.get(pk=published.data["id"])
+    graph = version.workflow_version.definition_snapshot
+    assert graph["nodes"][-2]["config"]["gather_from"] == ["member_1", "member_2"]
+
+    run = client.post(
+        f"/api/v1/agent-teams/{created.data['id']}/runs/",
+        {"input": "Assess this offline cluster plan."},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="parallel-run-001",
+    )
+    assert run.status_code == 202
+    assert process_once("parallel-team-worker") is True
+    team_run = AgentTeamRun.objects.select_related("workflow_run").get(pk=run.data["id"])
+    assert team_run.output_text == "team member response"
+    assert WorkflowStepRun.objects.filter(
+        workflow_run=team_run.workflow_run,
+        node_type="agent",
+        status=WorkflowStepRun.Status.SUCCEEDED,
+    ).count() == 3
+
+
+@pytest.mark.django_db
+def test_router_team_executes_only_the_selected_member(team_workspace):
+    user, tenant, project, model = team_workspace
+    router_model = make_model(user, tenant, "Router Model", "billing")
+    billing_model = make_model(user, tenant, "Billing Model", "invoice detail")
+    technical_model = make_model(user, tenant, "Technical Model", "technical detail")
+    router = make_agent(user, tenant, project, router_model, "Router Agent")
+    billing = make_agent(user, tenant, project, billing_model, "Billing Agent")
+    technical = make_agent(user, tenant, project, technical_model, "Technical Agent")
+    client = APIClient()
+    client.force_authenticate(user=user)
+    payload = {
+        "strategy": "router",
+        "router": {
+            "agent_id": str(router.id),
+            "instructions": "Choose the specialist that owns the request.",
+        },
+        "members": [
+            {
+                "agent_id": str(billing.id),
+                "role": "billing",
+                "route_label": "billing",
+                "instructions": "Answer billing questions.",
+            },
+            {
+                "agent_id": str(technical.id),
+                "role": "technical",
+                "route_label": "technical",
+                "instructions": "Answer technical questions.",
+            },
+        ],
+    }
+    created = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-teams/",
+        {"name": "Support router", "slug": "support-router", "draft_config": payload},
+        format="json",
+    )
+    assert created.status_code == 201
+    published = client.post(
+        f"/api/v1/agent-teams/{created.data['id']}/publish/",
+        {},
+        format="json",
+    )
+    assert published.status_code == 201
+    version = AgentTeamVersion.objects.get(pk=published.data["id"])
+    graph = version.workflow_version.definition_snapshot
+    assert [node["type"] for node in graph["nodes"]] == [
+        "start",
+        "agent",
+        "condition",
+        "agent",
+        "agent",
+        "end",
+    ]
+    assert graph["nodes"][2]["config"]["normalize"] is True
+
+    run = client.post(
+        f"/api/v1/agent-teams/{created.data['id']}/runs/",
+        {"input": "My invoice is wrong."},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="router-run-001",
+    )
+    assert run.status_code == 202
+    assert process_once("router-team-worker") is True
+    team_run = AgentTeamRun.objects.select_related("workflow_run").get(pk=run.data["id"])
+    assert "invoice detail" in team_run.output_text
+    assert "technical detail" not in team_run.output_text
+    steps = WorkflowStepRun.objects.filter(workflow_run=team_run.workflow_run)
+    assert steps.get(node_id="member_1").status == WorkflowStepRun.Status.SUCCEEDED
+    assert steps.get(node_id="member_2").status == WorkflowStepRun.Status.SKIPPED
+
+
+@pytest.mark.django_db
+def test_router_requires_unique_route_labels(team_workspace):
+    user, tenant, project, model = team_workspace
+    router = make_agent(user, tenant, project, model, "Router Agent")
+    first = make_agent(user, tenant, project, model, "First Agent")
+    second = make_agent(user, tenant, project, model, "Second Agent")
+    client = APIClient()
+    client.force_authenticate(user=user)
+    payload = {
+        "strategy": "router",
+        "router": {"agent_id": str(router.id), "instructions": "Route."},
+        "members": [
+            {
+                "agent_id": str(first.id),
+                "route_label": "same",
+                "instructions": "One.",
+                "role": "one",
+            },
+            {
+                "agent_id": str(second.id),
+                "route_label": "same",
+                "instructions": "Two.",
+                "role": "two",
+            },
+        ],
+    }
+    created = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-teams/",
+        {"name": "Broken router", "slug": "broken-router", "draft_config": payload},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-teams/{created.data['id']}/publish/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert response.data["code"] == "TEAM_ROUTE_LABEL_DUPLICATE"

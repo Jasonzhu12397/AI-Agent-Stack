@@ -194,9 +194,40 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Agent node {node_id} instructions are invalid."
                 )
+        gather_from = config.get("gather_from")
+        if gather_from is not None:
+            if not isinstance(gather_from, list) or not 1 <= len(gather_from) <= 12:
+                raise WorkflowValidationError(
+                    f"Node {node_id} gather_from must contain 1 to 12 nodes."
+                )
+            if any(
+                not isinstance(item, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", item)
+                or item == node_id
+                for item in gather_from
+            ):
+                raise WorkflowValidationError(
+                    f"Node {node_id} gather_from contains an invalid node id."
+                )
+            if len(set(gather_from)) != len(gather_from):
+                raise WorkflowValidationError(
+                    f"Node {node_id} gather_from cannot repeat nodes."
+                )
+            if (
+                config.get("input_from")
+                or config.get("source_node")
+                or config.get("arguments_from")
+            ):
+                raise WorkflowValidationError(
+                    f"Node {node_id} cannot combine gather_from with a single source."
+                )
         if node_type == "condition":
             if "equals" not in config:
                 raise WorkflowValidationError(f"Condition node {node_id} requires equals.")
+            if "normalize" in config and not isinstance(config["normalize"], bool):
+                raise WorkflowValidationError(
+                    f"Condition node {node_id} normalize must be a boolean."
+                )
             input_key = config.get("input_key", "input")
             if not isinstance(input_key, str) or not 1 <= len(input_key) <= 120:
                 raise WorkflowValidationError(
@@ -302,6 +333,11 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(
                 f"Node {node_id} source reference must point to an earlier node."
             )
+        for gathered_id in node["config"].get("gather_from", []) or []:
+            if order_index[gathered_id] >= order_index[node_id]:
+                raise WorkflowValidationError(
+                    f"Node {node_id} gather_from must reference earlier nodes."
+                )
     reachable = set()
     pending = [start_id]
     while pending:
@@ -469,6 +505,13 @@ def validate_model_references(graph, tenant, project):
 
 def _step_input(node, state):
     config = node["config"]
+    gather_from = config.get("gather_from")
+    if isinstance(gather_from, list):
+        gathered = []
+        for node_id in gather_from:
+            if node_id in state:
+                gathered.append({"node": node_id, "output": state[node_id]})
+        return {"gathered": gathered}
     source_node = config.get("input_from") or config.get("source_node")
     if source_node:
         return state.get(source_node)
@@ -479,6 +522,18 @@ def _step_input(node, state):
     if isinstance(input_data, dict):
         return input_data.get(input_key)
     return None
+
+
+def _value_text(value):
+    if isinstance(value, dict) and isinstance(value.get("content"), str):
+        return value["content"]
+    if isinstance(value, dict) and isinstance(value.get("input"), str):
+        return value["input"]
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _execute_node(node, state, input_data, tenant, project, task, workflow_run=None):
@@ -493,8 +548,23 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         else:
             input_key = config.get("input_key", "input")
             actual = input_data.get(input_key) if isinstance(input_data, dict) else None
-        return {"matched": actual == config["equals"]}
+        expected = config["equals"]
+        if config.get("normalize") is True:
+            actual = _value_text(actual).strip().lower()
+            expected = str(expected).strip().lower()
+        else:
+            actual = _value_text(actual) if isinstance(actual, dict) else actual
+        return {"matched": actual == expected}
     if node_type == "end":
+        gather_from = config.get("gather_from")
+        if isinstance(gather_from, list):
+            return {
+                "gathered": [
+                    {"node": node_id, "output": state[node_id]}
+                    for node_id in gather_from
+                    if node_id in state
+                ]
+            }
         source_node = config.get("input_from") or config.get("source_node")
         return state.get(source_node) if source_node else dict(state)
     if node_type == "tool":
@@ -627,17 +697,15 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             ) from exc
         snapshot = agent_version.config_snapshot
         source_value = _step_input(node, state)
-        if isinstance(source_value, dict) and isinstance(source_value.get("content"), str):
-            source_text = source_value["content"]
-        elif (
-            isinstance(source_value, dict)
-            and isinstance(source_value.get("input"), str)
-        ):
-            source_text = source_value["input"]
-        elif isinstance(source_value, (dict, list)):
-            source_text = json.dumps(source_value, ensure_ascii=False)
+        if isinstance(source_value, dict) and isinstance(source_value.get("gathered"), list):
+            source_text = ""
+            for item in source_value["gathered"]:
+                source_text += (
+                    f"[teammate_node={item['node']}]\n"
+                    f"{_value_text(item['output'])}\n\n"
+                )
         else:
-            source_text = "" if source_value is None else str(source_value)
+            source_text = _value_text(source_value)
         knowledge_ids = snapshot.get("knowledge_base_ids", [])
         reference_chunks = []
         if knowledge_ids:

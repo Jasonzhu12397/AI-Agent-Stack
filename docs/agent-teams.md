@@ -19,15 +19,30 @@ version containing `agent` nodes.
 
 `sequential`
 : Members run in order. Each member receives the previous member's answer as its
-  input. The final member's answer becomes the team output.
+  input. The final member's answer becomes the team output. A coordinator is
+  rejected in this mode.
 
 `coordinator`
 : Members run in order, then a separate coordinator Agent receives the last
-member's answer and its own synthesis instructions. The coordinator output is the
-team output.
+  member's answer and its synthesis instructions. The coordinator output is the
+  team output.
 
-A coordinator cannot also be a member, and the same Agent cannot appear twice in
-one roster. Teams are capped at six members.
+`parallel`
+: Every member receives the original task independently. All member nodes fan out
+  from `start`, and the required coordinator receives a gathered payload with each
+  member node id and output. Branch order in the persisted graph is deterministic;
+  independent nodes currently run in topological order inside one Workflow task
+  rather than in separate threads.
+
+`router`
+: A router Agent receives the task, must answer with exactly one configured route
+  label, and the condition chain executes only the selected member. Router output
+  and condition comparison normalize case and surrounding whitespace. A coordinator
+  is optional; without one, the selected member output is the team result.
+
+A coordinator cannot also be a member, a router cannot be a member or coordinator,
+and the same Agent cannot appear twice in one roster. Teams are capped at six
+members.
 
 ## Draft configuration
 
@@ -50,6 +65,34 @@ one roster. Teams are capped at six members.
     "agent_id": "00000000-0000-0000-0000-000000000003",
     "instructions": "Merge teammate outputs and remove contradictions."
   }
+}
+```
+
+Parallel mode uses the same shape with `"strategy": "parallel"` and requires a
+coordinator. Router mode replaces the coordinator requirement with a router
+object and adds a lowercase `route_label` to every member:
+
+```json
+{
+  "strategy": "router",
+  "router": {
+    "agent_id": "00000000-0000-0000-0000-000000000004",
+    "instructions": "Choose the specialist that owns the request."
+  },
+  "members": [
+    {
+      "agent_id": "00000000-0000-0000-0000-000000000001",
+      "route_label": "billing",
+      "role": "billing",
+      "instructions": "Answer billing questions."
+    },
+    {
+      "agent_id": "00000000-0000-0000-0000-000000000002",
+      "route_label": "technical",
+      "role": "technical",
+      "instructions": "Answer technical questions."
+    }
+  ]
 }
 ```
 
@@ -87,5 +130,6 @@ Agent versions that grant plugin tools are rejected at team publish time with
 checkpointing that does not yet exist for team members. A tool-free version of
 the Agent can still be used in a team.
 
-Parallel members, conditional routing, loops and human approval nodes are not
-implemented yet.
+Parallel members use fan-out/gather DAG semantics, not concurrent provider calls.
+Loops, human approval nodes, per-member plugin tools and automatic retry-by-route
+are not implemented yet.

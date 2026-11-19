@@ -214,15 +214,14 @@ def finish_task(task_id, lease_token, result):
             WorkflowRun.objects.filter(task=task).update(finished_at=now)
         if task.task_type == "team.run":
             if task.status == Task.Status.SUCCEEDED:
-                output = result.get("output")
-                output_text = output.get("content", "") if isinstance(output, dict) else ""
+                output_text = _team_output_text(result)
                 WorkflowRun.objects.filter(task=task).update(
                     output_data=result["output"],
                     state=result["state"],
                     finished_at=now,
                 )
                 AgentTeamRun.objects.filter(workflow_run__task=task).update(
-                    output_text=output_text if isinstance(output_text, str) else "",
+                    output_text=output_text,
                     finished_at=now,
                 )
             else:
@@ -1098,6 +1097,24 @@ def execute_knowledge_ingest(task):
         ]
     )
     return result
+
+
+def _team_output_text(result):
+    output = result.get("output") if isinstance(result, dict) else None
+    if isinstance(output, dict) and isinstance(output.get("content"), str):
+        return output["content"]
+    if isinstance(output, dict) and isinstance(output.get("gathered"), list):
+        parts = []
+        for item in output["gathered"]:
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("output")
+            if isinstance(nested, dict) and isinstance(nested.get("content"), str):
+                parts.append(f"[{item.get('node')}]\n{nested['content']}")
+            elif isinstance(nested, str):
+                parts.append(f"[{item.get('node')}]\n{nested}")
+        return "\n\n".join(parts)
+    return ""
 
 
 def execute_team_run(task, worker_id):
