@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "registry_endpoint": "10.0.0.10:5000",
+  "base_image": "python:3.12-slim",
+  "images": {
+    "registry": "registry:3.1.2",
+    "vbmc": "quay.io/metal3-io/vbmc:latest",
+    "sushy-tools": "quay.io/metal3-io/sushy-tools:latest",
+    "httpd-infra": "quay.io/metal3-io/ironic:main",
+    "ironic": "quay.io/metal3-io/ironic:main",
+    "ironic-keepalived": "quay.io/metal3-io/keepalived:main",
+    "ipa-downloader": "quay.io/metal3-io/ironic-ipa-downloader:latest",
+    "baremetal-operator": "quay.io/metal3-io/baremetal-operator:main",
+    "capm3": "quay.io/metal3-io/cluster-api-provider-metal3:main",
+    "ipam": "quay.io/metal3-io/ip-address-manager:main",
+    "irso": "quay.io/metal3-io/ironic-standalone-operator:latest",
+    "capi-controller": "registry.k8s.io/cluster-api/cluster-api-controller:v1.14.0",
+    "capi-kubeadm-bootstrap": "registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.0",
+    "capi-kubeadm-control-plane": "registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.0",
+    "kube-apiserver": "registry.k8s.io/kube-apiserver:v1.37.0",
+    "kube-controller-manager": "registry.k8s.io/kube-controller-manager:v1.37.0",
+    "kube-scheduler": "registry.k8s.io/kube-scheduler:v1.37.0",
+    "kube-proxy": "registry.k8s.io/kube-proxy:v1.37.0",
+    "etcd": "registry.k8s.io/etcd:3.6.4-0",
+    "coredns": "registry.k8s.io/coredns/coredns:v1.13.1",
+    "pause": "registry.k8s.io/pause:3.10.1"
+  },
+  "binaries": {
+    "clusterctl": {
+      "version": "v1.14.0",
+      "url": "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.0/clusterctl-linux-amd64"
+    },
+    "kubectl": {
+      "version": "v1.37.0",
+      "url": "https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl"
+    }
+  },
+  "python_requirements": [
+    "httpx>=0.27,<1.0",
+    "pydantic>=2.8,<3.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "PyYAML>=6.0,<7.0"
+  ],
+  "ipa": {
+    "branch": "master",
+    "flavor": "centos9",
+    "url": "https://tarballs.opendev.org/openstack/ironic-python-agent/dib/ipa-centos9-master.tar.gz"
+  },
+  "services": {
+    "vbmc": {
+      "container": {
+        "ports": [{"containerPort": 6240, "hostPort": 6240}]
+      },
+      "pod": {"hostNetwork": true, "dnsPolicy": "ClusterFirstWithHostNet"}
+    },
+    "sushy-tools": {
+      "container": {
+        "ports": [{"containerPort": 8000, "hostPort": 8000}]
+      },
+      "pod": {"hostNetwork": true, "dnsPolicy": "ClusterFirstWithHostNet"}
+    },
+    "httpd-infra": {
+      "container": {
+        "command": ["/bin/runhttpd"],
+        "env": [{"name": "PROVISIONING_INTERFACE", "value": "ironicendpoint"}],
+        "ports": [{"containerPort": 6180, "hostPort": 6180}],
+        "volumeMounts": [{"name": "shared", "mountPath": "/shared"}]
+      },
+      "pod": {
+        "hostNetwork": true,
+        "dnsPolicy": "ClusterFirstWithHostNet",
+        "volumes": [
+          {"name": "shared", "hostPath": {"path": "/opt/metal3-data", "type": "DirectoryOrCreate"}}
+        ]
+      }
+    }
+  }
+}

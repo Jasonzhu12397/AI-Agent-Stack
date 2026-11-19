@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HOME=/tmp
+WORKDIR /app
+COPY deploy/offline/assets/wheels /opt/offline-wheels
+RUN pip install --no-index --find-links=/opt/offline-wheels "psycopg[binary]>=3.2,<4.0" "pydantic>=2.8,<3.0"
+COPY packages/__init__.py ./packages/__init__.py
+COPY packages/agent_contracts ./packages/agent_contracts
+COPY apps/cloud_control_agent ./apps/cloud_control_agent
+USER 10001:10001
+ENTRYPOINT ["python", "-m", "apps.cloud_control_agent.main"]

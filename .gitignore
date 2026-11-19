@@ -18,3 +18,7 @@ node_modules/
 
 # Bare metal inventory with real BMC credentials stays local.
 deploy/metal3-lab/hosts/baremetal-nodes.yaml
+
+# Large offline image archives and generated bootstrap image references.
+deploy/offline/assets/
+deploy/offline/output/

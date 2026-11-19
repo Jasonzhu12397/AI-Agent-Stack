@@ -45,13 +45,22 @@ def _valid_endpoint(value: Any) -> str:
     return value
 
 
-def target_registry_config(endpoint: Any) -> dict[str, str]:
+def target_registry_config(endpoint: Any, pause_image: str | None = None) -> dict[str, str]:
     endpoint = _valid_endpoint(endpoint)
+    if pause_image is not None and not re.fullmatch(
+        rf"{re.escape(endpoint)}/ai-agent-stack/pause:[A-Za-z0-9._-]+", pause_image
+    ):
+        raise Metal3SkillError("EPH_LOCAL_PAUSE_IMAGE_INVALID")
+    sandbox = f'  sandbox_image = "{pause_image}"\n' if pause_image is not None else ""
     return {
         "endpoint": endpoint,
+        "image_repository": f"{endpoint}/ai-agent-stack",
+        "dns_image_repository": f"{endpoint}/ai-agent-stack/coredns",
+        "pause_image": pause_image or "",
         "containerd_config": (
             "version = 2\n\n"
-            '[plugins."io.containerd.grpc.v1.cri".registry]\n'
+            + ('[plugins."io.containerd.grpc.v1.cri"]\n' + sandbox if sandbox else "")
+            + '[plugins."io.containerd.grpc.v1.cri".registry]\n'
             '  config_path = "/etc/containerd/certs.d"\n'
         ),
         "hosts_toml": (
@@ -235,7 +244,7 @@ def render_local_registry(
         "config": config,
         "registry_documents": registry_documents,
         "service_documents": service_documents,
-        **target_registry_config(endpoint),
+        **target_registry_config(endpoint, value.get("pause_image") or None),
         "endpoint": endpoint,
         "target_agent_image": target_image,
     }

@@ -184,7 +184,9 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         raise Metal3SkillError("CAPI_MACHINE_IMAGE_URL_INVALID")
     cluster["image_url"] = image_url
     if cluster.get("registry_endpoint") is not None:
-        cluster["registry"] = target_registry_config(cluster["registry_endpoint"])
+        cluster["registry"] = target_registry_config(
+            cluster["registry_endpoint"], cluster.get("registry_pause_image")
+        )
     control_plane_count = cluster.get("control_plane_count", 3)
     if (
         not isinstance(control_plane_count, int)

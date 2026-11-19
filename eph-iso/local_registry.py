@@ -105,6 +105,14 @@ def published_digest(target: str) -> str:
     return digest
 
 
+def preload(config: dict[str, Any]) -> None:
+    """Import ISO archives before kubeadm, without contacting any registry."""
+    import_image(config["registry_archive"])
+    for image in config["images"]:
+        import_image(image["archive"])
+        tag_image(image["source"], image["target"])
+
+
 def publish(config: dict[str, Any]) -> None:
     wait_for_kubernetes(config["wait_seconds"])
     import_image(config["registry_archive"])
@@ -151,14 +159,19 @@ def publish(config: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--preload-only", action="store_true")
     arguments = parser.parse_args(argv)
     try:
         config = json.loads(arguments.config.read_text(encoding="utf-8"))
-        publish(config)
+        if arguments.preload_only:
+            preload(config)
+        else:
+            publish(config)
     except (OSError, ValueError, KeyError, TypeError, RegistryError) as exc:
         print(str(exc) or "LOCAL_REGISTRY_FAILED", file=sys.stderr)
         return 1
-    print(json.dumps({"registry": config["endpoint"], "status": "ready"}))
+    status = "preloaded" if arguments.preload_only else "ready"
+    print(json.dumps({"registry": config["endpoint"], "status": status}))
     return 0
 
 

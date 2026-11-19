@@ -75,12 +75,13 @@ def _spec():
     }
 
 
-def test_cloud_init_runs_registry_and_eph_bmc_services_as_pods_after_kubeadm():
+def test_cloud_init_preloads_images_then_runs_registry_and_bmc_as_pods_after_kubeadm():
     seed = bootstrap_renderer.render_cloud_init_seed(_spec())["user-data"]
     assert "docker.io" not in seed["packages"]
     assert "docker-compose-v2" not in seed["packages"]
-    assert seed["runcmd"][0].startswith("kubeadm init")
-    assert seed["runcmd"][2].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
+    assert seed["runcmd"][0].endswith("--preload-only")
+    assert seed["runcmd"][1].startswith("kubeadm init")
+    assert seed["runcmd"][3].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
     files = {item["path"]: item["content"] for item in seed["write_files"]}
     assert "/etc/ai-agent-stack/docker-compose.yaml" not in files
     registry_docs = list(yaml.safe_load_all(files["/etc/ai-agent-stack/registry.yaml"]))
@@ -157,6 +158,12 @@ def test_runtime_imports_pushes_and_waits_for_all_local_pods(monkeypatch):
     ]
     assert all(command[0] != "docker" for command in commands)
 
+    commands.clear()
+    module.preload(config)
+    assert len([command for command in commands if command[3:5] == ["images", "import"]]) == 6
+    assert not any(command[3:5] == ["images", "push"] for command in commands)
+    assert not any(command[0] == "kubectl" for command in commands)
+
 
 def test_target_control_plane_and_workers_receive_local_registry_configuration():
     template = {
@@ -175,14 +182,20 @@ def test_target_control_plane_and_workers_receive_local_registry_configuration()
             "control_plane_count": 1,
             "control_plane_data_template": template,
             "registry_endpoint": ENDPOINT,
+            "registry_pause_image": f"{ENDPOINT}/ai-agent-stack/pause:3.10.1",
             "worker_pools": [{"name": "workers", "count": 1, "data_template": template}],
         }
     )
     control_plane = next(item for item in documents if item["kind"] == "KubeadmControlPlane")
     workers = next(item for item in documents if item["kind"] == "KubeadmConfigTemplate")
     control_files = control_plane["spec"]["kubeadmConfigSpec"]["files"]
+    cluster_config = control_plane["spec"]["kubeadmConfigSpec"]["clusterConfiguration"]
+    assert cluster_config["imageRepository"] == f"{ENDPOINT}/ai-agent-stack"
+    assert cluster_config["dns"]["imageRepository"] == f"{ENDPOINT}/ai-agent-stack/coredns"
     worker_files = workers["spec"]["template"]["spec"]["files"]
     for files in (control_files, worker_files):
+        containerd = next(item for item in files if item["path"] == "/etc/containerd/config.toml")
+        assert f'sandbox_image = "{ENDPOINT}/ai-agent-stack/pause:3.10.1"' in containerd["content"]
         hosts = next(item for item in files if item["path"].endswith("hosts.toml"))
         assert ENDPOINT in hosts["path"]
         assert f'server = "http://{ENDPOINT}"' in hosts["content"]

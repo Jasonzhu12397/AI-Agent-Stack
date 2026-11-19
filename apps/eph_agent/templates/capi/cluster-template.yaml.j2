@@ -124,6 +124,11 @@ spec:
             value: "{{ cluster.control_plane_topology_manager_policy | default('single-numa-node') }}"
 {% endif %}
     clusterConfiguration:
+{% if cluster.registry is defined %}
+      imageRepository: {{ cluster.registry.image_repository | tojson }}
+      dns:
+        imageRepository: {{ cluster.registry.dns_image_repository | tojson }}
+{% endif %}
       apiServer:
         extraArgs:
           - name: cloud-provider

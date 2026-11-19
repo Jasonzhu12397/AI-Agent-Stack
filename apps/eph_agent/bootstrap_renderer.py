@@ -308,6 +308,11 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
                 "permissions": "0644",
             },
         ]
+        runcmd.insert(
+            0,
+            "python3 /usr/local/lib/ai-agent-stack/local_registry.py "
+            "--config /etc/ai-agent-stack/registry.json --preload-only",
+        )
         runcmd.append(
             "python3 /usr/local/lib/ai-agent-stack/local_registry.py "
             "--config /etc/ai-agent-stack/registry.json"
