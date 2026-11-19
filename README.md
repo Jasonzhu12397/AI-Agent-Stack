@@ -1,97 +1,102 @@
 # AI Agent Stack
 
-A **multi-tenant, multi-Agent AI SaaS platform**: one control plane for creating, publishing, orchestrating, running and governing AI Agents, plus a three-Agent infrastructure control system that deploys and takes over real bare-metal Kubernetes clusters.
+A **multi-tenant, multi-Agent AI SaaS platform** for building, publishing, orchestrating and governing AI Agents — with a built-in three-Agent infrastructure control plane for deploying real bare-metal Kubernetes clusters.
 
-## Product positioning
+AI Agent Stack is not a single chatbot or a collection of disconnected Agent demos. It combines a SaaS application runtime for AI Agents with an infrastructure runtime that can turn approved physical servers into a working Kubernetes control plane and data plane.
 
-AI Agent Stack is not a single chatbot or a collection of disconnected Agent demos. It is a SaaS platform with two cooperating runtime families:
+## Platform overview
 
-- **Application multi-Agent runtime** — Agent Studio, multi-step Workflows, model gateway, HTTP/OpenAPI/MCP tool integration, knowledge and RAG, asynchronous task execution, token budgets, tenant/project isolation, RBAC and audit. The independent Platform Worker executes general Agent and Workflow tasks.
-- **Infrastructure multi-Agent control system** — Cloud Control Agent, EPH Agent and Target Agent cooperate over versioned commands, leases, checkpoints and mTLS to bootstrap CAPI/Metal3/Ironic, hand over a target Kubernetes cluster and deploy its data plane.
+| SaaS capability | What the platform provides | Current state |
+| --- | --- | --- |
+| Agent management | Agent definitions, versions, publishing and run records | Code baseline |
+| Multi-step orchestration | Workflow nodes: `start`, `llm`, `condition`, `knowledge_search`, `tool`, `end` | Code baseline; parallel/loop/approval nodes pending |
+| Model access | OpenAI-compatible model gateway, chat and embeddings | Code baseline; multi-provider routing/fallback pending |
+| Tools and integrations | HTTP, OpenAPI and MCP streamable-HTTP tools, review and permission grants | Code baseline; OAuth and stdio MCP pending |
+| Knowledge and RAG | Knowledge bases, Qdrant collections versioned per embedding model and dimension | Code baseline; real Qdrant chain pending validation |
+| Asynchronous execution | PostgreSQL-backed Worker claims, leases, heartbeats, retries and cancellation | Code baseline |
+| SaaS tenancy | Tenants, projects, `admin/editor/viewer` roles and server-side isolation | Code baseline |
+| Usage governance | Per-tenant token budget reservation, settlement and overspend protection | Pending validation under real concurrency |
+| Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
+| Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
 
-The SaaS control plane provides tenants, projects, membership roles (`admin/editor/viewer`), per-tenant token budgets, connector installation and permission grants, deployment jobs, Agent/Workflow run records, and chained-hash audit evidence. Tenant and project data are server-side authorization boundaries, not client-supplied labels.
+External subscription billing and plan management are **not implemented**. The platform currently provides the multi-tenant and usage-governance foundations above; it does not claim to be a production-complete commercial SaaS.
 
-**Current scope:** the multi-tenant, multi-Agent SaaS foundations above are implemented at code-baseline level with automated tests; external subscription billing/plan management, complete provider OAuth, realtime event streaming, some advanced Workflow nodes, and real bare-metal end-to-end acceptance are not yet production-complete. The capability inventory below and in the architecture-inventory documents is authoritative about implemented versus planned features.
+## Multi-Agent architecture
 
-## Product direction
+AI Agent Stack has two cooperating multi-Agent runtime families.
 
-The long-term infrastructure product scope is documented in [Omni-Inspired Infrastructure Platform Roadmap](docs/omni-parity-roadmap.md). The bare-metal delivery path uses Cluster API (CAPI), Metal3 and Ironic. The authoritative Agent architecture is [ADR 0005: Fresh Three-Agent Runtime](docs/adr/0005-three-agent-fresh-runtime.md).
+### 1. Application multi-Agent runtime
 
-A code-backed architecture inventory, with each capability marked as baseline / pending validation / to develop, is available in bilingual form: [English](docs/architecture-inventory.en.md) · [中文](docs/architecture-inventory.zh-CN.md).
+- **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
+- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio, Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet, Governance, Audit and Organization.
+- **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent and Workflow tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
+- **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.
+- **Integration Hub**: connector catalog, project installation, explicit grants, credential references, HTTP/OpenAPI tools and MCP tool discovery/import. Newly discovered MCP tools remain disabled until reviewed.
+- **Knowledge/RAG**: document ingestion, embeddings and Qdrant retrieval. Collections are versioned by embedding model and dimension; `reindex_knowledge` supports dry-run and targeted re-embedding.
 
-## Current application architecture
+Platform Agents and Workflows execute in the Platform Worker. They are separate from the three infrastructure Agents that operate clusters and physical servers.
 
-- **Frontend:** Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
-- **Platform API:** Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
-- **Persistence:** PostgreSQL is the authoritative business datastore; Redis is auxiliary.
-- **Application task execution:** a separate Python Worker uses PostgreSQL-backed task records, atomic claims, lease tokens/expiry, heartbeat renewal, bounded retries and cooperative cancellation. It handles LLM/model routing and application workflows; it is not one of the three infrastructure Agents.
-- **Integration Hub:** tenant-scoped versioned connector metadata, tool schemas, admin review, project installation, explicit permission grants and credential-reference records. Normalized HTTP/OpenAPI contracts and credential resolution are in progress; provider-specific connectors and MCP transport remain under development.
-- **Knowledge and vector storage:** S3-compatible storage and pgvector are planned integration points.
+### 2. Infrastructure multi-Agent control system
 
-## Authoritative three-Agent infrastructure architecture
+1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination.
+2. **EPH Agent** — runs in the temporary EPH Live OS / single-node Kubernetes cluster. Renders bootstrap configuration, applies CAPI/BMO/Ironic/CAPM3, creates BMH and target-CAPI resources, and records source-side identity evidence.
+3. **Target Agent** — runs as three replicas on the target Control Plane with Kubernetes Lease leader election. Owns Target takeover, CAPI Pivot (`clusterctl move`), BMH migration, EPH cleanup, worker provisioning, NTP attestation and data-plane readiness.
 
-1. **Cloud Control Agent** — runs in the Alibaba Cloud or Tencent Cloud management environment. Owns durable deployment/command state, approvals, global scheduling, task dispatch, status aggregation and failure coordination.
+There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker facts come from Kubernetes, CAPI, Metal3 and approved infrastructure APIs.
 
-2. **EPH Agent** — runs as one Pod inside the temporary EPH Live OS / temporary single-node Kubernetes cluster. Owns source-side preflight, bootstrap checks and the source-side Cluster/BMH identity and digest evidence used for takeover verification. EPH has exactly one temporary Kubernetes node and no Worker pool; it does not perform the CAPI Pivot or the Target takeover.
+## End-to-end architecture
 
-3. **Target Agent** — runs in the target Kubernetes cluster on Control Plane Master nodes as three replicas, spread across the masters. Kubernetes Lease leader election ensures only one replica claims and executes commands. Target Agent owns target adoption, the CAPI Pivot (`clusterctl move`), CAPI/Metal3/Ironic coordination, BMH migration, EPH handoff/cleanup and Target Worker provisioning.
+```text
+Users / Operators
+       |
+       v
+Vue Web Studio  --->  Platform API (tenants, Agents, Workflows, models, tools, audit)
+                              |
+                              +--> PostgreSQL
+                              |
+                              +--> Platform Worker
+                                     |--> Model Gateway
+                                     |--> HTTP / OpenAPI / MCP tools
+                                     |--> Knowledge / RAG / Qdrant
+                                     |--> Agent and Workflow runs
 
-There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker facts are collected through Kubernetes, CAPI, Metal3 and approved infrastructure APIs.
-
-### Current fresh-runtime implementation
-
-The new branch contains:
-
-- Versioned Agent identity, command, lease, heartbeat, checkpoint and result contracts.
-- mTLS Agent-to-Cloud Control communication with certificate identity bound to the registered Agent UUID.
-- PostgreSQL-backed command registration, dispatch, lease claim/renewal, result reporting and Target checkpoint persistence.
-- Target three-replica deployment, Control Plane scheduling constraints, Pod anti-affinity, PDB and Kubernetes Lease leader election.
-- Read-only Kubernetes/CAPI/Metal3 observation.
-- An ordered, fail-closed Target handoff state machine with exact BMH identity-set checks and durable compare-and-swap checkpoints.
-- Control Plane chrony profile and pre-kubeadm command generation from approved external sources, plus Worker chrony configuration and pre-kubeadm command generation. Workers must use exactly the Ironic internal IP/VIP as their NTP source; no external pool or fallback is allowed. The generated host commands are not yet injected into CAPI bootstrap templates or executed on physical hosts.
-
-**Not yet production-complete:** the Target Agent CAPI Pivot adapter (`apps/target_agent/capi_pivot.py`) supports dry-run and approval-digest-gated `clusterctl move`, including provider-version checks, Target Control Plane controller placement checks, source UID annotation and postflight identity verification. It has not yet been run against the selected live CAPI/Metal3/Ironic provider matrix. Autonomous EPH cleanup, Worker provisioning, applying the generated chrony command to actual hosts, full platform API/UI integration and physical BMC/Ironic acceptance remain outstanding. The new Ironic adapter is unit-tested against mocked HTTP responses; live Ironic credentials, CA trust, API microversion and physical BMC acceptance have not yet been verified. Other mutating actions fail closed. Unit tests or QEMU boot tests do not prove physical bare-metal provisioning.
-
-The legacy `apps/node_agent` package and its shared runtime have been removed from this branch. The Cloud Control, EPH and Target Agents have independent source packages, entrypoints, images, credentials and command allowlists. No compatibility shim or fallback to the old Node Agent is permitted.
-
-## Local application quick start
-
-Requirements: Docker Engine with Compose v2.
-
-```bash
-cp .env.example .env
-docker compose --env-file .env -f deploy/docker-compose.yml up --build
+Cloud Control Agent
+       |
+       v
+EPH Agent (Debian 12 Live OS, single-node Kubernetes)
+       |
+       +--> CAPI + CAPM3 + BMO + Ironic + IPAM
+       |
+       v
+Target Control Plane (Ubuntu 24.04 LTS by default)
+       |
+       v
+Target Agent ---> CAPI Pivot / BMH migration / EPH cleanup
+       |
+       v
+Target Workers ---> Calico eBPF data plane / CNI / SR-IOV
 ```
 
-- Vue Studio: http://localhost:5173
-- Django API: http://localhost:8000/api/v1/
-- Django Admin: http://localhost:8000/admin/
-- Liveness: http://localhost:8000/health/live
-- Readiness: http://localhost:8000/health/ready
+## Bare-metal delivery lifecycle
 
-Create the first local administrator after the stack is running:
+`eph_single_node_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
 
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml exec api python apps/platform-api/manage.py createsuperuser
-```
+- Target Control Plane masters become ready before Target Workers are provisioned.
+- Target Agent restores its durable checkpoint after CAPI Pivot.
+- BMH migration requires exact source/target equality of namespace, name and stable hardware identity, plus verified Target Metal3 ownership.
+- EPH cleanup is blocked until CAPI ownership, BMH registry, controller health and credential revocation are positively verified.
+- Every external side effect requires idempotency, a durable checkpoint and postflight evidence. Missing or ambiguous evidence fails closed.
+- Kubernetes runs with Calico eBPF and kube-proxy replacement; kube-proxy is not installed.
+- Target Workers synchronize time only from the Target Control Plane's Ironic internal IP/VIP over UDP/123; external NTP pools and fallback are prohibited.
+- Kubernetes Control Plane management uses ordinary NIC connectivity. Pod traffic uses a separate Data Plane, with Multus and SR-IOV/DPDK where required.
 
-Docker Compose is for the local application/control-plane development stack. It must never start, supervise or substitute for EPH Agent or Target Agent Pods.
-
-## Build and deploy the three infrastructure Agents
-
-See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks. See the [Target CAPI Pivot contract](docs/capi-pivot-contract.md) for approval, provider compatibility, controller placement and postflight gates.
-
-Deployment requires three distinct Kubernetes contexts:
-
-- Cloud management cluster (Alibaba Cloud or Tencent Cloud).
-- Temporary EPH single-node Kubernetes cluster.
-- Target Kubernetes cluster.
+The complete lifecycle is implemented at code-baseline and mock-test level. Real Live ISO, BMC, IPA, CAPI Pivot, physical Worker and Calico eBPF end-to-end acceptance remain outstanding.
 
 ## Open-source operating systems and package repositories
 
-The EPH Live OS uses **Debian 12**. Target control-plane and worker images default to **Ubuntu 24.04 LTS**. Both operating systems can be deployed at scale without a paid operating-system subscription or a per-node license; Ubuntu Pro is not required. The default package selection uses open-source APT components only: Debian `main` and Ubuntu `main universe`, with no requirement for Debian `contrib/non-free` or Ubuntu `restricted/multiverse`.
+The EPH Live OS uses **Debian 12**. Target control-plane and worker images default to **Ubuntu 24.04 LTS**. Both can be deployed at scale without a paid operating-system subscription or per-node license; Ubuntu Pro is not required. The default package selection uses open-source components only: Debian `main` and Ubuntu `main universe`, without Debian `contrib/non-free` or Ubuntu `restricted/multiverse`.
 
-OS and Kubernetes package repositories are required **only while creating the EPH/Target OS images on a connected build machine**. Pin and mirror or snapshot those repositories together with the image build inputs. The default source configuration is:
+OS and Kubernetes repositories are required **only while building EPH/Target OS images on a connected build machine**. Pin and mirror or snapshot them with the image build inputs:
 
 ```text
 # Debian 12 (EPH)
@@ -108,32 +113,79 @@ deb https://security.ubuntu.com/ubuntu noble-security main universe
 deb https://pkgs.k8s.io/core:/stable:/v1.37/deb/ /
 ```
 
-The OS images must already contain compatible containerd, kubeadm, kubelet and kubectl binaries at the selected Kubernetes version (`v1.37.2`). EPH cloud-init and Target CAPI verify and enable these binaries; they never run online `apt update` or `apt install`. Bare-metal deployment, cluster expansion and remote image pulls must not depend on public OS repositories, public Kubernetes repositories or an external container registry.
+The OS images must already contain compatible containerd, kubeadm, kubelet and kubectl binaries at Kubernetes **`v1.37.2`**. EPH cloud-init and Target CAPI verify and enable them; they never execute online `apt update` or `apt install`. Bare-metal deployment, cluster expansion and remote image pulls do not depend on public OS repositories or an external container registry.
 
-Build three independent images and pin each by immutable SHA-256 digest. Apply Cloud Control Agent to the cloud management context, EPH Agent to the temporary EPH cluster and Target Agent to the Target cluster. Target Agent requires three schedulable Control Plane masters.
+## Offline image delivery
 
-The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must operate as TCP/L4 TLS passthrough unless a separately trusted client-certificate identity propagation design is implemented.
+The [offline image factory](deploy/offline/README.md) builds repository-owned Cloud Control, EPH and Target Agent images and packages every Metal3, IPA, Kubernetes and Calico image needed at runtime.
 
-## Ordered bare-metal delivery lifecycle
+```bash
+# On a connected build machine
+python3 tools/offline_images.py fetch
 
-`eph_single_node_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
+# With the network disconnected
+python3 tools/offline_images.py build --offline
+```
 
-- Target Control Plane masters are ready before Target Workers are provisioned.
-- Target Agent restores the durable checkpoint after CAPI Pivot.
-- BMH migration requires exact source/target equality of namespace, name and stable hardware identity, plus verified Target Metal3 ownership and reconciliation.
-- EPH cleanup is autonomous Target Agent work and is blocked until CAPI ownership, BMH registry, controller health and EPH credential revocation are positively verified.
-- Every external side effect requires idempotency, a durable checkpoint and postflight evidence. Missing or ambiguous evidence fails closed.
+- Versions and upstream references live in `deploy/offline/images.json`.
+- `fetch` resolves image digests and records SHA256 for archives, binaries, wheels and IPA.
+- `build --offline` uses `--pull=false` and `--network=none`; Agent Dockerfiles contain no apt/curl/wget installation path.
+- EPH imports all archives into containerd, starts the registry Pod, publishes images and verifies digests before deploying the remaining workloads.
+- Remote nodes pull only from the EPH local registry. No Docker Compose infrastructure stack and no external registry are used on EPH or Target nodes.
 
-## NTP and network invariants
+## Local application development
 
-- EPH uses an independent bootstrap NTP source before EPH kubeadm initialization because Target Control Plane does not exist yet.
-- Target Control Plane chronyd synchronizes from approved external NTP sources and exposes a reachable internal NTP service at the Ironic internal IP/VIP over UDP/123.
-- Every Target Worker synchronizes only from that Ironic internal IP/VIP. External NTP servers and fallback pools are prohibited. Worker readiness must verify the actual selected chronyd source, not only local clock synchronization.
-- Kubernetes Control Plane management uses ordinary NIC connectivity. The Data Plane is separate; Pod traffic uses the Data Plane, with Multus and SR-IOV/DPDK where required.
+Docker Compose is only for the local application/control-plane development stack. It must never start, supervise or substitute for EPH or Target Agent Pods.
+
+```bash
+cp .env.example .env
+docker compose --env-file .env -f deploy/docker-compose.yml up --build
+```
+
+- Vue Studio: http://localhost:5173
+- Django API: http://localhost:8000/api/v1/
+- Django Admin: http://localhost:8000/admin/
+- Liveness: http://localhost:8000/health/live
+- Readiness: http://localhost:8000/health/ready
+
+Create the first administrator after the stack is running:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml exec api python apps/platform-api/manage.py createsuperuser
+```
+
+## Three-Agent deployment
+
+See [Three-Agent deployment](deploy/agents/README.md) for image builds, secret requirements, mTLS certificate identities, Kubernetes manifests and rollout checks. See the [Target CAPI Pivot contract](docs/capi-pivot-contract.md) for approval, provider compatibility, controller placement and postflight gates.
+
+Deployment requires three distinct Kubernetes contexts:
+
+- Cloud management cluster (Alibaba Cloud or Tencent Cloud).
+- Temporary EPH single-node Kubernetes cluster.
+- Target Kubernetes cluster.
+
+Build three independent Agent images and pin each by immutable SHA-256 digest. Apply Cloud Control Agent to the cloud management context, EPH Agent to the temporary EPH cluster and Target Agent to the Target cluster. Target Agent requires three schedulable Control Plane masters.
+
+The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must provide TCP/L4 TLS passthrough unless a separately trusted client-certificate identity propagation design is implemented.
+
+## Validation and production status
+
+Implemented foundations include tenant/project isolation, membership roles, token budgets, chained audit, Agent/Workflow APIs, connector approval, MCP streamable-HTTP runtime, Qdrant collection bootstrap and the three infrastructure Agent state machines.
+
+Not yet production-complete:
+
+- Subscription billing and plan management.
+- MCP stdio transport, server mode and complete provider OAuth/token refresh.
+- Realtime WebSocket/SSE event streaming.
+- Parallel, loop and human-approval Workflow nodes.
+- Multi-provider model routing and fallback chains.
+- Redis-backed cache/queue coordination; pgvector and S3-compatible object storage.
+- Real CAPI/Metal3/Ironic deployment, CAPI Pivot, BMH migration, EPH cleanup and physical Worker acceptance.
+- Real SR-IOV/DPDK data-plane traffic validation and Day-2 scale/upgrade/repair operations.
+
+The authoritative code-backed checklist is [Architecture Inventory (English)](docs/architecture-inventory.en.md) / [架构盘点（中文）](docs/architecture-inventory.zh-CN.md). Unit or mocked tests do not constitute proof of physical deployment success.
 
 ## Local checks
-
-Python 3.12:
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -152,19 +204,21 @@ npm run build
 
 ## Repository layout
 
-- `apps/platform-api`: Django platform API.
-- `apps/worker`: independent application task Worker.
-- `apps/cloud_control_agent`: Cloud Control Agent.
-- `apps/eph_agent`: temporary EPH Agent.
-- `apps/target_agent`: Target Agent, leader election, handoff and NTP policy.
-- `packages/agent_contracts`: versioned, side-effect-free Agent contracts.
+- `apps/platform-api`: Django SaaS API, tenancy, Agents, Workflows, audit and deployment records.
+- `apps/worker`: asynchronous Agent and Workflow executor.
+- `apps/cloud_control_agent`: cloud-side infrastructure control plane.
+- `apps/eph_agent`: temporary EPH bootstrap Agent.
+- `apps/target_agent`: Target takeover, CAPI Pivot and data-plane Agent.
+- `packages/agent_contracts`: versioned Agent identity, command, lease, checkpoint and result contracts.
 - `packages/agent_transport`: mTLS control transport.
-- `apps/web-studio`: Vue 3 operator workspace.
-- `deploy/agents`: independent image build and three-context Kubernetes deployment assets.
-- `docs`: architecture decisions, threat model, verification matrix and delivery plan.
+- `apps/web-studio`: Vue 3 SaaS operator workspace.
+- `deploy/agents`: three-Agent images and Kubernetes deployment assets.
+- `deploy/offline`: offline image factory and version manifest.
+- `eph-iso`: Debian 12 EPH Live OS bootstrap assets.
+- `docs`: architecture, threat model, verification matrix and delivery plans.
 
 ## Security baseline
 
-Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted. Authorization is enforced by server-side policy, never by model intent or client-supplied tenant identifiers.
+Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Tenant and project authorization is enforced server-side, never by model intent or client-supplied tenant identifiers. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted.
 
 No production CAPI Pivot, BMH mutation, EPH cleanup or Worker provisioning is enabled until its adapter, approval boundary, compatibility matrix and physical acceptance evidence are complete.
