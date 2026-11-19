@@ -132,6 +132,7 @@ def test_build_spec_uses_platform_inventory(bridge_workspace):
     assert spec["k8s_version"] == "v1.37.2"
     assert len(spec["fleet"]) == 5
     assert spec["fleet"][0]["secret_ref"]
+    assert spec["bmc_credential_mode"] == "preprovisioned"
 
 
 @pytest.mark.django_db

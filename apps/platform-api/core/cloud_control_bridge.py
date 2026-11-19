@@ -100,6 +100,9 @@ def build_cloud_control_spec(
                 f"fleet has {len(fleet)} machine(s), but the request needs {required}"
             )
     spec["fleet"] = fleet
+    # BMC credentials are pre-provisioned as Kubernetes Secrets on the EPH node;
+    # the control plane only carries the Secret reference, never the credentials.
+    spec["bmc_credential_mode"] = "preprovisioned"
     return spec
 
 
