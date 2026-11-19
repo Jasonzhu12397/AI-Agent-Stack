@@ -883,7 +883,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             UPDATE agent_control_work_items
                             SET status = 'leased', assigned_agent_id = %s,
                                 lease_token_hash = %s,
-                                lease_expires_at = NOW() + (%s || ' seconds')::interval,
+                                lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
                                 attempts = attempts + 1, updated_at = NOW()
                             WHERE work_id = %s
                             """,
@@ -935,7 +935,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     UPDATE agent_control_work_items
-                    SET lease_expires_at = NOW() + (%s || ' seconds')::interval,
+                    SET lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
                         updated_at = NOW()
                     WHERE work_id = %s AND assigned_agent_id = %s
                       AND status = 'leased' AND lease_token_hash = %s
