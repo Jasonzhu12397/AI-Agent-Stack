@@ -3,7 +3,7 @@
 > 语言：中文 · [English](./architecture-inventory.en.md)
 
 > 盘点口径：本清单只依据仓库 `Jasonzhu12397/AI-Agent-Stack` main 分支当前代码核对，不把设计目标、文档规划或前端模板冒充成已完成功能。
-> 盘点日期：2026-11-18；复核基线 HEAD：`e08a18200406402c22e81e603f44615be4643c8f`。
+> 盘点日期：2026-11-19；复核基线 HEAD：`fa14aad8601e5a266f4caeb2f223a64ae56925ed`。
 
 ## 0. 三态定义（本清单统一口径）
 
@@ -15,9 +15,9 @@
 
 ## 1. 基线证据（本次复核）
 
-- 本地基线：**795 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移；工作区干净。
+- 本地基线：**878 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移；工作区干净。
 - 测试环境：本地无 PostgreSQL/Redis，测试以内联 `DATABASE_URL=sqlite://` 覆盖运行；CI 使用 PostgreSQL 16 服务容器。
-- 规模：`apps/` + `packages/` Python 源码与测试合计约 27.6k 行；测试文件 61 个。
+- 规模：`apps/` + `packages/` Python 源码与测试合计约 27.6k 行；测试文件 63 个。
 - CI 工作流：`.github/workflows/ci.yml` 三个 job —— `python`（ruff / system check / 迁移漂移 / migrate / pytest）、`web`（npm test / Vite build）、`compose`（两份 compose 配置校验）。
 - 历史记录：此前 Python CI 因 `tests/test_worker_tasks.py` 三处 ruff import 排序失败（非测试逻辑失败），已由 commit `5ba685b` 修复；远端 CI 重跑结果本次未再复核。
 
@@ -70,8 +70,8 @@
 | Agent | 目录 | 已实现动作 / 模块 | 三态 | 缺口 |
 |---|---|---|---|---|
 | Cloud Control Agent | `apps/cloud_control_agent/`（`api.py`、`main.py`） | HTTP 控制面：action/role 合法性校验、上报 capabilities 校验、checkpoint actor 迁移校验、证书 CN 身份校验、部署状态汇总与 DB 持久化 | 【基础】 | 【待开发】真实云厂商（阿里云 / 腾讯云 / AWS）VM 编排适配器：`pyproject.toml` 与代码中未见任何云 SDK；当前是控制面协议与校验，不是云资源编排器 |
-| EPH Agent | `apps/eph_agent/`（`main.py`、`metal3_skill.py`、`capi_renderer.py`、`ntp_policy.py`、`templates/`） | 动作：`eph.preflight`、`eph.source.observe`、`eph.capi.cluster.apply`、`eph.capi.cluster.observe`；BMH apply/wait-ready、CAPI 模板渲染、NTP 策略 | 【基础】 | 【待验证】单节点 Bootstrap 集群与目标 Control Plane 引导在真实 CAPI/Metal3/Ironic 版本上验收；EPH 目录下**没有** pivot 适配器（见 §8 冲突清单） |
-| Target Agent | `apps/target_agent/`（`main.py`、`capi_pivot.py`、`handoff.py`、`metal3_ownership.py`、`cleanup_scope.py`、`eph_cleanup.py`、`worker_provisioning.py`、`postflight.py`、`ntp_attestation.py`、`ntp_policy.py`、`ironic_client.py`、`leader_election.py`、`worker_attestation.py`） | 动作：`target.cluster.observe`、`target.capi.observe`、`target.capi.pivot`（含 dry-run）、`target.worker.ntp.validate`、`target.ntp.internal.probe`、`target.handoff.evaluate`、`target.eph.cleanup`、`target.worker.provision`；Pivot 适配器、自主接管状态机、BMH 身份集与 ownership 校验、EPH 清理范围、Worker provisioning、NTP 证明、三副本 Leader Election、Ironic HTTP 客户端 | 【基础】 | 【待验证】真实集群就绪后自主接管、CAPI Pivot、BMH 迁移、EPH 清理、物理 Worker 部署与硬件验收；当前多为 fail-closed 预检 + 单测/mock 覆盖，真实 provider 矩阵未跑通 |
+| EPH Agent | `apps/eph_agent/`（`main.py`、`bootstrap_renderer.py`、`control_stack.py`、`control_stack_adapter.py`、`metal3_skill.py`、`capi_renderer.py`、`ntp_policy.py`、`templates/`） | 动作：`eph.preflight`、`eph.source.observe`、`eph.bootstrap.render`（kubeadm init / NoCloud seed / Agent Deployment 纯渲染，返回产物摘要，无集群写入）、`eph.controlstack.apply`（cert-manager→CAPI→BMO→Ironic→CAPM3 幂等 apply + 就绪探针）、`eph.metal3.bmh.apply`/`observe`/`wait_ready`、`eph.capi.cluster.apply`/`observe`/`wait_ready`；上报的 capabilities 由 `packages/agent_contracts/orchestration.py` 单一来源生成 | 【基础】 | 【待验证】单节点 Bootstrap 集群与目标 Control Plane 引导在真实 CAPI/Metal3/Ironic 版本上验收；EPH 目录下**没有** pivot 适配器（见 §8 冲突清单） |
+| Target Agent | `apps/target_agent/`（`main.py`、`capi_pivot.py`、`handoff.py`、`metal3_ownership.py`、`network_plugins.py`、`network_stack_adapter.py`、`cleanup_scope.py`、`eph_cleanup.py`、`worker_provisioning.py`、`postflight.py`、`ntp_attestation.py`、`ntp_policy.py`、`ironic_client.py`、`leader_election.py`、`worker_attestation.py`） | 动作：`target.cluster.observe`、`target.capi.observe`、`target.capi.pivot`（含 dry-run）、`target.metal3.observe`/`verify_ownership`、`target.worker.ntp.validate`、`target.ntp.control_plane.render`/`verify_bootstrap`、`target.ntp.internal.probe`、`target.network.apply`（Calico/Multus/OVS/SR-IOV/DPDK 幂等 apply + 就绪观察）、`target.handoff.evaluate`、`target.eph.cleanup`、`target.worker.provision`；Pivot 适配器、自主接管状态机、BMH 身份集与 ownership 校验、EPH 清理范围、Worker provisioning、NTP 证明、三副本 Leader Election、Ironic HTTP 客户端 | 【基础】 | 【待验证】真实集群就绪后自主接管、CAPI Pivot、BMH 迁移、EPH 清理、物理 Worker 部署与硬件验收；当前多为 fail-closed 预检 + 单测/mock 覆盖，真实 provider 矩阵未跑通 |
 | Platform Worker | `apps/worker/worker_app/` | 通用 AI Agent 任务与 Workflow 异步执行（模型调用、工具路由、RAG 检索、工作流运行） | 【基础】 | 定位边界：只承担平台侧通用编排执行，不代替上述三个基础设施 Agent |
 
 ### 4.2 责任边界唯一标准（锁定口径，代码以此为准）
