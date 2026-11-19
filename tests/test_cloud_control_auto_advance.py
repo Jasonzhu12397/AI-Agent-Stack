@@ -1,6 +1,9 @@
 from uuid import uuid4
 
-from apps.cloud_control_agent.deployment_controller import advance_after_command
+from apps.cloud_control_agent.deployment_controller import (
+    advance_after_command,
+    reconcile_deployments,
+)
 
 
 class _Result:
@@ -15,15 +18,18 @@ class _Result:
 
 
 class _Connection:
-    def __init__(self, *, deployment, command, agent_id, existing=None):
+    def __init__(self, *, deployment, command, agent_id, existing=None, active=False):
         self.deployment = deployment
         self.command = command
         self.agent_id = agent_id
         self.existing = existing
+        self.active = active
         self.inserted = []
 
     def execute(self, sql, params=()):
         normalized = " ".join(sql.split())
+        if "SELECT 1 FROM agent_control_commands" in normalized:
+            return _Result([{"active": True}] if self.active else [])
         if "FROM agent_control_deployments" in normalized:
             return _Result([self.deployment])
         if "WHERE command_id = %s AND deployment_id = %s" in normalized:
@@ -147,3 +153,30 @@ def test_agent_registration_can_queue_the_first_step_without_a_prior_command():
     assert result["status"] == "queued"
     assert result["action"] == "eph.preflight"
     assert result["next_phase"] == "eph_single_node_ready"
+
+
+def test_reconcile_queues_a_deployment_that_has_no_active_command():
+    deployment = _deployment(phase="not_started", state={})
+    connection = _Connection(
+        deployment=deployment,
+        command=None,
+        agent_id=uuid4(),
+    )
+    summary = reconcile_deployments(connection, limit=10)
+    assert summary["scanned"] == 1
+    assert summary["queued"] == 1
+    assert summary["results"][0]["action"] == "eph.preflight"
+
+
+def test_reconcile_skips_a_deployment_with_an_active_command():
+    deployment = _deployment()
+    connection = _Connection(
+        deployment=deployment,
+        command=_command(next_phase=deployment["phase"]),
+        agent_id=uuid4(),
+        active=True,
+    )
+    summary = reconcile_deployments(connection, limit=10)
+    assert summary["queued"] == 0
+    assert summary["results"][0]["status"] == "active_command"
+    assert connection.inserted == []

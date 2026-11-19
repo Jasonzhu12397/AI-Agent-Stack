@@ -91,6 +91,23 @@ def test_cloud_control_registers_agent_and_creates_deployment(tmp_path):
         client.close()
 
 
+def test_cloud_control_reconcile_uses_the_platform_api_route(tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"status": "completed", "queued": 0})
+
+    client = _client(tmp_path, httpx.MockTransport(handler))
+    try:
+        client.reconcile_deployments(limit=25)
+        assert calls == [
+            ("POST", "/api/v1/control/deployments/reconcile", {"limit": 25})
+        ]
+    finally:
+        client.close()
+
+
 def test_cloud_control_status_methods_use_platform_api_routes(tmp_path):
     agent_id = uuid4()
     command_id = uuid4()

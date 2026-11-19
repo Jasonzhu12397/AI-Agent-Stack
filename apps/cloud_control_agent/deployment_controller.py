@@ -192,6 +192,83 @@ def advance_after_command(
     }
 
 
+def _has_active_command(
+    connection: psycopg.Connection[Any],
+    deployment_id: UUID,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1 FROM agent_control_commands
+        WHERE deployment_id = %s AND status IN ('queued', 'leased')
+        LIMIT 1
+        """,
+        (deployment_id,),
+    ).fetchone()
+    return row is not None
+
+
+def reconcile_deployments(
+    connection: psycopg.Connection[Any],
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Re-plan every non-terminal deployment that has no active command.
+
+    This is the recovery path for a result whose auto-advance was interrupted by
+    a database error, for a deployment created before its Agent registered, and
+    for an operator retry after a transient control-plane failure. It never
+    advances a deployment that still owns a queued or leased command.
+    """
+
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        return {"status": "invalid_limit"}
+    deployments = connection.execute(
+        """
+        SELECT deployment_id FROM agent_control_deployments
+        WHERE phase <> 'completed'
+        ORDER BY updated_at, created_at
+        LIMIT %s
+        """,
+        (limit,),
+    ).fetchall()
+    summary = {
+        "status": "completed",
+        "scanned": 0,
+        "queued": 0,
+        "skipped": 0,
+        "results": [],
+    }
+    for row in deployments:
+        summary["scanned"] += 1
+        deployment_id = row["deployment_id"]
+        if _has_active_command(connection, deployment_id):
+            result = {"status": "active_command", "deployment_id": str(deployment_id)}
+        else:
+            try:
+                result = advance_after_command(
+                    connection,
+                    deployment_id,
+                    require_command=False,
+                )
+            except (OrchestrationError, psycopg.Error) as exc:
+                LOG.warning(
+                    "Deployment reconciliation skipped for %s: %s",
+                    deployment_id,
+                    type(exc).__name__,
+                )
+                result = {
+                    "status": "error",
+                    "deployment_id": str(deployment_id),
+                    "error": type(exc).__name__,
+                }
+            result["deployment_id"] = str(deployment_id)
+        summary["results"].append(result)
+        if result["status"] == "queued":
+            summary["queued"] += 1
+        else:
+            summary["skipped"] += 1
+    return summary
+
+
 def advance_for_agent(
     connection: psycopg.Connection[Any],
     installation_id: UUID,

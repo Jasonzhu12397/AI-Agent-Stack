@@ -104,3 +104,62 @@ spec:
       port: 8443
       targetPort: mtls-api
       protocol: TCP
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloud-control-reconcile
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: cloud-control-reconcile
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  schedule: "*/1 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 30
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cloud-control-reconcile
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reconcile
+              image: REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - -m
+                - apps.cloud_control_agent.main
+                - --reconcile-once
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: cloud-control-agent-database
+                      key: database-url
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

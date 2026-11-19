@@ -129,6 +129,12 @@ def test_cloud_control_agent_is_separate_mtls_service():
     assert container["image"] == "REPLACE_WITH_REGISTRY/ai-agent-cloud-control-agent:VERSION"
     assert service["spec"]["type"] == "LoadBalancer"
     assert container["ports"][0]["containerPort"] == 8443
+    cronjob = next(item for item in manifest if item.get("kind") == "CronJob")
+    reconcile_pod = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    reconcile_container = reconcile_pod["containers"][0]
+    assert reconcile_container["image"] == container["image"]
+    assert reconcile_container["command"][-1] == "--reconcile-once"
+    assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
 
 
 def test_new_build_script_builds_three_independent_images():

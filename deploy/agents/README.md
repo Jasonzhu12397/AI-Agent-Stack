@@ -29,6 +29,11 @@ Target Agent image hosted in a different registry:
 
 Run `deploy.sh` only after the secrets below have been provisioned by your secret manager. The script performs server-side dry-run validation before applying resources and waits for all three Deployments.
 
+The Cloud Control manifest also deploys `cloud-control-reconcile`, a CronJob that
+runs `python -m apps.cloud_control_agent.main --reconcile-once` every minute. It
+uses the same database secret and image, replays interrupted auto-advance
+decisions, and skips deployments that still own a queued or leased command.
+
 ## Required Secrets
 
 ### Cloud management cluster

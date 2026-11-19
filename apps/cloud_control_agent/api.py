@@ -28,7 +28,11 @@ from packages.agent_contracts.orchestration import (
     plan_next_step as _plan_next_step,
 )
 
-from .deployment_controller import advance_after_command, advance_for_agent
+from .deployment_controller import (
+    advance_after_command,
+    advance_for_agent,
+    reconcile_deployments,
+)
 
 MAX_BODY_BYTES = 1024 * 1024
 LEASE_SECONDS = 90
@@ -417,6 +421,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/control/deployments/plan":
                     self._plan_deployment(document)
                     return
+                if self.path == "/api/v1/control/deployments/reconcile":
+                    self._reconcile_deployments(document)
+                    return
                 if self.path == "/api/v1/control/commands":
                     self._enqueue(document)
                     return
@@ -613,6 +620,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 "terminal": plan["terminal"],
                 "next_step": plan["next_step"],
             })
+
+        def _reconcile_deployments(self, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            limit = document.get("limit", 100)
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                summary = reconcile_deployments(connection, limit)
+            if summary["status"] == "invalid_limit":
+                raise ControlApiError("RECONCILE_LIMIT_INVALID")
+            self._send(200, summary)
 
         def _enqueue(self, document: dict[str, Any]) -> None:
             self._require_platform_api()

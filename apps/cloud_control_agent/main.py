@@ -10,6 +10,7 @@ from typing import Any
 import psycopg
 
 from .api import serve
+from .deployment_controller import reconcile_deployments
 
 
 class CloudControlConfigurationError(ValueError):
@@ -142,6 +143,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="cloud-control-agent")
     parser.add_argument("--healthcheck", action="store_true")
     parser.add_argument("--readiness-check", action="store_true")
+    parser.add_argument("--reconcile-once", action="store_true")
     args = parser.parse_args()
     if args.healthcheck:
         print(json.dumps({"service": "cloud-control-agent", "status": "healthy"}))
@@ -150,6 +152,16 @@ def main() -> int:
         database_url = _database_url()
         if args.readiness_check:
             check_store(database_url)
+            return 0
+        if args.reconcile_once:
+            with psycopg.connect(database_url, autocommit=True) as connection:
+                initialize_store(connection)
+                summary = reconcile_deployments(connection)
+            print(json.dumps({
+                "service": "cloud-control-agent",
+                "action": "reconcile",
+                **summary,
+            }), flush=True)
             return 0
         cert_file, key_file, client_ca_file = _tls_settings()
         host = os.environ.get("CLOUD_CONTROL_BIND_HOST", "0.0.0.0")

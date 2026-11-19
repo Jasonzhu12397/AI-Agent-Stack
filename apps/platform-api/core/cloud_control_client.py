@@ -101,6 +101,13 @@ class CloudControlClient:
             body,
         )
 
+    def reconcile_deployments(self, limit: int = 100) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/v1/control/deployments/reconcile",
+            {"limit": limit},
+        )
+
     def get_deployment(self, deployment_id: UUID) -> dict[str, Any]:
         return self._request(
             "GET",
