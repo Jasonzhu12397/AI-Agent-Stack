@@ -16,6 +16,11 @@ class FakeGateway:
 class FakeVectorStore:
     def __init__(self):
         self.upsert_calls = []
+        self.collection_calls = []
+
+    def ensure_collection(self, vector_size, distance="Cosine"):
+        self.collection_calls.append((vector_size, distance))
+        return {"created": True}
 
     def upsert(self, tenant_id, project_id, records):
         self.upsert_calls.append((tenant_id, project_id, records))
@@ -45,6 +50,7 @@ def test_ingestion_renews_lease_before_each_batch_and_vector_write(monkeypatch):
 
     assert gateway.batch_sizes == [128, 1]
     assert len(heartbeats) == 3
+    assert store.collection_calls == [(2, "Cosine")]
     assert len(store.upsert_calls) == 1
     assert result["chunks"] == 129
     assert result["stored"] == 129
@@ -75,6 +81,7 @@ def test_ingestion_stops_when_lease_heartbeat_fails(monkeypatch):
         )
 
     assert gateway.batch_sizes == []
+    assert store.collection_calls == []
     assert store.upsert_calls == []
 
 
