@@ -14,6 +14,10 @@ The renderer is pure: it validates the supplied spec and returns typed
 manifests. It never invokes ``kubeadm``, ``containerd`` or ``kubectl``; command
 execution stays in the runner injected by the EPH Agent main loop. Missing
 optional fields are omitted instead of being filled with hard-coded defaults.
+
+The Agent Deployment environment is derived from
+``packages.agent_transport.AgentSettings``; see
+``render_agent_deployment`` for the exact variable set.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import ipaddress
 import re
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import yaml
 
@@ -33,6 +38,11 @@ _HOSTNAME_PATTERN = re.compile(
     r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
     r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
 )
+
+MTLS_MOUNT_PATH = "/etc/agent/mtls"
+MTLS_CA_FILENAME = "ca.crt"
+MTLS_CERT_FILENAME = "tls.crt"
+MTLS_KEY_FILENAME = "tls.key"
 
 
 def _valid_name(value: Any, code: str) -> str:
@@ -113,34 +123,75 @@ def _valid_ntp_servers(value: Any) -> list[str]:
     return normalized
 
 
+def _valid_uuid(value: Any, code: str) -> str:
+    if not isinstance(value, str):
+        raise Metal3SkillError(code)
+    try:
+        parsed = UUID(value)
+    except ValueError:
+        raise Metal3SkillError(code) from None
+    if str(parsed) != value.lower():
+        raise Metal3SkillError(code)
+    return str(parsed)
+
+
+def _valid_seconds(value: Any, default: int, code: str) -> int:
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 300:
+        raise Metal3SkillError(code)
+    return value
+
+
 def _validate_agent_block(agent: Any) -> dict[str, Any]:
     if not isinstance(agent, dict):
         raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_BLOCK_REQUIRED")
-    control_endpoint = _valid_url(
-        agent.get("control_endpoint"),
+    control_url = _valid_url(
+        agent.get("control_endpoint", agent.get("control_url")),
         "EPH_BOOTSTRAP_AGENT_ENDPOINT_INVALID",
     )
+    if urlsplit(control_url).scheme != "https":
+        raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_ENDPOINT_INVALID")
     image = _valid_url(agent.get("image"), "EPH_BOOTSTRAP_AGENT_IMAGE_INVALID")
     mtls_secret_ref = _valid_name(
         agent.get("mtls_secret_ref"),
         "EPH_BOOTSTRAP_AGENT_MTLS_SECRET_REF_INVALID",
     )
-    poll_seconds = agent.get("poll_seconds", 15)
-    if (
-        not isinstance(poll_seconds, int)
-        or isinstance(poll_seconds, bool)
-        or not 1 <= poll_seconds <= 3600
+    poll_seconds = _valid_seconds(
+        agent.get("poll_seconds"),
+        5,
+        "EPH_BOOTSTRAP_AGENT_POLL_SECONDS_INVALID",
+    )
+    heartbeat_seconds = _valid_seconds(
+        agent.get("heartbeat_seconds"),
+        10,
+        "EPH_BOOTSTRAP_AGENT_HEARTBEAT_SECONDS_INVALID",
+    )
+    request_timeout_seconds = _valid_seconds(
+        agent.get("request_timeout_seconds"),
+        15,
+        "EPH_BOOTSTRAP_AGENT_REQUEST_TIMEOUT_SECONDS_INVALID",
+    )
+    agent_id = _valid_uuid(agent.get("agent_id"), "EPH_BOOTSTRAP_AGENT_ID_INVALID")
+    installation_id = _valid_uuid(
+        agent.get("installation_id"),
+        "EPH_BOOTSTRAP_AGENT_INSTALLATION_ID_INVALID",
+    )
+    instance_id = agent.get("instance_id")
+    if instance_id is not None and (
+        not isinstance(instance_id, str) or not instance_id or len(instance_id) > 128
     ):
-        raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_POLL_SECONDS_INVALID")
-    agent_id = agent.get("agent_id")
-    if agent_id is not None and not isinstance(agent_id, str):
-        raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_ID_INVALID")
+        raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_INSTANCE_ID_INVALID")
     return {
-        "control_endpoint": control_endpoint,
+        "control_url": control_url,
         "image": image,
         "mtls_secret_ref": mtls_secret_ref,
         "poll_seconds": poll_seconds,
-        **({"agent_id": agent_id} if agent_id else {}),
+        "heartbeat_seconds": heartbeat_seconds,
+        "request_timeout_seconds": request_timeout_seconds,
+        "agent_id": agent_id,
+        "installation_id": installation_id,
+        **({"instance_id": instance_id} if instance_id else {}),
     }
 
 
@@ -241,18 +292,34 @@ def _serialize_kubeadm_documents(documents: list[dict[str, Any]]) -> str:
 
 
 def render_agent_deployment(spec: Any) -> dict[str, Any]:
-    """Render the EPH Agent Deployment that joins the bootstrap node to the plane."""
+    """Render the EPH Agent Deployment that joins the bootstrap node to the plane.
+
+    The environment contract mirrors ``packages.agent_transport.AgentSettings``:
+    every variable the Agent reads at start-up is rendered here and the three TLS
+    files resolve inside the mounted secret, so a rendered Deployment cannot
+    fail with a start-up ``ConfigurationError``.
+    """
 
     normalized = _normalize_spec(spec)
     agent = normalized["agent"]
     namespace = "metal3"
+    instance_id = agent.get("instance_id", normalized["node_name"])
     env: list[dict[str, str]] = [
-        {"name": "CLOUD_CONTROL_ENDPOINT", "value": agent["control_endpoint"]},
+        {"name": "AGENT_CONTROL_URL", "value": agent["control_url"]},
         {"name": "AGENT_ROLE", "value": "eph"},
-        {"name": "POLL_SECONDS", "value": str(agent["poll_seconds"])},
+        {"name": "AGENT_ID", "value": agent["agent_id"]},
+        {"name": "AGENT_INSTALLATION_ID", "value": agent["installation_id"]},
+        {"name": "AGENT_INSTANCE_ID", "value": instance_id},
+        {"name": "AGENT_POLL_SECONDS", "value": str(agent["poll_seconds"])},
+        {"name": "AGENT_HEARTBEAT_SECONDS", "value": str(agent["heartbeat_seconds"])},
+        {
+            "name": "AGENT_REQUEST_TIMEOUT_SECONDS",
+            "value": str(agent["request_timeout_seconds"]),
+        },
+        {"name": "AGENT_TLS_CA_FILE", "value": MTLS_MOUNT_PATH + "/" + MTLS_CA_FILENAME},
+        {"name": "AGENT_TLS_CERT_FILE", "value": MTLS_MOUNT_PATH + "/" + MTLS_CERT_FILENAME},
+        {"name": "AGENT_TLS_KEY_FILE", "value": MTLS_MOUNT_PATH + "/" + MTLS_KEY_FILENAME},
     ]
-    if agent.get("agent_id"):
-        env.append({"name": "AGENT_ID", "value": agent["agent_id"]})
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -278,7 +345,11 @@ def render_agent_deployment(spec: Any) -> dict[str, Any]:
                             "image": agent["image"],
                             "env": env,
                             "volumeMounts": [
-                                {"name": "mtls", "mountPath": "/etc/agent/mtls", "readOnly": True}
+                                {
+                                    "name": "mtls",
+                                    "mountPath": MTLS_MOUNT_PATH,
+                                    "readOnly": True,
+                                }
                             ],
                         }
                     ],
