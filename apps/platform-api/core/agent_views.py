@@ -14,6 +14,7 @@ from core.agent_serializers import (
     AgentRunSerializer,
     AgentVersionSerializer,
 )
+from core.audit import record_audit_event
 from core.models import (
     AgentDefinition,
     AgentRun,
@@ -106,6 +107,18 @@ class AgentListCreateView(APIView):
             project=project,
             created_by=request.user,
         )
+        record_audit_event(
+            request,
+            tenant,
+            "agent.created",
+            "agent_definition",
+            agent.id,
+            metadata={
+                "slug": agent.slug,
+                "name": agent.name,
+                "project_id": str(project.id),
+            },
+        )
         return Response(
             AgentDraftSerializer(agent).data,
             status=status.HTTP_201_CREATED,
@@ -133,7 +146,19 @@ class AgentDetailView(APIView):
             )
         serializer = AgentDraftSerializer(agent, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        previous_version = agent.current_version
         serializer.save()
+        record_audit_event(
+            request,
+            agent.tenant,
+            "agent.updated",
+            "agent_definition",
+            agent.id,
+            metadata={
+                "fields": sorted(serializer.validated_data.keys()),
+                "previous_current_version": previous_version,
+            },
+        )
         return Response(serializer.data)
 
 
@@ -338,6 +363,20 @@ class AgentPublishView(APIView):
             )
             agent.current_version = version_number
             agent.save(update_fields=["current_version", "updated_at"])
+            record_audit_event(
+                request,
+                agent.tenant,
+                "agent.published",
+                "agent_version",
+                version.id,
+                metadata={
+                    "agent_id": str(agent.id),
+                    "version": version_number,
+                    "model_config_id": snapshot["model_config_id"],
+                    "tool_count": len(snapshot["tool_allowlist"]),
+                    "knowledge_base_count": len(snapshot["knowledge_base_ids"]),
+                },
+            )
         return Response(
             AgentVersionSerializer(version).data,
             status=status.HTTP_201_CREATED,
@@ -418,6 +457,19 @@ class AgentRunListCreateView(APIView):
                     "input_text": input_text,
                 },
             )
+        record_audit_event(
+            request,
+            agent.tenant,
+            "agent.run.created",
+            "agent_run",
+            run.id,
+            metadata={
+                "agent_id": str(agent.id),
+                "task_id": str(task.id),
+                "agent_version_id": str(version.id),
+                "deduplicated": not created,
+            },
+        )
         response_status = status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
         return Response(
             AgentRunSerializer(run).data,
