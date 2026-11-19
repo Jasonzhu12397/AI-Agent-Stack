@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
 import AgentStudioView from "./AgentStudioView.vue";
+import AgentTeamStudioView from "./AgentTeamStudioView.vue";
 import ModelManagerView from "./ModelManagerView.vue";
 import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
@@ -25,7 +26,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs";
+    activeSection?: "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs";
   }>(),
   { activeSection: "overview" },
 );
@@ -180,8 +181,10 @@ onUnmounted(() => {
                 ? "Model Manager"
                 : props.activeSection === "agents"
                   ? "Agent Studio"
-                  : props.activeSection === "workflows"
-                    ? "Workflow Studio"
+                  : props.activeSection === "teams"
+                    ? "Agent Teams"
+                    : props.activeSection === "workflows"
+                      ? "Workflow Studio"
                     : props.activeSection === "knowledge"
                       ? "Knowledge Bases"
                       : props.activeSection === "governance"
@@ -274,6 +277,11 @@ onUnmounted(() => {
         <ModelManagerView v-if="props.activeSection === 'models'" :tenant-id="selectedTenantId" />
         <AgentStudioView
           v-if="props.activeSection === 'agents'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <AgentTeamStudioView
+          v-if="props.activeSection === 'teams'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />

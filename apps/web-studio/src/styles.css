@@ -85,6 +85,9 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .agent-publish-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: #aebbd0; font-size: 12px; }
 .agent-run-list { display: grid; gap: 10px; margin-top: 18px; }
 .agent-run-heading { display: flex; align-items: center; justify-content: space-between; }
+.team-member-list { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #0c1422; border: 1px solid #28364d; border-radius: 8px; }
+.team-member-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #c9d4e5; font-size: 13px; }
+.team-member-row > span:first-child { flex: 1; min-width: 160px; }
 .agent-run-card { padding: 14px; background: #0c1422; border: 1px solid #28364d; border-radius: 10px; }
 .agent-run-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: #8798b1; font-size: 11px; }
 .agent-run-input { color: #aebbd0; font-size: 12px; }

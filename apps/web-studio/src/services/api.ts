@@ -58,6 +58,33 @@ export type AgentRun = {
   created_at: string;
   finished_at: string | null;
 };
+export type AgentTeamDraft = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  draft_config: Record<string, unknown>;
+  current_version: number;
+  is_archived: boolean;
+};
+export type AgentTeamVersion = {
+  id: string;
+  team_id: string;
+  version: number;
+  definition_snapshot: Record<string, unknown>;
+  workflow_version_id: string;
+  published_at: string;
+};
+export type AgentTeamRun = {
+  id: string;
+  team_version_id: string;
+  task_id: string;
+  task_status: string;
+  input_text: string;
+  output_text: string;
+  created_at: string;
+  finished_at: string | null;
+};
 export type ModelTestResult = {
   content: string;
   input_tokens: number;
@@ -272,6 +299,60 @@ export function getAgentRuns(agentId: string): Promise<AgentRun[]> {
 
 export function createAgentRun(agentId: string, input: string): Promise<AgentRun> {
   return request<AgentRun>(`/api/v1/agents/${agentId}/runs/`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ input }),
+  });
+}
+
+export function getAgentTeams(
+  tenantId: string,
+  projectId: string,
+): Promise<AgentTeamDraft[]> {
+  return request<AgentTeamDraft[]>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-teams/`,
+  );
+}
+
+export function createAgentTeam(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    slug: string;
+    description: string;
+    draft_config: Record<string, unknown>;
+  },
+): Promise<AgentTeamDraft> {
+  return request<AgentTeamDraft>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-teams/`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function updateAgentTeam(
+  teamId: string,
+  payload: Partial<Pick<AgentTeamDraft, "name" | "slug" | "description" | "draft_config">>,
+): Promise<AgentTeamDraft> {
+  return request<AgentTeamDraft>(`/api/v1/agent-teams/${teamId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishAgentTeam(teamId: string): Promise<AgentTeamVersion> {
+  return request<AgentTeamVersion>(`/api/v1/agent-teams/${teamId}/publish/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getAgentTeamRuns(teamId: string): Promise<AgentTeamRun[]> {
+  return request<AgentTeamRun[]>(`/api/v1/agent-teams/${teamId}/runs/`);
+}
+
+export function createAgentTeamRun(teamId: string, input: string): Promise<AgentTeamRun> {
+  return request<AgentTeamRun>(`/api/v1/agent-teams/${teamId}/runs/`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ input }),
