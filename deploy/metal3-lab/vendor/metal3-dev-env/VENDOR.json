@@ -2,10 +2,10 @@
   "upstream_repo": "https://github.com/metal3-io/metal3-dev-env",
   "upstream_commit": "7076f07624cdfba990f83bea24f749b37e3baad7",
   "imported_source": "/tmp/m3dev-7076f07.tar.gz",
-  "imported_at": "2026-11-19T10:55:52+00:00",
+  "imported_at": "2026-11-19T14:52:05+00:00",
   "file_count": 29,
-  "total_bytes": 110797,
-  "manifest_sha256": "5799e57984d488f538751286a09853d5e82e7b92c0f02c59b5413c387e6ab4e7",
+  "total_bytes": 110796,
+  "manifest_sha256": "258c44981d8049730c2d585f630681abde34c3cc4ae67e59f1dfd85b472e2717",
   "note": "Forked vendored source: the libvirt/KVM half is deleted and the scripts call tools/metal3_deploy.py. Runtime never clones upstream; edit these files directly.",
   "pruned_paths": [
     "vm-setup/setup-playbook.yml",
@@ -43,5 +43,5 @@
     ".yamllint.yaml"
   ],
   "retained_file_count": 29,
-  "resealed_at": "2026-11-19T10:55:52+00:00"
+  "resealed_at": "2026-11-19T14:52:05+00:00"
 }
