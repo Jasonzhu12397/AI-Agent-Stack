@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from packages.agent_contracts.orchestration import EPH_ACTIONS
+from packages.agent_contracts.orchestration import (
+    EPH_ACTIONS,
+    EPH_CHECKPOINT_PHASES,
+)
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -232,7 +235,7 @@ def execute(
         }
     if action == "eph.metal3.bmh.apply":
         checkpoint = command.get("deployment_checkpoint", {})
-        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "eph_single_node_ready":
+        if not isinstance(checkpoint, dict) or checkpoint.get("phase") != "control_stack_ready":
             return {
                 "status": "blocked",
                 "error_code": "METAL3_BMH_REGISTRATION_EPH_CHECKPOINT_REQUIRED",
@@ -503,11 +506,14 @@ def main() -> int:
                                 "output": outcome.get("output", {}),
                                 "side_effects": outcome.get("side_effects", False),
                             }
-                        checkpoint_phase = {
-                            "eph.preflight": "eph_single_node_ready",
-                            "eph.metal3.bmh.apply": "bmh_registered",
-                            "eph.metal3.bmh.wait_ready": "bmh_ready",
-                        }.get(command.get("action"))
+                        checkpoint_phase = EPH_CHECKPOINT_PHASES.get(
+                            command.get("action")
+                        )
+                        checkpoint_phase = (
+                            checkpoint_phase.value
+                            if checkpoint_phase is not None
+                            else None
+                        )
                         if (
                             checkpoint_phase is not None
                             and outcome["status"] == "succeeded"

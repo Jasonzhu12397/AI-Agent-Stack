@@ -37,6 +37,7 @@ class OrchestrationError(ValueError):
 class DeploymentPhase(StrEnum):
     NOT_STARTED = "not_started"
     EPH_SINGLE_NODE_READY = "eph_single_node_ready"
+    CONTROL_STACK_READY = "control_stack_ready"
     BMH_REGISTERED = "bmh_registered"
     BMH_READY = "bmh_ready"
     TARGET_CONTROL_PLANE_READY = "target_control_plane_ready"
@@ -52,6 +53,7 @@ class DeploymentPhase(StrEnum):
 #: Ordered lifecycle phases, matching the control-plane checkpoint ordering.
 PHASE_ORDER: tuple[DeploymentPhase, ...] = (
     DeploymentPhase.EPH_SINGLE_NODE_READY,
+    DeploymentPhase.CONTROL_STACK_READY,
     DeploymentPhase.BMH_REGISTERED,
     DeploymentPhase.BMH_READY,
     DeploymentPhase.TARGET_CONTROL_PLANE_READY,
@@ -104,6 +106,16 @@ TERMINAL_PHASES: frozenset[DeploymentPhase] = frozenset(
     {DeploymentPhase.COMPLETED}
 )
 
+#: Checkpoint that an EPH action advances to after it succeeds. The EPH Agent
+#: imports this single source instead of carrying a second hand-written map.
+EPH_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
+    "eph.preflight": DeploymentPhase.EPH_SINGLE_NODE_READY,
+    "eph.controlstack.apply": DeploymentPhase.CONTROL_STACK_READY,
+    "eph.metal3.bmh.apply": DeploymentPhase.BMH_REGISTERED,
+    "eph.metal3.bmh.wait_ready": DeploymentPhase.BMH_READY,
+    "eph.capi.cluster.apply": DeploymentPhase.TARGET_CONTROL_PLANE_READY,
+}
+
 
 @dataclass(frozen=True)
 class StepPlan:
@@ -125,6 +137,11 @@ _DISPATCH_TABLE: dict[DeploymentPhase, tuple[str, str, DeploymentPhase]] = {
         DeploymentPhase.EPH_SINGLE_NODE_READY,
     ),
     DeploymentPhase.EPH_SINGLE_NODE_READY: (
+        "eph",
+        "eph.controlstack.apply",
+        DeploymentPhase.CONTROL_STACK_READY,
+    ),
+    DeploymentPhase.CONTROL_STACK_READY: (
         "eph",
         "eph.metal3.bmh.apply",
         DeploymentPhase.BMH_REGISTERED,

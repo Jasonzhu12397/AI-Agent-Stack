@@ -66,8 +66,10 @@ def test_checkpoint_digest_changes_when_evidence_changes():
 
 def test_eph_agent_can_persist_bootstrap_and_metal3_checkpoints():
     _validate_checkpoint_actor_transition("eph", "not_started", "eph_single_node_ready")
-    _validate_checkpoint_actor_transition("eph", "eph_single_node_ready", "bmh_registered")
+    _validate_checkpoint_actor_transition("eph", "eph_single_node_ready", "control_stack_ready")
+    _validate_checkpoint_actor_transition("eph", "control_stack_ready", "bmh_registered")
     _validate_checkpoint_actor_transition("eph", "bmh_registered", "bmh_ready")
+    _validate_checkpoint_actor_transition("eph", "bmh_ready", "target_control_plane_ready")
 
 
 @pytest.mark.parametrize(
@@ -75,7 +77,7 @@ def test_eph_agent_can_persist_bootstrap_and_metal3_checkpoints():
     [
         ("not_started", "target_control_plane_ready"),
         ("eph_single_node_ready", "target_agent_ready"),
-        ("bmh_ready", "target_control_plane_ready"),
+        ("target_control_plane_ready", "target_agent_ready"),
         ("eph_single_node_ready", "eph_cleanup_verified"),
         ("workers_ready", "completed"),
     ],
@@ -88,11 +90,11 @@ def test_eph_agent_cannot_write_target_owned_or_skipped_checkpoints(
         _validate_checkpoint_actor_transition("eph", current_phase, next_phase)
 
 
-def test_target_agent_can_advance_from_eph_checkpoint_in_order():
+def test_target_agent_can_advance_after_eph_control_plane_checkpoint():
     _validate_checkpoint_actor_transition(
         "target",
-        "bmh_ready",
         "target_control_plane_ready",
+        "target_agent_ready",
     )
 
 
@@ -100,6 +102,7 @@ def test_target_agent_can_advance_from_eph_checkpoint_in_order():
     ("current_phase", "next_phase"),
     [
         ("not_started", "target_control_plane_ready"),
+        ("bmh_ready", "target_control_plane_ready"),
         ("eph_single_node_ready", "bmh_registry_migrated"),
         ("bmh_ready", "capi_pivot_verified"),
         ("target_agent_ready", "eph_single_node_ready"),

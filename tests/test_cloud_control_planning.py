@@ -31,6 +31,10 @@ def test_plan_deployment_command_starts_with_eph_preflight():
 
 def test_plan_deployment_command_applies_the_control_stack_before_bmh_registration():
     step = plan_deployment_command(uuid4(), "eph_single_node_ready", {})["next_step"]
+    assert step["action"] == "eph.controlstack.apply"
+    assert step["next_phase"] == "control_stack_ready"
+
+    step = plan_deployment_command(uuid4(), "control_stack_ready", {})["next_step"]
     assert step["action"] == "eph.metal3.bmh.apply"
     assert step["next_phase"] == "bmh_registered"
 

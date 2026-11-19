@@ -79,7 +79,7 @@ Target Workers ---> Calico eBPF data plane / CNI / SR-IOV
 
 ## Bare-metal delivery lifecycle
 
-`eph_single_node_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
+`eph_single_node_ready -> control_stack_ready -> bmh_registered -> bmh_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
 
 - Target Control Plane masters become ready before Target Workers are provisioned.
 - Target Agent restores its durable checkpoint after CAPI Pivot.

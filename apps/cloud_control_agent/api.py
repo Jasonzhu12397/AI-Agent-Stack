@@ -122,12 +122,16 @@ def _validate_checkpoint_actor_transition(
     except ValueError as exc:
         raise ControlApiError("CHECKPOINT_PHASE_INVALID") from exc
     if role == "eph":
-        if next_index > 2 or next_index != current_index + 1:
+        # EPH owns everything up to and including target control-plane readiness.
+        # Target takeover starts only after that checkpoint exists.
+        target_control_plane_index = CHECKPOINT_PHASES.index("target_control_plane_ready")
+        if next_index > target_control_plane_index or next_index != current_index + 1:
             raise ControlApiError("EPH_CHECKPOINT_PHASE_NOT_ALLOWED")
         return
     if role != "target":
         raise ControlApiError("CHECKPOINT_AGENT_ROLE_INVALID")
-    if next_index < 3 or next_index != current_index + 1:
+    target_agent_index = CHECKPOINT_PHASES.index("target_agent_ready")
+    if next_index < target_agent_index or next_index != current_index + 1:
         raise ControlApiError("TARGET_CHECKPOINT_TRANSITION_INVALID")
 
 

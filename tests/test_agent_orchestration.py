@@ -3,6 +3,8 @@ from uuid import uuid4
 import pytest
 
 from packages.agent_contracts.orchestration import (
+    EPH_CHECKPOINT_PHASES,
+    PHASE_ORDER,
     DeploymentPhase,
     OrchestrationError,
     build_idempotency_key,
@@ -18,8 +20,8 @@ from packages.agent_contracts.orchestration import (
 def test_phase_index_matches_lifecycle_order():
     assert phase_index(DeploymentPhase.NOT_STARTED) == -1
     assert phase_index(DeploymentPhase.EPH_SINGLE_NODE_READY) == 0
-    assert phase_index(DeploymentPhase.BMH_READY) == 2
-    assert phase_index(DeploymentPhase.COMPLETED) == 10
+    assert phase_index(DeploymentPhase.BMH_READY) == 3
+    assert phase_index(DeploymentPhase.COMPLETED) == 11
 
 
 def test_terminal_phase_plans_no_next_step():
@@ -45,6 +47,7 @@ def test_full_lifecycle_dispatch_chain_is_monotonic():
 
     assert visited == [
         ("eph", "eph.preflight", "eph_single_node_ready"),
+        ("eph", "eph.controlstack.apply", "control_stack_ready"),
         ("eph", "eph.metal3.bmh.apply", "bmh_registered"),
         ("eph", "eph.metal3.bmh.wait_ready", "bmh_ready"),
         ("eph", "eph.capi.cluster.apply", "target_control_plane_ready"),
@@ -117,3 +120,13 @@ def test_plan_next_step_rejects_unknown_phase():
 def test_plan_next_step_rejects_non_mapping_spec():
     with pytest.raises(OrchestrationError):
         plan_next_step(uuid4(), DeploymentPhase.NOT_STARTED, ["bad"])
+
+
+def test_every_planned_eph_action_has_a_matching_checkpoint_phase():
+    deployment_id = uuid4()
+    for phase in PHASE_ORDER:
+        plan = plan_next_step(deployment_id, phase, {})
+        if plan is None or plan.role != "eph":
+            continue
+        checkpoint = EPH_CHECKPOINT_PHASES[plan.action]
+        assert checkpoint is plan.next_phase
