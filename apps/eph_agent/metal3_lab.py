@@ -58,6 +58,13 @@ class LabSettings:
     image_url: str | None = None
     k8s_version: str | None = None
     data_template: Path | None = None
+    network_spec: Path | None = None
+    auto_network: bool = False
+    target_kubeconfig: Path | None = None
+    target_ready_timeout: int = 1800
+    network_ready_timeout: int = 900
+    deployment_id: str | None = None
+    deployment_ready_timeout: int = 3600
     django_settings: str = "platform_api.settings"
     write_back: bool = False
     allow_host_mutation: bool = False
@@ -116,9 +123,7 @@ class SubprocessExecutor:
             except OSError as exc:
                 raise LabError(f"{stage.name} could not start: {exc}; log {log_path}") from exc
         if completed.returncode != 0 and not stage.allow_failure:
-            raise LabError(
-                f"{stage.name} exited {completed.returncode}; inspect {log_path}"
-            )
+            raise LabError(f"{stage.name} exited {completed.returncode}; inspect {log_path}")
 
 
 def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
@@ -154,9 +159,7 @@ def preflight_host(
             meminfo = Path("/proc/meminfo").read_text(encoding="utf-8")
             memory_kib = int(
                 next(
-                    line.split()[1]
-                    for line in meminfo.splitlines()
-                    if line.startswith("MemTotal:")
+                    line.split()[1] for line in meminfo.splitlines() if line.startswith("MemTotal:")
                 )
             )
         except (OSError, StopIteration, ValueError, IndexError) as exc:
@@ -253,6 +256,7 @@ class Metal3Lab:
             ("--image-url", settings.image_url),
             ("--k8s-version", settings.k8s_version),
             ("--data-template", str(settings.data_template) if settings.data_template else None),
+            ("--network-spec", str(settings.network_spec) if settings.network_spec else None),
         )
         for flag, value in optional:
             if value:
@@ -295,6 +299,69 @@ class Metal3Lab:
                 self.sleep(self.settings.retry_interval)
         raise LabError("the agent could not deploy the target cluster")
 
+    def configure_target_network(self) -> None:
+        settings = self.settings
+        kubeconfig = settings.target_kubeconfig or (
+            settings.hosts_dir / metal3_deploy.TARGET_KUBECONFIG_FILE
+        )
+        if (
+            self.deploy(
+                [
+                    "target-kubeconfig",
+                    "--dir",
+                    str(settings.hosts_dir),
+                    "--output",
+                    str(kubeconfig),
+                    "--wait-seconds",
+                    str(settings.target_ready_timeout),
+                ]
+            )
+            != 0
+        ):
+            raise LabError("the target API kubeconfig was not produced by CAPI")
+        arguments = [
+            "network",
+            "--dir",
+            str(settings.hosts_dir),
+            "--apply",
+            "--wait",
+            "--target-kubeconfig",
+            str(kubeconfig),
+            "--timeout-seconds",
+            str(settings.network_ready_timeout),
+        ]
+        if settings.network_spec:
+            arguments.extend(("--spec", str(settings.network_spec)))
+        self.log("agent applying and waiting for the target CNI/data-plane plugins")
+        if self.deploy(arguments) != 0:
+            raise LabError("target network installation or readiness failed")
+
+    def wait_for_platform_deployment(self) -> None:
+        settings = self.settings
+        if not settings.deployment_id:
+            return
+        arguments = [
+            "stages",
+            "--dir",
+            str(settings.hosts_dir),
+            "--deployment-id",
+            settings.deployment_id,
+            "--django-settings",
+            settings.django_settings,
+            "--require-ready",
+        ]
+        deadline = time.monotonic() + settings.deployment_ready_timeout
+        while True:
+            result = self.deploy(arguments)
+            if result == 0:
+                self.log("platform pivot, workers and network evidence are ready")
+                return
+            if result == 1:
+                raise LabError("platform deployment failed; inspect platform-stages.json")
+            if time.monotonic() >= deadline:
+                raise LabError("platform deployment did not become ready before the timeout")
+            self.sleep(settings.retry_interval)
+
     def verify_target(self) -> None:
         arguments = [
             "verify",
@@ -330,7 +397,11 @@ class Metal3Lab:
         for stage in self.bootstrap_stages():
             self.run_host_stage(stage)
         self.apply_target()
+        if self.settings.auto_network:
+            self.configure_target_network()
         self.verify_target()
+        if self.settings.auto_network:
+            self.wait_for_platform_deployment()
 
     def verify(self) -> None:
         preflight_host()
@@ -342,9 +413,11 @@ class Metal3Lab:
         settings = self.settings
         runtime = settings.container_runtime
         working_dir = Path(os.environ.get("WORKING_DIR", "/opt/metal3-dev-env"))
-        ansible = Path(
-            os.environ.get("ANSIBLE_VENV", str(working_dir / "venv"))
-        ) / "bin" / "ansible-playbook"
+        ansible = (
+            Path(os.environ.get("ANSIBLE_VENV", str(working_dir / "venv")))
+            / "bin"
+            / "ansible-playbook"
+        )
         stages = [
             HostStage(
                 "delete-kind-cluster",
@@ -415,6 +488,7 @@ class Metal3Lab:
     def run(self, action: str) -> None:
         actions = {
             "prepare": self.prepare,
+            "auto": self.prepare,
             "verify": self.verify,
             "clean": self.clean,
             "reference": self.reference,
@@ -448,8 +522,21 @@ def settings_from_namespace(args: Any) -> LabSettings:
         image_url=args.image_url or os.environ.get("METAL3_LAB_IMAGE_URL"),
         k8s_version=args.k8s_version or os.environ.get("METAL3_LAB_K8S_VERSION"),
         data_template=Path(args.data_template) if args.data_template else None,
+        network_spec=(Path(args.network_spec) if getattr(args, "network_spec", None) else None),
+        auto_network=getattr(args, "auto_network", False) or getattr(args, "action", "") == "auto",
+        target_kubeconfig=(
+            Path(args.target_kubeconfig) if getattr(args, "target_kubeconfig", None) else None
+        ),
+        target_ready_timeout=getattr(args, "target_ready_timeout", 1800),
+        network_ready_timeout=getattr(args, "network_ready_timeout", 900),
+        deployment_id=getattr(args, "deployment_id", None),
+        deployment_ready_timeout=getattr(args, "deployment_ready_timeout", 3600),
         django_settings=args.django_settings,
-        write_back=args.write_back or os.environ.get("METAL3_LAB_WRITE_BACK") == "1",
+        write_back=(
+            args.write_back
+            or getattr(args, "action", "") == "auto"
+            or os.environ.get("METAL3_LAB_WRITE_BACK") == "1"
+        ),
         allow_host_mutation=args.allow_host_mutation
         or os.environ.get("METAL3_LAB_ALLOW_HOST_MUTATION") == "1",
         apply_retries=args.apply_retries,
@@ -464,10 +551,22 @@ def settings_from_namespace(args: Any) -> LabSettings:
 def validate_settings(settings: LabSettings) -> None:
     if settings.control_plane_count not in fleet_planning.VALID_CONTROL_PLANE_COUNTS:
         raise LabError(
-            "control plane size must be one of "
-            f"{fleet_planning.VALID_CONTROL_PLANE_COUNTS}"
+            f"control plane size must be one of {fleet_planning.VALID_CONTROL_PLANE_COUNTS}"
         )
     if settings.container_runtime not in {"docker", "podman"}:
         raise LabError("container runtime must be docker or podman")
     if settings.retry_interval < 0:
         raise LabError("retry interval cannot be negative")
+    if settings.auto_network:
+        if not settings.project:
+            raise LabError("auto requires --project so write-back is tenant scoped")
+        if settings.network_spec is None:
+            raise LabError("auto network requires --network-spec with plugin manifests")
+        if not settings.control_plane_endpoint or not settings.image_url:
+            raise LabError("auto requires --control-plane-endpoint and --image-url")
+        if not 60 <= settings.target_ready_timeout <= 7200:
+            raise LabError("target ready timeout must be between 60 and 7200 seconds")
+        if not 60 <= settings.network_ready_timeout <= 3600:
+            raise LabError("network ready timeout must be between 60 and 3600 seconds")
+        if not 60 <= settings.deployment_ready_timeout <= 86400:
+            raise LabError("deployment ready timeout must be between 60 and 86400 seconds")

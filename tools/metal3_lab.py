@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("plan", "prepare", "verify", "clean", "reference", "reseal"),
+        choices=("plan", "prepare", "auto", "verify", "clean", "reference", "reseal"),
     )
     parser.add_argument("--cluster-name")
     parser.add_argument("--namespace", default="metal3")
@@ -45,6 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-url")
     parser.add_argument("--k8s-version")
     parser.add_argument("--data-template")
+    parser.add_argument("--network-spec")
+    parser.add_argument("--auto-network", action="store_true")
+    parser.add_argument("--target-kubeconfig")
+    parser.add_argument("--target-ready-timeout", type=int, default=1800)
+    parser.add_argument("--network-ready-timeout", type=int, default=900)
+    parser.add_argument("--deployment-id")
+    parser.add_argument("--deployment-ready-timeout", type=int, default=3600)
     parser.add_argument("--django-settings", default="platform_api.settings")
     parser.add_argument("--hosts-dir")
     parser.add_argument("--work-dir")

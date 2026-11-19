@@ -29,10 +29,13 @@ plane plugins.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -46,11 +49,12 @@ for _path in (ROOT, ROOT / "apps" / "platform-api"):
 
 from apps.eph_agent import (  # noqa: E402
     capi_renderer,
+    data_template,
     fleet_planning,
     metal3_readiness,
     metal3_skill,
 )
-from apps.target_agent import network_plugins  # noqa: E402
+from apps.target_agent import network_plugins, network_stack_adapter  # noqa: E402
 from tools.metal3_fleet_source import load_platform_fleet  # noqa: E402
 
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -58,6 +62,9 @@ PLAN_FILE = "plan.json"
 SECRETS_FILE = "secrets.yaml"
 BMH_FILE = "bmh.yaml"
 CAPI_FILE = "capi.yaml"
+NETWORK_SPEC_FILE = "network-spec.yaml"
+NETWORK_FILE = "network.json"
+TARGET_KUBECONFIG_FILE = "target.kubeconfig"
 READY_STATES = {"available", "ready", "provisioned"}
 
 
@@ -67,8 +74,13 @@ READY_STATES = {"available", "ready", "provisioned"}
 class KubectlRunner:
     """Runner for the agent skills; manifests go in through stdin."""
 
-    def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        documents: list[dict[str, Any]] | None = None,
+        kubeconfig: Path | None = None,
+    ) -> None:
         self.documents = documents
+        self.kubeconfig = kubeconfig
 
     def __call__(self, arguments: list[str], timeout: int = 60, **_: Any) -> dict[str, Any]:
         payload = None
@@ -76,7 +88,11 @@ class KubectlRunner:
             payload = yaml.safe_dump_all(self.documents, sort_keys=False)
         try:
             completed = subprocess.run(
-                ["kubectl", *arguments],
+                [
+                    "kubectl",
+                    *(["--kubeconfig", str(self.kubeconfig)] if self.kubeconfig else []),
+                    *arguments,
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -94,8 +110,8 @@ class KubectlRunner:
         }
 
 
-def _plain_runner() -> KubectlRunner:
-    return KubectlRunner(None)
+def _plain_runner(kubeconfig: Path | None = None) -> KubectlRunner:
+    return KubectlRunner(None, kubeconfig=kubeconfig)
 
 
 def local_command_runner(arguments: list[str], timeout: int = 30, **_: Any) -> dict[str, Any]:
@@ -203,15 +219,23 @@ def command_plan(args: argparse.Namespace) -> int:
 
     capi_documents: list[dict[str, Any]] = []
     if args.control_plane_endpoint and args.image_url:
-        data_template = None
+        network_spec = None
+        if args.network_spec:
+            network_spec = yaml.safe_load(args.network_spec.read_text(encoding="utf-8"))
+            (out_dir / NETWORK_SPEC_FILE).write_text(
+                yaml.safe_dump(network_spec, sort_keys=False), encoding="utf-8"
+            )
+        template_content = None
         if args.data_template:
-            data_template = yaml.safe_load(args.data_template.read_text(encoding="utf-8"))
+            template_content = yaml.safe_load(args.data_template.read_text(encoding="utf-8"))
+        else:
+            template_content = data_template.default_data_template(network_spec)
         spec = fleet_planning.cluster_spec(
             plan,
             control_plane_endpoint=args.control_plane_endpoint,
             image_url=args.image_url,
             k8s_version=args.k8s_version,
-            data_template=data_template,
+            data_template=template_content,
             worker_node_labels=_parse_pool_labels(args.worker_node_labels),
         )
         capi_documents = capi_renderer.render_capi_metal3_manifests(spec)
@@ -381,7 +405,6 @@ def command_explain(args: argparse.Namespace) -> int:
     return 0
 
 
-NETWORK_FILE = "network.json"
 STAGES = (
     ("eph_live_os", "EPH live-OS single node runs Cluster API and Metal3"),
     ("control_plane", "target cluster control plane machines are registered and booted"),
@@ -391,12 +414,41 @@ STAGES = (
 )
 
 
+def _network_manifests(spec: dict[str, Any], spec_path: Path | None) -> dict[str, dict[str, Any]]:
+    inline = spec.get("manifests", {})
+    files = spec.get("manifest_files", {})
+    if not isinstance(inline, dict) or not isinstance(files, dict):
+        raise network_plugins.NetworkStackError("NETWORK_STACK_MANIFESTS_INVALID")
+    manifests = dict(inline)
+    base = spec_path.parent if spec_path else Path.cwd()
+    for name, filename in files.items():
+        if not isinstance(name, str) or not isinstance(filename, str):
+            raise network_plugins.NetworkStackError("NETWORK_STACK_MANIFESTS_INVALID")
+        path = (base / filename).resolve()
+        documents = [
+            item
+            for item in yaml.safe_load_all(path.read_text(encoding="utf-8"))
+            if item is not None
+        ]
+        if not documents or any(not isinstance(item, dict) for item in documents):
+            raise network_plugins.NetworkStackError("NETWORK_STACK_MANIFEST_INVALID")
+        manifests[name] = (
+            documents[0]
+            if len(documents) == 1
+            else {"apiVersion": "v1", "kind": "List", "items": documents}
+        )
+    return manifests
+
+
 def command_network(args: argparse.Namespace) -> int:
+    recorded_spec = args.dir / NETWORK_SPEC_FILE
+    spec_path = args.spec or (recorded_spec if recorded_spec.is_file() else None)
     spec: dict[str, Any] = {}
-    if args.spec:
-        spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    if spec_path:
+        spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
     plugins = network_plugins.plan_network_stack(spec)
-    document = {
+    document: dict[str, Any] = {
+        "status": "planned",
         "base_cni": next(
             (plugin.name for plugin in plugins if plugin.enabled and plugin.role == "cni"),
             None,
@@ -414,12 +466,137 @@ def command_network(args: argparse.Namespace) -> int:
         "data_plane_plugins": sorted(network_plugins.data_plane_plugins()),
     }
     args.dir.mkdir(parents=True, exist_ok=True)
-    (args.dir / NETWORK_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    evidence_path = args.dir / NETWORK_FILE
+
+    def write_evidence() -> None:
+        evidence_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    if args.apply:
+        namespace = spec.get("namespace", args.namespace)
+        runner = _plain_runner(args.target_kubeconfig)
+        applied = network_stack_adapter.apply_network_stack(
+            plugins,
+            namespace,
+            runner,
+            manifests=_network_manifests(spec, spec_path),
+        )
+        document["apply"] = applied
+        document["status"] = "applied"
+        if applied["apply_pending_plugins"]:
+            document["status"] = "blocked"
+            write_evidence()
+            raise network_stack_adapter.NetworkStackAdapterError(
+                "NETWORK_STACK_MANIFESTS_MISSING:" + ",".join(applied["apply_pending_plugins"])
+            )
+        write_evidence()
+        if args.wait:
+            readiness = network_stack_adapter.wait_for_network_stack_ready(
+                plugins,
+                namespace,
+                runner,
+                timeout_seconds=args.timeout_seconds,
+            )
+            document["readiness"] = readiness
+            document["status"] = "ready"
+    write_evidence()
     for plugin in plugins:
         state = "enabled" if plugin.enabled else "disabled"
         print(f"  {plugin.role:<10} {plugin.name:<8} {state}")
-    print(f"network plan: {args.dir / NETWORK_FILE}")
+    print(f"network {document['status']}: {args.dir / NETWORK_FILE}")
     return 0
+
+
+def command_target_kubeconfig(args: argparse.Namespace) -> int:
+    plan = json.loads((args.dir / PLAN_FILE).read_text(encoding="utf-8"))
+    cluster_name = plan.get("cluster_name")
+    namespace = plan.get("namespace", "metal3")
+    deadline = time.monotonic() + args.wait_seconds
+    last_error = "target kubeconfig secret is not ready"
+    while True:
+        result = _plain_runner()(
+            [
+                "get",
+                "secret",
+                f"{cluster_name}-kubeconfig",
+                "--namespace",
+                namespace,
+                "-o",
+                "json",
+            ],
+            timeout=60,
+        )
+        try:
+            if result.get("available") is True and result.get("returncode") == 0:
+                secret = json.loads(result.get("stdout", ""))
+                encoded = secret["data"]["value"]
+                content = base64.b64decode(encoded, validate=True).decode("utf-8")
+                document = yaml.safe_load(content)
+                if not isinstance(document, dict) or not document.get("clusters"):
+                    raise ValueError("kubeconfig has no cluster")
+                destination = args.output or args.dir / TARGET_KUBECONFIG_FILE
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                print(f"target kubeconfig: {destination}")
+                return 0
+            last_error = str(result.get("stderr") or result.get("error") or last_error)
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            last_error = f"invalid target kubeconfig: {exc}"
+        if time.monotonic() >= deadline:
+            print(f"ERROR: {last_error}", file=sys.stderr)
+            return 1
+        time.sleep(args.poll_interval)
+
+
+def _ready_artifact(path: Path, key: str = "status") -> bool:
+    if not path.is_file():
+        return False
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(document, dict) and document.get(key) == "ready"
+
+
+def _platform_stage_state(
+    plan_result: dict[str, Any],
+    local_network_ready: bool,
+) -> dict[str, bool]:
+    dual = plan_result.get("dual_agent", {})
+    source = plan_result.get("capi_pivot_source_preflight", {})
+    postflight = plan_result.get("postflight", {})
+    network = plan_result.get("network_stack", {})
+    return {
+        "eph_live_os": bool(plan_result),
+        "control_plane": source.get("preflight_validated") is True,
+        "pivot": (
+            dual.get("pivot_completed") is True and dual.get("target_agent_owns_cluster") is True
+        ),
+        "workers": (
+            dual.get("worker_provisioning_completed") is True
+            or postflight.get("worker_readiness_verified") is True
+        ),
+        "network": local_network_ready or network.get("ready") is True,
+    }
+
+
+def _load_platform_deployment(deployment_id: str, settings_module: str) -> Any:
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
+    import django
+
+    django.setup()
+    from core.models import ClusterDeployment
+
+    try:
+        identifier = uuid.UUID(deployment_id)
+    except ValueError as exc:
+        raise ValueError("METAL3_DEPLOYMENT_ID_INVALID") from exc
+    try:
+        return ClusterDeployment.objects.get(pk=identifier)
+    except ClusterDeployment.DoesNotExist as exc:
+        raise ValueError("METAL3_DEPLOYMENT_NOT_FOUND") from exc
 
 
 def command_stages(args: argparse.Namespace) -> int:
@@ -430,20 +607,40 @@ def command_stages(args: argparse.Namespace) -> int:
     document = json.loads(plan_path.read_text(encoding="utf-8"))
     roles = [item.get("role") for item in document.get("assignments", [])]
     control_plane = roles.count(fleet_planning.ROLE_CONTROL_PLANE)
-    workers = roles.count(fleet_planning.ROLE_WORKER)
+    network_ready = _ready_artifact(args.dir / NETWORK_FILE)
     reached = {
         "eph_live_os": True,
         "control_plane": bool((args.dir / BMH_FILE).is_file() and control_plane),
-        # the pivot attestation is written by the target agent after the platform
-        # queues and runs the pivot; the lab only reports whether it exists
         "pivot": (args.dir / "attestation.json").is_file(),
-        "workers": workers > 0,
-        "network": (args.dir / NETWORK_FILE).is_file(),
+        "workers": _ready_artifact(args.dir / "workers.json"),
+        "network": network_ready,
     }
+    platform_status = None
+    platform_error = None
+    if args.deployment_id:
+        deployment = _load_platform_deployment(args.deployment_id, args.django_settings)
+        plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+        reached = _platform_stage_state(plan_result, network_ready)
+        platform_status = deployment.status
+        platform_error = deployment.error
+        evidence = {
+            "deployment_id": str(deployment.id),
+            "status": platform_status,
+            "phase": plan_result.get("dual_agent", {}).get("phase"),
+            "stages": reached,
+            "error": platform_error,
+        }
+        (args.dir / "platform-stages.json").write_text(
+            json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"platform deployment: {platform_status} phase={evidence['phase']}")
     for key, description in STAGES:
         mark = "done" if reached.get(key) else "pending"
         print(f"  {mark:<8} {key:<14} {description}")
-    return 0
+    if platform_status == "failed":
+        print(f"ERROR: platform deployment failed: {platform_error}", file=sys.stderr)
+        return 1
+    return 2 if args.require_ready and not all(reached.values()) else 0
 
 
 def command_count(args: argparse.Namespace) -> int:
@@ -474,6 +671,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--data-template", type=Path, help="Metal3DataTemplate content for the machines"
     )
+    plan.add_argument(
+        "--network-spec",
+        type=Path,
+        help="physical network and CNI/data-plane specification (YAML or JSON)",
+    )
     plan.add_argument("--worker-node-labels", help="JSON object of pool -> label list")
     plan.add_argument("--django-settings", default="platform_api.settings")
     plan.add_argument(
@@ -489,9 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--namespace", default="metal3")
     apply.set_defaults(func=command_apply)
 
-    verify = sub.add_parser(
-        "verify", help="judge the BMHs and the management cluster in python"
-    )
+    verify = sub.add_parser("verify", help="judge the BMHs and the management cluster in python")
     verify.add_argument("--dir", type=Path, required=True)
     verify.add_argument("--namespace", default="metal3")
     verify.add_argument("--expected", type=int)
@@ -500,9 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--container-runtime", default=os.environ.get("CONTAINER_RUNTIME", "docker")
     )
     verify.add_argument("--ironic-url", default=os.environ.get("IRONIC_URL"))
-    verify.add_argument(
-        "--bmh-only", action="store_true", help="judge the BMHs and nothing else"
-    )
+    verify.add_argument("--bmh-only", action="store_true", help="judge the BMHs and nothing else")
     verify.add_argument(
         "--no-host-checks",
         action="store_true",
@@ -522,12 +720,29 @@ def build_parser() -> argparse.ArgumentParser:
     network.add_argument(
         "--spec",
         type=Path,
-        help='network spec JSON: {"plugins": {"calico": {"enabled": true}, ...}}',
+        help="network spec YAML/JSON, including plugins and manifests/manifest_files",
     )
+    network.add_argument("--apply", action="store_true")
+    network.add_argument("--wait", action="store_true")
+    network.add_argument("--target-kubeconfig", type=Path)
+    network.add_argument("--namespace", default="kube-system")
+    network.add_argument("--timeout-seconds", type=int, default=900)
     network.set_defaults(func=command_network)
+
+    kubeconfig = sub.add_parser(
+        "target-kubeconfig", help="wait for and export the CAPI target kubeconfig secret"
+    )
+    kubeconfig.add_argument("--dir", type=Path, required=True)
+    kubeconfig.add_argument("--output", type=Path)
+    kubeconfig.add_argument("--wait-seconds", type=int, default=1800)
+    kubeconfig.add_argument("--poll-interval", type=float, default=10)
+    kubeconfig.set_defaults(func=command_target_kubeconfig)
 
     stages = sub.add_parser("stages", help="show which deployment stage the target cluster is at")
     stages.add_argument("--dir", type=Path, required=True)
+    stages.add_argument("--require-ready", action="store_true")
+    stages.add_argument("--deployment-id")
+    stages.add_argument("--django-settings", default="platform_api.settings")
     stages.set_defaults(func=command_stages)
 
     count = sub.add_parser("count", help="print how many machines the recorded plan assigns")

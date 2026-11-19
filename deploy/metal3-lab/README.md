@@ -39,8 +39,9 @@ another orchestrator.
 | Lifecycle and ordering | `apps/eph_agent/metal3_lab.py`, exposed by `tools/metal3_lab.py` |
 | Read the fleet | `tools/metal3_fleet_source.py` reads `AgentMachine` rows and resolves BMC credential references |
 | Reason about roles | `apps/eph_agent/fleet_planning.py`: explicit role/pool labels win; otherwise reported CPU, RAM, disk and identity determine the ranking |
-| Render BMHs and CAPI | `apps/eph_agent/capi_renderer.py`, including control-plane and worker-pool ownership |
+| Render BMHs and CAPI | `apps/eph_agent/capi_renderer.py`; when `--data-template` is absent, `data_template.py` derives `Metal3DataTemplate` from the declared physical control-plane interface |
 | Apply | `apps/eph_agent/metal3_skill.apply_baremetalhosts`, then `apply_capi_cluster_resources` |
+| Configure target networking | `network_stack_adapter.py` applies local plugin manifests idempotently and waits for the declared Deployment/DaemonSet readiness |
 | Verify | `observe_baremetalhosts` plus `apps/eph_agent/metal3_readiness.py` for CRDs, controllers, replica sets, host bridges, infra containers and Ironic authentication |
 | Explain and audit | `plan.json` records every reason and missing fact; `--write-back` mirrors the decision into `AgentMachine` and writes `fleet.machine.role_planned` audit events |
 
@@ -68,7 +69,47 @@ python3 tools/metal3_lab.py plan \
   --write-back
 ```
 
-Prepare the management host and deploy the target control plane:
+Run the complete host, control-plane and target-CNI pipeline with one command:
+
+```bash
+python3 tools/metal3_lab.py auto \
+  --project <platform-project-id> \
+  --cluster-name target-cluster \
+  --control-plane-count 3 \
+  --control-plane-endpoint <api-vip> \
+  --image-url <eph-live-os-image-url> \
+  --network-spec <network.yaml> \
+  --deployment-id <cluster-deployment-id> \
+  --allow-host-mutation
+```
+
+`network.yaml` is the external data source for both host networking and the
+plugin stack. No interface or manifest is guessed:
+
+```yaml
+control_plane_interface: eno1
+dns_servers: [10.0.0.53]
+namespace: kube-system
+plugins:
+  calico:
+    enabled: true
+    version: v3.29.1
+    config:
+      resource_kind: DaemonSet
+      resource_name: calico-node
+manifest_files:
+  calico: ./calico.yaml
+```
+
+The manifest path is relative to `network.yaml`; inline `manifests` is also
+supported. Every enabled plugin must declare a local manifest and the workload
+used as its readiness evidence. `auto` waits for the CAPI kubeconfig Secret,
+writes `target.kubeconfig` with mode `0600`, applies the plugins and waits for
+readiness. When `--deployment-id` is supplied, it then waits for the platform's
+trusted pivot and worker evidence before returning success. Missing input or
+pending manifests fail the run.
+
+Prepare only the management host and deploy the target control plane:
 
 ```bash
 python3 tools/metal3_lab.py prepare \
@@ -97,7 +138,7 @@ python3 tools/metal3_lab.py clean --allow-host-mutation
 
 ## Lifecycle behavior
 
-`prepare` performs these steps in order:
+`prepare` performs these steps in order (`auto` additionally performs step 6):
 
 1. Require explicit host-mutation consent and validate Ubuntu, CPU/RAM and host
    commands before changing anything.
@@ -105,7 +146,21 @@ python3 tools/metal3_lab.py clean --allow-host-mutation
 3. Read the platform fleet, reason about roles and render the plan/manifests.
 4. Execute `01`, `02` and `03` to create the management environment.
 5. Call the agent's apply pipeline directly, with bounded retries.
-6. Call the agent's BMH and management-cluster readiness checks directly.
+6. For `auto`: export the CAPI target kubeconfig, apply the declared CNI/data-plane
+   manifests and wait for their workload readiness.
+7. Call the agent's BMH and management-cluster readiness checks directly.
+
+Read platform-backed pivot/worker evidence instead of trusting artifact presence:
+
+```bash
+python3 tools/metal3_deploy.py stages \
+  --dir .metal3-lab/hosts \
+  --deployment-id <cluster-deployment-id> \
+  --require-ready
+```
+
+This writes `platform-stages.json` from `ClusterDeployment.plan_result`; local
+`network.json` counts only when its status is `ready`.
 
 Logs are written under `.metal3-lab/artifacts` (or `--work-dir`). Every host
 command is an argument vector with `shell=False`; no command string is built for
