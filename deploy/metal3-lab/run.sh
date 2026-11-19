@@ -117,6 +117,7 @@ render_bmh_manifests() {
     [[ -n "${METAL3_LAB_K8S_VERSION:-}" ]] && args+=(--k8s-version "${METAL3_LAB_K8S_VERSION}")
     [[ -n "${METAL3_LAB_DATA_TEMPLATE:-}" ]] && args+=(--data-template "${METAL3_LAB_DATA_TEMPLATE}")
     [[ -n "${METAL3_LAB_DJANGO_SETTINGS:-}" ]] && args+=(--django-settings "${METAL3_LAB_DJANGO_SETTINGS}")
+    [[ "${METAL3_LAB_WRITE_BACK:-0}" == "1" ]] && args+=(--write-back)
 
     log "Planning ${CLUSTER_NAME} from the platform fleet"
     run_logged plan-${CLUSTER_NAME} python3 "${DEPLOY_TOOL}" "${args[@]}"
@@ -218,6 +219,8 @@ Bare metal inputs:
   METAL3_LAB_DATA_TEMPLATE       Metal3DataTemplate YAML for the machines.
   METAL3_LAB_HOSTS_DIR   Where the plan and manifests land
                          (default .metal3-lab/hosts).
+  METAL3_LAB_WRITE_BACK 1 mirrors the plan into AgentMachine.bmh_name and
+                         lifecycle_state and audits every assignment.
 
 Planning:
   tools/metal3_deploy.py reads AgentMachine rows (BMC endpoint, credential

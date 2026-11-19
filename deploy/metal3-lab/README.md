@@ -49,6 +49,12 @@ and exports the inputs; `tools/metal3_deploy.py` does the rest:
 facts the plan had to do without, so a master that was chosen on weak data says
 so out loud.
 
+`METAL3_LAB_WRITE_BACK=1` (or `--write-back`) mirrors the plan into the
+platform: `AgentMachine.bmh_name` and `lifecycle_state` are set to what the
+planner decided and one `fleet.machine.role_planned` audit event is recorded per
+machine with the reason, score and control-plane size. The platform therefore
+never keeps a second, stale opinion about who is a master.
+
 How the layers stack:
 
 1. The EPH live-OS single-node cluster runs Cluster API and Metal3.
@@ -60,7 +66,14 @@ How the layers stack:
    (`apps/target_agent/network_plugins.plan_network_stack`).
 
 The lab CLI covers the first two stages; the pivot and worker stages are agent
-commands driven by the platform, not shell.
+commands driven by the platform, not shell. `metal3_deploy.py stages` reports
+where the target cluster stands, and `metal3_deploy.py network` plans the CNI
+plus the data plane plugins through `plan_network_stack`:
+
+```bash
+python3 tools/metal3_deploy.py stages  --dir .metal3-lab/hosts
+python3 tools/metal3_deploy.py network --dir .metal3-lab/hosts --spec network.json
+```
 
 ## Bare metal workflow
 

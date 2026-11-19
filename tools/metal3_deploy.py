@@ -43,6 +43,7 @@ for _path in (ROOT, ROOT / "apps" / "platform-api"):
         sys.path.insert(0, str(_path))
 
 from apps.eph_agent import capi_renderer, fleet_planning, metal3_skill  # noqa: E402
+from apps.target_agent import network_plugins  # noqa: E402
 from tools.metal3_fleet_source import load_platform_fleet  # noqa: E402
 
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -167,6 +168,19 @@ def command_plan(args: argparse.Namespace) -> int:
         sys.stderr.write(
             "WARNING: --control-plane-endpoint and --image-url must be given together "
             "to render the CAPI manifests; skipping capi.yaml\n"
+        )
+
+    if args.write_back:
+        from tools.metal3_writeback import write_back_plan
+
+        result = write_back_plan(
+            plan,
+            settings_module=args.django_settings,
+            extra_metadata={"planned_by": "tools/metal3_deploy.py"},
+        )
+        print(
+            f"written back to the platform: {result['updated']} machine record(s) updated, "
+            f"{result['audited']} audit event(s)"
         )
 
     print(
@@ -299,6 +313,71 @@ def command_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+NETWORK_FILE = "network.json"
+STAGES = (
+    ("eph_live_os", "EPH live-OS single node runs Cluster API and Metal3"),
+    ("control_plane", "target cluster control plane machines are registered and booted"),
+    ("pivot", "the target agent owns the cluster: BMH and Ironic data are pivoted"),
+    ("workers", "worker machines join the data plane"),
+    ("network", "CNI and data plane plugins are installed"),
+)
+
+
+def command_network(args: argparse.Namespace) -> int:
+    spec: dict[str, Any] = {}
+    if args.spec:
+        spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    plugins = network_plugins.plan_network_stack(spec)
+    document = {
+        "base_cni": next(
+            (plugin.name for plugin in plugins if plugin.enabled and plugin.role == "cni"),
+            None,
+        ),
+        "plugins": [
+            {
+                "name": plugin.name,
+                "role": plugin.role,
+                "enabled": plugin.enabled,
+                "version": plugin.version,
+                "config": plugin.config,
+            }
+            for plugin in plugins
+        ],
+        "data_plane_plugins": sorted(network_plugins.data_plane_plugins()),
+    }
+    args.dir.mkdir(parents=True, exist_ok=True)
+    (args.dir / NETWORK_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    for plugin in plugins:
+        state = "enabled" if plugin.enabled else "disabled"
+        print(f"  {plugin.role:<10} {plugin.name:<8} {state}")
+    print(f"network plan: {args.dir / NETWORK_FILE}")
+    return 0
+
+
+def command_stages(args: argparse.Namespace) -> int:
+    plan_path = args.dir / PLAN_FILE
+    if not plan_path.is_file():
+        sys.stderr.write(f"ERROR: no plan recorded in {args.dir}\n")
+        return 1
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    roles = [item.get("role") for item in document.get("assignments", [])]
+    control_plane = roles.count(fleet_planning.ROLE_CONTROL_PLANE)
+    workers = roles.count(fleet_planning.ROLE_WORKER)
+    reached = {
+        "eph_live_os": True,
+        "control_plane": bool((args.dir / BMH_FILE).is_file() and control_plane),
+        # the pivot attestation is written by the target agent after the platform
+        # queues and runs the pivot; the lab only reports whether it exists
+        "pivot": (args.dir / "attestation.json").is_file(),
+        "workers": workers > 0,
+        "network": (args.dir / NETWORK_FILE).is_file(),
+    }
+    for key, description in STAGES:
+        mark = "done" if reached.get(key) else "pending"
+        print(f"  {mark:<8} {key:<14} {description}")
+    return 0
+
+
 def command_count(args: argparse.Namespace) -> int:
     plan_path = args.dir / PLAN_FILE
     if not plan_path.is_file():
@@ -329,6 +408,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument("--worker-node-labels", help="JSON object of pool -> label list")
     plan.add_argument("--django-settings", default="platform_api.settings")
+    plan.add_argument(
+        "--write-back",
+        action="store_true",
+        help="mirror the plan into AgentMachine.bmh_name/lifecycle_state and audit it",
+    )
     plan.add_argument("--redfish-systems-path", default="/redfish/v1/Systems/1")
     plan.set_defaults(func=command_plan)
 
@@ -346,6 +430,22 @@ def build_parser() -> argparse.ArgumentParser:
     explain = sub.add_parser("explain", help="print the recorded reasoning")
     explain.add_argument("--dir", type=Path, required=True)
     explain.set_defaults(func=command_explain)
+
+    network = sub.add_parser(
+        "network",
+        help="plan the CNI and data plane plugins for the target cluster",
+    )
+    network.add_argument("--dir", type=Path, required=True)
+    network.add_argument(
+        "--spec",
+        type=Path,
+        help='network spec JSON: {"plugins": {"calico": {"enabled": true}, ...}}',
+    )
+    network.set_defaults(func=command_network)
+
+    stages = sub.add_parser("stages", help="show which deployment stage the target cluster is at")
+    stages.add_argument("--dir", type=Path, required=True)
+    stages.set_defaults(func=command_stages)
 
     count = sub.add_parser("count", help="print how many machines the recorded plan assigns")
     count.add_argument("--dir", type=Path, required=True)
