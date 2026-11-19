@@ -3,10 +3,15 @@ import hashlib
 import json
 import uuid
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from core.models import AuditEvent, Tenant
+
+
+# Authentication events happen before a tenant is known, so they live on a
+# tenant-less chain that is serialized by a process-wide advisory lock.
+GLOBAL_AUDIT_CHAIN_LOCK_ID = 930417
 
 
 SENSITIVE_METADATA_PARTS = (
@@ -45,6 +50,24 @@ def _safe_metadata(value):
     return result
 
 
+def _chain_queryset(tenant):
+    if tenant is None:
+        return AuditEvent.objects.filter(tenant__isnull=True)
+    return AuditEvent.objects.filter(tenant=tenant)
+
+
+def _acquire_chain_lock(tenant):
+    if tenant is not None:
+        Tenant.objects.select_for_update().get(pk=tenant.pk)
+        return
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                [GLOBAL_AUDIT_CHAIN_LOCK_ID],
+            )
+
+
 def record_audit_event(
     request,
     tenant,
@@ -59,11 +82,12 @@ def record_audit_event(
     safe_metadata = _safe_metadata(metadata or {})
     timestamp = timezone.now()
     event_id = uuid.uuid4()
-    actor_id = (
-        getattr(request.user, "pk", None)
-        if request is not None
-        else getattr(actor, "pk", None)
-    )
+    if actor is not None:
+        actor_id = getattr(actor, "pk", None)
+    elif request is not None:
+        actor_id = getattr(request.user, "pk", None)
+    else:
+        actor_id = None
     request_id = ""
     remote_addr = None
     user_agent = ""
@@ -73,16 +97,12 @@ def record_audit_event(
         user_agent = str(request.headers.get("User-Agent", ""))[:256]
 
     with transaction.atomic():
-        Tenant.objects.select_for_update().get(pk=tenant.pk)
-        previous = (
-            AuditEvent.objects.filter(tenant=tenant)
-            .order_by("-created_at", "-id")
-            .first()
-        )
+        _acquire_chain_lock(tenant)
+        previous = _chain_queryset(tenant).order_by("-created_at", "-id").first()
         previous_hash = previous.event_hash if previous else ""
         canonical = {
             "id": str(event_id),
-            "tenant_id": str(tenant.pk),
+            "tenant_id": str(tenant.pk) if tenant else None,
             "project_id": str(project.pk) if project else None,
             "actor_id": actor_id,
             "event_type": event_type,
@@ -126,11 +146,11 @@ def record_audit_event(
 def verify_audit_chain(tenant):
     previous_hash = ""
     verified_count = 0
-    events = AuditEvent.objects.filter(tenant=tenant).order_by("created_at", "id")
+    events = _chain_queryset(tenant).order_by("created_at", "id")
     for event in events.iterator(chunk_size=500):
         canonical = {
             "id": str(event.id),
-            "tenant_id": str(event.tenant_id),
+            "tenant_id": str(event.tenant_id) if event.tenant_id else None,
             "project_id": str(event.project_id) if event.project_id else None,
             "actor_id": event.actor_id,
             "event_type": event.event_type,
@@ -168,3 +188,33 @@ def verify_audit_chain(tenant):
         "invalid_event_id": None,
         "head_hash": previous_hash,
     }
+
+
+def verify_global_audit_chain():
+    """Verify the tenant-less chain that carries authentication events."""
+
+    return verify_audit_chain(None)
+
+
+def record_auth_event(
+    request,
+    event_type,
+    outcome,
+    reason,
+    actor=None,
+):
+    """Record an authentication event on the tenant-independent chain.
+
+    The tenant is unknown (or intentionally withheld) at authentication time,
+    so the event must not carry tenant, project, or user-name information.
+    """
+
+    return record_audit_event(
+        request,
+        None,
+        event_type,
+        "session",
+        outcome=outcome,
+        metadata={"reason": reason},
+        actor=actor,
+    )

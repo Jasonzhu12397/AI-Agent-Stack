@@ -8,6 +8,9 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_auth_event
+from core.models import AuditEvent
+
 
 @require_GET
 @ensure_csrf_cookie
@@ -27,10 +30,29 @@ class LoginView(APIView):
         username = request.data.get("username")
         password = request.data.get("password")
         if not isinstance(username, str) or not isinstance(password, str):
+            record_auth_event(
+                request,
+                "auth.login.denied",
+                AuditEvent.Outcome.DENIED,
+                "invalid_payload",
+            )
             return Response({"detail": "Username and password are required."}, status=400)
         user = authenticate(request=request, username=username, password=password)
         if user is None or not user.is_active:
+            record_auth_event(
+                request,
+                "auth.login.denied",
+                AuditEvent.Outcome.DENIED,
+                "invalid_credentials",
+            )
             return Response({"detail": "Invalid username or password."}, status=400)
+        record_auth_event(
+            request,
+            "auth.login.succeeded",
+            AuditEvent.Outcome.SUCCESS,
+            "authenticated",
+            actor=user,
+        )
         login(request, user)
         return Response(
             {
@@ -45,6 +67,14 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        actor = request.user
+        record_auth_event(
+            request,
+            "auth.logout.succeeded",
+            AuditEvent.Outcome.SUCCESS,
+            "signed_out",
+            actor=actor,
+        )
         logout(request)
         return Response(status=204)
 
