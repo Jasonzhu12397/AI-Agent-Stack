@@ -31,22 +31,36 @@ chain with three deliberate, recorded patches (see `vendor/PATCHES.md`):
 - `04_verify.sh` has no `virsh` steps and no BMC emulator containers; the agent
   judges the BMHs themselves (status `OK`, provisioning state `ready`/`available`).
 
-## The agent performs the cluster actions
+## Python owns the pipeline, the agent owns the decisions
 
-`02/03/04` only prepare the host and make decisions; the cluster mutations and
-readiness judgement run inside the project's own agent skill so the agent's
-lease, field manager and audit trail apply:
+Nothing in this path parses cluster data in shell. `run.sh` picks the platform
+and exports the inputs; `tools/metal3_deploy.py` does the rest:
 
-| Step | Driver |
+| Stage | Code |
 |---|---|
-| Render BMHs | `tools/bmh_from_inventory.py --from-platform` reads `AgentMachine` rows through `tools/bmh_from_platform.py` (pure YAML, no cluster access) |
-| Register BMHs | `tools/metal3_agent_bridge.py apply` -> `apps/eph_agent/metal3_skill.apply_baremetalhosts` |
-| Verify readiness | `tools/metal3_agent_bridge.py verify` -> `apps/eph_agent/metal3_skill.observe_baremetalhosts` |
+| Read the fleet | `tools/metal3_fleet_source.py` -> `AgentMachine` rows (BMC endpoint, credential reference, reported CPU/RAM/disk/NICs) |
+| Reason about roles | `apps/eph_agent/fleet_planning.py`: explicit `ai-agent-stack.io/role` labels win, otherwise machines are ranked by reported capacity and identity status |
+| Render BMHs | `apps/eph_agent/capi_renderer.render_bmh_manifests` (the EPH agent's own template) |
+| Render the target cluster | `apps.eph_agent.capi_renderer.render_capi_metal3_manifests` with the control plane count and the worker pools the plan produced |
+| Apply | `apps/eph_agent/metal3_skill.apply_baremetalhosts` then `apply_capi_cluster_resources` |
+| Verify | `apps/eph_agent/metal3_skill.observe_baremetalhosts` |
 
-`METAL3_LAB_BMH_DRIVER` selects the driver: `agent` (default) or `local` (a
-direct `kubectl apply`, explicitly logged as a bypass because it steps outside
-the agent). The bridge is invoked by the scripts, never by you, and it injects
-the Kubernetes runner exactly the way the agent process does.
+`plan.json` records every assignment with the sentence that justified it and the
+facts the plan had to do without, so a master that was chosen on weak data says
+so out loud.
+
+How the layers stack:
+
+1. The EPH live-OS single-node cluster runs Cluster API and Metal3.
+2. `plan`/`apply` deploy the target cluster's **control plane** masters.
+3. The target agent then pivots the Metal3 data (`execute_capi_pivot`) and
+   provisions the **worker** machines - the data plane
+   (`execute_worker_provisioning`).
+4. The network stack adds the CNI and the data plane plugins
+   (`apps/target_agent/network_plugins.plan_network_stack`).
+
+The lab CLI covers the first two stages; the pivot and worker stages are agent
+commands driven by the platform, not shell.
 
 ## Bare metal workflow
 

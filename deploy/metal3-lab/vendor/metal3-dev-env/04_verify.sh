@@ -199,15 +199,17 @@ check_container(){
 # shellcheck disable=SC2329
 check_bmhs_baremetal(){
   local FAILS_CHECK="${FAILS}"
+  local tool="${METAL3_LAB_DEPLOY_TOOL:-}"
+  local hosts_dir="${BARE_METAL_HOSTS_DIR:-${WORKING_DIR}/hosts}"
 
   RESULT_STR="Agent verified the Baremetalhosts"
-  if [[ -z "${METAL3_LAB_AGENT_BRIDGE:-}" ]]; then
-    echo >&2 "ERROR: METAL3_LAB_AGENT_BRIDGE is unset; it must point to tools/metal3_agent_bridge.py"
+  if [[ -z "${tool}" ]]; then
+    echo >&2 "ERROR: METAL3_LAB_DEPLOY_TOOL is unset; it must point to tools/metal3_deploy.py"
     FAILS=$((FAILS+1))
     return 1
   fi
 
-  python3 "${METAL3_LAB_AGENT_BRIDGE}" verify --expected "${NUM_NODES}"
+  python3 "${tool}" verify --dir "${hosts_dir}" --namespace metal3
   process_status $?
 
   echo ""

@@ -123,15 +123,12 @@ def test_vendored_scripts_do_not_touch_the_cluster_themselves():
     launch = (VENDOR / "03_launch_mgmt_cluster.sh").read_text(encoding="utf-8")
     verify = (VENDOR / "04_verify.sh").read_text(encoding="utf-8")
 
-    assert "METAL3_LAB_AGENT_BRIDGE" in launch
-    assert "metal3_skill.apply_baremetalhosts" in launch
-    # the direct kubectl path survives only as the explicit local driver
-    assert 'kubectl apply -f "${hosts_dir}"' in launch
-    assert 'METAL3_LAB_BMH_DRIVER=local' in launch
+    assert "METAL3_LAB_DEPLOY_TOOL" in launch
+    assert 'python3 "${tool}" apply --dir' in launch
+    # no hand-rolled apply or jq probe survives in the bare metal branch
+    assert 'kubectl apply -f "${hosts_dir}"' not in launch
 
-    assert '"${METAL3_LAB_AGENT_BRIDGE}" verify --expected "${NUM_NODES}"' in verify
-    assert "observe_baremetalhosts" in verify
-    # the bare metal branch never probes the cluster itself any more
+    assert 'python3 "${tool}" verify --dir' in verify
     marker = 'if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then'
     branch = verify.split(marker, 1)[1].split("else", 1)[0]
     assert "kubectl" not in branch

@@ -14,6 +14,9 @@ readonly LOG_DIR="${WORK_DIR}/artifacts"
 readonly VENDOR_TOOL="${REPO_ROOT}/tools/vendor_import.py"
 readonly BMH_TOOL="${REPO_ROOT}/tools/bmh_from_inventory.py"
 readonly AGENT_BRIDGE="${REPO_ROOT}/tools/metal3_agent_bridge.py"
+readonly DEPLOY_TOOL="${REPO_ROOT}/tools/metal3_deploy.py"
+readonly CLUSTER_NAME="${METAL3_LAB_CLUSTER_NAME:-target-cluster}"
+readonly CONTROL_PLANE_COUNT="${METAL3_LAB_CONTROL_PLANE_COUNT:-3}"
 # Platform selects which half of the vendored tree is exercised:
 #   baremetal (default) - the BMHs describe physical machines, no VM is created
 #   libvirt             - upstream demo mode, virtual bare metal hosts on the host
@@ -87,6 +90,7 @@ platform_env() {
     # BMH registration and readiness judgement run through the agent bridge,
     # never through kubectl calls embedded in the vendored scripts.
     export METAL3_LAB_AGENT_BRIDGE="${AGENT_BRIDGE}"
+    export METAL3_LAB_DEPLOY_TOOL="${DEPLOY_TOOL}"
     export METAL3_LAB_BMH_DRIVER="${METAL3_LAB_BMH_DRIVER:-agent}"
     if [[ "${PLATFORM}" == "baremetal" ]]; then
         export BARE_METAL_HOSTS_DIR="${HOSTS_DIR}"
@@ -94,58 +98,32 @@ platform_env() {
     log "NODES_PLATFORM=${NODES_PLATFORM}${BARE_METAL_HOSTS_DIR:+ BARE_METAL_HOSTS_DIR=${BARE_METAL_HOSTS_DIR}} BMH_DRIVER=${METAL3_LAB_BMH_DRIVER}"
 }
 
-# Build the BMH bundle the agent will apply. By default the machine list comes
-# from the platform database (AgentMachine rows: BMC endpoint, vault credential
-# reference, reported boot NIC), so no inventory file has to be maintained by
-# hand. METAL3_LAB_INVENTORY_SOURCE=file keeps the static YAML path available.
+# Build the target cluster plan and the manifests the agent will apply.
+#
+# No shell parsing happens here: tools/metal3_deploy.py reads the platform
+# fleet, reasons about which machines are control plane and which are data
+# plane workers, renders the BMHs through the EPH agent's own template and
+# records the reasoning in plan.json. This function only decides where the
+# output goes and how many machines the plan owns.
 render_bmh_manifests() {
     [[ "${PLATFORM}" == "baremetal" ]] || return 0
     command -v python3 >/dev/null || die "python3 is required to render BMH manifests"
 
-    local source="${METAL3_LAB_INVENTORY_SOURCE:-platform}"
-    local -a args=()
-    case "${source}" in
-        platform)
-            args=(--from-platform)
-            [[ -n "${METAL3_LAB_PROJECT_ID:-}" ]] && args+=(--project "${METAL3_LAB_PROJECT_ID}")
-            [[ -n "${METAL3_LAB_DJANGO_SETTINGS:-}" ]] && args+=(--django-settings "${METAL3_LAB_DJANGO_SETTINGS}")
-            ;;
-        file)
-            [[ -r "${INVENTORY}" ]] ||
-                die "Inventory not found: ${INVENTORY}. Copy deploy/metal3-lab/hosts/baremetal-nodes.example.yaml or use METAL3_LAB_INVENTORY_SOURCE=platform."
-            args=(--inventory "${INVENTORY}")
-            ;;
-        *)
-            die "METAL3_LAB_INVENTORY_SOURCE must be platform or file; got ${source}"
-            ;;
-    esac
+    local -a args=(plan --cluster-name "${CLUSTER_NAME}" --namespace metal3 --out-dir "${HOSTS_DIR}")
+    args+=(--control-plane-count "${CONTROL_PLANE_COUNT}")
+    [[ -n "${METAL3_LAB_PROJECT_ID:-}" ]] && args+=(--project "${METAL3_LAB_PROJECT_ID}")
+    [[ -n "${METAL3_LAB_CONTROL_PLANE_ENDPOINT:-}" ]] && args+=(--control-plane-endpoint "${METAL3_LAB_CONTROL_PLANE_ENDPOINT}")
+    [[ -n "${METAL3_LAB_IMAGE_URL:-}" ]] && args+=(--image-url "${METAL3_LAB_IMAGE_URL}")
+    [[ -n "${METAL3_LAB_K8S_VERSION:-}" ]] && args+=(--k8s-version "${METAL3_LAB_K8S_VERSION}")
+    [[ -n "${METAL3_LAB_DATA_TEMPLATE:-}" ]] && args+=(--data-template "${METAL3_LAB_DATA_TEMPLATE}")
+    [[ -n "${METAL3_LAB_DJANGO_SETTINGS:-}" ]] && args+=(--django-settings "${METAL3_LAB_DJANGO_SETTINGS}")
 
-    log "Rendering BMH manifests from ${source}"
-    run_logged render-bmh python3 "${BMH_TOOL}" "${args[@]}" --out-dir "${HOSTS_DIR}"
-    NUM_NODES="$(python3 "${BMH_TOOL}" "${args[@]}" --count)"
+    log "Planning ${CLUSTER_NAME} from the platform fleet"
+    run_logged plan-${CLUSTER_NAME} python3 "${DEPLOY_TOOL}" "${args[@]}"
+    NUM_NODES="$(python3 "${DEPLOY_TOOL}" count --dir "${HOSTS_DIR}")"
     export NUM_NODES
-    (( NUM_NODES >= 1 )) || die "The inventory source produced no machines"
-    log "Rendered ${NUM_NODES} BareMetalHost manifest(s) from ${source}"
-}
-
-run_logged() {
-    local name="$1"
-    shift
-    local log_file="${LOG_DIR}/${name}-$(date -u +%Y%m%dT%H%M%SZ).log"
-    log "Running: $* (log: ${log_file})"
-    set +e
-    "$@" 2>&1 | tee "${log_file}"
-    local status=${PIPESTATUS[0]}
-    set -e
-    if (( status != 0 )); then
-        die "${name} failed with exit code ${status}; inspect ${log_file}"
-    fi
-}
-
-in_vendor() {
-    local name="$1"
-    shift
-    run_logged "${name}" bash -lc "cd '${VENDOR_DIR}' && $*"
+    (( NUM_NODES >= 1 )) || die "The plan assigned no machine; check the platform inventory report"
+    log "Planned ${NUM_NODES} machine(s) for ${CLUSTER_NAME}"
 }
 
 prepare() {
@@ -232,13 +210,21 @@ Platforms:
       hosts on this host, with vbmc/sushy-tools emulating their BMCs.
 
 Bare metal inputs:
-  METAL3_LAB_INVENTORY_SOURCE  platform (default) reads AgentMachine rows from
-                        the platform database; file reads a static YAML list.
-  METAL3_LAB_PROJECT_ID  Platform project to take machines from.
-  METAL3_LAB_INVENTORY  YAML inventory path, used only when the source is file
-                        (default deploy/metal3-lab/hosts/baremetal-nodes.yaml).
-  METAL3_LAB_HOSTS_DIR  Where generated BMH manifests land
-                        (default .metal3-lab/hosts).
+  METAL3_LAB_PROJECT_ID  Platform project to read the fleet from.
+  METAL3_LAB_CLUSTER_NAME         Target cluster name (default target-cluster).
+  METAL3_LAB_CONTROL_PLANE_COUNT  Control plane size: 1, 3, 5 or 7 (default 3).
+  METAL3_LAB_CONTROL_PLANE_ENDPOINT  VIP or DNS name of the target API server.
+  METAL3_LAB_IMAGE_URL   Live-OS image the machines boot into.
+  METAL3_LAB_DATA_TEMPLATE       Metal3DataTemplate YAML for the machines.
+  METAL3_LAB_HOSTS_DIR   Where the plan and manifests land
+                         (default .metal3-lab/hosts).
+
+Planning:
+  tools/metal3_deploy.py reads AgentMachine rows (BMC endpoint, credential
+  reference, reported hardware) and reasons about roles: explicit
+  ai-agent-stack.io/role labels win, otherwise machines are ranked by reported
+  CPU, RAM, disk and identity status. Every decision is recorded with its
+  reason in plan.json; machines with unclear facts are flagged, never guessed.
 
 Vendored source:
   The upstream Metal3 dev-env tree is repository code under
