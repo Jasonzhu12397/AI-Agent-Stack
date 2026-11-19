@@ -1,0 +1,50 @@
+#cloud-config
+# Placeholders only. The Cloud Control Plane must render a unique document per
+# node and must never commit real certificates or private keys.
+hostname: eph-bootstrap-01
+preserve_hostname: false
+
+write_files:
+  - path: /etc/ai-agent-studio/eph-bootstrap/bootstrap.json
+    owner: root:root
+    permissions: "0600"
+    content: |
+      {
+        "control_url": "https://control.example.test",
+        "agent_id": "0b8a5dc2-6f6f-4b4e-9a4c-3f6a1b7c8d90",
+        "installation_id": "1f0c2a44-8b1d-4c3e-8f5a-2b6c9d0e1f22",
+        "instance_id": "eph-bootstrap-01",
+        "agent_image": "registry.example.test/eph-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/ca.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      -----BEGIN CERTIFICATE-----
+      REPLACE_WITH_CONTROL_PLANE_CA
+      -----END CERTIFICATE-----
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/agent-ca.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      -----BEGIN CERTIFICATE-----
+      REPLACE_WITH_AGENT_ISSUER_CA
+      -----END CERTIFICATE-----
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.crt
+    owner: root:root
+    permissions: "0600"
+    content: |
+      -----BEGIN CERTIFICATE-----
+      REPLACE_WITH_ISSUED_AGENT_CERTIFICATE
+      -----END CERTIFICATE-----
+  - path: /etc/ai-agent-studio/eph-bootstrap/tls/tls.key
+    owner: root:root
+    permissions: "0600"
+    content: |
+      -----BEGIN EC PRIVATE KEY-----
+      REPLACE_WITH_ISSUED_AGENT_PRIVATE_KEY
+      -----END EC PRIVATE KEY-----
+
+runcmd:
+  - mkdir -p /mnt/eph-bootstrap
+  - python3 /usr/local/sbin/eph-bootstrap
