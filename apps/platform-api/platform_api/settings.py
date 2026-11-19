@@ -102,6 +102,39 @@ DATABASES = {
     )
 }
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+
+def _flag(name, default="false"):
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Redis backs the cache and the coordination primitives only. Business state
+always stays in PostgreSQL, so a cache outage degrades instead of losing data.
+CACHE_ENABLED = _flag("CACHE_ENABLED")
+CACHE_REQUIRED = _flag("CACHE_REQUIRED")
+CACHE_KEY_PREFIX = os.getenv("CACHE_KEY_PREFIX", "aiagentstack")
+CACHE_DEFAULT_TIMEOUT = int(os.getenv("CACHE_DEFAULT_TIMEOUT", "300"))
+CACHE_LOCK_TIMEOUT = int(os.getenv("CACHE_LOCK_TIMEOUT", "60"))
+CACHE_HEALTH_TIMEOUT = int(os.getenv("CACHE_HEALTH_TIMEOUT", "10"))
+if CACHE_ENABLED:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "KEY_PREFIX": CACHE_KEY_PREFIX,
+            "TIMEOUT": CACHE_DEFAULT_TIMEOUT,
+            "OPTIONS": {"socket_timeout": 5, "socket_connect_timeout": 5},
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "aiagentstack-local",
+            "KEY_PREFIX": CACHE_KEY_PREFIX,
+        }
+    }
+
 MODEL_PROVIDER_ALLOWED_HOSTS = [
     value.strip().lower()
     for value in os.getenv("MODEL_PROVIDER_ALLOWED_HOSTS", "").split(",")
