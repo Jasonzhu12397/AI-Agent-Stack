@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.models import (
     Project,
     ProjectMembership,
@@ -107,6 +108,18 @@ class WorkflowListCreateView(APIView):
             project=project,
             created_by=request.user,
         )
+        record_audit_event(
+            request,
+            tenant,
+            "workflow.created",
+            "workflow_definition",
+            workflow.id,
+            metadata={
+                "slug": workflow.slug,
+                "name": workflow.name,
+                "project_id": str(project.id),
+            },
+        )
         return Response(
             WorkflowDraftSerializer(workflow).data,
             status=status.HTTP_201_CREATED,
@@ -134,9 +147,20 @@ class WorkflowDetailView(APIView):
             )
         serializer = WorkflowDraftSerializer(workflow, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        previous_version = workflow.current_version
         serializer.save()
+        record_audit_event(
+            request,
+            workflow.tenant,
+            "workflow.updated",
+            "workflow_definition",
+            workflow.id,
+            metadata={
+                "fields": sorted(serializer.validated_data.keys()),
+                "previous_current_version": previous_version,
+            },
+        )
         return Response(serializer.data)
-
 
 
 class WorkflowValidateView(APIView):
@@ -230,6 +254,18 @@ class WorkflowPublishView(APIView):
             )
             workflow.current_version = version_number
             workflow.save(update_fields=["current_version", "updated_at"])
+            record_audit_event(
+                request,
+                workflow.tenant,
+                "workflow.published",
+                "workflow_version",
+                version.id,
+                metadata={
+                    "workflow_id": str(workflow.id),
+                    "version": version_number,
+                    "step_count": len(graph.get("nodes", {})),
+                },
+            )
         return Response(
             WorkflowVersionSerializer(version).data,
             status=status.HTTP_201_CREATED,
@@ -311,6 +347,19 @@ class WorkflowRunListCreateView(APIView):
                     "state": {"input": input_data},
                 },
             )
+        record_audit_event(
+            request,
+            workflow.tenant,
+            "workflow.run.created",
+            "workflow_run",
+            run.id,
+            metadata={
+                "workflow_id": str(workflow.id),
+                "task_id": str(task.id),
+                "workflow_version_id": str(version.id),
+                "deduplicated": not created,
+            },
+        )
         response_status = status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
         return Response(
             WorkflowRunSerializer(run).data,
