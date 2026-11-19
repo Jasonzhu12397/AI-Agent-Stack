@@ -30,7 +30,11 @@ def test_eph_agent_capabilities_are_derived_from_shared_catalog():
 
 
 def test_target_agent_capabilities_are_derived_from_shared_catalog():
-    assert target_main.CAPABILITIES == sorted(orchestration.TARGET_ACTIONS)
+    # The Target Agent reports its actions in a curated execution order, so the
+    # drift guard compares membership (no duplicates, nothing missing, nothing
+    # extra) rather than ordering.
+    assert len(target_main.CAPABILITIES) == len(set(target_main.CAPABILITIES))
+    assert set(target_main.CAPABILITIES) == set(orchestration.TARGET_ACTIONS)
 
 
 def test_eph_allowlist_contains_bootstrap_render_action():
