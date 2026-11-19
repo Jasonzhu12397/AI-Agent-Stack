@@ -109,7 +109,7 @@ def _flag(name, default="false"):
 
 
 # Redis backs the cache and the coordination primitives only. Business state
-always stays in PostgreSQL, so a cache outage degrades instead of losing data.
+# always stays in PostgreSQL, so a cache outage degrades instead of losing data.
 CACHE_ENABLED = _flag("CACHE_ENABLED")
 CACHE_REQUIRED = _flag("CACHE_REQUIRED")
 CACHE_KEY_PREFIX = os.getenv("CACHE_KEY_PREFIX", "aiagentstack")
