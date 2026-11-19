@@ -1,39 +1,158 @@
+import tarfile
 from pathlib import Path
+
+import pytest
+
+import tools.vendor_import as vendor_import
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "deploy" / "metal3-lab" / "run.sh"
 README = ROOT / "deploy" / "metal3-lab" / "README.md"
+VENDOR_README = ROOT / "deploy" / "metal3-lab" / "vendor" / "README.md"
+VENDOR_DIR = ROOT / "deploy" / "metal3-lab" / "vendor" / "metal3-dev-env"
 
 
-def test_metal3_runner_pins_immutable_upstream_revision():
+@pytest.fixture()
+def fake_archive(tmp_path):
+    """Build a minimal archive shaped like the GitHub source tarball."""
+
+    source = tmp_path / "src" / "metal3-dev-env-abc123"
+    (source / "lib").mkdir(parents=True)
+    (source / "vm-setup").mkdir(parents=True)
+    (source / ".github").mkdir(parents=True)
+    for name in (
+        "01_prepare_host.sh",
+        "02_configure_host.sh",
+        "03_launch_mgmt_cluster.sh",
+        "04_verify.sh",
+        "Makefile",
+        "ansible.cfg",
+    ):
+        (source / name).write_text(f"# {name}\n", encoding="utf-8")
+    (source / "lib" / "common.sh").write_text("# common\n", encoding="utf-8")
+    (source / "vm-setup" / "inventory.ini").write_text("[all]\n", encoding="utf-8")
+    (source / "vm-setup" / "setup-playbook.yml").write_text("- hosts: all\n", encoding="utf-8")
+    (source / ".github" / "workflow.yml").write_text("name: ci\n", encoding="utf-8")
+
+    archive = tmp_path / "upstream.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(source, arcname=source.name)
+    return archive
+
+
+def test_runner_has_no_git_dependency_and_runs_vendored_source():
     source = RUNNER.read_text(encoding="utf-8")
-    assert 'readonly UPSTREAM_REPO="https://github.com/metal3-io/metal3-dev-env.git"' in source
-    assert 'readonly UPSTREAM_COMMIT="7076f07624cdfba990f83bea24f749b37e3baad7"' in source
-    assert 'git -C "${UPSTREAM_DIR}" checkout --detach "${UPSTREAM_COMMIT}"' in source
-    assert 'git rev-parse HEAD' in source
+    assert "git clone" not in source
+    assert "git -C" not in source
+    assert "checkout --detach" not in source
+    assert "rev-parse" not in source
+    assert "command -v git" not in source
+    assert 'readonly PINNED_COMMIT="7076f07624cdfba990f83bea24f749b37e3baad7"' in source
+    assert "vendor/metal3-dev-env" in source
+    assert "tools/vendor_import.py" in source
+    assert 'in_vendor prepare-host "./01_prepare_host.sh"' in source
+    assert 'in_vendor configure-host "./02_configure_host.sh"' in source
+    assert 'in_vendor launch-management-cluster "./03_launch_mgmt_cluster.sh"' in source
+    assert 'in_vendor verify-management-cluster "./04_verify.sh"' in source
 
 
 def test_host_mutating_actions_require_explicit_consent():
     source = RUNNER.read_text(encoding="utf-8")
-    assert 'require_host_mutation_consent' in source
-    assert 'METAL3_LAB_ALLOW_HOST_MUTATION:-' in source
-    assert 'prepare)' in source
-    assert 'lifecycle)' in source
-    assert 'clean)' in source
+    assert "require_host_mutation_consent" in source
+    assert "METAL3_LAB_ALLOW_HOST_MUTATION:-" in source
+    assert "prepare)" in source
+    assert "lifecycle)" in source
+    assert "clean)" in source
 
 
-def test_runner_exposes_upstream_full_lifecycle_and_cleanup():
+def test_runner_exposes_full_lifecycle_cleanup_and_restore():
     source = RUNNER.read_text(encoding="utf-8")
-    assert 'make test' in source
-    assert 'make clean' in source
-    assert '01_prepare_host.sh' in source
-    assert '02_configure_host.sh' in source
-    assert '03_launch_mgmt_cluster.sh' in source
-    assert '04_verify.sh' in source
+    assert "make test" in source
+    assert "make clean" in source
+    assert "restore)" in source
+    assert "verify_vendor" in source
 
 
-def test_docs_distinguish_upstream_provider_e2e_from_agent_e2e():
+def test_vendor_check_rejects_a_missing_tree(tmp_path):
+    with pytest.raises(vendor_import.ImportError_):
+        vendor_import.check_tree(tmp_path / "absent")
+
+
+def test_vendor_import_extracts_the_pinned_tree_and_writes_provenance(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+
+    metadata = vendor_import.import_tree(str(fake_archive), target)
+
+    assert metadata["upstream_commit"] == vendor_import.PINNED_COMMIT
+    assert metadata["file_count"] == 9
+    assert (target / "01_prepare_host.sh").exists()
+    assert (target / "lib" / "common.sh").exists()
+    assert not (target / ".github").exists()
+    assert vendor_import.check_tree(target)["problems"] == []
+
+
+def test_vendor_check_reports_local_edits_without_failing(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target)
+
+    (target / "lib" / "common.sh").write_text("# locally patched\n", encoding="utf-8")
+
+    assert vendor_import.check_tree(target)["problems"] == ["modified lib/common.sh"]
+
+
+def test_vendor_check_rejects_a_mismatched_commit(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target, commit="deadbeef" * 5)
+
+    with pytest.raises(vendor_import.ImportError_, match="does not match"):
+        vendor_import.check_tree(target)
+
+
+def test_vendor_check_rejects_an_incomplete_tree(fake_archive, tmp_path):
+    target = tmp_path / "vendor" / "metal3-dev-env"
+    vendor_import.import_tree(str(fake_archive), target)
+
+    (target / "04_verify.sh").unlink()
+
+    with pytest.raises(vendor_import.ImportError_, match="incomplete"):
+        vendor_import.check_tree(target)
+
+
+def test_vendor_import_rejects_path_traversal(tmp_path):
+    malicious = tmp_path / "malicious.tar.gz"
+    payload = tmp_path / "evil.txt"
+    payload.write_text("x", encoding="utf-8")
+    with tarfile.open(malicious, "w:gz") as handle:
+        handle.add(payload, arcname="../evil.txt")
+
+    with pytest.raises(vendor_import.ImportError_, match="escapes"):
+        vendor_import.import_tree(str(malicious), tmp_path / "vendor" / "x")
+
+
+def test_vendor_import_reports_a_missing_archive(tmp_path):
+    with pytest.raises(vendor_import.ImportError_, match="archive not found"):
+        vendor_import.import_tree(str(tmp_path / "missing.tar.gz"), tmp_path / "vendor" / "x")
+
+
+def test_docs_distinguish_provider_e2e_from_agent_e2e():
     docs = README.read_text(encoding="utf-8")
     assert "not an AI Agent Stack three-agent end-to-end test" in docs
     assert "LIBVIRT_IRONIC" in docs
     assert "Cloud Control Agent" in docs
+
+
+def test_vendor_docs_explain_git_free_ownership():
+    docs = VENDOR_README.read_text(encoding="utf-8")
+    assert "repository code" in docs
+    assert "no git command" in docs
+    assert "VENDOR.json" in docs
+    assert "MANIFEST.sha256" in docs
+
+
+def test_vendored_tree_matches_its_manifest_when_present():
+    if not VENDOR_DIR.exists():
+        pytest.skip("vendored Metal3 tree is not materialised in this checkout")
+    report = vendor_import.check_tree(VENDOR_DIR)
+    assert report["metadata"]["upstream_commit"] == vendor_import.PINNED_COMMIT
+    assert report["metadata"]["file_count"] > 200
+    assert [item for item in report["problems"] if item.startswith("missing")] == []
