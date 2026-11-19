@@ -5,8 +5,11 @@ from apps.cloud_control_agent.workspace import (
     normalize_plugin,
     normalize_project,
     normalize_skill,
+    normalize_task,
     normalize_work,
     normalize_work_result,
+    normalize_workflow_definition,
+    normalize_workflow_run,
     normalize_workspace_path,
 )
 
@@ -131,3 +134,74 @@ def test_workspace_path_splits_project_collections():
 
     with pytest.raises(WorkspaceError):
         normalize_workspace_path("/api/v1/control/projects/abc/secrets")
+
+
+def test_workflow_definition_accepts_a_dag():
+    definition = normalize_workflow_definition({
+        "description": "Prepare then inspect",
+        "steps": [
+            {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
+            {
+                "id": "inspect",
+                "name": "Inspect hosts",
+                "depends_on": ["prepare"],
+                "payload": {"selector": "all"},
+            },
+        ],
+    })
+    assert [step["id"] for step in definition["steps"]] == ["prepare", "inspect"]
+    assert definition["steps"][1]["depends_on"] == ["prepare"]
+
+
+def test_workflow_definition_rejects_cycles_and_unknown_dependencies():
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition({
+            "steps": [
+                {"id": "a", "name": "A", "depends_on": ["b"]},
+                {"id": "b", "name": "B", "depends_on": ["a"]},
+            ],
+        })
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition({
+            "steps": [{"id": "a", "name": "A", "depends_on": ["missing"]}],
+        })
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition({
+            "steps": [{"id": "a", "name": "A", "depends_on": ["a"]}],
+        })
+
+
+def test_workflow_definition_rejects_duplicate_ids_and_bad_roles():
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition({
+            "steps": [
+                {"id": "a", "name": "A"},
+                {"id": "a", "name": "Again"},
+            ],
+        })
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition({
+            "steps": [{"id": "a", "name": "A", "required_role": "cloud"}],
+        })
+
+
+def test_task_normalization_and_workflow_run_input():
+    task = normalize_task(
+        name="Check NTP",
+        payload={"hosts": ["10.0.0.1"]},
+        required_role="target",
+        priority=3,
+        idempotency_key="task-ntp-001",
+    )
+    assert task["required_role"] == "target"
+    assert task["priority"] == 3
+
+    run = normalize_workflow_run(input={"cluster": "edge-01"}, idempotency_key="run-001")
+    assert run["input"] == {"cluster": "edge-01"}
+
+
+def test_workspace_path_accepts_tasks_and_workflows():
+    _, collection = normalize_workspace_path("/api/v1/control/projects/abc/tasks")
+    assert collection == "tasks"
+    _, collection = normalize_workspace_path("/api/v1/control/projects/abc/workflows")
+    assert collection == "workflows"

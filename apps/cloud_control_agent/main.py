@@ -210,6 +210,93 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
         CREATE INDEX IF NOT EXISTS agent_control_plugins_project_idx
         ON agent_control_plugins (project_id, enabled)
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_workflows (
+            workflow_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'published' CHECK (
+                status IN ('published', 'archived')
+            ),
+            latest_version INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (project_id, name)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_workflow_versions (
+            workflow_id UUID NOT NULL REFERENCES agent_control_workflows(workflow_id)
+                ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            definition JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (workflow_id, version)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_workflow_runs (
+            run_id UUID PRIMARY KEY,
+            workflow_id UUID NOT NULL REFERENCES agent_control_workflows(workflow_id)
+                ON DELETE CASCADE,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running' CHECK (
+                status IN ('running', 'succeeded', 'failed', 'cancelled')
+            ),
+            input JSONB NOT NULL DEFAULT '{}'::jsonb,
+            output JSONB,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            finished_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_tasks (
+            task_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            workflow_run_id UUID REFERENCES agent_control_workflow_runs(run_id)
+                ON DELETE CASCADE,
+            step_id TEXT,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued' CHECK (
+                status IN ('blocked', 'queued', 'leased', 'succeeded', 'failed', 'cancelled')
+            ),
+            priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 9),
+            required_role TEXT CHECK (
+                required_role IS NULL OR required_role IN ('eph', 'target')
+            ),
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            depends_on JSONB NOT NULL DEFAULT '[]'::jsonb,
+            result JSONB,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            assigned_agent_id UUID REFERENCES agent_control_agents(agent_id),
+            lease_token_hash TEXT,
+            lease_expires_at TIMESTAMPTZ,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (workflow_run_id, step_id)
+        )
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_tasks_claim_idx
+        ON agent_control_tasks (status, priority DESC, created_at)
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_tasks_run_idx
+        ON agent_control_tasks (workflow_run_id, status)
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_workflow_runs_project_idx
+        ON agent_control_workflow_runs (project_id, status)
+    """)
 
 
 def check_store(database_url: str) -> None:

@@ -19,7 +19,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | Usage governance | Per-tenant token budget reservation, settlement and overspend protection | Pending validation under real concurrency |
 | Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
 | Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
-| Control workspace | Installation-scoped projects with versioned skills, referenced plugins and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
+| Control workspace | Installation-scoped projects with versioned skills, referenced plugins, tasks, DAG workflows and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
 
 External subscription billing and plan management are **not implemented**. The platform currently provides the multi-tenant and usage-governance foundations above; it does not claim to be a production-complete commercial SaaS.
 

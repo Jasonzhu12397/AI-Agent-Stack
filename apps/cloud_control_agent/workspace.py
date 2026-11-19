@@ -19,6 +19,10 @@ MAX_MANIFEST_BYTES = 64 * 1024
 MAX_WORK_PAYLOAD_BYTES = 256 * 1024
 MAX_ACTIONS = 32
 MAX_IDEMPOTENCY_KEY_LENGTH = 128
+MAX_WORKFLOW_STEPS = 32
+MAX_STEP_DEPENDENCIES = 8
+MAX_STEP_NAME_LENGTH = 128
+MAX_WORKFLOW_DESCRIPTION_LENGTH = 512
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")
@@ -27,7 +31,10 @@ CONFIG_REF_PATTERN = re.compile(r"^(?:secret|vault|config)://[A-Za-z0-9._/-]{1,1
 WORK_KINDS = frozenset({"deployment", "maintenance", "inspection", "diagnostic"})
 PLUGIN_KINDS = frozenset({"connector", "tool", "runtime"})
 PROJECT_STATUSES = frozenset({"active", "archived"})
-WORK_STATUSES = frozenset({"queued", "leased", "succeeded", "failed", "cancelled"})
+TASK_STATUSES = frozenset(
+    {"blocked", "queued", "leased", "succeeded", "failed", "cancelled"}
+)
+WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
 AGENT_ROLES = frozenset({"eph", "target"})
 
 
@@ -220,8 +227,133 @@ def normalize_work_result(*, status: Any, result: Any) -> dict[str, Any]:
     }
 
 
+def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
+    """Validate a project workflow as an acyclic dependency graph of tasks."""
+
+    document = _bounded_json(definition, "definition", maximum=MAX_MANIFEST_BYTES)
+    steps = document.get("steps")
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_WORKFLOW_STEPS:
+        raise WorkspaceError(f"definition.steps must contain 1 to {MAX_WORKFLOW_STEPS} steps.")
+    normalized_steps: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(steps):
+        if not isinstance(item, dict):
+            raise WorkspaceError(f"definition.steps[{index}] must be an object.")
+        step_id = normalize_name(item.get("id"), f"definition.steps[{index}].id")
+        if step_id in seen:
+            raise WorkspaceError(f"duplicate workflow step id: {step_id}")
+        seen.add(step_id)
+        name = _bounded_text(
+            item.get("name"),
+            f"definition.steps[{index}].name",
+            maximum=MAX_STEP_NAME_LENGTH,
+        )
+        role = item.get("required_role")
+        if role not in (None, "", *AGENT_ROLES):
+            raise WorkspaceError(f"definition.steps[{index}].required_role is invalid.")
+        dependencies = item.get("depends_on", [])
+        if (
+            not isinstance(dependencies, list)
+            or len(dependencies) > MAX_STEP_DEPENDENCIES
+            or any(not isinstance(dep, str) or not dep for dep in dependencies)
+            or len(dependencies) != len(set(dependencies))
+        ):
+            raise WorkspaceError(
+                f"definition.steps[{index}].depends_on must be unique step ids."
+            )
+        if step_id in dependencies:
+            raise WorkspaceError(f"workflow step {step_id} cannot depend on itself.")
+        normalized_steps.append({
+            "id": step_id,
+            "name": name,
+            "required_role": role or None,
+            "payload": _bounded_json(
+                item.get("payload"),
+                f"definition.steps[{index}].payload",
+                maximum=MAX_WORK_PAYLOAD_BYTES,
+            ),
+            "depends_on": list(dependencies),
+        })
+    step_ids = {step["id"] for step in normalized_steps}
+    for step in normalized_steps:
+        missing = [dep for dep in step["depends_on"] if dep not in step_ids]
+        if missing:
+            raise WorkspaceError(
+                f"workflow step {step['id']} references unknown step {missing[0]}."
+            )
+    _assert_acyclic(normalized_steps)
+    description = _bounded_text(
+        document.get("description", ""),
+        "definition.description",
+        maximum=MAX_WORKFLOW_DESCRIPTION_LENGTH,
+        required=False,
+    )
+    return {"description": description, "steps": normalized_steps}
+
+
+def _assert_acyclic(steps: list[dict[str, Any]]) -> None:
+    by_id = {step["id"]: step for step in steps}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(step_id: str) -> None:
+        if step_id in visited:
+            return
+        if step_id in visiting:
+            raise WorkspaceError(f"workflow contains a cycle at step {step_id}.")
+        visiting.add(step_id)
+        for dependency in by_id[step_id]["depends_on"]:
+            visit(dependency)
+        visiting.discard(step_id)
+        visited.add(step_id)
+
+    for step in steps:
+        visit(step["id"])
+
+
+def normalize_task(
+    *,
+    name: Any,
+    payload: Any,
+    required_role: Any = None,
+    priority: Any = 0,
+    idempotency_key: Any,
+) -> dict[str, Any]:
+    if required_role not in (None, "", *AGENT_ROLES):
+        raise WorkspaceError("required_role must be eph, target or empty.")
+    if (
+        not isinstance(priority, int)
+        or isinstance(priority, bool)
+        or priority < 0
+        or priority > 9
+    ):
+        raise WorkspaceError("priority must be an integer from 0 to 9.")
+    return {
+        "name": _bounded_text(name, "name", maximum=MAX_STEP_NAME_LENGTH),
+        "payload": _bounded_json(payload, "payload", maximum=MAX_WORK_PAYLOAD_BYTES),
+        "required_role": required_role or None,
+        "priority": priority,
+        "idempotency_key": _bounded_text(
+            idempotency_key,
+            "idempotency_key",
+            maximum=MAX_IDEMPOTENCY_KEY_LENGTH,
+        ),
+    }
+
+
+def normalize_workflow_run(*, input: Any, idempotency_key: Any) -> dict[str, Any]:
+    return {
+        "input": _bounded_json(input, "input", maximum=MAX_WORK_PAYLOAD_BYTES),
+        "idempotency_key": _bounded_text(
+            idempotency_key,
+            "idempotency_key",
+            maximum=MAX_IDEMPOTENCY_KEY_LENGTH,
+        ),
+    }
+
+
 def normalize_workspace_path(raw: str) -> tuple[str, str | None]:
-    """Split ``/api/v1/control/projects/<id>[/skills|plugins|work]``."""
+    """Split ``/api/v1/control/projects/<id>[/skills|plugins|work|tasks|workflows]``."""
 
     prefix = "/api/v1/control/projects/"
     if not raw.startswith(prefix):
@@ -234,6 +366,6 @@ def normalize_workspace_path(raw: str) -> tuple[str, str | None]:
         raise WorkspaceError("project path is invalid")
     project_id = parts[0]
     collection = parts[1] if len(parts) == 2 else None
-    if collection not in (None, "skills", "plugins", "work"):
+    if collection not in (None, "skills", "plugins", "work", "tasks", "workflows"):
         raise WorkspaceError("project collection is invalid")
     return project_id, collection

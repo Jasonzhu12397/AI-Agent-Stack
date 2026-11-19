@@ -129,6 +129,59 @@ class AgentControlClient:
             raise AgentTransportError("Work result was not accepted")
         return response
 
+    def claim_task(self) -> dict[str, Any] | None:
+        response = self._post("/api/v1/agent-control/tasks/claim", {
+            "schema_version": "v1",
+            **self._identity(),
+        })
+        if response.get("task") is None:
+            return None
+        task = response["task"]
+        if not isinstance(task, dict):
+            raise AgentTransportError("Control API task must be an object or null")
+        token = response.get("lease_token")
+        if not isinstance(token, str) or not token:
+            raise AgentTransportError("Control API task lease token is missing")
+        skills = response.get("skills")
+        plugins = response.get("plugins")
+        return {
+            "task": task,
+            "skills": skills if isinstance(skills, list) else [],
+            "plugins": plugins if isinstance(plugins, list) else [],
+            "lease_token": token,
+            "lease_seconds": response.get("lease_seconds"),
+        }
+
+    def renew_task_lease(self, task: dict[str, Any], lease_token: str) -> dict[str, Any]:
+        response = self._post("/api/v1/agent-control/tasks/lease/renew", {
+            "schema_version": "v1",
+            **self._identity(),
+            "task_id": task["task_id"],
+            "lease_token": lease_token,
+        })
+        if response.get("renewed") is not True:
+            raise AgentTransportError("Task lease renewal was not confirmed")
+        return response
+
+    def report_task_result(
+        self,
+        task: dict[str, Any],
+        lease_token: str,
+        status: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = self._post("/api/v1/agent-control/tasks/result", {
+            "schema_version": "v1",
+            **self._identity(),
+            "task_id": task["task_id"],
+            "lease_token": lease_token,
+            "status": status,
+            "result": result,
+        })
+        if response.get("accepted") is not True:
+            raise AgentTransportError("Task result was not accepted")
+        return response
+
     def claim(self) -> dict[str, Any] | None:
         response = self._post("/api/v1/agent-control/commands/claim", {
             "schema_version": "v1",

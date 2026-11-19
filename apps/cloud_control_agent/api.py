@@ -35,11 +35,15 @@ from .deployment_controller import (
 )
 from .workspace import (
     WorkspaceError,
+    normalize_name,
     normalize_plugin,
     normalize_project,
     normalize_skill,
+    normalize_task,
     normalize_work,
     normalize_work_result,
+    normalize_workflow_definition,
+    normalize_workflow_run,
     normalize_workspace_path,
 )
 
@@ -463,8 +467,21 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         self._list_skills(project_id)
                     elif collection == "plugins":
                         self._list_plugins(project_id)
-                    else:
+                    elif collection == "work":
                         self._list_work(project_id)
+                    elif collection == "tasks":
+                        self._list_tasks(project_id)
+                    else:
+                        self._list_workflows(project_id)
+                    return
+                if self.path.startswith("/api/v1/control/workflows/"):
+                    self._get_workflow(self.path.rsplit("/", 1)[-1])
+                    return
+                if self.path.startswith("/api/v1/control/workflow-runs/"):
+                    self._get_workflow_run(self.path.rsplit("/", 1)[-1])
+                    return
+                if self.path.startswith("/api/v1/control/tasks/"):
+                    self._get_task(self.path.rsplit("/", 1)[-1])
                     return
                 if self.path.startswith("/api/v1/control/work/"):
                     self._get_work(self.path.rsplit("/", 1)[-1])
@@ -489,6 +506,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             try:
                 document = self._body()
+                if self.path == "/api/v1/agent-control/tasks/claim":
+                    self._claim_task(document)
+                    return
+                if self.path == "/api/v1/agent-control/tasks/lease/renew":
+                    self._renew_task_lease(document)
+                    return
+                if self.path == "/api/v1/agent-control/tasks/result":
+                    self._task_result(document)
+                    return
                 if self.path == "/api/v1/agent-control/work/claim":
                     self._claim_work(document)
                     return
@@ -528,9 +554,31 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         self._create_plugin(project_id, document)
                     elif collection == "work":
                         self._create_work(project_id, document)
+                    elif collection == "tasks":
+                        self._create_task(project_id, document)
+                    elif collection == "workflows":
+                        self._create_workflow(project_id, document)
                     else:
                         raise ControlApiError("PROJECT_COLLECTION_REQUIRED")
                     return
+                if self.path.startswith("/api/v1/control/workflows/"):
+                    parts = self.path.strip("/").split("/")
+                    if len(parts) != 6 or parts[3] != "workflows":
+                        raise ControlApiError("WORKFLOW_ACTION_INVALID")
+                    workflow_id = _parse_uuid(parts[4], "WORKFLOW_ID")
+                    if parts[5] == "runs":
+                        self._start_workflow_run(workflow_id, document)
+                    elif parts[5] == "versions":
+                        self._create_workflow_version(workflow_id, document)
+                    else:
+                        raise ControlApiError("WORKFLOW_ACTION_INVALID")
+                    return
+                if self.path.startswith("/api/v1/control/workflow-runs/"):
+                    if self.path.endswith("/cancel"):
+                        run_raw = self.path.rsplit("/", 2)[-2]
+                        self._cancel_workflow_run(run_raw)
+                        return
+                    raise ControlApiError("WORKFLOW_RUN_ACTION_INVALID")
                 if self.path.startswith("/api/v1/control/work/"):
                     if self.path.endswith("/cancel"):
                         work_raw = self.path.rsplit("/", 2)[-2]
@@ -990,6 +1038,622 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 raise ControlApiError("WORK_NOT_CANCELLABLE")
             self._send(200, {"cancelled": True, **row})
+
+        def _create_workflow(self, project_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            project = self._project_row(project_id)
+            if project["status"] != "active":
+                raise ControlApiError("PROJECT_NOT_ACTIVE")
+            workflow_id = _parse_uuid(document.get("workflow_id"), "WORKFLOW_ID")
+            try:
+                name = normalize_name(document.get("name"), "workflow name")
+                definition = normalize_workflow_definition(document.get("definition"))
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                try:
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO agent_control_workflows (
+                                workflow_id, project_id, name, description
+                            ) VALUES (%s, %s, %s, %s)
+                            """,
+                            (workflow_id, project_id, name, definition["description"]),
+                        )
+                        connection.execute(
+                            """
+                            INSERT INTO agent_control_workflow_versions (
+                                workflow_id, version, definition
+                            ) VALUES (%s, 1, %s)
+                            """,
+                            (workflow_id, Jsonb(definition)),
+                        )
+                except psycopg.errors.UniqueViolation as exc:
+                    raise ControlApiError("WORKFLOW_NAME_OR_ID_CONFLICT") from exc
+                row = connection.execute(
+                    """
+                    SELECT workflow_id, project_id, name, description, status,
+                           latest_version, created_at
+                    FROM agent_control_workflows WHERE workflow_id = %s
+                    """,
+                    (workflow_id,),
+                ).fetchone()
+            self._send(200, {"created": True, **row, "definition": definition})
+
+        def _list_workflows(self, project_id: UUID) -> None:
+            self._require_platform_api()
+            project = self._project_row(project_id)
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT w.workflow_id, w.name, w.description, w.status,
+                           w.latest_version, w.created_at, w.updated_at,
+                           COALESCE(jsonb_array_length(v.definition->'steps'), 0)
+                               AS step_count
+                    FROM agent_control_workflows w
+                    LEFT JOIN agent_control_workflow_versions v
+                      ON v.workflow_id = w.workflow_id AND v.version = w.latest_version
+                    WHERE w.project_id = %s ORDER BY w.name
+                    """,
+                    (project_id,),
+                ).fetchall()
+            self._send(200, {"project_id": project["project_id"], "results": rows})
+
+        def _get_workflow(self, raw_id: str) -> None:
+            self._require_platform_api()
+            workflow_id = _parse_uuid(raw_id, "WORKFLOW_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT w.workflow_id, w.project_id, w.name, w.description,
+                           w.status, w.latest_version, w.created_at, w.updated_at,
+                           v.definition
+                    FROM agent_control_workflows w
+                    JOIN agent_control_workflow_versions v
+                      ON v.workflow_id = w.workflow_id AND v.version = w.latest_version
+                    WHERE w.workflow_id = %s
+                    """,
+                    (workflow_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("WORKFLOW_NOT_FOUND")
+            self._send(200, row)
+
+        def _create_workflow_version(self, workflow_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            try:
+                definition = normalize_workflow_definition(document.get("definition"))
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    workflow = connection.execute(
+                        """
+                        SELECT workflow_id, status, latest_version
+                        FROM agent_control_workflows WHERE workflow_id = %s
+                        FOR UPDATE
+                        """,
+                        (workflow_id,),
+                    ).fetchone()
+                    if workflow is None:
+                        raise ControlApiError("WORKFLOW_NOT_FOUND")
+                    if workflow["status"] != "published":
+                        raise ControlApiError("WORKFLOW_NOT_PUBLISHED")
+                    version = workflow["latest_version"] + 1
+                    connection.execute(
+                        """
+                        INSERT INTO agent_control_workflow_versions (
+                            workflow_id, version, definition
+                        ) VALUES (%s, %s, %s)
+                        """,
+                        (workflow_id, version, Jsonb(definition)),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE agent_control_workflows
+                        SET latest_version = %s, description = %s, updated_at = NOW()
+                        WHERE workflow_id = %s
+                        """,
+                        (version, definition["description"], workflow_id),
+                    )
+            self._send(200, {
+                "created": True,
+                "workflow_id": workflow_id,
+                "version": version,
+                "definition": definition,
+            })
+
+        def _start_workflow_run(self, workflow_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            run_id = _parse_uuid(document.get("run_id"), "RUN_ID")
+            try:
+                run = normalize_workflow_run(
+                    input=document.get("input"),
+                    idempotency_key=document.get("idempotency_key"),
+                )
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    workflow = connection.execute(
+                        """
+                        SELECT workflow_id, project_id, status, latest_version
+                        FROM agent_control_workflows WHERE workflow_id = %s
+                        """,
+                        (workflow_id,),
+                    ).fetchone()
+                    if workflow is None:
+                        raise ControlApiError("WORKFLOW_NOT_FOUND")
+                    if workflow["status"] != "published":
+                        raise ControlApiError("WORKFLOW_NOT_PUBLISHED")
+                    project = connection.execute(
+                        """
+                        SELECT status FROM agent_control_projects WHERE project_id = %s
+                        """,
+                        (workflow["project_id"],),
+                    ).fetchone()
+                    if project is None or project["status"] != "active":
+                        raise ControlApiError("PROJECT_NOT_ACTIVE")
+                    version = workflow["latest_version"]
+                    definition_row = connection.execute(
+                        """
+                        SELECT definition FROM agent_control_workflow_versions
+                        WHERE workflow_id = %s AND version = %s
+                        """,
+                        (workflow_id, version),
+                    ).fetchone()
+                    if definition_row is None:
+                        raise ControlApiError("WORKFLOW_VERSION_NOT_FOUND")
+                    try:
+                        inserted = connection.execute(
+                            """
+                            INSERT INTO agent_control_workflow_runs (
+                                run_id, workflow_id, project_id, version,
+                                input, idempotency_key
+                            ) VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (run_id) DO NOTHING
+                            RETURNING run_id
+                            """,
+                            (
+                                run_id, workflow_id, workflow["project_id"], version,
+                                Jsonb(run["input"]), run["idempotency_key"],
+                            ),
+                        ).fetchone()
+                    except psycopg.errors.UniqueViolation as exc:
+                        raise ControlApiError("WORKFLOW_RUN_IDEMPOTENCY_CONFLICT") from exc
+                    if inserted is not None:
+                        for step in definition_row["definition"]["steps"]:
+                            connection.execute(
+                                """
+                                INSERT INTO agent_control_tasks (
+                                    task_id, project_id, workflow_run_id, step_id,
+                                    name, status, required_role, payload, depends_on,
+                                    idempotency_key
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    uuid4(),
+                                    workflow["project_id"],
+                                    run_id,
+                                    step["id"],
+                                    step["name"],
+                                    "queued" if not step["depends_on"] else "blocked",
+                                    step["required_role"],
+                                    Jsonb({
+                                        "workflow_input": run["input"],
+                                        "step": step["payload"],
+                                    }),
+                                    Jsonb(step["depends_on"]),
+                                    f"workflow:{run_id}:{step['id']}",
+                                ),
+                            )
+                    else:
+                        existing = connection.execute(
+                            """
+                            SELECT project_id, idempotency_key FROM agent_control_workflow_runs
+                            WHERE run_id = %s
+                            """,
+                            (run_id,),
+                        ).fetchone()
+                        if (
+                            existing is None
+                            or existing["project_id"] != workflow["project_id"]
+                            or existing["idempotency_key"] != run["idempotency_key"]
+                        ):
+                            raise ControlApiError("WORKFLOW_RUN_IDENTITY_CONFLICT")
+                    run_row = connection.execute(
+                        """
+                        SELECT run_id, workflow_id, project_id, version, status,
+                               input, output, idempotency_key, started_at, finished_at
+                        FROM agent_control_workflow_runs WHERE run_id = %s
+                        """,
+                        (run_id,),
+                    ).fetchone()
+                    tasks = connection.execute(
+                        """
+                        SELECT task_id, step_id, name, status, priority, required_role,
+                               payload, depends_on, result, assigned_agent_id, attempts
+                        FROM agent_control_tasks WHERE workflow_run_id = %s
+                        ORDER BY created_at, step_id
+                        """,
+                        (run_id,),
+                    ).fetchall()
+                self._send(200, {"created": inserted is not None, "run": run_row, "tasks": tasks})
+
+        def _get_workflow_run(self, raw_id: str) -> None:
+            self._require_platform_api()
+            run_id = _parse_uuid(raw_id, "RUN_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                run = connection.execute(
+                    """
+                    SELECT r.run_id, r.workflow_id, w.name AS workflow_name,
+                           r.project_id, r.version, r.status, r.input, r.output,
+                           r.idempotency_key, r.started_at, r.finished_at
+                    FROM agent_control_workflow_runs r
+                    JOIN agent_control_workflows w ON w.workflow_id = r.workflow_id
+                    WHERE r.run_id = %s
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if run is None:
+                    raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
+                tasks = connection.execute(
+                    """
+                    SELECT task_id, step_id, name, status, priority, required_role,
+                           payload, depends_on, result, assigned_agent_id,
+                           attempts, created_at, updated_at
+                    FROM agent_control_tasks WHERE workflow_run_id = %s
+                    ORDER BY created_at, step_id
+                    """,
+                    (run_id,),
+                ).fetchall()
+            self._send(200, {"run": run, "tasks": tasks})
+
+        def _cancel_workflow_run(self, raw_id: str) -> None:
+            self._require_platform_api()
+            run_id = _parse_uuid(raw_id, "RUN_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    run = connection.execute(
+                        """
+                        UPDATE agent_control_workflow_runs
+                        SET status = 'cancelled', finished_at = NOW(), updated_at = NOW()
+                        WHERE run_id = %s AND status = 'running'
+                        RETURNING run_id, status
+                        """,
+                        (run_id,),
+                    ).fetchone()
+                    if run is None:
+                        raise ControlApiError("WORKFLOW_RUN_NOT_CANCELLABLE")
+                    connection.execute(
+                        """
+                        UPDATE agent_control_tasks
+                        SET status = 'cancelled', lease_token_hash = NULL,
+                            lease_expires_at = NULL, updated_at = NOW()
+                        WHERE workflow_run_id = %s
+                          AND status IN ('blocked', 'queued', 'leased')
+                        """,
+                        (run_id,),
+                    )
+            self._send(200, {"cancelled": True, **run})
+
+        def _create_task(self, project_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            project = self._project_row(project_id)
+            if project["status"] != "active":
+                raise ControlApiError("PROJECT_NOT_ACTIVE")
+            task_id = _parse_uuid(document.get("task_id"), "TASK_ID")
+            try:
+                task = normalize_task(
+                    name=document.get("name"),
+                    payload=document.get("payload"),
+                    required_role=document.get("required_role"),
+                    priority=document.get("priority", 0),
+                    idempotency_key=document.get("idempotency_key"),
+                )
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                try:
+                    connection.execute(
+                        """
+                        INSERT INTO agent_control_tasks (
+                            task_id, project_id, name, priority, required_role,
+                            payload, idempotency_key
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (idempotency_key) DO NOTHING
+                        """,
+                        (
+                            task_id, project_id, task["name"], task["priority"],
+                            task["required_role"], Jsonb(task["payload"]),
+                            task["idempotency_key"],
+                        ),
+                    )
+                except psycopg.errors.UniqueViolation as exc:
+                    raise ControlApiError("TASK_ID_CONFLICT") from exc
+                row = connection.execute(
+                    """
+                    SELECT task_id, project_id, name, status, priority, required_role,
+                           payload, result, idempotency_key, attempts, created_at
+                    FROM agent_control_tasks WHERE task_id = %s
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if row is None:
+                    row = connection.execute(
+                        """
+                        SELECT task_id, project_id, name, status, priority, required_role,
+                               payload, result, idempotency_key, attempts, created_at
+                        FROM agent_control_tasks WHERE idempotency_key = %s
+                        """,
+                        (task["idempotency_key"],),
+                    ).fetchone()
+            if (
+                row is None
+                or row["project_id"] != project_id
+                or row["payload"] != task["payload"]
+            ):
+                raise ControlApiError("TASK_IDEMPOTENCY_CONFLICT")
+            self._send(200, {"created": row["task_id"] == task_id, **row})
+
+        def _list_tasks(self, project_id: UUID) -> None:
+            self._require_platform_api()
+            project = self._project_row(project_id)
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT task_id, workflow_run_id, step_id, name, status, priority,
+                           required_role, payload, depends_on, result,
+                           assigned_agent_id, attempts, created_at, updated_at
+                    FROM agent_control_tasks WHERE project_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (project_id,),
+                ).fetchall()
+            self._send(200, {"project_id": project["project_id"], "results": rows})
+
+        def _get_task(self, raw_id: str) -> None:
+            self._require_platform_api()
+            task_id = _parse_uuid(raw_id, "TASK_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT task_id, project_id, workflow_run_id, step_id, name, status,
+                           priority, required_role, payload, depends_on, result,
+                           assigned_agent_id, attempts, lease_expires_at,
+                           created_at, updated_at
+                    FROM agent_control_tasks WHERE task_id = %s
+                    """,
+                    (task_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("TASK_NOT_FOUND")
+            self._send(200, row)
+
+        def _claim_task(self, document: dict[str, Any]) -> None:
+            agent = self._authenticated_agent(document)
+            lease_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+            row = None
+            skills: list[dict[str, Any]] = []
+            plugins: list[dict[str, Any]] = []
+            with psycopg.connect(
+                database_url, row_factory=dict_row, autocommit=False
+            ) as connection:
+                with connection.transaction():
+                    row = connection.execute(
+                        """
+                        SELECT t.task_id, t.project_id, t.workflow_run_id, t.step_id,
+                               t.name, t.priority, t.required_role, t.payload,
+                               p.name AS project_name, r.workflow_id, r.status AS run_status,
+                               w.name AS workflow_name
+                        FROM agent_control_tasks t
+                        JOIN agent_control_projects p ON p.project_id = t.project_id
+                        LEFT JOIN agent_control_workflow_runs r ON r.run_id = t.workflow_run_id
+                        LEFT JOIN agent_control_workflows w ON w.workflow_id = r.workflow_id
+                        WHERE p.installation_id = %(installation_id)s
+                          AND p.status = 'active'
+                          AND (t.status = 'queued'
+                               OR (t.status = 'leased' AND t.lease_expires_at < NOW()))
+                          AND (t.workflow_run_id IS NULL OR r.status = 'running')
+                          AND (t.required_role IS NULL OR t.required_role = %(role)s)
+                        ORDER BY t.priority DESC, t.created_at
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                        """,
+                        {"installation_id": agent["installation_id"], "role": agent["role"]},
+                    ).fetchone()
+                    if row is not None:
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'leased', assigned_agent_id = %s,
+                                lease_token_hash = %s,
+                                lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
+                                attempts = attempts + 1, updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (agent["agent_id"], token_hash, LEASE_SECONDS, row["task_id"]),
+                        )
+                        skills = connection.execute(
+                            """
+                            SELECT skill_id, name, version, description, manifest
+                            FROM agent_control_skills
+                            WHERE project_id = %s AND enabled = TRUE ORDER BY name, version
+                            """,
+                            (row["project_id"],),
+                        ).fetchall()
+                        plugins = connection.execute(
+                            """
+                            SELECT plugin_id, name, version, kind, description, config_ref,
+                                   manifest
+                            FROM agent_control_plugins
+                            WHERE project_id = %s AND enabled = TRUE ORDER BY name, version
+                            """,
+                            (row["project_id"],),
+                        ).fetchall()
+            if row is None:
+                self._send(200, {"task": None})
+                return
+            self._send(200, {
+                "task": {
+                    "task_id": row["task_id"],
+                    "project_id": row["project_id"],
+                    "project_name": row["project_name"],
+                    "workflow_run_id": row["workflow_run_id"],
+                    "workflow_id": row["workflow_id"],
+                    "workflow_name": row["workflow_name"],
+                    "step_id": row["step_id"],
+                    "name": row["name"],
+                    "priority": row["priority"],
+                    "payload": row["payload"],
+                },
+                "skills": skills,
+                "plugins": plugins,
+                "lease_token": lease_token,
+                "lease_seconds": LEASE_SECONDS,
+            })
+
+        def _renew_task_lease(self, document: dict[str, Any]) -> None:
+            agent = self._authenticated_agent(document)
+            task_id = _parse_uuid(document.get("task_id"), "TASK_ID")
+            token = document.get("lease_token")
+            if not isinstance(token, str) or not token:
+                raise ControlApiError("TASK_LEASE_TOKEN_REQUIRED")
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    UPDATE agent_control_tasks
+                    SET lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
+                        updated_at = NOW()
+                    WHERE task_id = %s AND assigned_agent_id = %s
+                      AND status = 'leased' AND lease_token_hash = %s
+                    RETURNING lease_expires_at
+                    """,
+                    (LEASE_SECONDS, task_id, agent["agent_id"], token_hash),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("TASK_LEASE_INVALID")
+            self._send(200, {"renewed": True, **row})
+
+        def _task_result(self, document: dict[str, Any]) -> None:
+            agent = self._authenticated_agent(document)
+            task_id = _parse_uuid(document.get("task_id"), "TASK_ID")
+            token = document.get("lease_token")
+            if not isinstance(token, str) or not token:
+                raise ControlApiError("TASK_LEASE_TOKEN_REQUIRED")
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            try:
+                outcome = normalize_work_result(
+                    status=document.get("status"),
+                    result=document.get("result"),
+                )
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            run_status = None
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    task = connection.execute(
+                        """
+                        UPDATE agent_control_tasks
+                        SET status = %s, result = %s, lease_token_hash = NULL,
+                            lease_expires_at = NULL, updated_at = NOW()
+                        WHERE task_id = %s AND assigned_agent_id = %s
+                          AND status = 'leased' AND lease_token_hash = %s
+                        RETURNING task_id, workflow_run_id, step_id, status, result
+                        """,
+                        (
+                            outcome["status"], Jsonb(outcome["result"]), task_id,
+                            agent["agent_id"], token_hash,
+                        ),
+                    ).fetchone()
+                    if task is None:
+                        raise ControlApiError("TASK_RESULT_NOT_ACCEPTED")
+                    run_id = task["workflow_run_id"]
+                    if run_id is not None and task["status"] == "failed":
+                        connection.execute(
+                            """
+                            UPDATE agent_control_workflow_runs
+                            SET status = 'failed', output = %s,
+                                finished_at = NOW(), updated_at = NOW()
+                            WHERE run_id = %s AND status = 'running'
+                            """,
+                            (
+                                Jsonb({
+                                    "failed_step": task["step_id"],
+                                    "error": outcome["result"],
+                                }),
+                                run_id,
+                            ),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'cancelled', lease_token_hash = NULL,
+                                lease_expires_at = NULL, updated_at = NOW()
+                            WHERE workflow_run_id = %s
+                              AND status IN ('blocked', 'queued', 'leased')
+                            """,
+                            (run_id,),
+                        )
+                        run_status = "failed"
+                    elif run_id is not None:
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks t
+                            SET status = 'queued', updated_at = NOW()
+                            WHERE t.workflow_run_id = %s AND t.status = 'blocked'
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
+                                  LEFT JOIN agent_control_tasks d
+                                    ON d.workflow_run_id = t.workflow_run_id
+                                   AND d.step_id = dep.value
+                                  WHERE d.task_id IS NULL OR d.status <> 'succeeded'
+                              )
+                            """,
+                            (run_id,),
+                        )
+                        active = connection.execute(
+                            """
+                            SELECT COUNT(*) AS active FROM agent_control_tasks
+                            WHERE workflow_run_id = %s
+                              AND status IN ('blocked', 'queued', 'leased')
+                            """,
+                            (run_id,),
+                        ).fetchone()
+                        if active and active["active"] == 0:
+                            output = connection.execute(
+                                """
+                                SELECT COALESCE(jsonb_object_agg(step_id, result), '{}'::jsonb)
+                                    AS output
+                                FROM agent_control_tasks
+                                WHERE workflow_run_id = %s AND status = 'succeeded'
+                                  AND step_id IS NOT NULL
+                                """,
+                                (run_id,),
+                            ).fetchone()
+                            connection.execute(
+                                """
+                                UPDATE agent_control_workflow_runs
+                                SET status = 'succeeded', output = %s,
+                                    finished_at = NOW(), updated_at = NOW()
+                                WHERE run_id = %s AND status = 'running'
+                                """,
+                                (Jsonb(output["output"] if output else {}), run_id),
+                            )
+                            run_status = "succeeded"
+                        else:
+                            run_status = "running"
+            self._send(200, {
+                "accepted": True,
+                "task_id": task["task_id"],
+                "status": task["status"],
+                "workflow_run_id": task["workflow_run_id"],
+                "workflow_run_status": run_status,
+            })
 
         def _register_agent(self, document: dict[str, Any]) -> None:
             self._require_platform_api()
