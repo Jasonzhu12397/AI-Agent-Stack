@@ -1,6 +1,17 @@
 # AI Agent Stack
 
-An extensible, policy-governed AI Agent platform with a Vue operator workspace, Django platform API, independent task Worker and a three-Agent bare-metal Kubernetes control system.
+A **multi-tenant, multi-Agent AI SaaS platform**: one control plane for creating, publishing, orchestrating, running and governing AI Agents, plus a three-Agent infrastructure control system that deploys and takes over real bare-metal Kubernetes clusters.
+
+## Product positioning
+
+AI Agent Stack is not a single chatbot or a collection of disconnected Agent demos. It is a SaaS platform with two cooperating runtime families:
+
+- **Application multi-Agent runtime** — Agent Studio, multi-step Workflows, model gateway, HTTP/OpenAPI/MCP tool integration, knowledge and RAG, asynchronous task execution, token budgets, tenant/project isolation, RBAC and audit. The independent Platform Worker executes general Agent and Workflow tasks.
+- **Infrastructure multi-Agent control system** — Cloud Control Agent, EPH Agent and Target Agent cooperate over versioned commands, leases, checkpoints and mTLS to bootstrap CAPI/Metal3/Ironic, hand over a target Kubernetes cluster and deploy its data plane.
+
+The SaaS control plane provides tenants, projects, membership roles (`admin/editor/viewer`), per-tenant token budgets, connector installation and permission grants, deployment jobs, Agent/Workflow run records, and chained-hash audit evidence. Tenant and project data are server-side authorization boundaries, not client-supplied labels.
+
+**Current scope:** the multi-tenant, multi-Agent SaaS foundations above are implemented at code-baseline level with automated tests; external subscription billing/plan management, complete provider OAuth, realtime event streaming, some advanced Workflow nodes, and real bare-metal end-to-end acceptance are not yet production-complete. The capability inventory below and in the architecture-inventory documents is authoritative about implemented versus planned features.
 
 ## Product direction
 
