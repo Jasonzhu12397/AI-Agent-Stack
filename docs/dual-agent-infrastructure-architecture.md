@@ -57,3 +57,18 @@ Network readiness must verify actual routes, VLANs, MTU, SR-IOV resource availab
 The new branch currently provides independent Cloud Control, EPH and Target process entrypoints; mTLS heartbeat/claim/result transport; durable PostgreSQL command storage; Kubernetes Lease leader election; read-only Kubernetes/CAPI/Metal3 observation; and Worker NTP policy validation.
 
 CAPI Pivot execution, exact BMH registry migration, autonomous EPH cleanup, Worker provisioning, host-level chronyd application, full platform API/UI integration and physical BMC/Ironic acceptance remain incomplete. They must be delivered as new adapters and tested against the selected CAPI, Metal3, Ironic and operating-system versions. A green unit test or QEMU bootstrap test is not proof of physical bare-metal provisioning.
+
+
+## Fleet role reasoning artifacts
+
+The EPH preflight owns the first placement decision. When the deployment payload
+contains a validated `fleet`, it ranks machines from reported CPU, RAM, disk and
+hardware identity, honours explicit `ai-agent-stack.io/role` labels, and records
+the reason for every assignment. The same step emits the BMH host plan and, when
+an image URL and control-plane endpoint are supplied, the CAPI cluster spec.
+
+Checkpoint evidence is replaced on every transition, so Cloud Control keeps a
+fixed allowlist of these planning artifacts (`fleet_plan`, `hosts`,
+`cluster_spec`, `control_plane_count`, `worker_replicas`) in deployment state.
+Later `eph.metal3.bmh.apply` and `eph.capi.cluster.apply` steps receive them
+without re-deriving roles. Arbitrary fields and credentials are never carried.

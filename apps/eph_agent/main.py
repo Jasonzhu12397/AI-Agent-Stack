@@ -37,6 +37,7 @@ from .control_stack_adapter import (
     apply_control_stack,
     wait_for_control_stack_ready,
 )
+from .fleet_planning import PlanningError, plan_fleet_request
 from .metal3_skill import (
     Metal3SkillError,
     apply_baremetalhosts,
@@ -135,7 +136,24 @@ def execute(
                 ]
             except (ValueError, TypeError, AttributeError):
                 node_count = None
+        payload = command.get("payload", {})
+        fleet_evidence: dict[str, Any] = {}
+        if isinstance(payload, dict) and "fleet" in payload:
+            try:
+                fleet_evidence = plan_fleet_request(payload)
+            except PlanningError as exc:
+                return {
+                    "status": "blocked",
+                    "error_code": "EPH_FLEET_PLAN_INVALID",
+                    "output": {
+                        "role": "eph",
+                        "fleet_plan_failed": True,
+                        "reason": str(exc),
+                    },
+                    "side_effects": False,
+                }
         evidence = {
+            **fleet_evidence,
             "role": "eph",
             "eph_ready": False,
             "eph_node_count": node_count,

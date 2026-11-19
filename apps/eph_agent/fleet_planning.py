@@ -15,6 +15,7 @@ applying stay with :mod:`apps.eph_agent.capi_renderer` and
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -99,6 +100,125 @@ class FleetPlan:
         if machine.identity_status not in {"verified", "candidate"}:
             gaps.append(f"identity_status is {machine.identity_status}")
         return gaps
+
+
+_MACHINE_NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
+_IDENTITY_STATUSES = frozenset({"unknown", "unverified", "verified", "candidate", "conflict"})
+
+
+def _required_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise PlanningError(f"fleet machine {field_name} is required")
+    return value
+
+
+def machine_spec_from_mapping(value: Any) -> MachineSpec:
+    """Validate one platform fleet record before it can influence a role."""
+
+    if not isinstance(value, dict):
+        raise PlanningError("fleet machine must be an object")
+    name = _required_string(value.get("name"), "name")
+    if len(name) > 63 or _MACHINE_NAME.fullmatch(name) is None:
+        raise PlanningError("fleet machine name is not a Kubernetes DNS label")
+    labels = value.get("labels", {})
+    if not isinstance(labels, dict) or any(
+        not isinstance(key, str) or not isinstance(item, str)
+        for key, item in labels.items()
+    ):
+        raise PlanningError(f"{name}: labels must be a string map")
+    identity_status = value.get("identity_status", "unknown")
+    if identity_status not in _IDENTITY_STATUSES:
+        raise PlanningError(f"{name}: identity_status is invalid")
+    integers = {}
+    for field_name in ("cpu_cores", "ram_mib", "disk_gib"):
+        item = value.get(field_name, 0)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise PlanningError(f"{name}: {field_name} must be a non-negative integer")
+        integers[field_name] = item
+    for field_name in ("online", "tls_verify"):
+        item = value.get(field_name, True)
+        if not isinstance(item, bool):
+            raise PlanningError(f"{name}: {field_name} must be a boolean")
+        integers[field_name] = item
+    return MachineSpec(
+        name=name,
+        machine_id=_required_string(value.get("machine_id"), "machine_id"),
+        project_id=_required_string(value.get("project_id"), "project_id"),
+        bmc_address=_required_string(value.get("bmc_address"), "bmc_address"),
+        boot_mac=_required_string(value.get("boot_mac"), "boot_mac"),
+        secret_ref=_required_string(value.get("secret_ref"), "secret_ref"),
+        cpu_cores=integers["cpu_cores"],
+        ram_mib=integers["ram_mib"],
+        disk_gib=integers["disk_gib"],
+        labels=labels,
+        identity_status=identity_status,
+        online=integers["online"],
+        tls_verify=integers["tls_verify"],
+    )
+
+
+def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Turn a deployment payload's fleet into roles and downstream artifacts.
+
+    The result is deliberately JSON-only: Cloud Control persists the allow-listed
+    planning fields across checkpoints, so the BMH and CAPI phases never have to
+    re-infer a role from a truncated host list.
+    """
+
+    if not isinstance(payload, dict):
+        raise PlanningError("fleet planning payload must be an object")
+    fleet = payload.get("fleet")
+    if not isinstance(fleet, list) or not fleet:
+        raise PlanningError("fleet planning requires a non-empty fleet list")
+    cluster_name = _required_string(payload.get("cluster_name"), "cluster_name")
+    namespace = payload.get("namespace", "metal3")
+    if not isinstance(namespace, str) or not namespace:
+        raise PlanningError("namespace must be a non-empty string")
+    control_plane_count = payload.get("control_plane_count", 3)
+    if (
+        not isinstance(control_plane_count, int)
+        or isinstance(control_plane_count, bool)
+        or control_plane_count not in VALID_CONTROL_PLANE_COUNTS
+    ):
+        raise PlanningError(
+            f"control_plane_count must be one of {VALID_CONTROL_PLANE_COUNTS}"
+        )
+    plan = plan_fleet(
+        [machine_spec_from_mapping(item) for item in fleet],
+        cluster_name=cluster_name,
+        namespace=namespace,
+        control_plane_count=control_plane_count,
+    )
+    workers = plan.by_role(ROLE_WORKER)
+    evidence: dict[str, Any] = {
+        "fleet_plan": plan_document(plan),
+        "hosts": bmh_host_plan(plan),
+        "control_plane_count": plan.control_plane_count,
+        "worker_replicas": len(workers),
+    }
+    image_url = payload.get("image_url")
+    control_plane_endpoint = payload.get("control_plane_endpoint")
+    if isinstance(image_url, str) and image_url and isinstance(
+        control_plane_endpoint, str
+    ) and control_plane_endpoint:
+        data_template = payload.get("data_template")
+        worker_labels = payload.get("worker_node_labels")
+        evidence["cluster_spec"] = cluster_spec(
+            plan,
+            control_plane_endpoint=control_plane_endpoint,
+            image_url=image_url,
+            k8s_version=payload.get("k8s_version", "v1.37.2"),
+            data_template=data_template if isinstance(data_template, dict) else None,
+            worker_node_labels=(
+                worker_labels if isinstance(worker_labels, dict) else None
+            ),
+            registry_endpoint=(
+                payload.get("registry_endpoint")
+                if isinstance(payload.get("registry_endpoint"), str)
+                else None
+            ),
+        )
+    return evidence
 
 
 def machine_score(machine: MachineSpec) -> int:

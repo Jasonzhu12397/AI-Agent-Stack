@@ -130,6 +130,12 @@ def advance_after_command(
     spec = deployment["spec"] if isinstance(deployment["spec"], dict) else {}
     stored_state = deployment["state"] if isinstance(deployment["state"], dict) else {}
     evidence = stored_state.get("evidence")
+    artifacts = stored_state.get("artifacts")
+    if isinstance(artifacts, dict):
+        evidence = {
+            **(evidence if isinstance(evidence, dict) else {}),
+            **artifacts,
+        }
     try:
         plan = plan_next_step(
             deployment_id,

@@ -153,3 +153,34 @@ def test_next_phase_for_action_accepts_only_the_planned_action():
     )
     assert next_phase_for_action("eph_single_node_ready", "eph.metal3.bmh.observe") is None
     assert next_phase_for_action("completed", "target.handoff.evaluate") is None
+
+
+def test_payload_carries_fleet_and_agent_planning_artifacts():
+    deployment_id = uuid4()
+    spec = {
+        "cluster_name": "target",
+        "namespace": "metal3",
+        "control_plane_count": 3,
+        "fleet": [{"name": "cp-1"}, {"name": "w-1"}],
+        "image_url": "http://registry.local/images/worker.raw",
+        "control_plane_endpoint": "10.0.0.50:6443",
+    }
+    preflight = build_payload(deployment_id, "eph.preflight", spec)
+    assert preflight["fleet"] == spec["fleet"]
+    assert preflight["control_plane_count"] == 3
+
+    bmh = build_payload(
+        deployment_id,
+        "eph.metal3.bmh.apply",
+        spec,
+        {"hosts": [{"name": "cp-1", "node_type": "controlplane"}]},
+    )
+    assert bmh["hosts"] == [{"name": "cp-1", "node_type": "controlplane"}]
+
+    capi = build_payload(
+        deployment_id,
+        "eph.capi.cluster.apply",
+        spec,
+        {"cluster_spec": {"name": "target", "control_plane_count": 3}},
+    )
+    assert capi["cluster_spec"]["name"] == "target"

@@ -177,3 +177,116 @@ def test_count_command_reads_the_recorded_plan(tmp_path):
         json.dumps({"assignments": [{"machine": "a"}, {"machine": "b"}]}), encoding="utf-8"
     )
     assert metal3_deploy.main(["count", "--dir", str(tmp_path)]) == 0
+
+
+def _request_machine(name, **overrides):
+    value = {
+        "name": name,
+        "machine_id": f"id-{name}",
+        "project_id": "proj",
+        "bmc_address": f"redfish+https://10.0.0.1/redfish/v1/Systems/{name}",
+        "boot_mac": "aa:bb:cc:dd:ee:01",
+        "secret_ref": f"{name}-bmc",
+        "cpu_cores": 16,
+        "ram_mib": 64 * 1024,
+        "disk_gib": 400,
+        "identity_status": "verified",
+        "online": True,
+        "tls_verify": True,
+        "labels": {},
+    }
+    value.update(overrides)
+    return value
+
+
+def test_fleet_request_returns_bmh_and_cluster_artifacts():
+    payload = {
+        "cluster_name": "target",
+        "namespace": "metal3",
+        "control_plane_count": 1,
+        "image_url": "http://registry.local/eph/worker.raw",
+        "control_plane_endpoint": "10.0.0.50:6443",
+        "fleet": [
+            _request_machine("strong", cpu_cores=32, ram_mib=128 * 1024),
+            _request_machine("small", cpu_cores=8, ram_mib=16 * 1024),
+        ],
+    }
+    evidence = fp.plan_fleet_request(payload)
+
+    assert evidence["control_plane_count"] == 1
+    assert evidence["worker_replicas"] == 1
+    assert evidence["fleet_plan"]["assignments"][0]["reason"]
+    assert {item["node_type"] for item in evidence["hosts"]} == {"controlplane", "worker"}
+    assert evidence["cluster_spec"]["name"] == "target"
+    assert evidence["cluster_spec"]["control_plane_endpoint"] == "10.0.0.50:6443"
+
+
+def test_fleet_request_rejects_duplicate_or_malformed_machines():
+    payload = {
+        "cluster_name": "target",
+        "fleet": [_request_machine("cp"), _request_machine("cp")],
+    }
+    with pytest.raises(fp.PlanningError, match="duplicate"):
+        fp.plan_fleet_request(payload)
+
+    payload["fleet"] = [_request_machine("cp", cpu_cores=-1)]
+    with pytest.raises(fp.PlanningError, match="cpu_cores"):
+        fp.plan_fleet_request(payload)
+
+
+def test_eph_preflight_reasons_about_roles_and_records_the_plan(tmp_path, monkeypatch):
+    from apps.eph_agent import main as eph_main
+
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    monkeypatch.setenv("EPH_KUBECONFIG", str(kubeconfig))
+    nodes = {
+        "items": [{
+            "metadata": {"name": "eph-bootstrap"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["kubectl", "get", "nodes"]:
+            return {"available": True, "stdout": json.dumps(nodes), "stderr": ""}
+        return {"available": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(eph_main, "_run_read_only", runner)
+    result = eph_main.execute({
+        "action": "eph.preflight",
+        "payload": {
+            "cluster_name": "target",
+            "control_plane_count": 1,
+            "image_url": "http://registry.local/worker.raw",
+            "control_plane_endpoint": "10.0.0.50:6443",
+            "fleet": [
+                _request_machine("strong", cpu_cores=32, ram_mib=128 * 1024),
+                _request_machine("small", cpu_cores=8, ram_mib=16 * 1024),
+            ],
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["output"]["fleet_plan"]["control_plane_count"] == 1
+    assert result["output"]["worker_replicas"] == 1
+    assert len(result["output"]["hosts"]) == 2
+    assert result["output"]["cluster_spec"]["name"] == "target"
+
+
+def test_eph_preflight_blocks_on_an_invalid_fleet(tmp_path, monkeypatch):
+    from apps.eph_agent import main as eph_main
+
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("apiVersion: v1\n", encoding="utf-8")
+    monkeypatch.setenv("EPH_KUBECONFIG", str(kubeconfig))
+    monkeypatch.setattr(
+        eph_main,
+        "_run_read_only",
+        lambda *_args, **_kwargs: {"available": True, "stdout": "{}", "stderr": ""},
+    )
+    result = eph_main.execute({
+        "action": "eph.preflight",
+        "payload": {"cluster_name": "target", "fleet": [{"name": "broken"}]},
+    })
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "EPH_FLEET_PLAN_INVALID"

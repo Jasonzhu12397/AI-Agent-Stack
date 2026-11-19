@@ -147,6 +147,45 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
 
 
+PLANNING_ARTIFACT_KEYS = (
+    "fleet_plan",
+    "hosts",
+    "cluster_spec",
+    "control_plane_count",
+    "worker_replicas",
+)
+
+
+def _merge_planning_artifacts(
+    previous_state: Any,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Carry immutable planning output across checkpoint evidence replacement.
+
+    Checkpoints intentionally replace the evidence document. The fleet roles and
+    rendered cluster inputs must survive that replacement, or the BMH/CAPI phase
+    would lose the Agent's reasoning. Only a fixed allowlist is retained.
+    """
+
+    artifacts: dict[str, Any] = {}
+    if isinstance(previous_state, dict):
+        existing = previous_state.get("artifacts")
+        if isinstance(existing, dict):
+            for key in PLANNING_ARTIFACT_KEYS:
+                value = existing.get(key)
+                if isinstance(value, dict) or isinstance(value, list):
+                    artifacts[key] = value
+                elif isinstance(value, int) and not isinstance(value, bool):
+                    artifacts[key] = value
+    for key in PLANNING_ARTIFACT_KEYS:
+        value = evidence.get(key)
+        if isinstance(value, dict) or isinstance(value, list):
+            artifacts[key] = value
+        elif isinstance(value, int) and not isinstance(value, bool):
+            artifacts[key] = value
+    return artifacts
+
+
 def _checkpoint_state_digest(evidence: dict[str, Any]) -> str:
     canonical = json.dumps(
         evidence,
@@ -607,6 +646,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             plan_evidence = evidence
             if not plan_evidence and isinstance(stored_evidence, dict):
                 plan_evidence = stored_evidence
+            stored_artifacts = stored_state.get("artifacts")
+            if isinstance(stored_artifacts, dict):
+                plan_evidence = {**plan_evidence, **stored_artifacts}
             plan = plan_deployment_command(
                 deployment_id,
                 deployment["phase"],
@@ -926,7 +968,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 expected_phase,
                 next_phase,
             )
-            state = {"state_digest": state_digest.lower(), "evidence": evidence}
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 with connection.transaction():
                     deployment = connection.execute(
@@ -967,6 +1008,16 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     if leased_command is None:
                         raise ControlApiError("CHECKPOINT_COMMAND_LEASE_INVALID")
+                    state = {
+                        "state_digest": state_digest.lower(),
+                        "evidence": evidence,
+                    }
+                    artifacts = _merge_planning_artifacts(
+                        deployment["state"],
+                        evidence,
+                    )
+                    if artifacts:
+                        state["artifacts"] = artifacts
                     updated = connection.execute(
                         """
                         UPDATE agent_control_deployments

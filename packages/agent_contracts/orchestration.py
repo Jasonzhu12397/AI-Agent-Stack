@@ -275,9 +275,14 @@ def build_payload(
         "cluster_name",
         "namespace",
         "kubernetes_version",
+        "k8s_version",
         "worker_replicas",
+        "control_plane_count",
         "baremetal_host_namespace",
         "machine_deployment_name",
+        "image_url",
+        "control_plane_endpoint",
+        "registry_endpoint",
     )
     for field_name in scalar_fields:
         value = _scalar(spec.get(field_name))
@@ -288,11 +293,36 @@ def build_payload(
     if isinstance(worker_config, dict):
         payload["worker_provisioning"] = worker_config
 
-    hosts = spec.get("hosts")
-    if isinstance(hosts, list) and all(isinstance(item, dict) for item in hosts):
-        payload["hosts"] = hosts
+    for field_name in ("data_template", "worker_node_labels"):
+        value = spec.get(field_name)
+        if isinstance(value, dict):
+            payload[field_name] = value
+
+    for field_name in ("hosts", "fleet"):
+        value = spec.get(field_name)
+        if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            payload[field_name] = value
 
     if isinstance(evidence, dict) and evidence:
+        if (
+            action == "eph.metal3.bmh.apply"
+            and "hosts" not in payload
+            and isinstance(evidence.get("hosts"), list)
+        ):
+            payload["hosts"] = evidence["hosts"]
+        if (
+            action == "eph.capi.cluster.apply"
+            and "cluster_spec" not in payload
+            and isinstance(evidence.get("cluster_spec"), dict)
+        ):
+            payload["cluster_spec"] = evidence["cluster_spec"]
+        if (
+            action == "target.worker.provision"
+            and "worker_replicas" not in payload
+            and isinstance(evidence.get("worker_replicas"), int)
+            and not isinstance(evidence.get("worker_replicas"), bool)
+        ):
+            payload["worker_replicas"] = evidence["worker_replicas"]
         payload["evidence"] = evidence
 
     return payload

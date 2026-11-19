@@ -6,6 +6,7 @@ from apps.cloud_control_agent.api import (
     ControlApiError,
     _certificate_common_name,
     _checkpoint_state_digest,
+    _merge_planning_artifacts,
     _parse_uuid,
     _validate_action_role,
     _validate_checkpoint_actor_transition,
@@ -346,3 +347,21 @@ def test_eph_pivot_attestation_rejects_duplicate_hardware_identity():
 def test_capi_pivot_checkpoint_requires_a_complete_attestation():
     with pytest.raises(ControlApiError, match="EPH_PIVOT_ATTESTATION_INVALID"):
         _validate_checkpoint_evidence("target", "capi_pivot_verified", {})
+
+
+def test_checkpoint_artifacts_survive_evidence_replacement():
+    previous = {
+        "artifacts": {
+            "fleet_plan": {"assignments": [{"machine": "m1", "role": "control-plane"}]},
+            "hosts": [{"name": "m1"}],
+            "secret_value": "must-not-survive",
+        }
+    }
+    evidence = {
+        "fleet_plan": {"assignments": [{"machine": "m1", "role": "control-plane"}]},
+        "worker_replicas": 2,
+    }
+    artifacts = _merge_planning_artifacts(previous, evidence)
+    assert artifacts["hosts"] == [{"name": "m1"}]
+    assert artifacts["worker_replicas"] == 2
+    assert "secret_value" not in artifacts
