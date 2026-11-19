@@ -20,6 +20,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .data_template import DataTemplateError, default_data_template
+
 ROLE_LABEL = "ai-agent-stack.io/role"
 POOL_LABEL = "ai-agent-stack.io/pool"
 CONTROL_PLANE_POOL = "control-plane"
@@ -202,6 +204,15 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
         control_plane_endpoint, str
     ) and control_plane_endpoint:
         data_template = payload.get("data_template")
+        if not isinstance(data_template, dict):
+            network_spec = payload.get("network_spec")
+            if isinstance(network_spec, dict):
+                try:
+                    data_template = default_data_template(network_spec)
+                except DataTemplateError as exc:
+                    raise PlanningError(str(exc)) from exc
+            else:
+                data_template = None
         worker_labels = payload.get("worker_node_labels")
         evidence["cluster_spec"] = cluster_spec(
             plan,

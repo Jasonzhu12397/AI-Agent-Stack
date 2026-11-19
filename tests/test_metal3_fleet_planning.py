@@ -290,3 +290,24 @@ def test_eph_preflight_blocks_on_an_invalid_fleet(tmp_path, monkeypatch):
     })
     assert result["status"] == "blocked"
     assert result["error_code"] == "EPH_FLEET_PLAN_INVALID"
+
+
+def test_fleet_request_derives_a_data_template_from_the_physical_network():
+    payload = {
+        "cluster_name": "target",
+        "control_plane_count": 1,
+        "image_url": "http://registry.local/worker.raw",
+        "control_plane_endpoint": "10.0.0.50:6443",
+        "network_spec": {
+            "control_plane_interface": "eno1",
+            "dns_servers": ["10.0.0.53"],
+        },
+        "fleet": [
+            _request_machine("cp", cpu_cores=32, ram_mib=128 * 1024),
+            _request_machine("worker"),
+        ],
+    }
+    evidence = fp.plan_fleet_request(payload)
+    template = evidence["cluster_spec"]["control_plane_data_template"]
+    assert template["network_data"]["links"]["ethernets"][0]["id"] == "eno1"
+    assert template["network_data"]["services"]["dns"] == ["10.0.0.53"]

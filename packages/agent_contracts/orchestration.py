@@ -293,7 +293,7 @@ def build_payload(
     if isinstance(worker_config, dict):
         payload["worker_provisioning"] = worker_config
 
-    for field_name in ("data_template", "worker_node_labels"):
+    for field_name in ("data_template", "worker_node_labels", "network_spec"):
         value = spec.get(field_name)
         if isinstance(value, dict):
             payload[field_name] = value
