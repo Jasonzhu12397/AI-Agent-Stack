@@ -19,6 +19,7 @@ optional fields are omitted instead of being filled with hard-coded defaults.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -26,10 +27,12 @@ from uuid import UUID
 
 import yaml
 
+from .local_registry import render_local_registry
 from .metal3_skill import Metal3SkillError
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _VERSION_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+_PINNED_IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[a-f0-9]{64}$")
 _HOSTNAME_PATTERN = re.compile(
     r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
     r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
@@ -148,7 +151,11 @@ def _validate_agent_block(agent: Any) -> dict[str, Any]:
     )
     if urlsplit(control_url).scheme != "https":
         raise Metal3SkillError("EPH_BOOTSTRAP_AGENT_ENDPOINT_INVALID")
-    image = _valid_url(agent.get("image"), "EPH_BOOTSTRAP_AGENT_IMAGE_INVALID")
+    image_value = agent.get("image")
+    if isinstance(image_value, str) and _PINNED_IMAGE_PATTERN.fullmatch(image_value):
+        image = image_value
+    else:
+        image = _valid_url(image_value, "EPH_BOOTSTRAP_AGENT_IMAGE_INVALID")
     mtls_secret_ref = _valid_name(
         agent.get("mtls_secret_ref"),
         "EPH_BOOTSTRAP_AGENT_MTLS_SECRET_REF_INVALID",
@@ -216,6 +223,7 @@ def _normalize_spec(spec: Any) -> dict[str, Any]:
         "control_plane_port": port,
         "ntp_servers": ntp_servers,
         "agent": agent,
+        **({"registry": spec["registry"]} if "registry" in spec else {}),
     }
 
 
@@ -256,21 +264,63 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
 
     normalized = _normalize_spec(spec)
     kubeadm_documents = render_kubeadm_init(normalized)
+    packages = ["containerd", "kubelet", "kubeadm", "kubectl"]
+    runcmd = [
+        "kubeadm init --config /etc/kubernetes/kubeadm-init.yaml --upload-certs",
+        "mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config",
+    ]
+    registry_files = []
+    if _PINNED_IMAGE_PATTERN.fullmatch(normalized["agent"]["image"]):
+        registry = render_local_registry(
+            normalized.get("registry"),
+            node_ip=normalized["node_ip"],
+            agent_image=normalized["agent"]["image"],
+        )
+        packages.extend(["docker.io", "docker-compose-v2"])
+        registry_files = [
+            {
+                "path": registry["config"]["compose_file"],
+                "content": yaml.safe_dump(registry["compose"], sort_keys=False),
+                "owner": "root:root",
+                "permissions": "0600",
+            },
+            {
+                "path": "/etc/ai-agent-stack/registry.json",
+                "content": json.dumps(registry["config"], indent=2) + "\n",
+                "owner": "root:root",
+                "permissions": "0600",
+            },
+            {
+                "path": "/etc/containerd/config.toml",
+                "content": registry["containerd_config"],
+                "owner": "root:root",
+                "permissions": "0644",
+            },
+            {
+                "path": f"/etc/containerd/certs.d/{registry['endpoint']}/hosts.toml",
+                "content": registry["hosts_toml"],
+                "owner": "root:root",
+                "permissions": "0644",
+            },
+        ]
+        runcmd.insert(
+            0,
+            "python3 /usr/local/lib/ai-agent-stack/local_registry.py "
+            "--config /etc/ai-agent-stack/registry.json",
+        )
     user_data: dict[str, Any] = {
         "#cloud-config": True,
-        "packages": ["containerd", "kubelet", "kubeadm", "kubectl"],
+        "packages": packages,
         "write_files": [
             {
                 "path": "/etc/kubernetes/kubeadm-init.yaml",
                 "content": _serialize_kubeadm_documents(kubeadm_documents),
                 "owner": "root:root",
                 "permissions": "0644",
-            }
+            },
+            *registry_files,
         ],
-        "runcmd": [
-            "kubeadm init --config /etc/kubernetes/kubeadm-init.yaml --upload-certs",
-            "mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config",
-        ],
+        "runcmd": runcmd,
     }
     if normalized["ntp_servers"]:
         user_data["ntp"] = {"servers": normalized["ntp_servers"]}

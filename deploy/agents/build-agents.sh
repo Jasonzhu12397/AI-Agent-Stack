@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 IMAGE_TAG="${IMAGE_TAG:-}"
+IMAGE_OUTPUT_DIR="${IMAGE_OUTPUT_DIR:-$ROOT_DIR/deploy/agents/dist}"
 CLOUD_CONTROL_IMAGE_REPOSITORY="${CLOUD_CONTROL_IMAGE_REPOSITORY:-}"
 EPH_AGENT_IMAGE_REPOSITORY="${EPH_AGENT_IMAGE_REPOSITORY:-}"
 TARGET_AGENT_IMAGE_REPOSITORY="${TARGET_AGENT_IMAGE_REPOSITORY:-}"
@@ -33,27 +34,28 @@ valid_repository "$TARGET_AGENT_IMAGE_REPOSITORY" || fail "TARGET_AGENT_IMAGE_RE
 [[ "$KUBECTL_SHA256_AMD64" =~ ^[a-fA-F0-9]{64}$ ]] || fail "KUBECTL_SHA256_AMD64_INVALID"
 
 docker buildx version >/dev/null
+mkdir -p "$IMAGE_OUTPUT_DIR"
 
 build_image() {
     local name="$1"
     local repository="$2"
     local dockerfile="$3"
     shift 3
-    local metadata_file
-    metadata_file="$(mktemp)"
+    local metadata_file="$IMAGE_OUTPUT_DIR/$name.metadata.json"
+    local archive_file="$IMAGE_OUTPUT_DIR/$name.tar"
     docker buildx build \
         --platform "$PLATFORMS" \
         --file "$ROOT_DIR/$dockerfile" \
         "$@" \
         --tag "$repository:$IMAGE_TAG" \
-        --push \
+        --output "type=docker,dest=$archive_file" \
         --metadata-file "$metadata_file" \
         "$ROOT_DIR"
     local digest
     digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["containerimage.digest"])' "$metadata_file")"
-    rm -f "$metadata_file"
     [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "${name}_IMAGE_DIGEST_INVALID"
     printf '%s_IMAGE_REF=%s@%s\n' "$name" "$repository" "$digest"
+    printf '%s_IMAGE_ARCHIVE=%s\n' "$name" "$archive_file"
 }
 
 build_image CLOUD_CONTROL_AGENT "$CLOUD_CONTROL_IMAGE_REPOSITORY" Dockerfile.cloud-control-agent

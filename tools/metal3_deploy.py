@@ -237,6 +237,7 @@ def command_plan(args: argparse.Namespace) -> int:
             k8s_version=args.k8s_version,
             data_template=template_content,
             worker_node_labels=_parse_pool_labels(args.worker_node_labels),
+            registry_endpoint=(network_spec or {}).get("registry_endpoint"),
         )
         capi_documents = capi_renderer.render_capi_metal3_manifests(spec)
         (out_dir / CAPI_FILE).write_text(

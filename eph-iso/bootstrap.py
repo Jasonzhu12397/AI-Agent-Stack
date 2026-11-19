@@ -108,13 +108,24 @@ def validate_config(config: object) -> dict:
     image = config["agent_image"]
     if not isinstance(image, str) or not IMAGE_PATTERN.fullmatch(image):
         raise BootstrapError("AGENT_IMAGE_NOT_PINNED_BY_DIGEST")
-    return {
+    result = {
         "control_url": control_url.rstrip("/"),
         "agent_id": agent_id,
         "installation_id": installation_id,
         "instance_id": instance_id,
         "agent_image": image,
     }
+    local_endpoint = image.split("/", 1)[0]
+    for field in ("target_agent_image", "vbmc_image", "sushy_tools_image"):
+        related_image = config.get(field)
+        if related_image is None:
+            continue
+        if not isinstance(related_image, str) or not IMAGE_PATTERN.fullmatch(related_image):
+            raise BootstrapError("AGENT_IMAGE_NOT_PINNED_BY_DIGEST")
+        if related_image.split("/", 1)[0] != local_endpoint:
+            raise BootstrapError("AGENT_IMAGE_MUST_USE_EPH_LOCAL_REGISTRY")
+        result[field] = related_image
+    return result
 
 
 def _run(arguments: list[str], input_text: str | None = None) -> None:
@@ -154,20 +165,56 @@ def verify_keypair(leaf_path: pathlib.Path, ca_path: pathlib.Path, key_path: pat
     """
 
     try:
-        _run([
-            "openssl", "verify", "-x509_strict", "-purpose", "sslclient",
-            "-verify_depth", "8", "-CAfile", str(ca_path), str(leaf_path),
-        ])
-        fingerprint = _run_output([
-            "openssl", "x509", "-in", str(leaf_path), "-noout",
-            "-fingerprint", "-sha256",
-        ]).strip().split("=", 1)[-1].replace(":", "").lower()
-        certificate_public_key = _run_output([
-            "openssl", "x509", "-in", str(leaf_path), "-pubkey", "-noout",
-        ]).strip()
-        private_public_key = _run_output([
-            "openssl", "pkey", "-in", str(key_path), "-pubout",
-        ]).strip()
+        _run(
+            [
+                "openssl",
+                "verify",
+                "-x509_strict",
+                "-purpose",
+                "sslclient",
+                "-verify_depth",
+                "8",
+                "-CAfile",
+                str(ca_path),
+                str(leaf_path),
+            ]
+        )
+        fingerprint = (
+            _run_output(
+                [
+                    "openssl",
+                    "x509",
+                    "-in",
+                    str(leaf_path),
+                    "-noout",
+                    "-fingerprint",
+                    "-sha256",
+                ]
+            )
+            .strip()
+            .split("=", 1)[-1]
+            .replace(":", "")
+            .lower()
+        )
+        certificate_public_key = _run_output(
+            [
+                "openssl",
+                "x509",
+                "-in",
+                str(leaf_path),
+                "-pubkey",
+                "-noout",
+            ]
+        ).strip()
+        private_public_key = _run_output(
+            [
+                "openssl",
+                "pkey",
+                "-in",
+                str(key_path),
+                "-pubout",
+            ]
+        ).strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         raise BootstrapError("CLIENT_CERTIFICATE_VALIDATION_FAILED") from None
     if not hmac.compare_digest(certificate_public_key, private_public_key):
@@ -212,8 +259,15 @@ def wait_for_kubernetes_api(attempts: int = 60, interval: int = 5) -> None:
 
 def create_secret(name: str, files: dict[str, pathlib.Path]) -> None:
     command = _apply_kubeconfig() + [
-        "--namespace", NAMESPACE, "create", "secret", "generic", name,
-        "--dry-run=client", "-o", "yaml",
+        "--namespace",
+        NAMESPACE,
+        "create",
+        "secret",
+        "generic",
+        name,
+        "--dry-run=client",
+        "-o",
+        "yaml",
     ]
     for key, path in files.items():
         command.append("--from-file=" + key + "=" + str(path))
@@ -231,18 +285,37 @@ def apply_text(manifest: str) -> None:
 
 def wait_for_agent_pod() -> None:
     kubectl = _apply_kubeconfig() + ["--namespace", NAMESPACE]
-    _run(kubectl + [
-        "rollout", "status", "deployment/" + DEPLOYMENT_NAME, "--timeout=10m",
-    ])
-    _run(kubectl + [
-        "wait", "--for=condition=Ready", "pod",
-        "--selector=app.kubernetes.io/name=" + DEPLOYMENT_NAME, "--timeout=300s",
-    ])
-    running = _run_output(kubectl + [
-        "get", "pods", "--selector=app.kubernetes.io/name=" + DEPLOYMENT_NAME,
-        "--field-selector=status.phase=Running", "-o",
-        "jsonpath={.items[0].metadata.name}",
-    ], timeout=15).strip()
+    _run(
+        kubectl
+        + [
+            "rollout",
+            "status",
+            "deployment/" + DEPLOYMENT_NAME,
+            "--timeout=10m",
+        ]
+    )
+    _run(
+        kubectl
+        + [
+            "wait",
+            "--for=condition=Ready",
+            "pod",
+            "--selector=app.kubernetes.io/name=" + DEPLOYMENT_NAME,
+            "--timeout=300s",
+        ]
+    )
+    running = _run_output(
+        kubectl
+        + [
+            "get",
+            "pods",
+            "--selector=app.kubernetes.io/name=" + DEPLOYMENT_NAME,
+            "--field-selector=status.phase=Running",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        ],
+        timeout=15,
+    ).strip()
     if not running:
         raise BootstrapError("EPH_AGENT_POD_NOT_READY")
 
@@ -272,9 +345,16 @@ def bootstrap(media_root: pathlib.Path | None = None) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="eph-bootstrap-") as temporary:
         wait_for_kubernetes_api()
-        _run(_apply_kubeconfig() + [
-            "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=300s",
-        ])
+        _run(
+            _apply_kubeconfig()
+            + [
+                "wait",
+                "--for=condition=Ready",
+                "nodes",
+                "--all",
+                "--timeout=300s",
+            ]
+        )
 
         secret_dir = pathlib.Path(temporary)
         tls_paths: dict[str, pathlib.Path] = {}
@@ -313,6 +393,12 @@ def bootstrap(media_root: pathlib.Path | None = None) -> dict:
         "installation_id": config["installation_id"],
         "secret": SECRET_NAME,
         "certificate_fingerprint_sha256": fingerprint,
+        "local_registry": config["agent_image"].split("/", 1)[0],
+        **(
+            {"target_agent_image": config["target_agent_image"]}
+            if "target_agent_image" in config
+            else {}
+        ),
     }
 
 

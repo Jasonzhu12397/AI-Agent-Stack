@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
+from .local_registry import target_registry_config
 from .metal3_skill import Metal3SkillError
 
 TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates"
@@ -100,9 +101,7 @@ def render_bmh_manifests(hosts: Any, namespace: str = "metal3") -> list[dict[str
             item["annotations"] = annotations
         normalized.append(item)
     try:
-        rendered = _environment().get_template("bmh/bmh-template.yaml.j2").render(
-            hosts=normalized
-        )
+        rendered = _environment().get_template("bmh/bmh-template.yaml.j2").render(hosts=normalized)
         documents = [item for item in yaml.safe_load_all(rendered) if item is not None]
     except (TemplateError, yaml.YAMLError, TypeError, ValueError) as exc:
         raise Metal3SkillError("METAL3_BMH_TEMPLATE_RENDER_FAILED") from exc
@@ -174,7 +173,9 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         raise Metal3SkillError("CAPI_KUBERNETES_VERSION_INVALID")
     cluster["k8s_version"] = version
     image_url = cluster.get("image_url")
-    if not isinstance(image_url, str) or not image_url.startswith(("http://", "https://", "oci://")):
+    if not isinstance(image_url, str) or not image_url.startswith(
+        ("http://", "https://", "oci://")
+    ):
         raise Metal3SkillError("CAPI_MACHINE_IMAGE_URL_REQUIRED")
     image_parsed = urlsplit(image_url)
     if image_parsed.scheme in {"http", "https"} and (
@@ -182,6 +183,8 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     ):
         raise Metal3SkillError("CAPI_MACHINE_IMAGE_URL_INVALID")
     cluster["image_url"] = image_url
+    if cluster.get("registry_endpoint") is not None:
+        cluster["registry"] = target_registry_config(cluster["registry_endpoint"])
     control_plane_count = cluster.get("control_plane_count", 3)
     if (
         not isinstance(control_plane_count, int)
@@ -207,8 +210,10 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= 2500:
             raise Metal3SkillError("CAPI_WORKER_POOL_COUNT_INVALID")
         labels = pool.get("node_labels", [])
-        if not isinstance(labels, list) or len(labels) > 32 or any(
-            not isinstance(label, str) or len(label) > 253 for label in labels
+        if (
+            not isinstance(labels, list)
+            or len(labels) > 32
+            or any(not isinstance(label, str) or len(label) > 253 for label in labels)
         ):
             raise Metal3SkillError("CAPI_WORKER_POOL_LABELS_INVALID")
         pool["node_labels"] = labels
@@ -227,8 +232,8 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
         cluster.get("control_plane_data_template"),
     )
     try:
-        rendered = _environment().get_template("capi/cluster-template.yaml.j2").render(
-            cluster=cluster
+        rendered = (
+            _environment().get_template("capi/cluster-template.yaml.j2").render(cluster=cluster)
         )
         documents = [item for item in yaml.safe_load_all(rendered) if item is not None]
     except (TemplateError, yaml.YAMLError, TypeError, ValueError) as exc:
@@ -238,9 +243,7 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     data_templates = [control_plane_data_template] + [
         pool["data_template"] for pool in normalized_pools
     ]
-    cluster_documents = [
-        item for item in documents if item["kind"] in {"Cluster", "Metal3Cluster"}
-    ]
+    cluster_documents = [item for item in documents if item["kind"] in {"Cluster", "Metal3Cluster"}]
     remaining_documents = [
         item for item in documents if item["kind"] not in {"Cluster", "Metal3Cluster"}
     ]

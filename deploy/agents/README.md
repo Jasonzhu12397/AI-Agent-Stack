@@ -18,7 +18,9 @@ The deployment script requires three distinct kubeconfig contexts:
 - `EPH_CONTEXT`
 - `TARGET_CONTEXT`
 
-All images must be pinned by immutable SHA-256 digest:
+All images must be pinned by immutable SHA-256 digest and use the same EPH
+host-local registry endpoint. The deploy script rejects any Cloud Control or
+Target Agent image hosted in a different registry:
 
 - `CLOUD_CONTROL_IMAGE`
 - `EPH_AGENT_IMAGE`
@@ -70,15 +72,16 @@ Expired command leases can be reclaimed. The lease token is returned only to the
 
 ## Build
 
-Use `build-agents.sh` with immutable release versions and verified upstream checksums. Current EPH and Target image builds are verified only for `linux/amd64`; the script rejects other platforms rather than silently producing an unverified image.
+Use `build-agents.sh` with immutable release versions and verified upstream checksums. Current EPH and Target image builds are verified only for `linux/amd64`; the script rejects other platforms rather than silently producing an unverified image. It writes local `.tar` archives and `.metadata.json` digest files under `deploy/agents/dist` (or `IMAGE_OUTPUT_DIR`) and never pushes to an external registry.
 
 Example environment variables:
 
 ```bash
 export IMAGE_TAG=2026.11.17-rc1
-export CLOUD_CONTROL_IMAGE_REPOSITORY=registry.example.com/ai-agent-cloud-control-agent
-export EPH_AGENT_IMAGE_REPOSITORY=registry.example.com/ai-agent-eph-agent
-export TARGET_AGENT_IMAGE_REPOSITORY=registry.example.com/ai-agent-target-agent
+export EPH_LOCAL_REGISTRY=10.0.0.10:5000
+export CLOUD_CONTROL_IMAGE_REPOSITORY=$EPH_LOCAL_REGISTRY/ai-agent-cloud-control-agent
+export EPH_AGENT_IMAGE_REPOSITORY=$EPH_LOCAL_REGISTRY/ai-agent-eph-agent
+export TARGET_AGENT_IMAGE_REPOSITORY=$EPH_LOCAL_REGISTRY/ai-agent-target-agent
 export CLUSTERCTL_VERSION=v1.10.5
 export CLUSTERCTL_SHA256_AMD64=<verified-64-character-sha256>
 export KUBECTL_VERSION=v1.32.2

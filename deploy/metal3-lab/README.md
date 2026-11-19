@@ -88,6 +88,7 @@ plugin stack. No interface or manifest is guessed:
 
 ```yaml
 control_plane_interface: eno1
+registry_endpoint: 10.0.0.10:5000
 dns_servers: [10.0.0.53]
 namespace: kube-system
 plugins:

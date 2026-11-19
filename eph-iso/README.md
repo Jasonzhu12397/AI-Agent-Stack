@@ -53,7 +53,10 @@ root:
   "agent_id": "0b8a5dc2-6f6f-4b4e-9a4c-3f6a1b7c8d90",
   "installation_id": "1f0c2a44-8b1d-4c3e-8f5a-2b6c9d0e1f22",
   "instance_id": "eph-bootstrap-01",
-  "agent_image": "registry.example.test/eph-agent@sha256:<64 hex characters>"
+  "agent_image": "10.0.0.10:5000/ai-agent-stack/eph-agent@sha256:<64 hex characters>",
+  "target_agent_image": "10.0.0.10:5000/ai-agent-stack/target-agent@sha256:<64 hex characters>",
+  "vbmc_image": "10.0.0.10:5000/ai-agent-stack/vbmc@sha256:<64 hex characters>",
+  "sushy_tools_image": "10.0.0.10:5000/ai-agent-stack/sushy-tools@sha256:<64 hex characters>"
 }
 ~~~
 
@@ -77,16 +80,42 @@ refuses to continue when the certificate does not match the private key
 Never commit real certificates, private keys or kubeconfigs. Treat the seed as
 secret material and destroy it after the node is provisioned.
 
+## Host-local registry and BMC services
+
+A digest-pinned Agent image requires a `registry` block in the bootstrap spec.
+The renderer writes a Docker Compose file and `eph-iso/local_registry.py` runs
+before `kubeadm init`. The ISO must install that script at
+`/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image archives;
+there is no external registry pull.
+
+The Compose stack contains `registry`, `vbmc` and `sushy-tools`. The latter two
+run directly on the EPH live-OS host. Their images, commands, ports, devices and
+volumes come from the seed. The runtime performs this sequence:
+
+1. Load the registry image archive and start only `registry`.
+2. Load, tag and push the EPH Agent, Target Agent, vbmc and sushy-tools archives.
+3. Read each published manifest digest from the local registry and require an
+   exact match with the pinned digest.
+4. Pull the two service images from the local registry and start the full stack.
+5. Verify all three Compose services are running and restart containerd.
+
+The same registry endpoint is written into the target control-plane and worker
+Kubeadm `files` as containerd `hosts.toml`. Remote nodes therefore pull Agent and
+workload images from the EPH provisioning NIC. The default listener is HTTP on
+the isolated provisioning network; no public registry is required.
+
 ## Boot sequence
 
 1. cloud-init consumes the NoCloud seed and writes the bootstrap material with
    root ownership and `0600` permissions.
-2. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
-3. `bootstrap.py` waits for `kubectl get --raw=/readyz` to return `ok`, then
+2. The local registry starts, all ISO image archives are published and digest
+   checked, and vbmc/sushy-tools start on the EPH host.
+3. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
+4. `bootstrap.py` waits for `kubectl get --raw=/readyz` to return `ok`, then
    waits for the node to report `Ready`.
-4. The three TLS files are copied into a temporary directory, verified locally,
+5. The three TLS files are copied into a temporary directory, verified locally,
    and stored as the `eph-agent-mtls` Secret in namespace `ai-agent-system`.
-5. `namespace.yaml`, `rbac.yaml` and the rendered `eph-node-agent.yaml` are
+6. `namespace.yaml`, `rbac.yaml` and the rendered `eph-node-agent.yaml` are
    applied, then `rollout status deployment/eph-agent` and a Pod readiness
    check confirm the Agent joined the control plane.
 

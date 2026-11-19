@@ -295,6 +295,7 @@ def cluster_spec(
     k8s_version: str = "v1.31.0",
     data_template: dict[str, Any] | None = None,
     worker_node_labels: dict[str, list[str]] | None = None,
+    registry_endpoint: str | None = None,
 ) -> dict[str, Any]:
     """The spec :func:`capi_renderer.render_capi_metal3_manifests` expects."""
 
@@ -318,6 +319,7 @@ def cluster_spec(
         "control_plane_count": plan.control_plane_count,
         "worker_pools": pools,
         "control_plane_data_template": data_template,
+        **({"registry_endpoint": registry_endpoint} if registry_endpoint else {}),
     }
 
 
