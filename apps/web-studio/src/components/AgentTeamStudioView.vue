@@ -56,6 +56,7 @@ const availableAgents = computed(() =>
   agents.value.filter(
     (agent) =>
       agent.current_version > 0 &&
+      agent.id !== coordinatorAgentId.value &&
       !members.value.some((member) => member.agent_id === agent.id),
   ),
 );
