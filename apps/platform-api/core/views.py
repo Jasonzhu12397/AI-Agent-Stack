@@ -35,7 +35,7 @@ def readiness(request):
     vector_store = "not_configured"
     if os.getenv("QDRANT_URL"):
         try:
-            vector_store = "ok" if QdrantVectorStore().ping() else "unavailable"
+            vector_store = "ok" if QdrantVectorStore().ping_service() else "unavailable"
         except VectorStoreError:
             vector_store = "unavailable"
     if vector_store == "unavailable":
