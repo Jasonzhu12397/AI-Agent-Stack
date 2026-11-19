@@ -23,7 +23,8 @@ def _spec(**overrides: object) -> dict:
             "image": "oci://registry.example.test/eph-agent:v1",
             "mtls_secret_ref": "eph-agent-mtls",
             "poll_seconds": 15,
-            "agent_id": "eph-bootstrap-01",
+            "agent_id": "0b8a5dc2-6f6f-4b4e-9a4c-3f6a1b7c8d90",
+            "installation_id": "1f0c2a44-8b1d-4c3e-8f5a-2b6c9d0e1f22",
         },
     }
     spec.update(overrides)
