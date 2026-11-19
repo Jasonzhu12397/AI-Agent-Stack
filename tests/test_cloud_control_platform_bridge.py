@@ -251,3 +251,18 @@ def test_create_validates_sriov_worker_config(bridge_workspace, monkeypatch):
     )
     assert response.status_code == 400
     assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
+
+
+@pytest.mark.django_db
+def test_create_rejects_control_plane_size_the_planner_cannot_build(bridge_workspace):
+    user, tenant, project, node, client = bridge_workspace
+    spec = _cluster_spec()
+    spec["control_plane_replicas"] = 9
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/cluster-deployments/",
+        {"eph_node_id": str(node.id), "cluster_spec": spec},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="cp-nine",
+    )
+    assert response.status_code == 400
+    assert "1, 3, 5, 7" in response.data["detail"]

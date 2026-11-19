@@ -96,11 +96,9 @@ def _validated_spec(request):
     if (
         not isinstance(control_plane_replicas, int)
         or isinstance(control_plane_replicas, bool)
-        or control_plane_replicas < 1
-        or control_plane_replicas > 9
-        or control_plane_replicas % 2 == 0
+        or control_plane_replicas not in (1, 3, 5, 7)
     ):
-        return None, "control_plane_replicas must be an odd integer from 1 to 9."
+        return None, "control_plane_replicas must be one of 1, 3, 5, 7."
     if (
         not isinstance(worker_replicas, int)
         or isinstance(worker_replicas, bool)
