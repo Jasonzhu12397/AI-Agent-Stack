@@ -846,9 +846,48 @@ else
     kubectl delete validatingwebhookconfiguration/"${BMO_NAME_PREFIX}"-validating-webhook-configuration --ignore-not-found=true
 fi
 
+# Apply the BMH manifests that describe physical hardware
+#
+# baremetal platform (local patch: see vendor/PATCHES.md): nothing is generated
+# from libvirt inventory. The operator (or tools/bmh_from_inventory.py) writes
+# one BareMetalHost per machine into BARE_METAL_HOSTS_DIR and this function only
+# applies them, retrying while the webhook comes up.
+#
+apply_bm_hosts_from_dir()
+{
+    local namespace="$1"
+    local hosts_dir="${BARE_METAL_HOSTS_DIR:-${WORKING_DIR}/hosts}"
+    local retry=10
+    local retry_interval=60
+
+    if [[ ! -d "${hosts_dir}" ]]; then
+        echo >&2 "ERROR: BMH manifest directory not found: ${hosts_dir}"
+        echo >&2 "Generate it with: python3 tools/bmh_from_inventory.py --inventory deploy/metal3-lab/hosts/baremetal-nodes.yaml --out-dir ${hosts_dir}"
+        exit 1
+    fi
+
+    while [[ "${retry}" -gt 0 ]]; do
+        echo "applying BMH manifests from ${hosts_dir}"
+        if kubectl apply -f "${hosts_dir}" -n "${namespace}"; then
+            echo "BMH manifests applied"
+            return 0
+        fi
+        echo "retrying in ${retry_interval} seconds"
+        sleep "${retry_interval}"
+        retry=$((retry - 1))
+    done
+
+    echo >&2 "ERROR: failed to apply BMH manifests from ${hosts_dir}"
+    exit 1
+}
+
+# baremetal: the BMH manifests describe real hardware and are supplied by the
+# operator; nothing is generated from libvirt inventory in this mode.
+if [[ "${NODES_PLATFORM}" = "baremetal" ]]; then
+    apply_bm_hosts_from_dir "${NAMESPACE}"
 # Tests might want to apply bmh inside the test scipt
 # then dev-env will create the bmh files but do not apply them
-if [[ "${SKIP_APPLY_BMH:-false}" = "true" ]]; then
+elif [[ "${SKIP_APPLY_BMH:-false}" = "true" ]]; then
     safe_pushd "${BMOPATH}"
     list_nodes | make_bm_hosts
     popd

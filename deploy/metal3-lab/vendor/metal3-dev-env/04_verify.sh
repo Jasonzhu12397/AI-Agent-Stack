@@ -182,6 +182,41 @@ check_container(){
   return $?
 }
 
+# baremetal platform (local patch: see vendor/PATCHES.md)
+#
+# There is no libvirt, no virsh and no virtualbmc here, so the BMH CRs are the
+# only source of truth: every host registered by the operator must be present,
+# reachable through its BMC and past introspection.
+# shellcheck disable=SC2329
+check_bmhs_baremetal(){
+  local FAILS_CHECK="${FAILS}"
+  local BMH_JSON COUNT NAME STATUS PROVISIONING
+
+  RESULT_STR="Fetch Baremetalhosts"
+  BMH_JSON="$(kubectl --kubeconfig "${KUBECONFIG}" get baremetalhosts -n metal3 -o json)"
+  process_status $?
+
+  COUNT="$(echo "${BMH_JSON}" | jq -r '.items | length' 2>/dev/null || echo 0)"
+  RESULT_STR="Baremetalhosts registered"
+  equals "${COUNT}" "${NUM_NODES}"
+
+  for i in $(seq 0 $((COUNT-1))); do
+    [[ "${COUNT}" -gt 0 ]] || break
+    NAME="$(echo "${BMH_JSON}" | jq -r ".items[${i}].metadata.name")"
+    STATUS="$(echo "${BMH_JSON}" | jq -r ".items[${i}].status.operationalStatus")"
+    PROVISIONING="$(echo "${BMH_JSON}" | jq -r ".items[${i}].status.provisioning.state")"
+
+    RESULT_STR="${NAME} Baremetalhost status OK"
+    equals "${STATUS}" "OK"
+
+    RESULT_STR="${NAME} Baremetalhost introspecting completed"
+    is_in "${PROVISIONING}" "ready available"
+  done
+
+  echo ""
+  return "$((FAILS-FAILS_CHECK))"
+}
+
 KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
 EXPTD_V1ALPHAX_V1BETAX_CRDS="clusters.cluster.x-k8s.io \
   kubeadmconfigs.bootstrap.cluster.x-k8s.io \
@@ -216,7 +251,13 @@ EXPTD_RS="cluster.x-k8s.io/provider:infrastructure-metal3:capm3-system:1 \
   cluster.x-k8s.io/provider:control-plane-kubeadm:capi-kubeadm-control-plane-system:1 \
   cluster.x-k8s.io/provider:ipam-metal3:metal3-ipam-system:1"
 BRIDGES="provisioning external"
-EXPTD_CONTAINERS="httpd-infra registry vbmc sushy-tools"
+# baremetal platform (local patch: see vendor/PATCHES.md): vbmc and sushy-tools
+# are libvirt-only BMC emulators, so they are not expected on real hardware.
+if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
+  EXPTD_CONTAINERS="httpd-infra registry"
+else
+  EXPTD_CONTAINERS="httpd-infra registry vbmc sushy-tools"
+fi
 
 FAILS=0
 BMO_RUN_LOCAL="${BMO_RUN_LOCAL:-false}"
@@ -262,6 +303,12 @@ if [[ "${NODES_PLATFORM}" == "fake" ]]; then
   exit 0
 fi
 
+# baremetal platform (local patch: see vendor/PATCHES.md): there are no domains
+# to inspect with virsh, so the BMHs are verified through the API instead.
+if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
+  check_bmhs_baremetal
+else
+
 # Verify the baremetal hosts
 ## Fetch the BM CRs
 RESULT_STR="Fetch Baremetalhosts"
@@ -283,6 +330,8 @@ if [[ -n "$(list_nodes)" ]]; then
     echo ""
   done <<< "$(list_nodes)"
 fi
+
+fi  # end of the non-baremetal BMH verification branch
 
 # Verify that the operator are running locally
 if [[ "${BMO_RUN_LOCAL}" == true ]]; then

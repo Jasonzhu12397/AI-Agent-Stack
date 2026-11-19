@@ -144,23 +144,30 @@ if ! sudo test -f /root/.ssh/id_rsa_virt_power; then
     sudo cat /root/.ssh/id_rsa_virt_power.pub | sudo tee -a /root/.ssh/authorized_keys
 fi
 
-ANSIBLE_FORCE_COLOR=true "${ANSIBLE}-playbook" \
-    -e "working_dir=${WORKING_DIR}" \
-    -e "num_nodes=${NUM_NODES}" \
-    -e "extradisks=${VM_EXTRADISKS}" \
-    -e "virthost=${HOSTNAME}" \
-    -e "vm_platform=${NODES_PLATFORM}" \
-    -e "libvirt_firmware=${LIBVIRT_FIRMWARE}" \
-    -e "libvirt_secure_boot=${LIBVIRT_SECURE_BOOT}" \
-    -e "libvirt_domain_type=${LIBVIRT_DOMAIN_TYPE}" \
-    -e "default_memory=${TARGET_NODE_MEMORY}" \
-    -e "manage_external=${MANAGE_EXT_BRIDGE}" \
-    -e "provisioning_url_host=${BARE_METAL_PROVISIONER_URL_HOST}" \
-    -e "nodes_file=${NODES_FILE}" \
-    -e "fake_nodes_file=${FAKE_NODES_FILE}" \
-    -e "node_hostname_format=${NODE_HOSTNAME_FORMAT}" \
-    -i vm-setup/inventory.ini \
-    -b vm-setup/setup-playbook.yml
+# baremetal platform (local patch: see vendor/PATCHES.md): the BMHs describe
+# hardware that already exists, so the libvirt and virtbmc roles that create
+# virtual machines are skipped. Nothing here creates a VM, a veth or a domain.
+if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
+    echo "Skipping libvirt VM creation on baremetal platform"
+else
+    ANSIBLE_FORCE_COLOR=true "${ANSIBLE}-playbook" \
+        -e "working_dir=${WORKING_DIR}" \
+        -e "num_nodes=${NUM_NODES}" \
+        -e "extradisks=${VM_EXTRADISKS}" \
+        -e "virthost=${HOSTNAME}" \
+        -e "vm_platform=${NODES_PLATFORM}" \
+        -e "libvirt_firmware=${LIBVIRT_FIRMWARE}" \
+        -e "libvirt_secure_boot=${LIBVIRT_SECURE_BOOT}" \
+        -e "libvirt_domain_type=${LIBVIRT_DOMAIN_TYPE}" \
+        -e "default_memory=${TARGET_NODE_MEMORY}" \
+        -e "manage_external=${MANAGE_EXT_BRIDGE}" \
+        -e "provisioning_url_host=${BARE_METAL_PROVISIONER_URL_HOST}" \
+        -e "nodes_file=${NODES_FILE}" \
+        -e "fake_nodes_file=${FAKE_NODES_FILE}" \
+        -e "node_hostname_format=${NODE_HOSTNAME_FORMAT}" \
+        -i vm-setup/inventory.ini \
+        -b vm-setup/setup-playbook.yml
+fi
 
 # Usually virt-manager/virt-install creates this: https://www.redhat.com/archives/libvir-list/2008-August/msg00179.html
 if ! sudo virsh pool-uuid default > /dev/null 2>&1 ; then
@@ -528,6 +535,13 @@ else
         -v "${IRONIC_DATA_DIR}":/shared --entrypoint /bin/runhttpd "${IRONIC_IMAGE}"
 fi
 
+# baremetal platform (local patch: see vendor/PATCHES.md): vbmc and sushy-tools
+# exist only to emulate IPMI/Redfish for libvirt VMs. Real hardware exposes its
+# own BMC, so these containers are not started and nothing here talks to libvirt.
+if [[ "${NODES_PLATFORM}" == "baremetal" ]]; then
+    echo "Skipping vbmc and sushy-tools containers on baremetal platform"
+    sudo "${CONTAINER_RUNTIME}" rm -f vbmc sushy-tools 2>/dev/null || true
+else
 # Start vbmc and sushy containers
 # Mount the libvirt socket directly to avoid SSH-based qemu+ssh:// connections
 # which are prone to transient failures causing power-on commands to be acked
@@ -544,6 +558,7 @@ sudo "${CONTAINER_RUNTIME}" run -d --net host --name sushy-tools ${POD_NAME_INFR
     -v "${WORKING_DIR}/virtualbmc/sushy-tools":/root/sushy -v "/root/.ssh":/root/ssh \
     -v /var/run/libvirt:/var/run/libvirt \
     "${SUSHY_TOOLS_IMAGE}"
+fi
 
 # Installing the openstack/ironic clients on the host is optional
 # if not installed, we copy a wrapper to OPENSTACKCLIENT_PATH which

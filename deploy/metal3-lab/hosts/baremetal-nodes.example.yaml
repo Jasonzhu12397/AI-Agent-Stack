@@ -1,0 +1,42 @@
+# Physical machines for the Metal3 lab (bare metal platform).
+#
+# Copy this file to baremetal-nodes.yaml, fill in the BMC details of your
+# machines and keep it out of version control if it carries real passwords.
+#
+#   cp deploy/metal3-lab/hosts/baremetal-nodes.example.yaml \
+#      deploy/metal3-lab/hosts/baremetal-nodes.yaml
+#
+# Fields:
+#   name          DNS-label name of the BareMetalHost (lowercase, digits, '-')
+#   bmc_address   BMC endpoint. Either "<scheme>+<url>" or a bare URL
+#                 (a bare URL is assumed to be redfish+https).
+#   username      BMC username, stored in a Secret next to the BMH
+#   password      BMC password, stored in a Secret next to the BMH
+#   boot_mac      MAC of the NIC that boots over PXE / virtual media
+#   boot_mode     UEFI (default), UEFISecureBoot or legacy
+#   verify_bmc_ca false (default) skips BMC certificate verification;
+#                   set true once your BMC has a trusted certificate
+#   online        true (default) lets Ironic power the machine on
+#   root_device_hints  optional Ironic rootDeviceHints (deviceName, serialNumber, ...)
+#   labels        optional extra Kubernetes labels for the BMH
+#
+# The inventory describes hardware that already exists: nothing in this path
+# creates a VM, a virtual BMC or a libvirt domain.
+machines:
+  - name: bm-node-1
+    bmc_address: redfish+https://10.0.0.11/redfish/v1/Systems/1
+    username: admin
+    password: CHANGE-ME
+    boot_mac: aa:bb:cc:dd:ee:01
+    boot_mode: UEFI
+    verify_bmc_ca: false
+    online: true
+    root_device_hints:
+      deviceName: /dev/sda
+
+  - name: bm-node-2
+    bmc_address: ipmi://10.0.0.12
+    username: admin
+    password: CHANGE-ME
+    boot_mac: aa:bb:cc:dd:ee:02
+    boot_mode: legacy
