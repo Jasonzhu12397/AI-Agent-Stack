@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 
 # Create certificates and related files for TLS
 if [[ "${IRONIC_TLS_SETUP,,}" == "true" ]]; then
