@@ -3,7 +3,7 @@
 > 语言：中文 · [English](./architecture-inventory.en.md)
 
 > 盘点口径：本清单只依据仓库 `Jasonzhu12397/AI-Agent-Stack` main 分支当前代码核对，不把设计目标、文档规划或前端模板冒充成已完成功能。
-> 盘点日期：2026-11-19；复核基线 HEAD：`901892603807e268410b5398228b9106ea2ad270`。
+> 盘点日期：2026-11-19；复核基线 HEAD：`fa14aad8601e5a266f4caeb2f223a64ae56925ed`。
 
 ## 0. 三态定义（本清单统一口径）
 
@@ -15,9 +15,9 @@
 
 ## 1. 基线证据（本次复核）
 
-- 本地基线：**878 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移；工作区干净。
+- 本地基线（2026-11-19 复核）：**935 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移。
 - 测试环境：本地无 PostgreSQL/Redis，测试以内联 `DATABASE_URL=sqlite://` 覆盖运行；CI 使用 PostgreSQL 16 服务容器。
-- 规模：`apps/` + `packages/` Python 源码与测试合计约 27.6k 行；测试文件 69 个（`tests/` 68 个，`apps/platform-api/core/tests/` 1 个）。
+- 规模：`apps/` + `packages/` Python 源码与测试合计约 30.5k 行；`tests/test_*.py` 74 个。
 - CI 工作流：`.github/workflows/ci.yml` 三个 job —— `python`（ruff / system check / 迁移漂移 / migrate / pytest）、`web`（npm test / Vite build）、`compose`（两份 compose 配置校验）。
 - 历史记录：此前 Python CI 因 `tests/test_worker_tasks.py` 三处 ruff import 排序失败（非测试逻辑失败），已由 commit `5ba685b` 修复；远端 CI 重跑结果本次未再复核。
 
@@ -46,7 +46,7 @@
 | Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；本地余弦相似度计算 | 【基础】 | 【待验证】真实 Qdrant 实例 + 嵌入模型的 ingest / retrieve 全链路；【待开发】pgvector、S3-compatible 对象存储在代码中尚未接入（见 §7.3） |
 | Token Budget | 预算预留、用量结算、防超额消耗 | `core/token_budget.py`、`core/token_budget_views.py`：租户级预算预留、结算、幂等、超额保护；含回归测试 | 【待验证】 | 多轮修复后本地测试全绿；需在并发 worker 与真实模型上报用量下复核结算一致性 |
 | Task Queue / Scheduler | 缓存、任务队列、异步执行 | `apps/worker/worker_app/main.py` 轮询 `process_once`；任务认领与租约基于 PostgreSQL 记录；依赖含 `redis`，`settings.py` 仅定义 `REDIS_URL` | 【基础】（DB 队列） | 【待开发】Redis 实际作为缓存 / 队列 / 协调通道：代码中未见 `CACHES`、channel_layer 或 redis 客户端调用；队列故障恢复、积压与重放需继续验证 |
-| Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py` 链式哈希审计记录与 verify；落库覆盖 agent-node / cluster-deployment / membership / plugin / tool-approval / workflow | 【基础】 | 需核对 model / agent / knowledge / connection 等其余写接口是否全部落审计；策略闭环待完整覆盖 |
+| Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py` 链式哈希审计记录与 verify；落库覆盖 agent-node / agent-plugin / cluster-deployment / membership / plugin / tool-approval / model / knowledge / agent / workflow / task / token-budget / tenant / project 写接口 | 【基础】 | 登录/登出等无租户上下文的认证事件尚未入链（哈希链按租户建立，需单独设计）；策略闭环待完整覆盖 |
 | Realtime Logs / Events | Agent、Workflow、部署过程实时日志 | 前端 `api.ts` 以请求拉取为主；代码中未见 channels consumer / `group_send` / channel_layer 实现 | 【待开发】 | 实时推送通道（WebSocket/SSE）尚未落地；当前为轮询体验 |
 | Multi-Agent 接入 | 外部 AI Agent 以插件方式接入协同工作 | 现有接入形态：第三方能力封装为连接器工具（HTTP/OpenAPI schema），经 tool router 权限/审批后由 Agent/Workflow 调用 | 【基础】（工具级接入） | 【待开发】把外部 AI Agent 作为可编排节点、可返回结构化结果并参与状态流转的完整接入协议；MCP Agent 接入待运行时落地 |
 
@@ -129,7 +129,7 @@
 | Infrastructure Agents | `InfrastructureAgentsView.vue` | 接 agent-nodes / commands / approve | 【基础】 | 真实部署闭环、阶段证据与失败态待验证 |
 | Metal3 Fleet | `Metal3FleetView.vue` | 接 fleet machines / BMC 配置 / lifecycle-review | 【基础】 | 物理设备操作与硬件验收待验证 |
 | Governance | `GovernanceView.vue` | 接 tool-approvals / approve / reject | 【基础】 | 完整策略闭环（审批规则、越权拦截）待补 |
-| Audit | `AuditView.vue` | 接 audit-events / verify | 【基础】 | 事件覆盖完整性待补全到所有写接口 |
+| Audit | `AuditView.vue` | 接 audit-events / verify | 【基础】 | 平台侧写接口已全量覆盖；认证类事件待单独设计 |
 | Organization | `OrganizationView.vue` | 接 tenants / projects / members | 【基础】 | 邀请流程、角色变更通知等仍需完善 |
 | Docs & Matrix | `DocsAndMatrixView.vue` | 静态阶段矩阵 + 外链 verification-matrix，不调 API | 【基础】（文档展示） | 矩阵状态必须由真实验收证据驱动，需持续更新 |
 | SR-IOV Editor | `SriovDevicePluginEditor.vue` | 子组件，被部署视图引用；不直接 import api.ts | 【基础】 | 配置与后端持久化的端到端校验待核对 |
@@ -144,12 +144,14 @@
 | 服务 | 目录 | 作用 | 三态 |
 |---|---|---|---|
 | Platform API | `apps/platform-api` | Django REST API、认证、权限、数据管理 | 【基础】 |
-| Worker | `apps/worker/worker_app` | 异步任务、通用 Agent 执行、Workflow 执行（`tasks.py` / `main.py`） | 【基础】 | 注：`worker_app/capi_pivot.py` 为未被 `tasks.py`/`main.py`/测试引用的预留/残留模块，当前不参与执行链路；正式 Pivot 适配器在 `apps/target_agent/capi_pivot.py` |
+| Worker | `apps/worker/worker_app` | 异步任务、通用 Agent 执行、Workflow 执行（`tasks.py` / `main.py`） | 【基础】 |
 | Cloud Control Agent | `apps/cloud_control_agent` | 云端部署控制面（协议校验/状态汇总） | 【基础】；真实云编排【待开发】 |
 | EPH Agent | `apps/eph_agent` | Bootstrap 集群操作与源侧观察 | 【基础/待验证】 |
 | Target Agent | `apps/target_agent` | 目标集群接管、Pivot、清理、Worker 部署 | 【基础/待验证】 |
 | Agent Contracts | `packages/agent_contracts`、`apps/agent_contracts` | Agent 身份/命令/租约/心跳/checkpoint 契约；SR-IOV 配置校验契约 | 【基础】 |
 | Agent Transport | `packages/agent_transport` | mTLS 通信、租约续约、传输客户端 | 【基础】 |
+
+注：`worker_app/capi_pivot.py` 为未被 `tasks.py` / `main.py` / 测试引用的预留残留模块，当前不参与执行链路；正式 Pivot 适配器位于 `apps/target_agent/capi_pivot.py`。
 
 ### 7.2 部署清单
 
@@ -223,7 +225,7 @@
 
 1. **先统一口径**：按 §8 修订冲突文档与 README，把 Pivot 责任固定到 Target Agent；`docs/verification-matrix.md` 与前端 `DocsAndMatrixView` 的状态只填有测试/环境证据的项。
 2. **GUI 功能映射核对**：逐页面、逐按钮对照 §6 清单，确认 API 接线、持久化与失败态；把静态展示与 JSON 编辑区域标记为未完成。
-3. **后端补齐**：Redis 通道接入与故障恢复、审计覆盖全写接口、模型路由/降级、连接器 OAuth 与 MCP 运行时。
+3. **后端补齐**：Redis 通道接入与故障恢复、认证类审计事件（需租户无关的独立链）、模型路由/降级、连接器 OAuth 与 MCP 运行时。
 4. **Agent 真实链路验收**：在选定的 CAPI / Metal3 / Ironic / OS 版本矩阵上，按 §5.1 七步状态机逐阶段补端到端证据；fail-closed 的预检逐步替换为真实执行适配器。
 5. **数据面与 Day-2**：Multus/SR-IOV/OVS/Calico/DPDK 安装回滚、真实 VF 与流量验证；扩容/缩容/升级/修复运维闭环。
 
