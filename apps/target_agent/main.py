@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from packages.agent_contracts.orchestration import TARGET_CHECKPOINT_PHASES
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -1567,26 +1568,35 @@ def main() -> int:
                                     "output": outcome.get("output", {}),
                                     "side_effects": outcome.get("side_effects", False),
                                 }
+                            checkpoint_phase = None
+                            checkpoint_evidence = None
                             if (
-                                command.get("action") == "target.handoff.evaluate"
-                                and outcome["status"] == "succeeded"
+                                outcome["status"] == "succeeded"
                                 and not outcome["output"].get("already_applied")
                                 and not command_guard.lost.is_set()
                                 and not leader_guard.lost.is_set()
                             ):
+                                action = command.get("action")
+                                if action == "target.handoff.evaluate":
+                                    checkpoint_phase = outcome["output"]["to_phase"]
+                                    checkpoint_evidence = outcome["output"]["evidence"]
+                                elif action in TARGET_CHECKPOINT_PHASES:
+                                    checkpoint_phase = TARGET_CHECKPOINT_PHASES[action].value
+                                    checkpoint_evidence = outcome["output"]
+                            if checkpoint_phase is not None:
                                 try:
                                     checkpoint_result = client.persist_checkpoint(
                                         command,
-                                        outcome["output"]["to_phase"],
-                                        outcome["output"]["evidence"],
+                                        checkpoint_phase,
+                                        checkpoint_evidence,
                                     )
                                     outcome["output"]["checkpoint"] = checkpoint_result
                                     outcome["side_effects"] = True
                                 except AgentTransportError:
                                     outcome = {
                                         "status": "failed",
-                                        "error_code": "HANDOFF_CHECKPOINT_PERSIST_FAILED",
-                                        "output": {"phase": outcome["output"]["to_phase"]},
+                                        "error_code": "TARGET_CHECKPOINT_PERSIST_FAILED",
+                                        "output": {"phase": checkpoint_phase},
                                         "side_effects": outcome.get("side_effects", False),
                                     }
                             if not leader_guard.lost.is_set():

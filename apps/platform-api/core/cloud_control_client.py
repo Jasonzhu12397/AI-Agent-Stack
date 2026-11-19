@@ -84,15 +84,21 @@ class CloudControlClient:
         deployment_id: UUID,
         installation_id: UUID,
         cluster_id: UUID,
+        spec: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "deployment_id": str(deployment_id),
+            "installation_id": str(installation_id),
+            "cluster_id": str(cluster_id),
+        }
+        if spec is not None:
+            if not isinstance(spec, dict):
+                raise ValueError("Deployment spec must be an object")
+            body["spec"] = spec
         return self._request(
             "POST",
             "/api/v1/control/deployments",
-            {
-                "deployment_id": str(deployment_id),
-                "installation_id": str(installation_id),
-                "cluster_id": str(cluster_id),
-            },
+            body,
         )
 
     def get_deployment(self, deployment_id: UUID) -> dict[str, Any]:

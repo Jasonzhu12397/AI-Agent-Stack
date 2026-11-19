@@ -39,6 +39,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             phase TEXT NOT NULL,
             sequence BIGINT NOT NULL DEFAULT 0,
             state JSONB NOT NULL DEFAULT '{}'::jsonb,
+            spec JSONB NOT NULL DEFAULT '{}'::jsonb,
             trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -47,6 +48,10 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     connection.execute(
         "ALTER TABLE agent_control_deployments "
         "ADD COLUMN IF NOT EXISTS trusted_context JSONB NOT NULL DEFAULT '{}'::jsonb"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_deployments "
+        "ADD COLUMN IF NOT EXISTS spec JSONB NOT NULL DEFAULT '{}'::jsonb"
     )
     connection.execute("""
         CREATE TABLE IF NOT EXISTS agent_control_agents (
@@ -75,6 +80,8 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             action TEXT NOT NULL,
             idempotency_key TEXT NOT NULL UNIQUE,
             payload JSONB NOT NULL,
+            from_phase TEXT,
+            next_phase TEXT,
             status TEXT NOT NULL CHECK (
                 status IN ('queued', 'leased', 'succeeded', 'failed', 'blocked', 'cancelled')
             ),
@@ -99,6 +106,12 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     )
     connection.execute(
         "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS from_phase TEXT"
+    )
+    connection.execute(
+        "ALTER TABLE agent_control_commands ADD COLUMN IF NOT EXISTS next_phase TEXT"
     )
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_commands_claim_idx

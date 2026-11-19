@@ -81,6 +81,7 @@ Target Workers ---> Calico eBPF data plane / CNI / SR-IOV
 
 `eph_single_node_ready -> control_stack_ready -> bmh_registered -> bmh_ready -> target_control_plane_ready -> target_agent_ready -> capi_pivot_verified -> bmh_registry_migrated -> eph_cleanup_verified -> worker_provisioning -> workers_ready -> completed`
 
+- Cloud Control Agent automatically plans and queues the next command after every successful result whose checkpoint has advanced; retries are deduplicated by phase-scoped idempotency keys.
 - Target Control Plane masters become ready before Target Workers are provisioned.
 - Target Agent restores its durable checkpoint after CAPI Pivot.
 - BMH migration requires exact source/target equality of namespace, name and stable hardware identity, plus verified Target Metal3 ownership.

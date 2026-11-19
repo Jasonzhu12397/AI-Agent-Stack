@@ -5,12 +5,14 @@ import pytest
 from packages.agent_contracts.orchestration import (
     EPH_CHECKPOINT_PHASES,
     PHASE_ORDER,
+    TARGET_CHECKPOINT_PHASES,
     DeploymentPhase,
     OrchestrationError,
     build_idempotency_key,
     build_payload,
     is_terminal,
     next_phase_after,
+    next_phase_for_action,
     phase_index,
     plan_next_step,
     role_for_action,
@@ -130,3 +132,24 @@ def test_every_planned_eph_action_has_a_matching_checkpoint_phase():
             continue
         checkpoint = EPH_CHECKPOINT_PHASES[plan.action]
         assert checkpoint is plan.next_phase
+
+
+def test_every_planned_target_action_has_a_matching_checkpoint_phase():
+    deployment_id = uuid4()
+    for phase in PHASE_ORDER:
+        plan = plan_next_step(deployment_id, phase, {})
+        if plan is None or plan.role != "target":
+            continue
+        if plan.action == "target.handoff.evaluate":
+            continue
+        checkpoint = TARGET_CHECKPOINT_PHASES[plan.action]
+        assert checkpoint is plan.next_phase
+
+
+def test_next_phase_for_action_accepts_only_the_planned_action():
+    assert (
+        next_phase_for_action("eph_single_node_ready", "eph.controlstack.apply").value
+        == "control_stack_ready"
+    )
+    assert next_phase_for_action("eph_single_node_ready", "eph.metal3.bmh.observe") is None
+    assert next_phase_for_action("completed", "target.handoff.evaluate") is None

@@ -19,6 +19,7 @@ from packages.agent_contracts.orchestration import (
 from packages.agent_contracts.orchestration import (
     PHASE_ORDER,
     OrchestrationError,
+    next_phase_for_action,
 )
 from packages.agent_contracts.orchestration import (
     TARGET_ACTIONS as CONTRACT_TARGET_ACTIONS,
@@ -26,6 +27,8 @@ from packages.agent_contracts.orchestration import (
 from packages.agent_contracts.orchestration import (
     plan_next_step as _plan_next_step,
 )
+
+from .deployment_controller import advance_after_command, advance_for_agent
 
 MAX_BODY_BYTES = 1024 * 1024
 LEASE_SECONDS = 90
@@ -249,6 +252,23 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
     }
 
 
+def _validate_checkpoint_evidence(
+    role: str,
+    next_phase: str,
+    evidence: Any,
+) -> None:
+    """Reject a checkpoint that claims a security-sensitive transition.
+
+    A Target Agent reports the pivot attestation in the same evidence document
+    it sends with the checkpoint. Validating it here prevents a forged or
+    incomplete pivot from advancing the deployment before result validation.
+    """
+
+    if role == "target" and next_phase == "capi_pivot_verified":
+        if not isinstance(evidence, dict) or _validated_eph_pivot_attestation(evidence) is None:
+            raise ControlApiError("EPH_PIVOT_ATTESTATION_INVALID")
+
+
 def _certificate_common_name(certificate: dict[str, Any] | None) -> str | None:
     if not certificate:
         return None
@@ -446,6 +466,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 ).fetchone()
             if row is None:
                 raise ControlApiError("AGENT_REGISTRATION_IDENTITY_CONFLICT")
+            try:
+                with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                    advance_for_agent(connection, installation_id, cluster_id)
+            except psycopg.Error:
+                # Registration itself succeeded; a transient retry failure must
+                # not force the Agent to redo identity registration.
+                pass
             self._send(200, {"registered": True, "agent_id": str(agent_id)})
 
         def _create_deployment(self, document: dict[str, Any]) -> None:
@@ -459,22 +486,25 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 "INSTALLATION_ID",
             )
             cluster_id = _parse_uuid(document.get("cluster_id"), "CLUSTER_ID")
+            spec = document.get("spec", {})
+            if not isinstance(spec, dict) or len(_json_bytes(spec)) > MAX_BODY_BYTES:
+                raise ControlApiError("DEPLOYMENT_SPEC_INVALID")
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 with connection.transaction():
                     connection.execute(
                         """
                         INSERT INTO agent_control_deployments (
                             deployment_id, installation_id, cluster_id,
-                            phase, sequence, state
+                            phase, sequence, state, spec
                         )
-                        VALUES (%s, %s, %s, 'not_started', 0, '{}'::jsonb)
+                        VALUES (%s, %s, %s, 'not_started', 0, '{}'::jsonb, %s)
                         ON CONFLICT (deployment_id) DO NOTHING
                         """,
-                        (deployment_id, installation_id, cluster_id),
+                        (deployment_id, installation_id, cluster_id, Jsonb(spec)),
                     )
                     row = connection.execute(
                         """
-                        SELECT installation_id, cluster_id, phase, sequence, state
+                        SELECT installation_id, cluster_id, phase, sequence, state, spec
                         FROM agent_control_deployments
                         WHERE deployment_id = %s
                         """,
@@ -486,6 +516,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         or row["cluster_id"] != cluster_id
                     ):
                         raise ControlApiError("DEPLOYMENT_IDENTITY_CONFLICT")
+                    if row["spec"] != spec:
+                        raise ControlApiError("DEPLOYMENT_SPEC_CONFLICT")
             self._send(200, {
                 "created": True,
                 "deployment_id": str(deployment_id),
@@ -627,6 +659,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("AGENT_INSTALLATION_MISMATCH")
                 if role == "target" and agent["cluster_id"] != deployment["cluster_id"]:
                     raise ControlApiError("TARGET_AGENT_CLUSTER_MISMATCH")
+                from_phase = deployment["phase"]
+                next_phase = None
                 if follow_plan:
                     plan = plan_deployment_command(
                         deployment_id,
@@ -643,19 +677,23 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         or next_step["payload"] != payload
                     ):
                         raise ControlApiError("COMMAND_DOES_NOT_MATCH_PLAN")
+                    next_phase = next_step["next_phase"]
+                else:
+                    inferred = next_phase_for_action(from_phase, action)
+                    next_phase = inferred.value if inferred is not None else None
                 inserted = connection.execute(
                     """
                     INSERT INTO agent_control_commands (
                         command_id, deployment_id, target_agent_id, required_role,
-                        action, idempotency_key, payload, status
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued')
+                        action, idempotency_key, payload, from_phase, next_phase, status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
                     ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING command_id
                     """,
                     (
                         command_id, deployment_id, target_agent_id, role, action,
-                        idempotency_key, Jsonb(payload),
-                    ),
+                        idempotency_key, Jsonb(payload), from_phase, next_phase,
+),
                 ).fetchone()
                 if inserted is None:
                     existing = connection.execute(
@@ -866,6 +904,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 state_digest.lower(),
             ):
                 raise ControlApiError("CHECKPOINT_EVIDENCE_DIGEST_MISMATCH")
+            _validate_checkpoint_evidence(identity["role"], next_phase, evidence)
             _validate_checkpoint_actor_transition(
                 identity["role"],
                 expected_phase,
@@ -1076,6 +1115,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 """,
                                 (Jsonb(trusted_context), updated["deployment_id"]),
                             )
+            try:
+                with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                    advance_after_command(connection, updated["deployment_id"], command_id)
+            except psycopg.Error:
+                # The result is already durable. Auto-advance can be retried by
+                # the dedicated recovery path without returning a false failure.
+                pass
             self._send(200, {"accepted": True})
 
     return Handler

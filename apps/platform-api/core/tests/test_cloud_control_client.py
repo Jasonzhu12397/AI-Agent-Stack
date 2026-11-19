@@ -74,13 +74,19 @@ def test_cloud_control_registers_agent_and_creates_deployment(tmp_path):
     client = _client(tmp_path, httpx.MockTransport(handler))
     try:
         client.register_agent(agent_id, installation_id, "target", cluster_id)
-        result = client.create_deployment(deployment_id, installation_id, cluster_id)
+        result = client.create_deployment(
+            deployment_id,
+            installation_id,
+            cluster_id,
+            {"cluster_name": "edge-01", "worker_replicas": 3},
+        )
         assert result["phase"] == "not_started"
         assert calls[0][0] == "POST"
         assert calls[0][1] == "/api/v1/control/agents/register"
         assert calls[0][2]["agent_id"] == str(agent_id)
         assert calls[1][1] == "/api/v1/control/deployments"
         assert calls[1][2]["cluster_id"] == str(cluster_id)
+        assert calls[1][2]["spec"]["cluster_name"] == "edge-01"
     finally:
         client.close()
 

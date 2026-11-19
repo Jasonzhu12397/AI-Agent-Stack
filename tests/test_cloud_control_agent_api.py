@@ -9,6 +9,7 @@ from apps.cloud_control_agent.api import (
     _parse_uuid,
     _validate_action_role,
     _validate_checkpoint_actor_transition,
+    _validate_checkpoint_evidence,
     _validate_reported_capabilities,
     _validated_eph_pivot_attestation,
 )
@@ -340,3 +341,8 @@ def test_eph_pivot_attestation_rejects_duplicate_hardware_identity():
         "source_bmh_digest": digest,
         "target_bmh_digest": digest,
     }) is None
+
+
+def test_capi_pivot_checkpoint_requires_a_complete_attestation():
+    with pytest.raises(ControlApiError, match="EPH_PIVOT_ATTESTATION_INVALID"):
+        _validate_checkpoint_evidence("target", "capi_pivot_verified", {})

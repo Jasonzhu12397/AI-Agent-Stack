@@ -116,6 +116,15 @@ EPH_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
     "eph.capi.cluster.apply": DeploymentPhase.TARGET_CONTROL_PLANE_READY,
 }
 
+#: Checkpoint advanced by deterministic Target actions. ``target.handoff.evaluate``
+#: is excluded because its next phase depends on the current lifecycle phase.
+TARGET_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
+    "target.capi.pivot": DeploymentPhase.CAPI_PIVOT_VERIFIED,
+    "target.metal3.verify_ownership": DeploymentPhase.BMH_REGISTRY_MIGRATED,
+    "target.eph.cleanup": DeploymentPhase.EPH_CLEANUP_VERIFIED,
+    "target.worker.provision": DeploymentPhase.WORKER_PROVISIONING,
+}
+
 
 @dataclass(frozen=True)
 class StepPlan:
@@ -287,6 +296,25 @@ def build_payload(
         payload["evidence"] = evidence
 
     return payload
+
+
+def next_phase_for_action(
+    current_phase: str | DeploymentPhase,
+    action: str,
+) -> DeploymentPhase | None:
+    """Return the phase a dispatchable action advances to, else ``None``.
+
+    Only the action planned for the current phase is accepted. Observation and
+    diagnostic actions therefore never create a phantom checkpoint transition.
+    """
+
+    phase = _normalize_phase(current_phase)
+    if is_terminal(phase):
+        return None
+    entry = _DISPATCH_TABLE.get(phase)
+    if entry is None or entry[1] != action:
+        return None
+    return entry[2]
 
 
 def plan_next_step(
