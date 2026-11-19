@@ -187,5 +187,3 @@ def test_reseal_refuses_a_tree_that_keeps_pruned_code(fake_archive, tmp_path):
 
     with pytest.raises(vendor_import.ImportError_, match="must not be vendored"):
         vendor_import.reseal_tree(target)
-
-

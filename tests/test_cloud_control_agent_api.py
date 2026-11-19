@@ -337,4 +337,3 @@ def test_eph_pivot_attestation_rejects_duplicate_hardware_identity():
         "source_bmh_digest": digest,
         "target_bmh_digest": digest,
     }) is None
-

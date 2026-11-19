@@ -582,4 +582,3 @@ differs(){
   fi
   return ${RET_CODE}
 }
-
