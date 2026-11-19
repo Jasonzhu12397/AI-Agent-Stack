@@ -732,7 +732,6 @@ class ClusterDeployment(models.Model):
         ]
 
 
-
 class ClusterDeploymentCheckpoint(models.Model):
     deployment = models.OneToOneField(
         ClusterDeployment,
@@ -1112,7 +1111,6 @@ class ToolApprovalRequest(models.Model):
         ]
 
 
-
 class AuditEvent(models.Model):
     class Outcome(models.TextChoices):
         SUCCESS = "success", "Success"
@@ -1124,6 +1122,8 @@ class AuditEvent(models.Model):
         Tenant,
         on_delete=models.PROTECT,
         related_name="audit_events",
+        null=True,
+        blank=True,
     )
     project = models.ForeignKey(
         Project,
