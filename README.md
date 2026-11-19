@@ -78,6 +78,29 @@ Deployment requires three distinct Kubernetes contexts:
 - Temporary EPH single-node Kubernetes cluster.
 - Target Kubernetes cluster.
 
+## Open-source operating systems and package repositories
+
+The EPH Live OS uses **Debian 12**. Target control-plane and worker images default to **Ubuntu 24.04 LTS**. Both operating systems can be deployed at scale without a paid operating-system subscription or a per-node license; Ubuntu Pro is not required. The default package selection uses open-source APT components only: Debian `main` and Ubuntu `main universe`, with no requirement for Debian `contrib/non-free` or Ubuntu `restricted/multiverse`.
+
+OS and Kubernetes package repositories are required **only while creating the EPH/Target OS images on a connected build machine**. Pin and mirror or snapshot those repositories together with the image build inputs. The default source configuration is:
+
+```text
+# Debian 12 (EPH)
+deb https://deb.debian.org/debian bookworm main
+deb https://deb.debian.org/debian bookworm-updates main
+deb https://security.debian.org/debian-security bookworm-security main
+
+# Ubuntu 24.04 LTS (Target)
+deb https://archive.ubuntu.com/ubuntu noble main universe
+deb https://archive.ubuntu.com/ubuntu noble-updates main universe
+deb https://security.ubuntu.com/ubuntu noble-security main universe
+
+# Kubernetes v1.37 packages (image build only)
+deb https://pkgs.k8s.io/core:/stable:/v1.37/deb/ /
+```
+
+The OS images must already contain compatible containerd, kubeadm, kubelet and kubectl binaries at the selected Kubernetes version (`v1.37.2`). EPH cloud-init and Target CAPI verify and enable these binaries; they never run online `apt update` or `apt install`. Bare-metal deployment, cluster expansion and remote image pulls must not depend on public OS repositories, public Kubernetes repositories or an external container registry.
+
 Build three independent images and pin each by immutable SHA-256 digest. Apply Cloud Control Agent to the cloud management context, EPH Agent to the temporary EPH cluster and Target Agent to the Target cluster. Target Agent requires three schedulable Control Plane masters.
 
 The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must operate as TCP/L4 TLS passthrough unless a separately trusted client-certificate identity propagation design is implemented.
