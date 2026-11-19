@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from packages.agent_contracts.orchestration import EPH_ACTIONS
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -21,6 +22,11 @@ from packages.agent_transport import (
     ConfigurationError,
 )
 
+from .bootstrap_renderer import (
+    render_agent_deployment,
+    render_cloud_init_seed,
+    render_kubeadm_init,
+)
 from .capi_renderer import render_bmh_manifests, render_capi_metal3_manifests
 from .control_stack import plan_control_stack
 from .control_stack_adapter import (
@@ -39,17 +45,7 @@ from .metal3_skill import (
 )
 
 LOG = logging.getLogger("eph-agent")
-CAPABILITIES = [
-    "eph.preflight",
-    "eph.source.observe",
-    "eph.controlstack.apply",
-    "eph.metal3.bmh.apply",
-    "eph.metal3.bmh.observe",
-    "eph.metal3.bmh.wait_ready",
-    "eph.capi.cluster.apply",
-    "eph.capi.cluster.observe",
-    "eph.capi.cluster.wait_ready",
-]
+CAPABILITIES = sorted(EPH_ACTIONS)
 
 
 def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
@@ -97,6 +93,18 @@ def _run_kubectl(
         "stdout": completed.stdout[-max_output_bytes:],
         "stderr": completed.stderr[-4000:],
     }
+
+
+def _artifact_digest(document: Any) -> str:
+    """Stable digest so a re-render of the same spec is byte-for-byte identical."""
+
+    encoded = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def execute(
@@ -152,6 +160,37 @@ def execute(
             "status": "succeeded" if ready else "blocked",
             "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
             "output": evidence,
+            "side_effects": False,
+        }
+    if action == "eph.bootstrap.render":
+        payload = command.get("payload", {})
+        try:
+            if not isinstance(payload, dict):
+                raise Metal3SkillError("COMMAND_PAYLOAD_INVALID")
+            spec = payload.get("spec", payload)
+            artifacts = {
+                "kubeadm_init": render_kubeadm_init(spec),
+                "cloud_init_seed": render_cloud_init_seed(spec),
+                "agent_deployment": render_agent_deployment(spec),
+            }
+        except Metal3SkillError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"resource_type": "EPH_BOOTSTRAP"},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": {
+                "resource_type": "EPH_BOOTSTRAP",
+                "artifact_count": len(artifacts),
+                "artifact_digests": {
+                    name: _artifact_digest(document)
+                    for name, document in artifacts.items()
+                },
+            },
             "side_effects": False,
         }
     if action == "eph.controlstack.apply":
