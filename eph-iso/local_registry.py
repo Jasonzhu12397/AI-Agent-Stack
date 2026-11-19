@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Start the EPH local registry and publish the ISO's pinned images.
+"""Run the EPH registry and BMC Pods and publish the ISO's pinned images.
 
-The input is rendered by apps.eph_agent.local_registry. Every subprocess uses
-an argument vector; no shell command or external registry is involved.
+All workloads run in the EPH single-node Kubernetes cluster. Images are loaded
+into containerd and pushed only to the EPH Pod registry; no Docker Compose or
+external registry is used. Every subprocess uses an argument vector.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+KUBECONFIG = "/etc/kubernetes/admin.conf"
 
 
 class RegistryError(RuntimeError):
@@ -38,6 +41,22 @@ def run(arguments: list[str], *, timeout: int = 300) -> str:
     return completed.stdout
 
 
+def kubectl(*arguments: str, timeout: int = 300) -> str:
+    return run(["kubectl", "--kubeconfig", KUBECONFIG, *arguments], timeout=timeout)
+
+
+def wait_for_kubernetes(timeout_seconds: int) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            if kubectl("get", "--raw=/readyz", timeout=10).strip() == "ok":
+                return
+        except RegistryError:
+            pass
+        time.sleep(2)
+    raise RegistryError("LOCAL_KUBERNETES_API_NOT_READY")
+
+
 def wait_for_registry(endpoint: str, timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     url = f"http://{endpoint}/v2/"
@@ -50,6 +69,15 @@ def wait_for_registry(endpoint: str, timeout_seconds: int) -> None:
             pass
         time.sleep(1)
     raise RegistryError("LOCAL_REGISTRY_NOT_READY")
+
+
+def import_image(archive: str) -> None:
+    run(["ctr", "--namespace", "k8s.io", "images", "import", archive])
+
+
+def tag_image(source: str, target: str) -> None:
+    if source != target:
+        run(["ctr", "--namespace", "k8s.io", "images", "tag", source, target])
 
 
 def published_digest(target: str) -> str:
@@ -78,29 +106,46 @@ def published_digest(target: str) -> str:
 
 
 def publish(config: dict[str, Any]) -> None:
-    endpoint = config["endpoint"]
-    compose_file = Path(config["compose_file"])
-    compose = ["docker", "compose", "-f", str(compose_file)]
-    run(["systemctl", "enable", "--now", "docker"])
-    run(["docker", "load", "--input", config["registry_archive"]])
-    run([*compose, "up", "-d", "registry"])
-    wait_for_registry(endpoint, config["wait_seconds"])
+    wait_for_kubernetes(config["wait_seconds"])
+    import_image(config["registry_archive"])
+    kubectl("apply", "-f", config["registry_manifest"])
+    kubectl(
+        "--namespace",
+        config["namespace"],
+        "rollout",
+        "status",
+        "deployment/registry",
+        f"--timeout={config['wait_seconds']}s",
+    )
+    wait_for_registry(config["endpoint"], config["wait_seconds"])
     for image in config["images"]:
-        run(["docker", "load", "--input", image["archive"]])
-        if image["source"] != image["target"]:
-            run(["docker", "tag", image["source"], image["target"]])
-        run(["docker", "push", image["target"]])
+        import_image(image["archive"])
+        tag_image(image["source"], image["target"])
+        run(
+            [
+                "ctr",
+                "--namespace",
+                "k8s.io",
+                "images",
+                "push",
+                "--plain-http",
+                image["target"],
+            ]
+        )
     for image in config["pinned_images"]:
         expected = image["reference"].split("@", 1)[1]
         if published_digest(image["target"]) != expected:
             raise RegistryError("LOCAL_REGISTRY_PINNED_DIGEST_MISMATCH")
-    for image in config["service_images"]:
-        run(["docker", "pull", image])
-    run([*compose, "up", "-d"])
-    running = set(run([*compose, "ps", "--status", "running", "--services"]).split())
-    if not {"registry", "vbmc", "sushy-tools"}.issubset(running):
-        raise RegistryError("LOCAL_EPH_SERVICES_NOT_RUNNING")
-    run(["systemctl", "restart", "containerd"])
+    kubectl("apply", "-f", config["services_manifest"])
+    for name in config["service_names"]:
+        kubectl(
+            "--namespace",
+            config["namespace"],
+            "rollout",
+            "status",
+            f"deployment/{name}",
+            f"--timeout={config['wait_seconds']}s",
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

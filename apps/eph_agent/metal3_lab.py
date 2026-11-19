@@ -37,7 +37,7 @@ HOST_BOOTSTRAP_SCRIPTS = (
     "02_configure_host.sh",
     "03_launch_mgmt_cluster.sh",
 )
-INFRA_CONTAINERS = ("ipa-downloader", "httpd-infra", "ipxe-builder", "registry")
+INFRA_CONTAINERS = ("ipa-downloader", "httpd-infra", "ipxe-builder")
 HOST_LINKS = ("ironic-peer", "ironicendpoint", "provisioning", "external")
 
 

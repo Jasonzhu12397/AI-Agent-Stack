@@ -276,11 +276,16 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
             node_ip=normalized["node_ip"],
             agent_image=normalized["agent"]["image"],
         )
-        packages.extend(["docker.io", "docker-compose-v2"])
         registry_files = [
             {
-                "path": registry["config"]["compose_file"],
-                "content": yaml.safe_dump(registry["compose"], sort_keys=False),
+                "path": registry["config"]["registry_manifest"],
+                "content": yaml.safe_dump_all(registry["registry_documents"], sort_keys=False),
+                "owner": "root:root",
+                "permissions": "0600",
+            },
+            {
+                "path": registry["config"]["services_manifest"],
+                "content": yaml.safe_dump_all(registry["service_documents"], sort_keys=False),
                 "owner": "root:root",
                 "permissions": "0600",
             },
@@ -303,10 +308,9 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
                 "permissions": "0644",
             },
         ]
-        runcmd.insert(
-            0,
+        runcmd.append(
             "python3 /usr/local/lib/ai-agent-stack/local_registry.py "
-            "--config /etc/ai-agent-stack/registry.json",
+            "--config /etc/ai-agent-stack/registry.json"
         )
     user_data: dict[str, Any] = {
         "#cloud-config": True,

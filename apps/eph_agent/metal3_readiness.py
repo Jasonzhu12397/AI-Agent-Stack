@@ -36,6 +36,9 @@ PROVIDER_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
     ("capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"),
     ("capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"),
     ("baremetal-operator-system", "baremetal-operator-controller-manager"),
+    ("ai-agent-system", "registry"),
+    ("ai-agent-system", "vbmc"),
+    ("ai-agent-system", "sushy-tools"),
 )
 
 # (label key, label value, namespace, expected replica set count)
@@ -47,9 +50,9 @@ PROVIDER_REPLICASETS: tuple[tuple[str, str, str, int], ...] = (
     ("cluster.x-k8s.io/provider", "ipam-metal3", "metal3-ipam-system", 1),
 )
 
-# Host-side infrastructure this lab starts on the provisioning host itself.
+# Only httpd-infra remains a host container. Registry and BMC services are Pods.
 REQUIRED_BRIDGES: tuple[str, ...] = ("provisioning", "external")
-REQUIRED_CONTAINERS: tuple[str, ...] = ("httpd-infra", "registry")
+REQUIRED_CONTAINERS: tuple[str, ...] = ("httpd-infra",)
 
 Runner = Callable[..., dict[str, Any]]
 
@@ -168,9 +171,7 @@ def check_bridges(host_runner: Runner) -> list[Finding]:
         links = json.loads(result.get("stdout") or "[]")
     except (TypeError, ValueError):
         return [Finding("host link inventory", False, "ip returned no JSON")]
-    names = {
-        item.get("ifname") for item in links if isinstance(item, dict)
-    }
+    names = {item.get("ifname") for item in links if isinstance(item, dict)}
     return [
         Finding(
             f"bridge {name}",
@@ -182,9 +183,7 @@ def check_bridges(host_runner: Runner) -> list[Finding]:
 
 
 def check_containers(host_runner: Runner, container_runtime: str) -> list[Finding]:
-    result = host_runner(
-        ["sudo", container_runtime, "ps", "--format", "{{.Names}}"], 30
-    )
+    result = host_runner(["sudo", container_runtime, "ps", "--format", "{{.Names}}"], 30)
     if not result.get("available") or result.get("returncode") != 0:
         return [Finding("container inventory", False, f"{container_runtime} ps failed")]
     names = {line.strip() for line in (result.get("stdout") or "").splitlines()}

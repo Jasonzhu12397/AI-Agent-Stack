@@ -31,12 +31,16 @@ def _registry():
         ],
         "services": {
             "vbmc": {
-                "image": _image("vbmc", "c"),
-                "ports": ["127.0.0.1:6240:6240"],
+                "container": {
+                    "image": _image("vbmc", "c"),
+                    "ports": [{"containerPort": 6240, "hostPort": 6240}],
+                },
             },
             "sushy-tools": {
-                "image": _image("sushy-tools", "d"),
-                "ports": ["127.0.0.1:8000:8000"],
+                "container": {
+                    "image": _image("sushy-tools", "d"),
+                    "ports": [{"containerPort": 8000, "hostPort": 8000}],
+                },
             },
         },
     }
@@ -60,14 +64,22 @@ def _spec():
     }
 
 
-def test_cloud_init_starts_local_registry_and_eph_bmc_services_before_kubeadm():
+def test_cloud_init_runs_registry_and_eph_bmc_services_as_pods_after_kubeadm():
     seed = bootstrap_renderer.render_cloud_init_seed(_spec())["user-data"]
-    assert seed["packages"][-2:] == ["docker.io", "docker-compose-v2"]
-    assert seed["runcmd"][0].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
+    assert "docker.io" not in seed["packages"]
+    assert "docker-compose-v2" not in seed["packages"]
+    assert seed["runcmd"][0].startswith("kubeadm init")
+    assert seed["runcmd"][2].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
     files = {item["path"]: item["content"] for item in seed["write_files"]}
-    compose = yaml.safe_load(files["/etc/ai-agent-stack/docker-compose.yaml"])
-    assert set(compose["services"]) == {"registry", "vbmc", "sushy-tools"}
-    assert compose["services"]["registry"]["pull_policy"] == "never"
+    assert "/etc/ai-agent-stack/docker-compose.yaml" not in files
+    registry_docs = list(yaml.safe_load_all(files["/etc/ai-agent-stack/registry.yaml"]))
+    registry = next(item for item in registry_docs if item["kind"] == "Deployment")
+    registry_container = registry["spec"]["template"]["spec"]["containers"][0]
+    assert registry_container["imagePullPolicy"] == "Never"
+    assert registry["spec"]["template"]["spec"]["hostNetwork"] is True
+    service_docs = list(yaml.safe_load_all(files["/etc/ai-agent-stack/eph-bmc-services.yaml"]))
+    assert {item["kind"] for item in service_docs} == {"Deployment"}
+    assert {item["metadata"]["name"] for item in service_docs} == {"vbmc", "sushy-tools"}
     config = json.loads(files["/etc/ai-agent-stack/registry.json"])
     assert config["target_agent_image"] == _image("target-agent", "b")
     assert len(config["images"]) == 4
@@ -95,7 +107,7 @@ def test_local_registry_requires_vbmc_and_sushy_tools():
     assert str(error.value) == "EPH_LOCAL_BMC_SERVICES_REQUIRED"
 
 
-def test_runtime_loads_pushes_and_starts_all_local_services(monkeypatch):
+def test_runtime_imports_pushes_and_waits_for_all_local_pods(monkeypatch):
     module_path = ROOT / "eph-iso" / "local_registry.py"
     spec = importlib.util.spec_from_file_location("eph_local_registry_runtime", module_path)
     module = importlib.util.module_from_spec(spec)
@@ -104,11 +116,10 @@ def test_runtime_loads_pushes_and_starts_all_local_services(monkeypatch):
 
     def fake_run(arguments, timeout=300):
         commands.append(arguments)
-        if arguments[-3:] == ["--status", "running", "--services"]:
-            return "registry\nvbmc\nsushy-tools\n"
         return ""
 
     monkeypatch.setattr(module, "run", fake_run)
+    monkeypatch.setattr(module, "wait_for_kubernetes", lambda *args: None)
     monkeypatch.setattr(module, "wait_for_registry", lambda *args: None)
     config = local_registry.render_local_registry(
         _registry(), node_ip="10.0.0.10", agent_image=_image("eph-agent", "a")
@@ -118,14 +129,18 @@ def test_runtime_loads_pushes_and_starts_all_local_services(monkeypatch):
     }
     monkeypatch.setattr(module, "published_digest", lambda target: digests[target])
     module.publish(config)
-    pushes = [command for command in commands if command[:2] == ["docker", "push"]]
-    pulls = [command for command in commands if command[:2] == ["docker", "pull"]]
+    pushes = [command for command in commands if command[3:5] == ["images", "push"]]
+    imports = [command for command in commands if command[3:5] == ["images", "import"]]
+    rollouts = [command for command in commands if "rollout" in command]
+    applies = [command for command in commands if command[-2] == "-f"]
     assert len(pushes) == 4
-    assert pulls == [
-        ["docker", "pull", _image("vbmc", "c")],
-        ["docker", "pull", _image("sushy-tools", "d")],
+    assert len(imports) == 5
+    assert len(rollouts) == 3
+    assert [command[-1] for command in applies] == [
+        config["registry_manifest"],
+        config["services_manifest"],
     ]
-    assert any(command[-2:] == ["up", "-d"] for command in commands)
+    assert all(command[0] != "docker" for command in commands)
 
 
 def test_target_control_plane_and_workers_receive_local_registry_configuration():

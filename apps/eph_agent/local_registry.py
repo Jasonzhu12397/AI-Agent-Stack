@@ -1,9 +1,9 @@
-"""Render the EPH host-local OCI registry and its supporting services.
+"""Render the EPH local registry and BMC services as Kubernetes workloads.
 
-All container images used by the EPH and Target Agents are imported from the
-Live ISO, tagged, and pushed to the registry on the EPH provisioning NIC. No
-external registry is contacted. The vbmc and sushy-tools services run beside
-that registry on the EPH host, not as virtual machines.
+The registry, vbmc, and sushy-tools all run as Pods in the EPH single-node
+cluster. Images arrive in Live ISO archives, are imported into containerd, and
+are published only to the registry on the EPH provisioning NIC. No Docker
+Compose stack, virtual machine, or external registry is involved.
 """
 
 from __future__ import annotations
@@ -19,19 +19,7 @@ _DIGEST_IMAGE = re.compile(
 )
 _ENDPOINT = re.compile(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
 _REQUIRED_SERVICES = ("vbmc", "sushy-tools")
-_SERVICE_FIELDS = {
-    "image",
-    "command",
-    "ports",
-    "environment",
-    "volumes",
-    "restart",
-    "depends_on",
-    "network_mode",
-    "privileged",
-    "cap_add",
-    "devices",
-}
+_NAMESPACE = "ai-agent-system"
 
 
 def _pinned_image(value: Any, code: str) -> tuple[str, str]:
@@ -49,11 +37,16 @@ def _absolute_path(value: Any, code: str) -> str:
     return str(Path(value))
 
 
+def _valid_endpoint(value: Any) -> str:
+    if not isinstance(value, str) or not _ENDPOINT.fullmatch(value):
+        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
+    if not 1 <= int(value.rsplit(":", 1)[1]) <= 65535:
+        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
+    return value
+
+
 def target_registry_config(endpoint: Any) -> dict[str, str]:
-    if not isinstance(endpoint, str) or not _ENDPOINT.fullmatch(endpoint):
-        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
-    if not 1 <= int(endpoint.rsplit(":", 1)[1]) <= 65535:
-        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
+    endpoint = _valid_endpoint(endpoint)
     return {
         "endpoint": endpoint,
         "containerd_config": (
@@ -70,6 +63,28 @@ def target_registry_config(endpoint: Any) -> dict[str, str]:
     }
 
 
+def _deployment(name: str, container: dict[str, Any], pod: dict[str, Any]) -> dict[str, Any]:
+    labels = {"app.kubernetes.io/name": name, "app.kubernetes.io/part-of": "eph-bootstrap"}
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": name, "namespace": _NAMESPACE, "labels": labels},
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"app.kubernetes.io/name": name}},
+            "strategy": {"type": "Recreate"},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "containers": [container],
+                    "restartPolicy": "Always",
+                    **pod,
+                },
+            },
+        },
+    }
+
+
 def render_local_registry(
     value: Any,
     *,
@@ -78,11 +93,7 @@ def render_local_registry(
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise Metal3SkillError("EPH_LOCAL_REGISTRY_REQUIRED")
-    endpoint = value.get("endpoint", f"{node_ip}:5000")
-    if not isinstance(endpoint, str) or not _ENDPOINT.fullmatch(endpoint):
-        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
-    if not 1 <= int(endpoint.rsplit(":", 1)[1]) <= 65535:
-        raise Metal3SkillError("EPH_LOCAL_REGISTRY_ENDPOINT_INVALID")
+    endpoint = _valid_endpoint(value.get("endpoint", f"{node_ip}:5000"))
     agent_endpoint, agent_repository = _pinned_image(
         agent_image, "EPH_BOOTSTRAP_AGENT_IMAGE_INVALID"
     )
@@ -144,36 +155,58 @@ def render_local_registry(
     services = value.get("services")
     if not isinstance(services, dict) or not set(_REQUIRED_SERVICES).issubset(services):
         raise Metal3SkillError("EPH_LOCAL_BMC_SERVICES_REQUIRED")
-    compose_services: dict[str, Any] = {
-        "registry": {
-            "image": registry_reference,
-            "pull_policy": "never",
-            "restart": "unless-stopped",
-            "ports": [f"{endpoint.rsplit(':', 1)[1]}:5000"],
-            "volumes": [f"{data_dir}:/var/lib/registry"],
-        }
-    }
     required_repositories = {agent_repository, target_repository}
+    service_documents = []
+    service_images = []
     for name in _REQUIRED_SERVICES:
         service = services[name]
-        if not isinstance(service, dict) or set(service) - _SERVICE_FIELDS:
+        if not isinstance(service, dict) or set(service) - {"container", "pod"}:
             raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_INVALID")
-        service = dict(service)
+        container = service.get("container")
+        pod = service.get("pod", {})
+        if not isinstance(container, dict) or not isinstance(pod, dict):
+            raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_INVALID")
+        container = dict(container)
         service_endpoint, repository = _pinned_image(
-            service.get("image"), "EPH_LOCAL_BMC_SERVICE_IMAGE_INVALID"
+            container.get("image"), "EPH_LOCAL_BMC_SERVICE_IMAGE_INVALID"
         )
         if service_endpoint != endpoint:
             raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_IMAGE_INVALID")
         required_repositories.add(repository)
-        service["pull_policy"] = "never"
-        service["restart"] = service.get("restart", "unless-stopped")
-        service["depends_on"] = ["registry"]
-        compose_services[name] = service
+        service_images.append(container["image"])
+        container.update({"name": name, "imagePullPolicy": "IfNotPresent"})
+        service_documents.append(_deployment(name, container, dict(pod)))
     if not required_repositories.issubset(repositories):
         raise Metal3SkillError("EPH_LOCAL_REGISTRY_IMAGE_SET_INCOMPLETE")
 
-    port = endpoint.rsplit(":", 1)[1]
-    service_images = [compose_services[name]["image"] for name in _REQUIRED_SERVICES]
+    registry_container = {
+        "name": "registry",
+        "image": registry_reference,
+        "imagePullPolicy": "Never",
+        "ports": [{"name": "registry", "containerPort": 5000}],
+        "readinessProbe": {
+            "httpGet": {"path": "/v2/", "port": 5000},
+            "initialDelaySeconds": 1,
+            "periodSeconds": 2,
+            "timeoutSeconds": 2,
+            "failureThreshold": 60,
+        },
+        "volumeMounts": [{"name": "registry-data", "mountPath": "/var/lib/registry"}],
+    }
+    registry_pod = {
+        "hostNetwork": True,
+        "dnsPolicy": "ClusterFirstWithHostNet",
+        "volumes": [
+            {"name": "registry-data", "hostPath": {"path": data_dir, "type": "DirectoryOrCreate"}}
+        ],
+    }
+    namespace = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": _NAMESPACE},
+    }
+    registry_documents = [namespace, _deployment("registry", registry_container, registry_pod)]
+
     pinned_images = []
     for pinned in [agent_image, target_image, *service_images]:
         repository = pinned.split("/", 1)[1].split("@", 1)[0]
@@ -185,33 +218,24 @@ def render_local_registry(
         pinned_images.append({"reference": pinned, "target": target})
     config = {
         "endpoint": endpoint,
-        "compose_file": "/etc/ai-agent-stack/docker-compose.yaml",
+        "namespace": _NAMESPACE,
+        "registry_manifest": "/etc/ai-agent-stack/registry.yaml",
+        "services_manifest": "/etc/ai-agent-stack/eph-bmc-services.yaml",
         "registry_archive": registry_archive,
         "agent_image": agent_image,
         "target_agent_image": target_image,
         "images": normalized_archives,
         "pinned_images": pinned_images,
-        "service_images": service_images,
+        "service_names": list(_REQUIRED_SERVICES),
         "wait_seconds": value.get("wait_seconds", 120),
     }
     if not isinstance(config["wait_seconds"], int) or not 1 <= config["wait_seconds"] <= 600:
         raise Metal3SkillError("EPH_LOCAL_REGISTRY_WAIT_INVALID")
-    hosts = (
-        f'server = "http://{endpoint}"\n\n'
-        f'[host."http://{endpoint}"]\n'
-        '  capabilities = ["pull", "resolve", "push"]\n'
-        "  skip_verify = true\n"
-    )
     return {
         "config": config,
-        "compose": {"name": "ai-agent-eph", "services": compose_services},
-        "hosts_toml": hosts,
-        "containerd_config": (
-            "version = 2\n\n"
-            '[plugins."io.containerd.grpc.v1.cri".registry]\n'
-            '  config_path = "/etc/containerd/certs.d"\n'
-        ),
+        "registry_documents": registry_documents,
+        "service_documents": service_documents,
+        **target_registry_config(endpoint),
         "endpoint": endpoint,
-        "port": port,
         "target_agent_image": target_image,
     }

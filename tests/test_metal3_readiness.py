@@ -34,6 +34,7 @@ def test_all_crds_present_passes():
 
 def test_a_missing_crd_fails_with_a_reason():
     present = readiness.REQUIRED_CRDS[:-1]
+
     def runner(args, timeout=60, **_):
         return ok(crd_document(present))
 
@@ -90,6 +91,7 @@ def test_replica_set_count_and_readiness_are_both_checked():
 
 def test_bridges_are_read_from_json_not_grep():
     payload = [{"ifname": "provisioning"}, {"ifname": "eth0"}]
+
     def host(args, timeout=30, **_):
         return {"available": True, "returncode": 0, "stdout": json.dumps(payload)}
 
@@ -99,15 +101,15 @@ def test_bridges_are_read_from_json_not_grep():
     assert not by_name["bridge external"].ok
 
 
-def test_containers_are_matched_exactly():
+def test_only_httpd_infra_is_a_host_container():
     def host(args, timeout=30, **_):
         return {"available": True, "returncode": 0, "stdout": "httpd-infra\nregistry-mirror\n"}
 
     findings = readiness.check_containers(host, "podman")
-    by_name = {item.name: item for item in findings}
-    assert by_name["container httpd-infra"].ok
-    # a similarly named container must not satisfy the check
-    assert not by_name["container registry"].ok
+    assert findings == [readiness.Finding("container httpd-infra", True, "")]
+    assert ("ai-agent-system", "registry") in readiness.PROVIDER_DEPLOYMENTS
+    assert ("ai-agent-system", "vbmc") in readiness.PROVIDER_DEPLOYMENTS
+    assert ("ai-agent-system", "sushy-tools") in readiness.PROVIDER_DEPLOYMENTS
 
 
 def test_ironic_must_refuse_anonymous_reads():

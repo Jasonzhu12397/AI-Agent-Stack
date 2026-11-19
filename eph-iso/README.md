@@ -80,24 +80,25 @@ refuses to continue when the certificate does not match the private key
 Never commit real certificates, private keys or kubeconfigs. Treat the seed as
 secret material and destroy it after the node is provisioned.
 
-## Host-local registry and BMC services
+## Pod-local registry and BMC services
 
 A digest-pinned Agent image requires a `registry` block in the bootstrap spec.
-The renderer writes a Docker Compose file and `eph-iso/local_registry.py` runs
-before `kubeadm init`. The ISO must install that script at
-`/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image archives;
-there is no external registry pull.
+The renderer writes Kubernetes Deployment manifests and
+`eph-iso/local_registry.py` runs after `kubeadm init`. The ISO must install that
+script at `/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image
+archives; there is no Docker Compose stack or external registry pull.
 
-The Compose stack contains `registry`, `vbmc` and `sushy-tools`. The latter two
-run directly on the EPH live-OS host. Their images, commands, ports, devices and
-volumes come from the seed. The runtime performs this sequence:
+`registry`, `vbmc` and `sushy-tools` are Deployments in namespace
+`ai-agent-system`. The registry Pod uses host networking on the provisioning NIC
+and a hostPath data volume. The BMC Pod container and Pod specs come from the
+seed. The runtime performs this sequence:
 
-1. Load the registry image archive and start only `registry`.
-2. Load, tag and push the EPH Agent, Target Agent, vbmc and sushy-tools archives.
-3. Read each published manifest digest from the local registry and require an
-   exact match with the pinned digest.
-4. Pull the two service images from the local registry and start the full stack.
-5. Verify all three Compose services are running and restart containerd.
+1. Wait for the EPH API, import the registry archive into containerd, apply the
+   registry Deployment and wait for rollout and `/v2/` readiness.
+2. Import, tag and push the EPH Agent, Target Agent, vbmc and sushy-tools
+   archives to the registry Pod.
+3. Read each published manifest digest and require an exact pinned match.
+4. Apply the vbmc and sushy-tools Deployments and wait for both rollouts.
 
 The same registry endpoint is written into the target control-plane and worker
 Kubeadm `files` as containerd `hosts.toml`. Remote nodes therefore pull Agent and
@@ -108,9 +109,9 @@ the isolated provisioning network; no public registry is required.
 
 1. cloud-init consumes the NoCloud seed and writes the bootstrap material with
    root ownership and `0600` permissions.
-2. The local registry starts, all ISO image archives are published and digest
-   checked, and vbmc/sushy-tools start on the EPH host.
-3. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
+2. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
+3. The registry Pod starts, all ISO image archives are published and digest
+   checked, and the vbmc/sushy-tools Pods become ready.
 4. `bootstrap.py` waits for `kubectl get --raw=/readyz` to return `ok`, then
    waits for the node to report `Ready`.
 5. The three TLS files are copied into a temporary directory, verified locally,
