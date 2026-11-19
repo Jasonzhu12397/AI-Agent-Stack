@@ -58,7 +58,7 @@ def test_handoff_requires_single_node_eph():
 def test_handoff_requires_three_ready_target_masters_and_internal_ntp():
     with pytest.raises(HandoffError, match="THREE_TARGET_MASTERS"):
         evaluate_transition(
-            "bmh_ready",
+            "target_control_plane_applied",
             "target_control_plane_ready",
             {
                 "target_control_plane_ready": True,
@@ -167,7 +167,7 @@ def test_handoff_blocks_workers_until_control_plane_chronyd_is_verified():
         match="EVIDENCE_REQUIRED:target_control_plane_ntp_profile_verified",
     ):
         evaluate_transition(
-            "bmh_ready",
+            "target_control_plane_applied",
             "target_control_plane_ready",
             {
                 "target_control_plane_ready": True,
@@ -180,7 +180,7 @@ def test_handoff_blocks_workers_until_control_plane_chronyd_is_verified():
 
 def test_handoff_accepts_target_control_plane_only_after_external_ntp_sync():
     result = evaluate_transition(
-        "bmh_ready",
+        "target_control_plane_applied",
         "target_control_plane_ready",
         {
             "target_control_plane_ready": True,
@@ -212,7 +212,7 @@ def test_handoff_completion_requires_durable_workers_ready_checkpoint():
             },
         },
         "deployment_checkpoint": {
-            "phase": "workers_ready",
+            "phase": "network_ready",
             "sequence": 8,
             "state": {},
         },
@@ -335,7 +335,7 @@ def test_handoff_boolean_evidence_requires_boolean_true():
     ("phase", "next_phase", "evidence", "error"),
     [
         (
-            "bmh_ready",
+            "target_control_plane_applied",
             "target_control_plane_ready",
             {
                 "target_control_plane_ready": True,

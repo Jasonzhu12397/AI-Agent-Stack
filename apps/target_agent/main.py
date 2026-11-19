@@ -1071,6 +1071,7 @@ def execute(
             "capi_pivot_verified",
             "bmh_registry_migrated",
             "eph_cleanup_verified",
+            "workers_ready",
         }:
             return {
                 "status": "blocked",
@@ -1102,7 +1103,13 @@ def execute(
                 _kubectl,
                 lease_lost_event,
             )
-            evidence = {**applied, "readiness": readiness}
+            previous_evidence: dict[str, Any] = {}
+            if current_phase == "workers_ready":
+                previous_evidence = _validated_checkpoint_evidence(
+                    checkpoint,
+                    HandoffPhase.WORKERS_READY.value,
+                )
+            evidence = {**previous_evidence, **applied, "readiness": readiness}
         except (
             NetworkStackAdapterError,
             NetworkStackError,
@@ -1254,7 +1261,7 @@ def execute(
             if next_phase == HandoffPhase.COMPLETED.value:
                 previous_evidence = _validated_checkpoint_evidence(
                     checkpoint,
-                    HandoffPhase.WORKERS_READY.value,
+                    HandoffPhase.NETWORK_READY.value,
                 )
                 cluster_name = previous_evidence.get("target_cluster_name")
                 namespace = previous_evidence.get("machine_deployment_namespace")

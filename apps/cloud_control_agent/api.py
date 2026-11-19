@@ -95,6 +95,19 @@ def plan_deployment_command(
     }
 
 
+def _command_payload_for_claim(payload: Any, next_phase: Any) -> dict[str, Any]:
+    """Expose the phase transition to the Agent inside the claimed command payload.
+
+    Target actions such as ``handoff.evaluate`` need the exact next phase, and an
+    Agent must never infer it from local state. The command row is authoritative.
+    """
+
+    result = dict(payload) if isinstance(payload, dict) else {}
+    if isinstance(next_phase, str) and next_phase:
+        result["next_phase"] = next_phase
+    return result
+
+
 def _validate_reported_capabilities(role: str, capabilities: Any) -> list[str]:
     if (
         not isinstance(capabilities, list)
@@ -821,7 +834,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         SELECT c.command_id, c.deployment_id, c.target_agent_id,
                                c.required_role, c.action, c.idempotency_key,
-                               c.payload, c.created_at, c.deadline,
+                               c.payload, c.next_phase AS command_next_phase,
+                               c.created_at, c.deadline,
                                d.phase AS deployment_phase,
                                d.sequence AS checkpoint_sequence,
                                d.state AS checkpoint_state,
@@ -856,6 +870,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """,
                         (lease_id, token_hash, expires, now, deadline, row["command_id"]),
                     )
+            command_payload = _command_payload_for_claim(
+                row["payload"],
+                row["command_next_phase"],
+            )
             self._send(200, {
                 "command": {
                     "schema_version": "v1",
@@ -865,7 +883,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "target_agent_id": str(row["target_agent_id"]),
                     "required_role": row["required_role"],
                     "action": row["action"],
-                    "payload": row["payload"],
+                    "payload": command_payload,
                     "deployment_checkpoint": {
                         "phase": row["deployment_phase"],
                         "sequence": row["checkpoint_sequence"],

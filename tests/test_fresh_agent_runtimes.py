@@ -233,7 +233,7 @@ def test_target_agent_verifies_live_master_readiness_and_ntp_before_handoff(monk
         "action": "target.handoff.evaluate",
         "deployment_id": "deployment-1",
         "deployment_checkpoint": {
-            "phase": "bmh_ready",
+            "phase": "target_control_plane_applied",
             "sequence": 3,
             "state": {},
         },

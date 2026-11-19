@@ -48,6 +48,7 @@ class DeploymentPhase(StrEnum):
     EPH_CLEANUP_VERIFIED = "eph_cleanup_verified"
     WORKER_PROVISIONING = "worker_provisioning"
     WORKERS_READY = "workers_ready"
+    NETWORK_READY = "network_ready"
     COMPLETED = "completed"
 
 
@@ -65,6 +66,7 @@ PHASE_ORDER: tuple[DeploymentPhase, ...] = (
     DeploymentPhase.EPH_CLEANUP_VERIFIED,
     DeploymentPhase.WORKER_PROVISIONING,
     DeploymentPhase.WORKERS_READY,
+    DeploymentPhase.NETWORK_READY,
     DeploymentPhase.COMPLETED,
 )
 
@@ -126,6 +128,7 @@ TARGET_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
     "target.metal3.verify_ownership": DeploymentPhase.BMH_REGISTRY_MIGRATED,
     "target.eph.cleanup": DeploymentPhase.EPH_CLEANUP_VERIFIED,
     "target.worker.provision": DeploymentPhase.WORKER_PROVISIONING,
+    "target.network.apply": DeploymentPhase.NETWORK_READY,
 }
 
 
@@ -204,6 +207,11 @@ _DISPATCH_TABLE: dict[DeploymentPhase, tuple[str, str, DeploymentPhase]] = {
         DeploymentPhase.WORKERS_READY,
     ),
     DeploymentPhase.WORKERS_READY: (
+        "target",
+        "target.network.apply",
+        DeploymentPhase.NETWORK_READY,
+    ),
+    DeploymentPhase.NETWORK_READY: (
         "target",
         "target.handoff.evaluate",
         DeploymentPhase.COMPLETED,
@@ -291,6 +299,7 @@ def build_payload(
         "image_url",
         "control_plane_endpoint",
         "registry_endpoint",
+        "target_namespace",
     )
     for field_name in scalar_fields:
         value = _scalar(spec.get(field_name))
@@ -301,7 +310,13 @@ def build_payload(
     if isinstance(worker_config, dict):
         payload["worker_provisioning"] = worker_config
 
-    for field_name in ("data_template", "worker_node_labels", "network_spec"):
+    for field_name in (
+        "data_template",
+        "worker_node_labels",
+        "network_spec",
+        "plugins",
+        "manifests",
+    ):
         value = spec.get(field_name)
         if isinstance(value, dict):
             payload[field_name] = value

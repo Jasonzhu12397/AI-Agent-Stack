@@ -16,6 +16,7 @@ class HandoffPhase(StrEnum):
     EPH_SINGLE_NODE_READY = "eph_single_node_ready"
     BMH_REGISTERED = "bmh_registered"
     BMH_READY = "bmh_ready"
+    TARGET_CONTROL_PLANE_APPLIED = "target_control_plane_applied"
     TARGET_CONTROL_PLANE_READY = "target_control_plane_ready"
     TARGET_AGENT_READY = "target_agent_ready"
     CAPI_PIVOT_VERIFIED = "capi_pivot_verified"
@@ -23,6 +24,7 @@ class HandoffPhase(StrEnum):
     EPH_CLEANUP_VERIFIED = "eph_cleanup_verified"
     WORKER_PROVISIONING = "worker_provisioning"
     WORKERS_READY = "workers_ready"
+    NETWORK_READY = "network_ready"
     COMPLETED = "completed"
 
 

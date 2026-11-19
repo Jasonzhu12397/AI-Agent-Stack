@@ -6,6 +6,7 @@ from apps.cloud_control_agent.api import (
     ControlApiError,
     _certificate_common_name,
     _checkpoint_state_digest,
+    _command_payload_for_claim,
     _merge_planning_artifacts,
     _parse_uuid,
     _validate_action_role,
@@ -369,3 +370,10 @@ def test_checkpoint_artifacts_survive_evidence_replacement():
     assert artifacts["hosts"] == [{"name": "m1"}]
     assert artifacts["worker_replicas"] == 2
     assert "secret_value" not in artifacts
+
+
+def test_claimed_command_payload_exposes_the_authoritative_next_phase():
+    payload = {"cluster_name": "target"}
+    assert _command_payload_for_claim(payload, "network_ready")["next_phase"] == "network_ready"
+    assert payload == {"cluster_name": "target"}
+    assert "next_phase" not in _command_payload_for_claim(None, None)

@@ -23,7 +23,7 @@ def test_phase_index_matches_lifecycle_order():
     assert phase_index(DeploymentPhase.NOT_STARTED) == -1
     assert phase_index(DeploymentPhase.EPH_SINGLE_NODE_READY) == 0
     assert phase_index(DeploymentPhase.BMH_READY) == 3
-    assert phase_index(DeploymentPhase.COMPLETED) == 12
+    assert phase_index(DeploymentPhase.COMPLETED) == 13
 
 
 def test_terminal_phase_plans_no_next_step():
@@ -60,6 +60,7 @@ def test_full_lifecycle_dispatch_chain_is_monotonic():
         ("target", "target.eph.cleanup", "eph_cleanup_verified"),
         ("target", "target.worker.provision", "worker_provisioning"),
         ("target", "target.handoff.evaluate", "workers_ready"),
+        ("target", "target.network.apply", "network_ready"),
         ("target", "target.handoff.evaluate", "completed"),
     ]
 
@@ -185,3 +186,18 @@ def test_payload_carries_fleet_and_agent_planning_artifacts():
         {"cluster_spec": {"name": "target", "control_plane_count": 3}},
     )
     assert capi["cluster_spec"]["name"] == "target"
+
+
+def test_network_apply_payload_carries_plugin_and_manifest_spec():
+    spec = {
+        "target_namespace": "metal3",
+        "plugins": {
+            "calico": {"enabled": True, "version": "v3.30.2"},
+            "sriov": {"enabled": True, "version": "v2.7.0"},
+        },
+        "manifests": {"calico": {"kind": "Deployment"}},
+    }
+    payload = build_payload(uuid4(), "target.network.apply", spec)
+    assert payload["plugins"] == spec["plugins"]
+    assert payload["manifests"] == spec["manifests"]
+    assert payload["target_namespace"] == "metal3"
