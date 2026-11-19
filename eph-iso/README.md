@@ -47,7 +47,7 @@ root:
 
 `bootstrap.json` holds the non-secret identity:
 
-```json
+~~~json
 {
   "control_url": "https://control.example.test",
   "agent_id": "0b8a5dc2-6f6f-4b4e-9a4c-3f6a1b7c8d90",
@@ -55,7 +55,7 @@ root:
   "instance_id": "eph-bootstrap-01",
   "agent_image": "registry.example.test/eph-agent@sha256:<64 hex characters>"
 }
-```
+~~~
 
 `agent_image` must be pinned by digest. `instance_id` is optional and defaults
 to the node hostname when the Deployment is rendered.

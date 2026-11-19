@@ -14,10 +14,6 @@ The renderer is pure: it validates the supplied spec and returns typed
 manifests. It never invokes ``kubeadm``, ``containerd`` or ``kubectl``; command
 execution stays in the runner injected by the EPH Agent main loop. Missing
 optional fields are omitted instead of being filled with hard-coded defaults.
-
-The Agent Deployment environment is derived from
-``packages.agent_transport.AgentSettings``; see
-``render_agent_deployment`` for the exact variable set.
 """
 
 from __future__ import annotations

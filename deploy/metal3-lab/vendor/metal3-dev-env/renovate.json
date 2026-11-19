@@ -1,0 +1,189 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "enabled": true,
+  "configMigration": true,
+  "baseBranchPatterns": [
+    "main"
+  ],
+  "enabledManagers": [
+    "custom.regex",
+    "github-actions"
+  ],
+  "prCreation": "immediate",
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 0,
+  "labels": [
+    "ok-to-test"
+  ],
+  "semanticCommits": "disabled",
+  "packageRules": [
+    {
+      "matchBaseBranches": [
+        "main"
+      ],
+      "description": "run before 6am on Mondays",
+      "schedule": [
+        "* 0-5 * * 1"
+      ]
+    },
+    {
+      "matchDepTypes": [
+        "devDependencies"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": false
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions",
+      "automerge": false,
+      "schedule": [
+        "* 3 * * 4"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ]
+    },
+    {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "kindest/node"
+      ],
+      "automerge": false,
+      "commitMessageTopic": "kindest/node"
+    },
+    {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "registry"
+      ],
+      "automerge": false,
+      "commitMessageTopic": "Docker registry"
+    },
+    {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "ansible",
+        "kubernetes"
+      ],
+      "automerge": false,
+      "separateMultipleMajor": true
+    },
+    {
+      "matchPackageNames": [
+        "golang"
+      ],
+      "allowedVersions": "<=1.25"
+    },
+    {
+      "matchPackageNames": [
+        "kindest/node"
+      ],
+      "allowedVersions": "<=1.37"
+    },
+    {
+      "matchPackageNames": [
+        "kubernetes-sigs/cri-tools"
+      ],
+      "allowedVersions": "<=1.36"
+    }
+  ],
+  "rangeStrategy": "bump",
+  "forkProcessing": "disabled",
+  "minimumReleaseAge": "5 days",
+  "automerge": false,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^lib/common\\.sh$/"
+      ],
+      "matchStrings": [
+        "KIND_VERSION:-(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "depNameTemplate": "kubernetes-sigs/kind",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^lib/common\\.sh$/"
+      ],
+      "matchStrings": [
+        "KIND_NODE_IMAGE_VERSION:-(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "depNameTemplate": "kindest/node",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^lib/common\\.sh$/"
+      ],
+      "matchStrings": [
+        "ANSIBLE_VERSION:-(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "depNameTemplate": "ansible",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^vm-setup/roles/packages_installation/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "kubernetes==(?<currentValue>.*?)"
+      ],
+      "depNameTemplate": "kubernetes",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^vm-setup/roles/packages_installation/defaults/main\\.yml$/"
+      ],
+      "matchStrings": [
+        "go_version: \"(?<currentValue>[0-9.]+)\""
+      ],
+      "depNameTemplate": "golang",
+      "datasourceTemplate": "golang-version"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^lib/common\\.sh$/"
+      ],
+      "matchStrings": [
+        "REGISTRY_IMAGE_VERSION=\"(?<currentValue>.*?)\""
+      ],
+      "depNameTemplate": "registry",
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

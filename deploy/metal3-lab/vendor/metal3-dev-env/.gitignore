@@ -1,0 +1,15 @@
+logs
+config_*.sh
+!config_example.sh
+bmhosts_crs.yaml
+*.bk
+*.tmp
+clouds.yaml
+_clouds_yaml
+
+*.swp
+ipv6-*/
+vm-setup/roles/run_tests/files/manifests
+__pycache__
+.claude
+local-dev/

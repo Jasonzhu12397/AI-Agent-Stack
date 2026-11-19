@@ -1,0 +1,10 @@
+{
+  "upstream_repo": "https://github.com/metal3-io/metal3-dev-env",
+  "upstream_commit": "7076f07624cdfba990f83bea24f749b37e3baad7",
+  "imported_source": "/tmp/m3dev-7076f07.tar.gz",
+  "imported_at": "2026-11-19T06:01:59+00:00",
+  "file_count": 245,
+  "total_bytes": 529636,
+  "manifest_sha256": "3a3e02bb6d5252bae2bb5dfd4cf4088a6283c60c2abb909aec8ccfa80bcf6066",
+  "note": "Vendored source. Runtime never clones upstream; edit these files directly."
+}
