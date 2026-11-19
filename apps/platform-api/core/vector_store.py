@@ -127,6 +127,36 @@ class QdrantVectorStore:
         clone.api_key = self.api_key
         return clone
 
+    def ping_service(self):
+        """Check Qdrant service readiness without requiring a collection to exist."""
+
+        headers = {"Accept": "text/plain"}
+        if self.api_key:
+            headers["api-key"] = self.api_key
+        request = Request(
+            self.base_url + "/readyz",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with build_opener(NoRedirectHandler()).open(
+                request,
+                timeout=min(self.timeout_seconds, 3),
+            ) as response:
+                status = getattr(response, "status", 200)
+                response.read()
+        except HTTPError as exc:
+            raise VectorStoreError(
+                f"Vector database readiness endpoint returned HTTP {exc.code}."
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise VectorStoreError("Vector database is unavailable.") from exc
+        if not 200 <= status < 300:
+            raise VectorStoreError(
+                f"Vector database readiness endpoint returned HTTP {status}."
+            )
+        return True
+
     def ping(self):
         """Return True when the vector database answers a collection read."""
 
