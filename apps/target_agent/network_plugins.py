@@ -86,7 +86,11 @@ def plan_network_stack(spec: Any) -> list[NetworkPlugin]:
         if entry is None:
             enabled = name == "calico"
             version = None
-            config = None
+            config = (
+                {"dataplane": "eBPF", "kube_proxy_replacement": True}
+                if name == "calico"
+                else None
+            )
         else:
             if not isinstance(entry, dict):
                 raise NetworkStackError("NETWORK_STACK_PLUGIN_ENTRY_INVALID")
@@ -99,6 +103,19 @@ def plan_network_stack(spec: Any) -> list[NetworkPlugin]:
             if config is not None and not isinstance(config, dict):
                 raise NetworkStackError("NETWORK_STACK_CONFIG_INVALID")
             version = normalized_version
+            if name == "calico":
+                if not enabled:
+                    raise NetworkStackError("NETWORK_STACK_CALICO_REQUIRED")
+                normalized_config = dict(config or {})
+                if normalized_config.get("dataplane", "eBPF") != "eBPF":
+                    raise NetworkStackError("NETWORK_STACK_CALICO_EBPF_REQUIRED")
+                if normalized_config.get("kube_proxy_replacement", True) is not True:
+                    raise NetworkStackError("NETWORK_STACK_KUBE_PROXY_REPLACEMENT_REQUIRED")
+                config = {
+                    **normalized_config,
+                    "dataplane": "eBPF",
+                    "kube_proxy_replacement": True,
+                }
         planned.append(
             NetworkPlugin(
                 name=name,

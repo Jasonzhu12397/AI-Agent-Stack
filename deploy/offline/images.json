@@ -20,10 +20,14 @@
     "kube-apiserver": "registry.k8s.io/kube-apiserver:v1.37.0",
     "kube-controller-manager": "registry.k8s.io/kube-controller-manager:v1.37.0",
     "kube-scheduler": "registry.k8s.io/kube-scheduler:v1.37.0",
-    "kube-proxy": "registry.k8s.io/kube-proxy:v1.37.0",
     "etcd": "registry.k8s.io/etcd:3.6.4-0",
     "coredns": "registry.k8s.io/coredns/coredns:v1.13.1",
-    "pause": "registry.k8s.io/pause:3.10.1"
+    "pause": "registry.k8s.io/pause:3.10.1",
+    "calico-node": "docker.io/calico/node:v3.30.2",
+    "calico-cni": "docker.io/calico/cni:v3.30.2",
+    "calico-pod2daemon-flexvol": "docker.io/calico/pod2daemon-flexvol:v3.30.2",
+    "calico-kube-controllers": "docker.io/calico/kube-controllers:v3.30.2",
+    "tigera-operator": "quay.io/tigera/operator:v1.38.2"
   },
   "binaries": {
     "clusterctl": {

@@ -111,6 +111,8 @@ spec:
         content: {{ cluster.registry.hosts_toml | tojson }}
 {% endif %}
     initConfiguration:
+      skipPhases:
+        - addon/kube-proxy
       nodeRegistration:
         kubeletExtraArgs:
           - name: cloud-provider
@@ -133,8 +135,8 @@ spec:
         extraArgs:
           - name: cloud-provider
             value: ""
-{% if cluster.registry is defined or (cluster.control_plane_hugepage_count_1gb is defined and cluster.control_plane_hugepage_count_1gb) %}
     preKubeadmCommands:
+      - "command -v containerd && command -v kubeadm && command -v kubelet && command -v kubectl && systemctl enable kubelet"
 {% if cluster.registry is defined %}
       - "systemctl restart containerd"
 {% endif %}
@@ -142,7 +144,6 @@ spec:
       - "echo {{ cluster.control_plane_hugepage_count_1gb }} > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
 {% if cluster.control_plane_hugepage_count_2mb is defined and cluster.control_plane_hugepage_count_2mb %}
       - "echo {{ cluster.control_plane_hugepage_count_2mb }} > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
-{% endif %}
 {% endif %}
 {% endif %}
 {% if cluster.allow_workloads_on_control_plane | default(false) %}
@@ -214,8 +215,8 @@ spec:
               value: "{{ pool.topology_manager_policy | default('single-numa-node') }}"
 {% endif %}
 {% endif %}
-{% if cluster.registry is defined or (pool.hugepage_count_1gb is defined and pool.hugepage_count_1gb) %}
       preKubeadmCommands:
+        - "command -v containerd && command -v kubeadm && command -v kubelet && command -v kubectl && systemctl enable kubelet"
 {% if cluster.registry is defined %}
         - "systemctl restart containerd"
 {% endif %}
@@ -223,7 +224,6 @@ spec:
         - "echo {{ pool.hugepage_count_1gb }} > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
 {% if pool.hugepage_count_2mb is defined and pool.hugepage_count_2mb %}
         - "echo {{ pool.hugepage_count_2mb }} > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
-{% endif %}
 {% endif %}
 {% endif %}
 ---

@@ -84,9 +84,13 @@ secret material and destroy it after the node is provisioned.
 
 A digest-pinned Agent image requires a `registry` block in the bootstrap spec.
 The renderer writes Kubernetes Deployment manifests and
-`eph-iso/local_registry.py` runs after `kubeadm init`. The ISO must install that
-script at `/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image
-archives; there is no Docker Compose stack or external registry pull.
+`eph-iso/local_registry.py` preloads all archives before `kubeadm init` and runs
+again after it. The ISO must install that script at
+`/usr/local/lib/ai-agent-stack/local_registry.py` and carry local image archives;
+there is no Docker Compose stack or external registry pull. The Live OS must
+preinstall compatible containerd, kubeadm, kubelet and kubectl binaries;
+cloud-init installs no OS packages. Kubeadm skips the kube-proxy addon because
+the Target data plane uses Calico eBPF.
 
 `registry`, `vbmc`, `sushy-tools` and `httpd-infra` are Deployments in namespace
 `ai-agent-system`. The EPH Agent is a Deployment in the same cluster, and BMH,
@@ -111,7 +115,9 @@ the isolated provisioning network; no public registry is required.
 
 1. cloud-init consumes the NoCloud seed and writes the bootstrap material with
    root ownership and `0600` permissions.
-2. kubelet, containerd and `kubeadm init` bring up the single-node control plane.
+2. Preinstalled binaries are verified, all image archives are imported into
+   containerd, and `kubeadm init --skip-phases=addon/kube-proxy` brings up the
+   single-node control plane.
 3. The registry Pod starts, all ISO image archives are published and digest
    checked, and the vbmc/sushy-tools/httpd-infra Pods become ready.
 4. `bootstrap.py` waits for `kubectl get --raw=/readyz` to return `ok`, then

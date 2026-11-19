@@ -5,6 +5,13 @@ Metal3/IPA dependency without using an external registry during EPH deployment.
 Docker/Skopeo are required **only on the image build machine**, never on the EPH
 node. EPH and Target workloads remain Kubernetes Deployments.
 
+Both the EPH Live OS and every Target control-plane/worker OS image must already
+contain compatible `containerd`, `kubeadm`, `kubelet` and `kubectl` binaries.
+Cloud-init and CAPI only verify and enable them; they do not install Kubernetes
+packages. Kubeadm skips the kube-proxy addon on EPH and Target control planes.
+The Target Agent applies Calico eBPF, waits for Calico readiness, and only then
+removes the kube-proxy DaemonSet and ConfigMap.
+
 ## 1. Select versions
 
 Edit `images.json` before fetching. It contains one entry for every image, the
@@ -59,8 +66,10 @@ network installation path.
 - archives for registry, vbmc, sushy-tools, Ironic, BMO, CAPI, CAPM3, IPAM,
   IRSO and the other configured Metal3 images;
 - the IPA kernel/ramdisk archive;
-- kube-apiserver, kube-controller-manager, kube-scheduler, kube-proxy, etcd,
-  CoreDNS and pause archives with the exact version tags Kubeadm expects;
+- kube-apiserver, kube-controller-manager, kube-scheduler, etcd, CoreDNS and
+  pause archives with the exact version tags Kubeadm expects;
+- Calico node, CNI, kube-controllers and Tigera operator images for the eBPF
+  data plane; kube-proxy is deliberately excluded;
 - `bootstrap-images.json`, with pinned local-registry references for every image;
 - `bootstrap.json` when `--bootstrap` was supplied, preserving the original
   bootstrap fields and adding `agent_image`, `agent.image`, `registry` and `ipa`;

@@ -264,9 +264,12 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
 
     normalized = _normalize_spec(spec)
     kubeadm_documents = render_kubeadm_init(normalized)
-    packages = ["containerd", "kubelet", "kubeadm", "kubectl"]
+    packages: list[str] = []
     runcmd = [
-        "kubeadm init --config /etc/kubernetes/kubeadm-init.yaml --upload-certs",
+        "command -v containerd && command -v kubeadm && command -v kubelet && "
+        "command -v kubectl && systemctl enable kubelet",
+        "kubeadm init --config /etc/kubernetes/kubeadm-init.yaml --upload-certs "
+        "--skip-phases=addon/kube-proxy",
         "mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config",
     ]
     registry_files = []
@@ -309,7 +312,7 @@ def render_cloud_init_seed(spec: Any) -> dict[str, Any]:
             },
         ]
         runcmd.insert(
-            0,
+            1,
             "python3 /usr/local/lib/ai-agent-stack/local_registry.py "
             "--config /etc/ai-agent-stack/registry.json --preload-only",
         )

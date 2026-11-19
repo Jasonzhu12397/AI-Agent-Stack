@@ -46,17 +46,17 @@ def test_kubeadm_init_renders_two_documents_with_networking():
     assert cluster_config["networking"]["serviceSubnet"] == "10.96.0.0/12"
 
 
-def test_cloud_init_seed_carries_hostname_packages_and_kubeadm_config():
+def test_cloud_init_uses_preinstalled_kubernetes_binaries_and_skips_kube_proxy():
     seed = render_cloud_init_seed(_spec())
     assert seed["meta-data"]["local-hostname"] == "eph-bootstrap-01"
     user_data = seed["user-data"]
-    assert "containerd" in user_data["packages"]
-    assert "kubeadm" in user_data["packages"]
+    assert user_data["packages"] == []
     assert any(
         file["path"] == "/etc/kubernetes/kubeadm-init.yaml" for file in user_data["write_files"]
     )
     assert user_data["ntp"]["servers"] == ["192.0.2.1"]
-    assert any("kubeadm init" in cmd for cmd in user_data["runcmd"])
+    init = next(cmd for cmd in user_data["runcmd"] if "kubeadm init" in cmd)
+    assert "--skip-phases=addon/kube-proxy" in init
 
 
 def test_agent_deployment_injects_endpoint_role_and_mtls_volume():

@@ -234,6 +234,47 @@ def _apply_manifest(
             path.unlink(missing_ok=True)
 
 
+def _calico_ebpf_manifest() -> dict[str, Any]:
+    return {
+        "apiVersion": "crd.projectcalico.org/v1",
+        "kind": "FelixConfiguration",
+        "metadata": {"name": "default"},
+        "spec": {
+            "bpfEnabled": True,
+            "bpfKubeProxyIptablesCleanupEnabled": True,
+            "bpfConnectTimeLoadBalancing": "TCP",
+        },
+    }
+
+
+def _apply_calico_ebpf(
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any,
+) -> None:
+    _invoke(
+        runner,
+        [
+            "wait",
+            "--for=condition=Established",
+            "crd/felixconfigurations.crd.projectcalico.org",
+            "--timeout=120s",
+        ],
+        130,
+    )
+    _apply_manifest(_calico_ebpf_manifest(), runner, lease_lost_event)
+
+
+def disable_kube_proxy(runner: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    """Remove kube-proxy only after Calico eBPF is ready."""
+    for resource in ("daemonset/kube-proxy", "configmap/kube-proxy"):
+        _invoke(
+            runner,
+            ["--namespace", "kube-system", "delete", resource, "--ignore-not-found=true"],
+            120,
+        )
+    return {"kube_proxy_disabled": True, "dataplane": "eBPF", "side_effects": True}
+
+
 def apply_network_stack(
     plan: list[NetworkPlugin],
     namespace: str,
@@ -259,6 +300,7 @@ def apply_network_stack(
     already: list[str] = []
     pending: list[str] = []
     data_plane: list[str] = []
+    ebpf_configured = False
 
     for plugin in enabled:
         if plugin.name in DATA_PLANE_PLUGINS:
@@ -266,15 +308,18 @@ def apply_network_stack(
         existing = _existing_workload(plugin, namespace, runner)
         if existing is not None:
             already.append(plugin.name)
-            continue
-        manifest = manifest_source.get(plugin.name)
-        if manifest is None:
-            pending.append(plugin.name)
-            continue
-        if lease_lost_event is not None and lease_lost_event.is_set():
-            raise NetworkStackAdapterError("COMMAND_LEASE_LOST_DURING_NETWORK_STACK_APPLY")
-        _apply_manifest(manifest, runner, lease_lost_event)
-        applied.append(plugin.name)
+        else:
+            manifest = manifest_source.get(plugin.name)
+            if manifest is None:
+                pending.append(plugin.name)
+                continue
+            if lease_lost_event is not None and lease_lost_event.is_set():
+                raise NetworkStackAdapterError("COMMAND_LEASE_LOST_DURING_NETWORK_STACK_APPLY")
+            _apply_manifest(manifest, runner, lease_lost_event)
+            applied.append(plugin.name)
+        if plugin.name == "calico":
+            _apply_calico_ebpf(runner, lease_lost_event)
+            ebpf_configured = True
 
     return {
         "namespace": namespace,
@@ -283,7 +328,8 @@ def apply_network_stack(
         "applied_plugins": applied,
         "already_present_plugins": already,
         "apply_pending_plugins": pending,
-        "side_effects": bool(applied),
+        "calico_ebpf_configured": ebpf_configured,
+        "side_effects": bool(applied) or ebpf_configured,
     }
 
 

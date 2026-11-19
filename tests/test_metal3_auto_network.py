@@ -79,6 +79,11 @@ def test_network_apply_waits_and_records_ready_evidence(tmp_path, monkeypatch):
         "wait_for_network_stack_ready",
         lambda *args, **kwargs: {"ready": True},
     )
+    monkeypatch.setattr(
+        metal3_deploy.network_stack_adapter,
+        "disable_kube_proxy",
+        lambda *args, **kwargs: {"kube_proxy_disabled": True, "side_effects": True},
+    )
     assert metal3_deploy.main(
         [
             "network",
@@ -113,6 +118,43 @@ def test_network_apply_fails_when_an_enabled_plugin_has_no_manifest(
     evidence = json.loads((tmp_path / metal3_deploy.NETWORK_FILE).read_text())
     assert evidence["status"] == "blocked"
     assert evidence["apply"]["apply_pending_plugins"] == ["calico"]
+
+
+def test_calico_manifest_images_are_localized_with_version_tags():
+    manifests = metal3_deploy._network_manifests(
+        {
+            "registry_endpoint": "10.0.0.10:5000",
+            "manifests": {
+                "calico": {
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "initContainers": [
+                                    {"image": "docker.io/calico/cni:v3.30.2"},
+                                    {"image": "calico/pod2daemon-flexvol:v3.30.2"},
+                                ],
+                                "containers": [
+                                    {"image": "calico/node:v3.30.2"},
+                                    {"image": "calico/kube-controllers:v3.30.2"},
+                                    {"image": "quay.io/tigera/operator:v1.38.2"},
+                                ],
+                            }
+                        }
+                    }
+                }
+            },
+        },
+        None,
+    )
+    pod = manifests["calico"]["spec"]["template"]["spec"]
+    images = [item["image"] for item in pod["initContainers"] + pod["containers"]]
+    assert images == [
+        "10.0.0.10:5000/ai-agent-stack/calico-cni:v3.30.2",
+        "10.0.0.10:5000/ai-agent-stack/calico-pod2daemon-flexvol:v3.30.2",
+        "10.0.0.10:5000/ai-agent-stack/calico-node:v3.30.2",
+        "10.0.0.10:5000/ai-agent-stack/calico-kube-controllers:v3.30.2",
+        "10.0.0.10:5000/ai-agent-stack/tigera-operator:v1.38.2",
+    ]
 
 
 def test_auto_lifecycle_runs_kubeconfig_network_then_verification(tmp_path, monkeypatch):

@@ -11,6 +11,10 @@ def test_default_stack_enables_only_base_calico():
     planned = plan_network_stack({})
     by_name = {plugin.name: plugin for plugin in planned}
     assert by_name["calico"].enabled is True
+    assert by_name["calico"].config == {
+        "dataplane": "eBPF",
+        "kube_proxy_replacement": True,
+    }
     for name in ("multus", "ovs", "sriov", "dpdk"):
         assert by_name[name].enabled is False
 
@@ -59,3 +63,12 @@ def test_rejects_non_mapping_config():
 def test_rejects_non_mapping_spec():
     with pytest.raises(NetworkStackError, match="NETWORK_STACK_SPEC_INVALID"):
         plan_network_stack(["not", "a", "dict"])
+
+
+def test_rejects_calico_iptables_and_kube_proxy_mode():
+    with pytest.raises(NetworkStackError, match="CALICO_EBPF_REQUIRED"):
+        plan_network_stack({"plugins": {"calico": {"config": {"dataplane": "Iptables"}}}})
+    with pytest.raises(NetworkStackError, match="KUBE_PROXY_REPLACEMENT_REQUIRED"):
+        plan_network_stack(
+            {"plugins": {"calico": {"config": {"kube_proxy_replacement": False}}}}
+        )

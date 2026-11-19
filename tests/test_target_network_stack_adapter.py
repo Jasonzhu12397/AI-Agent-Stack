@@ -8,6 +8,7 @@ from apps.target_agent.network_plugins import plan_network_stack
 from apps.target_agent.network_stack_adapter import (
     NetworkStackAdapterError,
     apply_network_stack,
+    disable_kube_proxy,
     wait_for_network_stack_ready,
 )
 
@@ -69,12 +70,14 @@ def _make_runner(existing: set[str], applied: list[str], ready: bool = True):
             if "--dry-run=server" not in arguments:
                 applied.append(arguments[-1])
             return {"available": True, "returncode": 0, "stdout": "applied", "stderr": ""}
+        if arguments[0] in {"wait", "delete"} or arguments[0] == "--namespace":
+            return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
         return {"available": False, "returncode": 1, "stderr": "unknown"}
 
     return runner, calls
 
 
-def test_apply_marks_data_plane_and_skips_existing_without_manifest():
+def test_apply_preserves_existing_calico_and_enforces_ebpf_configuration():
     plan = plan_network_stack(_spec())
     existing = {"calico-node"}
     applied: list[str] = []
@@ -86,8 +89,10 @@ def test_apply_marks_data_plane_and_skips_existing_without_manifest():
     assert evidence["apply_pending_plugins"] == ["sriov"]
     assert evidence["data_plane_plugins"] == ["sriov"]
     assert evidence["applied_plugins"] == []
-    assert evidence["side_effects"] is False
-    assert not any(call[0] == "apply" for call in calls)
+    assert evidence["calico_ebpf_configured"] is True
+    assert evidence["side_effects"] is True
+    assert any(call[0] == "wait" for call in calls)
+    assert len(applied) == 1
 
 
 def test_apply_applies_supplied_manifest_for_missing_plugin():
@@ -107,6 +112,14 @@ def test_apply_applies_supplied_manifest_for_missing_plugin():
     assert evidence["applied_plugins"] == ["sriov"]
     assert evidence["side_effects"] is True
     assert len(applied) == 1
+
+
+def test_kube_proxy_is_deleted_only_by_explicit_post_readiness_action():
+    runner, calls = _make_runner(set(), [])
+    evidence = disable_kube_proxy(runner)
+    assert evidence["kube_proxy_disabled"] is True
+    deleted = [call[3] for call in calls if call[0] == "--namespace"]
+    assert deleted == ["daemonset/kube-proxy", "configmap/kube-proxy"]
 
 
 def test_wait_ready_succeeds_for_enabled_plugins():
@@ -164,6 +177,8 @@ def _document_runner(document: dict[str, object] | None, calls: list[list[str]])
             }
         if arguments[0] == "apply":
             return {"available": True, "returncode": 0, "stdout": "applied", "stderr": ""}
+        if arguments[0] in {"wait", "delete"} or arguments[0] == "--namespace":
+            return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
         return {"available": False, "returncode": 1, "stderr": "unknown"}
 
     return runner

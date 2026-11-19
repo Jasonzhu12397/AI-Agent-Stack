@@ -30,10 +30,16 @@ KUBERNETES_IMAGES = {
     "kube-apiserver",
     "kube-controller-manager",
     "kube-scheduler",
-    "kube-proxy",
     "etcd",
     "coredns",
     "pause",
+}
+CALICO_IMAGES = {
+    "calico-node",
+    "calico-cni",
+    "calico-pod2daemon-flexvol",
+    "calico-kube-controllers",
+    "tigera-operator",
 }
 Runner = Callable[[list[str]], str]
 
@@ -322,13 +328,13 @@ def _target_repository(name: str) -> str:
 
 def _target_reference(endpoint: str, name: str, source: str) -> str:
     repository = _target_repository(name)
-    if name not in KUBERNETES_IMAGES:
+    if name not in KUBERNETES_IMAGES | CALICO_IMAGES:
         return f"{endpoint}/ai-agent-stack/{repository}:bootstrap"
     if "@" in source or ":" not in source:
-        raise OfflineImageError("OFFLINE_KUBERNETES_IMAGE_TAG_REQUIRED")
+        raise OfflineImageError("OFFLINE_VERSIONED_IMAGE_TAG_REQUIRED")
     tag = source.rsplit(":", 1)[1]
     if not tag or "/" in tag:
-        raise OfflineImageError("OFFLINE_KUBERNETES_IMAGE_TAG_INVALID")
+        raise OfflineImageError("OFFLINE_VERSIONED_IMAGE_TAG_INVALID")
     return f"{endpoint}/ai-agent-stack/{repository}:{tag}"
 
 

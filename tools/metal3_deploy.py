@@ -414,6 +414,42 @@ STAGES = (
 )
 
 
+_CALICO_IMAGE_NAMES = {
+    "calico/node": "calico-node",
+    "calico/cni": "calico-cni",
+    "calico/pod2daemon-flexvol": "calico-pod2daemon-flexvol",
+    "calico/kube-controllers": "calico-kube-controllers",
+    "tigera/operator": "tigera-operator",
+}
+
+
+def _localize_calico_images(value: Any, endpoint: str) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _localize_calico_images(item, endpoint)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if key == "image" and isinstance(item, str):
+            if item.startswith(f"{endpoint}/"):
+                continue
+            normalized = item.replace("docker.io/", "", 1)
+            if "@" in normalized:
+                repository, reference = normalized.split("@", 1)
+                separator = "@"
+            else:
+                repository, separator, reference = normalized.rpartition(":")
+            name = _CALICO_IMAGE_NAMES.get(repository.removeprefix("quay.io/"))
+            if name is None:
+                continue
+            if not separator or not reference or "/" in reference:
+                raise network_plugins.NetworkStackError("NETWORK_STACK_CALICO_IMAGE_TAG_REQUIRED")
+            value[key] = f"{endpoint}/ai-agent-stack/{name}{separator}{reference}"
+            continue
+        _localize_calico_images(item, endpoint)
+
+
 def _network_manifests(spec: dict[str, Any], spec_path: Path | None) -> dict[str, dict[str, Any]]:
     inline = spec.get("manifests", {})
     files = spec.get("manifest_files", {})
@@ -437,6 +473,10 @@ def _network_manifests(spec: dict[str, Any], spec_path: Path | None) -> dict[str
             if len(documents) == 1
             else {"apiVersion": "v1", "kind": "List", "items": documents}
         )
+    endpoint = spec.get("registry_endpoint")
+    if isinstance(endpoint, str) and endpoint:
+        for manifest in manifests.values():
+            _localize_calico_images(manifest, endpoint)
     return manifests
 
 
@@ -497,6 +537,7 @@ def command_network(args: argparse.Namespace) -> int:
                 timeout_seconds=args.timeout_seconds,
             )
             document["readiness"] = readiness
+            document["kube_proxy"] = network_stack_adapter.disable_kube_proxy(runner)
             document["status"] = "ready"
     write_evidence()
     for plugin in plugins:

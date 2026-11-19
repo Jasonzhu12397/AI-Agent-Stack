@@ -93,13 +93,16 @@ plugin stack. No interface or manifest is guessed:
 ```yaml
 control_plane_interface: eno1
 registry_endpoint: 10.0.0.10:5000
+registry_pause_image: 10.0.0.10:5000/ai-agent-stack/pause:3.10.1
 dns_servers: [10.0.0.53]
 namespace: kube-system
 plugins:
   calico:
     enabled: true
-    version: v3.29.1
+    version: v3.30.2
     config:
+      dataplane: eBPF
+      kube_proxy_replacement: true
       resource_kind: DaemonSet
       resource_name: calico-node
 manifest_files:
@@ -110,7 +113,13 @@ The manifest path is relative to `network.yaml`; inline `manifests` is also
 supported. Every enabled plugin must declare a local manifest and the workload
 used as its readiness evidence. `auto` waits for the CAPI kubeconfig Secret,
 writes `target.kubeconfig` with mode `0600`, applies the plugins and waits for
-readiness. When `--deployment-id` is supplied, it then waits for the platform's
+readiness. Calico eBPF is mandatory: the Agent applies FelixConfiguration with
+`bpfEnabled`, waits for the Calico workloads, then deletes kube-proxy. Calico
+and Tigera image references in containers and initContainers are rewritten to
+`registry_endpoint` with their version tags preserved, including
+`pod2daemon-flexvol`. Target Kubeadm configurations skip the kube-proxy addon and require containerd,
+kubeadm, kubelet and kubectl to be preinstalled in the OS image. When
+`--deployment-id` is supplied, it then waits for the platform's
 trusted pivot and worker evidence before returning success. Missing input or
 pending manifests fail the run.
 

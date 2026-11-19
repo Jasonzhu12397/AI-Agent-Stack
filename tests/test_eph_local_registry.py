@@ -79,9 +79,10 @@ def test_cloud_init_preloads_images_then_runs_registry_and_bmc_as_pods_after_kub
     seed = bootstrap_renderer.render_cloud_init_seed(_spec())["user-data"]
     assert "docker.io" not in seed["packages"]
     assert "docker-compose-v2" not in seed["packages"]
-    assert seed["runcmd"][0].endswith("--preload-only")
-    assert seed["runcmd"][1].startswith("kubeadm init")
-    assert seed["runcmd"][3].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
+    assert "command -v kubeadm" in seed["runcmd"][0]
+    assert seed["runcmd"][1].endswith("--preload-only")
+    assert seed["runcmd"][2].startswith("kubeadm init")
+    assert seed["runcmd"][4].startswith("python3 /usr/local/lib/ai-agent-stack/local_registry.py")
     files = {item["path"]: item["content"] for item in seed["write_files"]}
     assert "/etc/ai-agent-stack/docker-compose.yaml" not in files
     registry_docs = list(yaml.safe_load_all(files["/etc/ai-agent-stack/registry.yaml"]))
@@ -190,6 +191,12 @@ def test_target_control_plane_and_workers_receive_local_registry_configuration()
     workers = next(item for item in documents if item["kind"] == "KubeadmConfigTemplate")
     control_files = control_plane["spec"]["kubeadmConfigSpec"]["files"]
     cluster_config = control_plane["spec"]["kubeadmConfigSpec"]["clusterConfiguration"]
+    init_config = control_plane["spec"]["kubeadmConfigSpec"]["initConfiguration"]
+    assert init_config["skipPhases"] == ["addon/kube-proxy"]
+    control_commands = control_plane["spec"]["kubeadmConfigSpec"]["preKubeadmCommands"]
+    worker_commands = workers["spec"]["template"]["spec"]["preKubeadmCommands"]
+    assert "command -v kubeadm" in control_commands[0]
+    assert "command -v kubeadm" in worker_commands[0]
     assert cluster_config["imageRepository"] == f"{ENDPOINT}/ai-agent-stack"
     assert cluster_config["dns"]["imageRepository"] == f"{ENDPOINT}/ai-agent-stack/coredns"
     worker_files = workers["spec"]["template"]["spec"]["files"]
