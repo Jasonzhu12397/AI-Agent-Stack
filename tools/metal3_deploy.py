@@ -55,6 +55,7 @@ from apps.eph_agent import (  # noqa: E402
     metal3_skill,
 )
 from apps.target_agent import network_plugins, network_stack_adapter  # noqa: E402
+from tools import metal3_bmc_secrets  # noqa: E402
 from tools.metal3_fleet_source import load_platform_fleet  # noqa: E402
 
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -164,16 +165,6 @@ def http_status_probe(url: str) -> int | None:
 # ----------------------------------------------------------------------------- plan
 
 
-def _secret_document(machine) -> dict[str, Any]:
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {"name": machine.spec.secret_ref},
-        "type": "Opaque",
-        "stringData": {"username": machine.username, "password": machine.password},
-    }
-
-
 def command_plan(args: argparse.Namespace) -> int:
     skipped: list[str] = []
     fleet = load_platform_fleet(
@@ -193,6 +184,7 @@ def command_plan(args: argparse.Namespace) -> int:
         cluster_name=args.cluster_name,
         namespace=args.namespace,
         control_plane_count=args.control_plane_count,
+        worker_count=args.worker_replicas,
     )
     for warning in plan.warnings:
         sys.stderr.write(f"WARNING: {warning}\n")
@@ -201,18 +193,17 @@ def command_plan(args: argparse.Namespace) -> int:
     bmh_documents = capi_renderer.render_bmh_manifests(hosts, namespace=args.namespace)
 
     credentials = {machine.spec.name: machine for machine in fleet}
-    secrets = [
-        _secret_document(credentials[assignment.machine.name]) for assignment in plan.assignments
-    ]
+    secrets = metal3_bmc_secrets.render_bmc_secrets(
+        [credentials[assignment.machine.name] for assignment in plan.assignments],
+        namespace=args.namespace,
+    )
 
     out_dir = args.out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     (out_dir / PLAN_FILE).write_text(
         json.dumps(fleet_planning.plan_document(plan), indent=2) + "\n", encoding="utf-8"
     )
-    (out_dir / SECRETS_FILE).write_text(
-        yaml.safe_dump_all(secrets, sort_keys=False), encoding="utf-8"
-    )
+    metal3_bmc_secrets.write_private_manifest(out_dir / SECRETS_FILE, secrets)
     (out_dir / BMH_FILE).write_text(
         yaml.safe_dump_all(bmh_documents, sort_keys=False), encoding="utf-8"
     )
@@ -293,6 +284,38 @@ def _load(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         raise SystemExit(f"ERROR: manifest not found: {path}")
     return [item for item in yaml.safe_load_all(path.read_text(encoding="utf-8")) if item]
+
+
+def command_secrets(args: argparse.Namespace) -> int:
+    skipped: list[str] = []
+    fleet = load_platform_fleet(
+        project_id=args.project,
+        settings_module=args.django_settings,
+        systems_path=args.redfish_systems_path,
+        skipped=skipped,
+    )
+    for item in skipped:
+        sys.stderr.write(f"WARNING: skipped {item}\n")
+    if not fleet:
+        sys.stderr.write("ERROR: the platform has no resolvable BMC credential\n")
+        return 1
+    documents = metal3_bmc_secrets.render_bmc_secrets(fleet, namespace=args.namespace)
+    metal3_bmc_secrets.write_private_manifest(args.out_dir / SECRETS_FILE, documents)
+    print(f"wrote {len(documents)} BMC Secret(s) to {args.out_dir / SECRETS_FILE} (mode 0600)")
+
+    if args.apply:
+        for document in documents:
+            name = document["metadata"]["name"]
+            runner = KubectlRunner([document])
+            result = runner(
+                ["apply", "--server-side", "-f", "-", "--namespace", args.namespace],
+                60,
+            )
+            if result.get("available") is not True or result.get("returncode") != 0:
+                sys.stderr.write(f"ERROR: failed to apply BMC Secret {name}\n")
+                return 1
+        print(f"applied {len(documents)} BMC Secret(s) in namespace {args.namespace}")
+    return 0
 
 
 def command_apply(args: argparse.Namespace) -> int:
@@ -705,6 +728,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--cluster-name", required=True, help="target cluster name")
     plan.add_argument("--namespace", default="metal3")
     plan.add_argument("--control-plane-count", type=int, default=3, choices=(1, 3, 5, 7))
+    plan.add_argument("--worker-replicas", type=int, help="exact number of workers to include")
     plan.add_argument("--out-dir", type=Path, required=True)
     plan.add_argument("--control-plane-endpoint", help="VIP or DNS name of the target API server")
     plan.add_argument("--image-url", help="live-OS image the machines boot into")
@@ -726,6 +750,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument("--redfish-systems-path", default="/redfish/v1/Systems/1")
     plan.set_defaults(func=command_plan)
+
+    secrets = sub.add_parser(
+        "secrets",
+        help="render and optionally apply pre-provisioned BMC credential Secrets",
+    )
+    secrets.add_argument("--project", help="platform project id to read machines from")
+    secrets.add_argument("--namespace", default="metal3")
+    secrets.add_argument("--out-dir", type=Path, required=True)
+    secrets.add_argument("--apply", action="store_true")
+    secrets.add_argument("--django-settings", default="platform_api.settings")
+    secrets.add_argument("--redfish-systems-path", default="/redfish/v1/Systems/1")
+    secrets.set_defaults(func=command_secrets)
 
     apply = sub.add_parser("apply", help="hand the rendered bundle to the agent")
     apply.add_argument("--dir", type=Path, required=True)

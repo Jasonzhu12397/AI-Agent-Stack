@@ -11,6 +11,30 @@ The host-bootstrap source is vendored under
 `MANIFEST.sha256` record provenance and the fork's integrity baseline. Runtime
 performs no clone, fetch, checkout or submodule operation.
 
+## Pre-provision BMC credentials (required before the first BMH)
+
+BMC passwords are intentionally kept out of Cloud Control. Resolve them from the
+platform credential store, write an owner-only manifest, and apply the Secrets
+to the EPH bootstrap cluster in the same namespace the BMHs use:
+
+~~~bash
+python tools/metal3_deploy.py secrets \
+  --project <project-id> \
+  --namespace metal3 \
+  --out-dir /secure/ai-agent-stack/bmc \
+  --apply
+~~~
+
+`secrets.yaml` is written with mode 0600. Keep it on an encrypted volume, never
+commit it, and delete it after the Secrets exist. The EPH Agent fails closed with
+`METAL3_BMC_CREDENTIAL_SECRET_MISSING` when a BMH references a Secret that is
+missing, so a deployment cannot silently proceed with absent credentials.
+
+Without `--apply`, the command only renders the file; apply it from a host with
+the EPH kubeconfig. The same file is produced by `tools/metal3_deploy.py plan`
+and is included in the rendered bundle.
+
+
 ## One platform: physical machines
 
 This lab provisions real hardware and never requires libvirt, KVM, a VM domain,
