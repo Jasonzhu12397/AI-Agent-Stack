@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.models import (
     AgentRun,
     WorkflowRun,
@@ -134,6 +135,18 @@ class TaskListCreateView(APIView):
                 {"detail": "Idempotency-Key was already used with a different request."},
                 status=status.HTTP_409_CONFLICT,
             )
+        record_audit_event(
+            request,
+            tenant,
+            "task.created",
+            "task",
+            task.id,
+            project=project,
+            metadata={
+                "task_type": task_type,
+                "deduplicated": not created,
+            },
+        )
         response_status = status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
         return Response(TaskSerializer(task).data, status=response_status)
 
@@ -163,6 +176,7 @@ class TaskCancelView(APIView):
         task = TaskDetailView().get_task(request, task_id)
         with transaction.atomic():
             task = Task.objects.select_for_update().get(pk=task.pk)
+            previous_status = task.status
             approval_ids = list(
                 ToolApprovalRequest.objects.select_for_update()
                 .filter(
@@ -210,6 +224,20 @@ class TaskCancelView(APIView):
                 AgentRun.objects.filter(task=task).update(finished_at=timezone.now())
             if task.task_type == "workflow.run" and task.status == Task.Status.CANCELLED:
                 WorkflowRun.objects.filter(task=task).update(finished_at=timezone.now())
+            record_audit_event(
+                request,
+                task.tenant,
+                "task.cancelled",
+                "task",
+                task.id,
+                project=task.project,
+                metadata={
+                    "task_type": task.task_type,
+                    "previous_status": previous_status,
+                    "status": task.status,
+                    "cancelled_approvals": len(approval_ids),
+                },
+            )
         return Response(
             TaskSerializer(task).data,
             status=status.HTTP_202_ACCEPTED,

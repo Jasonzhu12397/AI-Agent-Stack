@@ -6,6 +6,7 @@ from django.views.decorators.http import require_GET
 from rest_framework.generics import ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated
 
+from core.audit import record_audit_event
 from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from core.pagination import TenantPagination
 from core.permissions import IsTenantAdmin
@@ -48,6 +49,14 @@ class TenantListView(ListCreateAPIView):
             user=self.request.user,
             role=TenantMembership.Role.OWNER,
         )
+        record_audit_event(
+            self.request,
+            tenant,
+            "tenant.created",
+            "tenant",
+            tenant.id,
+            metadata={"slug": tenant.slug, "name": tenant.name},
+        )
 
 
 class TenantProjectListView(ListCreateAPIView):
@@ -81,9 +90,19 @@ class TenantProjectListView(ListCreateAPIView):
         return queryset.order_by("name").distinct()
 
     def perform_create(self, serializer):
-        project = serializer.save(tenant=self.get_tenant())
+        tenant = self.get_tenant()
+        project = serializer.save(tenant=tenant)
         ProjectMembership.objects.create(
             project=project,
             user=self.request.user,
             role=ProjectMembership.Role.ADMIN,
+        )
+        record_audit_event(
+            self.request,
+            tenant,
+            "project.created",
+            "project",
+            project.id,
+            project=project,
+            metadata={"slug": project.slug, "name": project.name},
         )

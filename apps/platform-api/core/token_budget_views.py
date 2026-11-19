@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.audit import record_audit_event
 from core.models import Tenant, TenantTokenBudget
 from core.permissions import IsTenantAdmin
 from core.token_budget import get_tenant_token_usage
@@ -76,6 +77,14 @@ class TenantTokenBudgetView(APIView):
         for field, value in serializer.validated_data.items():
             setattr(budget, field, value)
         budget.save(update_fields=[*serializer.validated_data, "updated_at"])
+        record_audit_event(
+            request,
+            tenant,
+            "token_budget.updated",
+            "tenant_token_budget",
+            budget.id,
+            metadata={field: value for field, value in serializer.validated_data.items()},
+        )
         now = timezone.now()
         return Response(
             {
