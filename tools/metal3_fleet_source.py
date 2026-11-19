@@ -83,6 +83,7 @@ def load_platform_fleet(
     settings_module: str = "platform_api.settings",
     systems_path: str = DEFAULT_REDFISH_SYSTEMS_PATH,
     skipped: list[str] | None = None,
+    require_credentials: bool = True,
 ) -> list[PlatformMachine]:
     """Return every machine the platform can describe well enough to plan."""
 
@@ -100,6 +101,8 @@ def load_platform_fleet(
     if not resolver_path and getattr(settings, "BMC_VAULT_ADDR", ""):
         resolver_path = "core.bmc_credentials.resolve_bmc_credentials"
     resolver = import_string(resolver_path) if resolver_path else None
+    if require_credentials and resolver is None:
+        raise ValueError("BMC_CREDENTIAL_RESOLVER is not configured")
 
     queryset = AgentMachine.objects.select_related("agent_node", "tenant", "project")
     if project_id:
@@ -118,7 +121,7 @@ def load_platform_fleet(
         if not machine.bmc_credential_ref:
             skipped.append(f"{name}: bmc_credential_ref is not configured")
             continue
-        if resolver is None:
+        if require_credentials and resolver is None:
             skipped.append(f"{name}: BMC_CREDENTIAL_RESOLVER is not configured")
             continue
 
@@ -132,19 +135,21 @@ def load_platform_fleet(
             skipped.append(f"{name}: hardware_inventory has no unambiguous boot NIC")
             continue
 
-        try:
-            credential = resolver(
-                credential_ref=machine.bmc_credential_ref,
-                trust_bundle_ref=machine.bmc_trust_bundle_ref,
-                tenant_id=str(machine.tenant_id),
-                project_id=str(machine.project_id),
-            )
-        except Exception as exc:  # noqa: BLE001 - one bad reference must not stop the fleet
-            skipped.append(f"{name}: credential resolver failed ({type(exc).__name__})")
-            continue
-        if not isinstance(credential, dict) or not credential.get("username"):
-            skipped.append(f"{name}: resolver returned no BMC username")
-            continue
+        credential: dict[str, Any] = {}
+        if require_credentials:
+            try:
+                credential = resolver(
+                    credential_ref=machine.bmc_credential_ref,
+                    trust_bundle_ref=machine.bmc_trust_bundle_ref,
+                    tenant_id=str(machine.tenant_id),
+                    project_id=str(machine.project_id),
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad reference must not stop the fleet
+                skipped.append(f"{name}: credential resolver failed ({type(exc).__name__})")
+                continue
+            if not isinstance(credential, dict) or not credential.get("username"):
+                skipped.append(f"{name}: resolver returned no BMC username")
+                continue
 
         inventory = machine.hardware_inventory or {}
         cpu, ram, disk = hardware_facts(inventory)

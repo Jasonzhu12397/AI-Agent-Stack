@@ -103,6 +103,11 @@ DATABASES = {
 }
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+CLOUD_CONTROL_API_URL = os.getenv("CLOUD_CONTROL_API_URL", "").strip()
+CLOUD_CONTROL_CA_FILE = os.getenv("CLOUD_CONTROL_CA_FILE", "").strip()
+CLOUD_CONTROL_CLIENT_CERT_FILE = os.getenv("CLOUD_CONTROL_CLIENT_CERT_FILE", "").strip()
+CLOUD_CONTROL_CLIENT_KEY_FILE = os.getenv("CLOUD_CONTROL_CLIENT_KEY_FILE", "").strip()
+
 
 def _flag(name, default="false"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}

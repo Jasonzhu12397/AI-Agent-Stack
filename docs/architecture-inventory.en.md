@@ -87,7 +87,7 @@ Target form: **a general-purpose AI Agent platform + three infrastructure deploy
 
 ### 5.1 Seven-step lifecycle (core business state machine)
 
-Implementation: `core/cluster_deployment_services.py` (ordered phases: preflight → pivot → verify → worker provision → postflight → plan), together with phase transitions and checkpoint CAS in `core/agent_node_views.py` (sequence/phase compare-and-swap).
+Implementation: the platform creates a Cloud Control deployment and dispatches it through `core/cloud_control_bridge.py`; phases, commands, retries and checkpoint binding live in `apps/cloud_control_agent` and `packages/agent_contracts/orchestration.py`. The legacy `core/cluster_deployment_services.py` chain and its Target handoff/checkpoint APIs are removed.
 
 | Step | Target flow | Code state | State |
 |---|---|---|---|

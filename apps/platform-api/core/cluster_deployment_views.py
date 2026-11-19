@@ -10,19 +10,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.audit import record_audit_event
-from core.agent_node_views import (
-    _cancel_agent_commands,
-    _tenant_and_project,
-    _validate_payload,
-)
-from core.cluster_deployment_services import queue_deployment_command
 from apps.agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     validate_sriov_device_plugin_config,
 )
+from core.audit import record_audit_event
+from core.agent_node_views import _tenant_and_project, _validate_payload
+from core.cloud_control_bridge import (
+    CloudControlBridgeError,
+    CloudControlNotConfigured,
+    FleetInventoryEmpty,
+    build_cloud_control_spec,
+    control_identity,
+    dispatch_deployment,
+)
 from core.models import (
-    AgentCommand,
     AgentNode,
     ClusterDeployment,
     ProjectMembership,
@@ -31,6 +33,7 @@ from core.models import (
 
 
 def _deployment_data(deployment):
+    plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
     return {
         "id": str(deployment.id),
         "tenant_id": str(deployment.tenant_id),
@@ -43,9 +46,8 @@ def _deployment_data(deployment):
         ),
         "status": deployment.status,
         "spec": deployment.spec,
-        "plan_hash": deployment.plan_hash,
-        "preflight_result": deployment.preflight_result,
         "plan_result": deployment.plan_result,
+        "cloud_control": plan_result.get("cloud_control"),
         "error": deployment.error,
         "created_at": deployment.created_at,
         "updated_at": deployment.updated_at,
@@ -66,6 +68,60 @@ def _can_edit_project(user, tenant, project):
         role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
     ).exists()
     return tenant_admin or project_editor
+
+
+def _validated_spec(request):
+    spec = request.data.get("cluster_spec")
+    if not isinstance(spec, dict):
+        return None, "cluster_spec must be a JSON object."
+    payload_error = _validate_payload({"cluster_spec": spec})
+    if payload_error:
+        return None, payload_error
+    cluster_name = spec.get("cluster_name")
+    kubernetes_version = spec.get("kubernetes_version")
+    control_plane_replicas = spec.get("control_plane_replicas")
+    worker_replicas = spec.get("worker_replicas")
+    if (
+        not isinstance(cluster_name, str)
+        or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
+        or len(cluster_name) > 63
+    ):
+        return None, "cluster_name must be a DNS label."
+    if (
+        not isinstance(kubernetes_version, str)
+        or not re.fullmatch(r"v1\.\d+\.\d+", kubernetes_version)
+    ):
+        return None, "kubernetes_version must use v1.x.y format."
+    if (
+        not isinstance(control_plane_replicas, int)
+        or isinstance(control_plane_replicas, bool)
+        or control_plane_replicas < 1
+        or control_plane_replicas > 9
+        or control_plane_replicas % 2 == 0
+    ):
+        return None, "control_plane_replicas must be an odd integer from 1 to 9."
+    if (
+        not isinstance(worker_replicas, int)
+        or isinstance(worker_replicas, bool)
+        or worker_replicas < 0
+        or worker_replicas > 1000
+    ):
+        return None, "worker_replicas must be an integer from 0 to 1000."
+    worker_config = spec.get("worker_provisioning")
+    if worker_config is not None:
+        if not isinstance(worker_config, dict):
+            return None, "worker_provisioning must be a JSON object."
+        pools = worker_config.get("sriov_device_plugin")
+        if pools is not None:
+            try:
+                normalized = validate_sriov_device_plugin_config(pools)
+            except SriovDevicePluginConfigError as exc:
+                return None, str(exc)
+            spec["worker_provisioning"] = {
+                **worker_config,
+                "sriov_device_plugin": normalized,
+            }
+    return spec, None
 
 
 class ClusterDeploymentListCreateView(APIView):
@@ -110,75 +166,40 @@ class ClusterDeploymentListCreateView(APIView):
                 {"detail": "The selected EPH agent must have a fresh heartbeat."},
                 status=409,
             )
-        spec = request.data.get("cluster_spec")
-        if not isinstance(spec, dict):
-            return Response({"detail": "cluster_spec must be a JSON object."}, status=400)
-        payload_error = _validate_payload({"cluster_spec": spec})
+        spec, payload_error = _validated_spec(request)
         if payload_error:
             return Response({"detail": payload_error}, status=400)
-        cluster_name = spec.get("cluster_name")
-        kubernetes_version = spec.get("kubernetes_version")
-        control_plane_replicas = spec.get("control_plane_replicas")
-        worker_replicas = spec.get("worker_replicas")
-        if (
-            not isinstance(cluster_name, str)
-            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", cluster_name)
-            or len(cluster_name) > 63
-        ):
-            return Response({"detail": "cluster_name must be a DNS label."}, status=400)
-        if (
-            not isinstance(kubernetes_version, str)
-            or not re.fullmatch(r"v1\.\d+\.\d+", kubernetes_version)
-        ):
-            return Response({"detail": "kubernetes_version must use v1.x.y format."}, status=400)
-        if (
-            not isinstance(control_plane_replicas, int)
-            or isinstance(control_plane_replicas, bool)
-            or control_plane_replicas < 1
-            or control_plane_replicas > 9
-            or control_plane_replicas % 2 == 0
-        ):
-            return Response(
-                {"detail": "control_plane_replicas must be an odd integer from 1 to 9."},
-                status=400,
-            )
-        if (
-            not isinstance(worker_replicas, int)
-            or isinstance(worker_replicas, bool)
-            or worker_replicas < 0
-            or worker_replicas > 1000
-        ):
-            return Response(
-                {"detail": "worker_replicas must be an integer from 0 to 1000."},
-                status=400,
-            )
+        cluster_name = spec["cluster_name"]
+        kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
             return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
-        try:
-            with transaction.atomic():
-                deployment, created = ClusterDeployment.objects.get_or_create(
+
+        deployment = ClusterDeployment.objects.filter(
+            tenant=tenant,
+            idempotency_key=idempotency_key,
+        ).first()
+        created = False
+        if deployment is None:
+            try:
+                deployment = ClusterDeployment.objects.create(
+                    tenant=tenant,
+                    project=project,
+                    eph_node=eph_node,
+                    requested_by=request.user,
+                    cluster_name=cluster_name,
+                    kubernetes_version=kubernetes_version,
+                    spec=spec,
+                    status=ClusterDeployment.Status.PREFLIGHT_QUEUED,
+                    idempotency_key=idempotency_key,
+                )
+                created = True
+            except IntegrityError:
+                deployment = ClusterDeployment.objects.get(
                     tenant=tenant,
                     idempotency_key=idempotency_key,
-                    defaults={
-                        "project": project,
-                        "eph_node": eph_node,
-                        "requested_by": request.user,
-                        "cluster_name": cluster_name,
-                        "kubernetes_version": kubernetes_version,
-                        "spec": spec,
-                        "status": ClusterDeployment.Status.PREFLIGHT_QUEUED,
-                    },
                 )
-                if created:
-                    queue_deployment_command(deployment, "host.preflight")
-        except IntegrityError:
-            deployment = ClusterDeployment.objects.get(
-                tenant=tenant,
-                idempotency_key=idempotency_key,
-            )
-            created = False
-        if not created and (
+        if (
             deployment.project_id != project.id
             or deployment.eph_node_id != eph_node.id
             or deployment.spec != spec
@@ -187,6 +208,89 @@ class ClusterDeploymentListCreateView(APIView):
                 {"detail": "Idempotency-Key was used for a different cluster plan."},
                 status=409,
             )
+
+        plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+        control = plan_result.get("cloud_control")
+        if isinstance(control, dict) and isinstance(control.get("spec"), dict):
+            installation_id = uuid.UUID(control["installation_id"])
+            cluster_id = uuid.UUID(control["cluster_id"])
+            control_spec = control["spec"]
+        else:
+            try:
+                control_spec = build_cloud_control_spec(
+                    spec,
+                    project_id=project.id,
+                    cluster_name=cluster_name,
+                )
+            except FleetInventoryEmpty:
+                if created:
+                    deployment.delete()
+                return Response(
+                    {
+                        "detail": "No complete bare-metal fleet is available for this project.",
+                        "code": "FLEET_INVENTORY_EMPTY",
+                    },
+                    status=409,
+                )
+            installation_id, cluster_id = control_identity(
+                tenant.id,
+                project.id,
+                eph_node.id,
+                cluster_name,
+            )
+            plan_result = {
+                **plan_result,
+                "cloud_control": {
+                    "deployment_id": str(deployment.id),
+                    "installation_id": str(installation_id),
+                    "cluster_id": str(cluster_id),
+                    "spec": control_spec,
+                },
+            }
+            deployment.plan_result = plan_result
+            deployment.save(update_fields=["plan_result", "updated_at"])
+
+        try:
+            result = dispatch_deployment(
+                deployment_id=deployment.id,
+                installation_id=installation_id,
+                cluster_id=cluster_id,
+                spec=control_spec,
+            )
+        except CloudControlNotConfigured:
+            return Response(
+                {
+                    "detail": "Cloud Control API is not configured on this platform.",
+                    "code": "CLOUD_CONTROL_NOT_CONFIGURED",
+                },
+                status=503,
+            )
+        except CloudControlBridgeError:
+            deployment.error = {
+                "code": "CLOUD_CONTROL_DISPATCH_FAILED",
+                "retryable": True,
+            }
+            deployment.save(update_fields=["error", "updated_at"])
+            return Response(
+                {
+                    "detail": "Cloud Control did not accept the deployment.",
+                    "code": "CLOUD_CONTROL_DISPATCH_FAILED",
+                },
+                status=502,
+            )
+
+        with transaction.atomic():
+            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status not in {
+                ClusterDeployment.Status.SUCCEEDED,
+                ClusterDeployment.Status.FAILED,
+                ClusterDeployment.Status.CANCELLED,
+            }:
+                deployment.status = ClusterDeployment.Status.PROVISIONING
+                deployment.started_at = deployment.started_at or timezone.now()
+            deployment.error = None
+            deployment.save(update_fields=["status", "error", "started_at", "updated_at"])
+
         if created:
             record_audit_event(
                 request,
@@ -202,7 +306,10 @@ class ClusterDeploymentListCreateView(APIView):
                 },
             )
         return Response(
-            _deployment_data(deployment),
+            {
+                **_deployment_data(deployment),
+                "cloud_control_result": result,
+            },
             status=202 if created else 200,
         )
 
@@ -222,405 +329,3 @@ class ClusterDeploymentDetailView(APIView):
             ).exists():
                 return Response({"detail": "Project membership required."}, status=403)
         return Response(_deployment_data(deployment))
-
-
-class ClusterDeploymentSriovConfigView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def put(self, request, deployment_id):
-        if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        deployment = get_object_or_404(
-            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
-            pk=deployment_id,
-        )
-        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
-        try:
-            normalized = validate_sriov_device_plugin_config(request.data.get("pools"))
-        except SriovDevicePluginConfigError as exc:
-            return Response({"detail": str(exc)}, status=400)
-        with transaction.atomic():
-            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-            if deployment.status in {
-                ClusterDeployment.Status.SUCCEEDED,
-                ClusterDeployment.Status.FAILED,
-                ClusterDeployment.Status.CANCELLED,
-            }:
-                return Response(
-                    {"detail": "Terminal deployments cannot be reconfigured."},
-                    status=409,
-                )
-            if AgentCommand.objects.filter(
-                deployment=deployment,
-                command_type="cluster.capi.worker.provision",
-            ).exists():
-                return Response(
-                    {
-                        "detail": (
-                            "SR-IOV configuration is immutable after worker provisioning is queued."
-                        )
-                    },
-                    status=409,
-                )
-            spec = dict(deployment.spec)
-            worker_config = spec.get("worker_provisioning")
-            if worker_config is None:
-                worker_config = {}
-            if not isinstance(worker_config, dict):
-                return Response(
-                    {
-                        "detail": (
-                            "worker_provisioning must be an object before SR-IOV "
-                            "configuration can be attached."
-                        )
-                    },
-                    status=409,
-                )
-            worker_config = dict(worker_config)
-            worker_config["sriov_device_plugin"] = normalized
-            spec["worker_provisioning"] = worker_config
-            deployment.spec = spec
-            deployment.save(update_fields=["spec", "updated_at"])
-        record_audit_event(
-            request,
-            deployment.tenant,
-            "cluster_deployment.sriov_device_plugin_configured",
-            "cluster_deployment",
-            deployment.id,
-            project=deployment.project,
-            metadata={
-                "pool_names": sorted(normalized),
-                "configmap_names": sorted({
-                    pool["sriov_network_device_plugin_configmap_name"]
-                    for pool in normalized.values()
-                }),
-            },
-        )
-        return Response(_deployment_data(deployment))
-
-
-class ClusterDeploymentCancelView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, deployment_id):
-        deployment = get_object_or_404(
-            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
-            pk=deployment_id,
-        )
-        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
-        with transaction.atomic():
-            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-            if deployment.status in {
-                ClusterDeployment.Status.SUCCEEDED,
-                ClusterDeployment.Status.FAILED,
-                ClusterDeployment.Status.CANCELLED,
-            }:
-                return Response({"detail": "Deployment is already terminal."}, status=409)
-            now = timezone.now()
-            deployment.status = ClusterDeployment.Status.CANCELLED
-            deployment.finished_at = now
-            unknown_outcomes = _cancel_agent_commands(
-                AgentCommand.objects.filter(
-                    deployment=deployment,
-                    status__in=[
-                        AgentCommand.Status.QUEUED,
-                        AgentCommand.Status.WAITING_APPROVAL,
-                        AgentCommand.Status.RUNNING,
-                    ],
-                ),
-                now,
-            )
-            if unknown_outcomes:
-                deployment.error = {
-                    "code": "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
-                    "command_ids": unknown_outcomes,
-                    "retryable": False,
-                }
-            deployment.save(
-                update_fields=["status", "finished_at", "error", "updated_at"]
-            )
-        return Response(_deployment_data(deployment))
-
-
-
-class ClusterDeploymentTargetAgentHandoffView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, deployment_id):
-        if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        deployment = get_object_or_404(
-            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
-            pk=deployment_id,
-        )
-        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
-        if deployment.status not in {
-            ClusterDeployment.Status.CONTROL_PLANE_READY,
-            ClusterDeployment.Status.TARGET_AGENT_PENDING,
-        }:
-            return Response(
-                {"detail": "Target Agent handoff requires a verified ready Control Plane."},
-                status=409,
-            )
-        try:
-            target_node_id = uuid.UUID(str(request.data.get("target_node_id")))
-        except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid target_node_id is required."}, status=400)
-        target_node = get_object_or_404(
-            AgentNode.objects.filter(
-                tenant=deployment.tenant,
-                project=deployment.project,
-                node_type=AgentNode.NodeType.TARGET_CLUSTER,
-            ),
-            pk=target_node_id,
-        )
-        if target_node.status != AgentNode.Status.ONLINE or (
-            target_node.last_seen_at is None
-            or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
-        ):
-            return Response(
-                {"detail": "The selected Target Agent must have a fresh heartbeat."},
-                status=409,
-            )
-        if deployment.eph_node.status != AgentNode.Status.ONLINE or (
-            deployment.eph_node.last_seen_at is None
-            or deployment.eph_node.last_seen_at
-            < timezone.now() - datetime.timedelta(seconds=60)
-        ):
-            return Response(
-                {"detail": "The EPH source Agent must have a fresh heartbeat for pivot inventory."},
-                status=409,
-            )
-        if target_node.cluster_name != deployment.cluster_name:
-            return Response(
-                {"detail": "Target Agent must be enrolled for the deployment cluster name."},
-                status=409,
-            )
-        with transaction.atomic():
-            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-            if deployment.status not in {
-                ClusterDeployment.Status.CONTROL_PLANE_READY,
-                ClusterDeployment.Status.TARGET_AGENT_PENDING,
-            }:
-                return Response({"detail": "Deployment handoff state changed."}, status=409)
-            if deployment.target_node_id and deployment.target_node_id != target_node.id:
-                return Response(
-                    {"detail": "Deployment is already assigned to another Target Agent."},
-                    status=409,
-                )
-            target_node = AgentNode.objects.select_for_update().get(pk=target_node.pk)
-            if (
-                target_node.status != AgentNode.Status.ONLINE
-                or target_node.last_seen_at is None
-                or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
-            ):
-                return Response(
-                    {"detail": "Target Agent heartbeat is no longer fresh."},
-                    status=409,
-                )
-            deployment.target_node = target_node
-            deployment.status = ClusterDeployment.Status.TARGET_AGENT_PENDING
-            deployment.plan_result = {
-                **(deployment.plan_result or {}),
-                "dual_agent": {
-                    **(deployment.plan_result or {}).get("dual_agent", {}),
-                    "phase": (deployment.plan_result or {})
-                    .get("dual_agent", {})
-                    .get("phase", "source_preflight_pending"),
-                    "source_agent_id": str(deployment.eph_node_id),
-                    "target_agent_id": str(target_node.id),
-                    "target_agent_owns_cluster": (
-                        (deployment.plan_result or {})
-                        .get("dual_agent", {})
-                        .get("target_agent_owns_cluster", False)
-                    ),
-                    "eph_reclaim_allowed": False,
-                },
-            }
-            deployment.save(
-                update_fields=["target_node", "status", "plan_result", "updated_at"],
-            )
-            source_preflight_command = queue_deployment_command(
-                deployment,
-                "cluster.capi.pivot.source.preflight",
-                node=deployment.eph_node,
-            )
-        record_audit_event(
-            request,
-            deployment.tenant,
-            "cluster_deployment.target_agent_handoff_requested",
-            "cluster_deployment",
-            deployment.id,
-            project=deployment.project,
-            metadata={
-                "cluster_name": deployment.cluster_name,
-                "target_node_id": str(target_node.id),
-                "source_preflight_command_id": str(source_preflight_command.id),
-                "target_preflight_scheduled": False,
-            },
-        )
-        return Response(
-            {
-                "deployment": _deployment_data(deployment),
-                "target_agent_id": str(target_node.id),
-                "checkpoint_endpoint": (
-                    f"/api/v1/agent-runtime/deployments/{deployment.id}/checkpoint/"
-                ),
-                "source_preflight_command_id": str(source_preflight_command.id),
-                "source_preflight_command_status": source_preflight_command.status,
-                "preflight_command_id": None,
-                "preflight_command_status": "waiting_for_source_inventory",
-                "worker_provisioning_allowed": False,
-            },
-            status=202,
-        )
-
-
-class ClusterDeploymentTargetPostflightView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, deployment_id):
-        if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        deployment = get_object_or_404(
-            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
-            pk=deployment_id,
-        )
-        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
-        if request.data.get("confirmation") != "cluster_provisioned":
-            return Response(
-                {"detail": "Explicit cluster_provisioned confirmation is required."},
-                status=400,
-            )
-        plan_result = deployment.plan_result or {}
-        if (
-            plan_result.get("provisioning_ready") is not True
-            or plan_result.get("adapter_enabled") is not True
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "The EPH plan is dry-run only or has missing prerequisites; "
-                        "provisioning is not enabled."
-                    )
-                },
-                status=409,
-            )
-        requested_target_node_id = request.data.get("target_node_id")
-        is_postflight_retry = (
-            deployment.status == ClusterDeployment.Status.POSTFLIGHT
-            and (
-                not requested_target_node_id
-                or str(requested_target_node_id) == str(deployment.target_node_id)
-            )
-        )
-        if not is_postflight_retry and (
-            deployment.status != ClusterDeployment.Status.WORKERS_READY
-            or plan_result.get("provisioning_completed") is not True
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "Target postflight requires completed provisioning "
-                        "with all workers ready."
-                    )
-                },
-                status=409,
-            )
-        target_node_id = request.data.get("target_node_id") or deployment.target_node_id
-        try:
-            target_node_id = uuid.UUID(str(target_node_id))
-        except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid target_node_id is required."}, status=400)
-        target_node = get_object_or_404(
-            AgentNode.objects.filter(
-                tenant=deployment.tenant,
-                project=deployment.project,
-                node_type=AgentNode.NodeType.TARGET_CLUSTER,
-            ),
-            pk=target_node_id,
-        )
-        if target_node.status != AgentNode.Status.ONLINE or (
-            target_node.last_seen_at is None
-            or target_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
-        ):
-            return Response(
-                {"detail": "The selected target agent must have a fresh heartbeat."},
-                status=409,
-            )
-        if target_node.cluster_name and target_node.cluster_name != deployment.cluster_name:
-            return Response(
-                {"detail": "Target agent is enrolled for a different cluster name."},
-                status=409,
-            )
-        if deployment.target_node_id and deployment.target_node_id != target_node.id:
-            return Response(
-                {"detail": "Deployment is already bound to another target agent."},
-                status=409,
-            )
-        with transaction.atomic():
-            deployment = ClusterDeployment.objects.select_for_update().get(pk=deployment.pk)
-            if (
-                deployment.status == ClusterDeployment.Status.POSTFLIGHT
-                and deployment.target_node_id == target_node.id
-            ):
-                command = AgentCommand.objects.filter(
-                    deployment=deployment,
-                    command_type="cluster.postflight",
-                ).first()
-                if command is not None:
-                    return Response(
-                        {
-                            "deployment": _deployment_data(deployment),
-                            "command_id": str(command.id),
-                            "command_status": command.status,
-                        },
-                        status=200,
-                    )
-            locked_plan = deployment.plan_result or {}
-            if (
-                deployment.status != ClusterDeployment.Status.WORKERS_READY
-                or locked_plan.get("provisioning_ready") is not True
-                or locked_plan.get("adapter_enabled") is not True
-                or locked_plan.get("provisioning_completed") is not True
-            ):
-                return Response(
-                    {"detail": "Deployment state changed or provisioning is incomplete."},
-                    status=409,
-                )
-            if deployment.target_node_id and deployment.target_node_id != target_node.id:
-                return Response(
-                    {"detail": "Deployment is already bound to another target agent."},
-                    status=409,
-                )
-            target_node = AgentNode.objects.select_for_update().get(pk=target_node.pk)
-            if (
-                target_node.status != AgentNode.Status.ONLINE
-                or target_node.last_seen_at is None
-                or target_node.last_seen_at
-                < timezone.now() - datetime.timedelta(seconds=60)
-            ):
-                return Response(
-                    {"detail": "The selected target agent must have a fresh heartbeat."},
-                    status=409,
-                )
-            deployment.target_node = target_node
-            deployment.status = ClusterDeployment.Status.POSTFLIGHT
-            deployment.save(update_fields=["target_node", "status", "updated_at"])
-            command = queue_deployment_command(
-                deployment,
-                "cluster.postflight",
-                node=target_node,
-            )
-        return Response(
-            {
-                "deployment": _deployment_data(deployment),
-                "command_id": str(command.id),
-                "command_status": command.status,
-            },
-            status=202,
-        )

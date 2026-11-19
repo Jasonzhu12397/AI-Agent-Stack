@@ -1,0 +1,20 @@
+services:
+  api:
+    environment:
+      CLOUD_CONTROL_API_URL: ${CLOUD_CONTROL_API_URL:?CLOUD_CONTROL_API_URL is required}
+      CLOUD_CONTROL_CA_FILE: /run/secrets/cloud-control-ca.pem
+      CLOUD_CONTROL_CLIENT_CERT_FILE: /run/secrets/platform-api-client.pem
+      CLOUD_CONTROL_CLIENT_KEY_FILE: /run/secrets/platform-api-client.key
+    volumes:
+      - type: bind
+        source: ${CLOUD_CONTROL_CA_PEM_PATH:?CLOUD_CONTROL_CA_PEM_PATH is required}
+        target: /run/secrets/cloud-control-ca.pem
+        read_only: true
+      - type: bind
+        source: ${PLATFORM_API_CLIENT_PEM_PATH:?PLATFORM_API_CLIENT_PEM_PATH is required}
+        target: /run/secrets/platform-api-client.pem
+        read_only: true
+      - type: bind
+        source: ${PLATFORM_API_CLIENT_KEY_PATH:?PLATFORM_API_CLIENT_KEY_PATH is required}
+        target: /run/secrets/platform-api-client.key
+        read_only: true

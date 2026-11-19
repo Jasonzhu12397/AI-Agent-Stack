@@ -87,7 +87,7 @@
 
 ### 5.1 生命周期七步（核心业务状态机）
 
-实现位置：`core/cluster_deployment_services.py`（有序阶段：preflight → pivot → verify → worker provision → postflight → plan），配合 `core/agent_node_views.py` 的阶段迁移与 checkpoint CAS（sequence/phase 比较与交换）。
+实现位置：平台通过 `core/cloud_control_bridge.py` 创建并派发 Cloud Control 部署；相位、命令、重试和检查点绑定位于 `apps/cloud_control_agent` 与 `packages/agent_contracts/orchestration.py`。旧的 `core/cluster_deployment_services.py` 链路及其 Target handoff/checkpoint API 已移除。
 
 | 步骤 | 目标流程 | 代码现状 | 三态 |
 |---|---|---|---|

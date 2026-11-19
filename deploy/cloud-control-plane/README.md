@@ -31,6 +31,19 @@ chmod 600 .env.cloud
 
 Do not commit .env.cloud. Use a secret manager to provision the file on the VM. Set ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS and CORS_ALLOWED_ORIGINS to the actual public hostname. The web image uses a same-origin API base path and Nginx proxies /api, /health and /ws to the private Django ASGI service. Agent mTLS is available as an opt-in isolated Compose profile. It requires operator-provisioned server/client CA PEM files and explicit activation; see [Agent mutual TLS deployment contract](agent-mtls-deployment.md). Do not set mandatory enforcement until the ingress profile and Agent certificates are ready.
 
+## Connect the platform to Cloud Control
+
+Deployment creation in Studio no longer queues a platform `AgentCommand`. The platform API creates a Cloud Control deployment through the mTLS API, with the client certificate Common Name `platform-api`. Enable the bridge by adding the override file:
+
+~~~bash
+docker compose --env-file .env.cloud \
+  -f deploy/docker-compose.cloud.yml \
+  -f deploy/cloud-control-plane/docker-compose.cloud-control.yml \
+  up -d --build api
+~~~
+
+Set `CLOUD_CONTROL_API_URL`, `CLOUD_CONTROL_CA_PEM_PATH`, `PLATFORM_API_CLIENT_PEM_PATH` and `PLATFORM_API_CLIENT_KEY_PATH` in `.env.cloud`. The CA must validate the Cloud Control server certificate; the client certificate must validate against the CA configured in `CLOUD_CONTROL_TLS_CLIENT_CA_FILE` on the Cloud Control Agent. Without these values the API returns `CLOUD_CONTROL_NOT_CONFIGURED` and does not create a deployment.
+
 ## Build and deploy
 
 ~~~bash
@@ -48,5 +61,6 @@ The API container applies Django migrations before starting Daphne. The cloud Ag
 - Verify API and WebSocket access through the proxy.
 - Verify API, cloud Agent, PostgreSQL, Redis and Qdrant connectivity from the cloud network.
 - Enroll EPH and Target Agents in Studio and deploy them with the two-context Agent deployment helper.
+- Create a cluster deployment in Studio and confirm Cloud Control accepted it (`status=provisioning`, `plan_result.cloud_control.deployment_id`).
 
 This profile deploys the cloud Control Plane containers only. It does not configure cloud IAM, managed database backups, WAF, TLS certificates, provider-specific private networking, Kubernetes CNI, Ironic/BMC reachability, or physical hardware. Those are environment-specific operational requirements and must be completed before production traffic.

@@ -19,7 +19,6 @@ from core.agent_node_views import (
     FleetMachineLifecycleReviewView,
     FleetMachineBMCConfigView,
     AgentNodeRevokeView,
-    AgentRuntimeDeploymentCheckpointView,
     AgentRuntimeHeartbeatView,
     AgentRuntimeInventoryReportView,
     AgentRuntimeLeaseRenewView,
@@ -41,12 +40,8 @@ from core.agent_views import (
 )
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
 from core.cluster_deployment_views import (
-    ClusterDeploymentCancelView,
     ClusterDeploymentDetailView,
     ClusterDeploymentListCreateView,
-    ClusterDeploymentTargetAgentHandoffView,
-    ClusterDeploymentTargetPostflightView,
-    ClusterDeploymentSriovConfigView,
 )
 from core.knowledge_views import (
     KnowledgeDocumentDetailView,
@@ -196,26 +191,6 @@ urlpatterns = [
         name="cluster-deployment-detail",
     ),
     path(
-        "api/v1/cluster-deployments/<uuid:deployment_id>/sriov-device-plugin/",
-        ClusterDeploymentSriovConfigView.as_view(),
-        name="cluster-deployment-sriov-device-plugin",
-    ),
-    path(
-        "api/v1/cluster-deployments/<uuid:deployment_id>/cancel/",
-        ClusterDeploymentCancelView.as_view(),
-        name="cluster-deployment-cancel",
-    ),
-    path(
-        "api/v1/cluster-deployments/<uuid:deployment_id>/target-agent/handoff/",
-        ClusterDeploymentTargetAgentHandoffView.as_view(),
-        name="cluster-deployment-target-agent-handoff",
-    ),
-    path(
-        "api/v1/cluster-deployments/<uuid:deployment_id>/target-postflight/",
-        ClusterDeploymentTargetPostflightView.as_view(),
-        name="cluster-deployment-target-postflight",
-    ),
-    path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
         AgentNodeListCreateView.as_view(),
         name="agent-node-list-create",
@@ -276,11 +251,6 @@ urlpatterns = [
         "api/v1/agent-runtime/heartbeat/",
         AgentRuntimeHeartbeatView.as_view(),
         name="agent-runtime-heartbeat",
-    ),
-    path(
-        "api/v1/agent-runtime/deployments/<uuid:deployment_id>/checkpoint/",
-        AgentRuntimeDeploymentCheckpointView.as_view(),
-        name="agent-runtime-deployment-checkpoint",
     ),
     path(
         "api/v1/agent-runtime/commands/poll/",
