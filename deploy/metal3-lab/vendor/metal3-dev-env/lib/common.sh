@@ -90,8 +90,8 @@ else
   export POD_NAME_INFRA=""
 fi
 
-export SSH_KEY=${SSH_KEY:-"${HOME}/.ssh/id_rsa}"
-export SSH_PUB_KEY=${SSH_PUB_KEY:-"${SSH_KEY}.pub}"
+export SSH_KEY=${SSH_KEY:-"${HOME}/.ssh/id_rsa}"}
+export SSH_PUB_KEY=${SSH_PUB_KEY:-"${SSH_KEY}.pub}"}
 # Generate user ssh key
 if [[ ! -f "${SSH_KEY}" ]]; then
   mkdir -p "$(dirname "$SSH_KEY")"
@@ -269,7 +269,7 @@ export FAKE_NODES_FILE="${FAKE_NODES_FILE:-${WORKING_DIR}/fake_nodes.json}"
 export NODES_PLATFORM="${NODES_PLATFORM:-libvirt}"
 export ANSIBLE_VENV="${ANSIBLE_VENV:-"${WORKING_DIR}/venv"}"
 # shellcheck disable=SC2034
-ANSIBLE="${ANSIBLE_VENV}/bin/ansible}"
+ANSIBLE="${ANSIBLE_VENV}/bin/ansible"
 
 # Metal3
 export NAMESPACE="${NAMESPACE:-metal3}"
