@@ -69,6 +69,7 @@ EPH_ACTIONS: frozenset[str] = frozenset(
     {
         "eph.preflight",
         "eph.source.observe",
+        "eph.bootstrap.render",
         "eph.controlstack.apply",
         "eph.metal3.bmh.apply",
         "eph.metal3.bmh.observe",
