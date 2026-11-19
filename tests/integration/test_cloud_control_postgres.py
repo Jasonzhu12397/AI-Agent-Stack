@@ -420,7 +420,7 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
             "payload": {"cluster": "edge-02"},
             "idempotency_key": f"work-{work_id}",
         })
-        assert created["work"]["status"] == "queued"
+        assert created["status"] == "queued"
 
         agent_id = uuid4()
         _register_agent(platform_client, agent_id, installation_id)
@@ -445,8 +445,8 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
             agent_client.close()
 
         work = _get(platform_client, f"/api/v1/control/work/{work_id}")
-        assert work["work"]["status"] == "succeeded"
-        assert work["work"]["result"] == {"findings": 2}
-        assert work["work"]["assigned_agent_id"] == str(agent_id)
+        assert work["status"] == "succeeded"
+        assert work["result"] == {"findings": 2}
+        assert work["assigned_agent_id"] == str(agent_id)
     finally:
         platform_client.close()
