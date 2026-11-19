@@ -148,4 +148,19 @@ def test_collection_for_model_versions_collections_by_model_and_dimension(monkey
     with pytest.raises(VectorStoreError, match="positive integer"):
         store.collection_for_model("bge-m3", 0)
     with pytest.raises(VectorStoreError, match="collection"):
-        store.collection_for_model("bge-m3", 1024, base="")
+        store.collection_for_model("///", 768)
+
+
+def test_for_model_binds_a_copy_to_the_derived_collection(monkeypatch):
+    monkeypatch.setenv("QDRANT_URL", "http://qdrant:6333")
+    monkeypatch.setenv("QDRANT_COLLECTION", "agent_knowledge")
+    monkeypatch.setenv("QDRANT_API_KEY_REF", "env:QDRANT_TEST_KEY")
+    monkeypatch.setenv("QDRANT_TEST_KEY", "secret-key")
+    store = QdrantVectorStore()
+
+    scoped = store.for_model("bge-m3", 768)
+
+    assert scoped.collection == "agent_knowledge__bge-m3-768"
+    assert scoped.collection != store.collection
+    assert scoped.base_url == store.base_url
+    assert scoped.api_key == "secret-key"
