@@ -34,6 +34,7 @@ from .deployment_controller import (
     reconcile_deployments,
 )
 from .workspace import (
+    MAX_WORKFLOW_STEPS,
     WORK_KINDS,
     WorkspaceError,
     normalize_approval,
@@ -372,6 +373,23 @@ def _parse_uuid(value: Any, field: str) -> UUID:
         return UUID(str(value))
     except (ValueError, TypeError, AttributeError) as exc:
         raise ControlApiError(f"{field}_INVALID") from exc
+
+
+def _lookup_field(document: Any, path: str) -> tuple[bool, Any]:
+    current = document
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    return True, current
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    return type(left) is type(right) and left == right
 
 
 def _loop_requests_another_iteration(result: Any) -> bool:
@@ -1413,31 +1431,97 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 return "blocked"
             return "awaiting_approval" if step.get("type", "task") == "approval" else "queued"
 
-        def _advance_workflow_run(self, connection: Any, run_id: UUID) -> str:
-            connection.execute(
+        def _resolve_condition_steps(self, connection: Any, run_id: UUID, run_input: Any) -> int:
+            rows = connection.execute(
+                """
+                SELECT task_id, step_id, payload
+                FROM agent_control_tasks
+                WHERE workflow_run_id = %s AND status = 'queued'
+                  AND step_type = 'condition'
+                ORDER BY created_at, step_id
+                """,
+                (run_id,),
+            ).fetchall()
+            resolved = 0
+            for row in rows:
+                condition = (row["payload"] or {}).get("condition")
+                if not isinstance(condition, dict):
+                    matched = False
+                    found = False
+                    field_name = ""
+                    source = None
+                else:
+                    field_name = str(condition.get("field") or "")
+                    source = condition.get("source")
+                    document = run_input
+                    if source:
+                        source_row = connection.execute(
+                            """
+                            SELECT result FROM agent_control_tasks
+                            WHERE workflow_run_id = %s AND step_id = %s
+                            """,
+                            (run_id, source),
+                        ).fetchone()
+                        document = source_row["result"] if source_row else None
+                    found, value = _lookup_field(document, field_name)
+                    matched = found and _json_values_equal(value, condition.get("equals"))
+                result = {
+                    "matched": bool(matched),
+                    "found": bool(found),
+                    "field": field_name,
+                    "source": source,
+                }
+                connection.execute(
+                    """
+                    UPDATE agent_control_tasks
+                    SET status = 'succeeded', result = %s, updated_at = NOW()
+                    WHERE task_id = %s AND status = 'queued'
+                    """,
+                    (Jsonb(result), row["task_id"]),
+                )
+                resolved += 1
+            return resolved
+
+        def _cancel_mismatched_steps(self, connection: Any, run_id: UUID) -> int:
+            result = connection.execute(
                 """
                 UPDATE agent_control_tasks t
-                SET status = CASE
-                        WHEN t.step_type = 'approval' THEN 'awaiting_approval'
-                        ELSE 'queued'
-                    END,
-                    updated_at = NOW()
+                SET status = 'cancelled', updated_at = NOW()
                 WHERE t.workflow_run_id = %s AND t.status = 'blocked'
-                  AND (
-                      (
-                          t.join_policy = 'all'
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
-                              LEFT JOIN agent_control_tasks d
-                                ON d.workflow_run_id = t.workflow_run_id
-                               AND d.step_id = dep.value
-                              WHERE d.task_id IS NULL OR d.status <> 'succeeded'
-                          )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM jsonb_each_text(t.when_policy) AS w(key, value)
+                      JOIN agent_control_tasks d
+                        ON d.workflow_run_id = t.workflow_run_id
+                       AND d.step_id = w.key
+                      WHERE d.status = 'succeeded'
+                        AND w.value::boolean IS DISTINCT FROM
+                            COALESCE((d.result->>'matched')::boolean, FALSE)
+                  )
+                """,
+                (run_id,),
+            )
+            return result.rowcount or 0
+
+        def _cancel_unreachable_steps(self, connection: Any, run_id: UUID) -> int:
+            cancelled = 0
+            for _ in range(33):
+                result = connection.execute(
+                    """
+                    UPDATE agent_control_tasks t
+                    SET status = 'cancelled', updated_at = NOW()
+                    WHERE t.workflow_run_id = %s AND t.status = 'blocked'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
+                          JOIN agent_control_tasks d
+                            ON d.workflow_run_id = t.workflow_run_id
+                           AND d.step_id = dep.value
+                          WHERE d.status = 'cancelled'
                       )
-                      OR (
-                          t.join_policy = 'any'
-                          AND EXISTS (
+                      AND (
+                          t.join_policy = 'all'
+                          OR NOT EXISTS (
                               SELECT 1
                               FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
                               JOIN agent_control_tasks d
@@ -1446,10 +1530,84 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                               WHERE d.status = 'succeeded'
                           )
                       )
-                  )
+                    """,
+                    (run_id,),
+                )
+                affected = result.rowcount or 0
+                cancelled += affected
+                if affected == 0:
+                    break
+            return cancelled
+
+        def _advance_workflow_run(self, connection: Any, run_id: UUID) -> str:
+            run = connection.execute(
+                """
+                SELECT input FROM agent_control_workflow_runs WHERE run_id = %s
                 """,
                 (run_id,),
-            )
+            ).fetchone()
+            run_input = run["input"] if run else {}
+            for _ in range(MAX_WORKFLOW_STEPS + 1):
+                unblocked = connection.execute(
+                    """
+                    UPDATE agent_control_tasks t
+                    SET status = CASE
+                            WHEN t.step_type = 'approval' THEN 'awaiting_approval'
+                            WHEN t.step_type = 'condition' THEN 'queued'
+                            ELSE 'queued'
+                        END,
+                        updated_at = NOW()
+                    WHERE t.workflow_run_id = %s AND t.status = 'blocked'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM jsonb_each_text(t.when_policy) AS w(key, value)
+                          JOIN agent_control_tasks d
+                            ON d.workflow_run_id = t.workflow_run_id
+                           AND d.step_id = w.key
+                          WHERE d.task_id IS NULL
+                             OR d.status <> 'succeeded'
+                             OR (
+                                 d.status = 'succeeded'
+                                 AND w.value::boolean IS DISTINCT FROM
+                                     COALESCE((d.result->>'matched')::boolean, FALSE)
+                             )
+                      )
+                      AND (
+                          (
+                              t.join_policy = 'all'
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM jsonb_array_elements_text(t.depends_on)
+                                      AS dep(value)
+                                  LEFT JOIN agent_control_tasks d
+                                    ON d.workflow_run_id = t.workflow_run_id
+                                   AND d.step_id = dep.value
+                                  WHERE d.task_id IS NULL
+                                     OR d.status <> 'succeeded'
+                              )
+                          )
+                          OR (
+                              t.join_policy = 'any'
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM jsonb_array_elements_text(t.depends_on)
+                                      AS dep(value)
+                                  JOIN agent_control_tasks d
+                                    ON d.workflow_run_id = t.workflow_run_id
+                                   AND d.step_id = dep.value
+                                  WHERE d.status = 'succeeded'
+                              )
+                          )
+                      )
+                    """,
+                    (run_id,),
+                )
+                unblocked_count = unblocked.rowcount or 0
+                resolved = self._resolve_condition_steps(connection, run_id, run_input)
+                mismatched = self._cancel_mismatched_steps(connection, run_id)
+                unreachable = self._cancel_unreachable_steps(connection, run_id)
+                if not (unblocked_count or resolved or mismatched or unreachable):
+                    break
             active = connection.execute(
                 """
                 SELECT COUNT(*) AS active FROM agent_control_tasks
@@ -1668,10 +1826,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 INSERT INTO agent_control_tasks (
                                     task_id, project_id, workflow_run_id, step_id,
                                     step_type, join_policy, name, status,
-                                    required_role, payload, depends_on,
+                                    required_role, payload, depends_on, when_policy,
                                     idempotency_key, loop_max_iterations
                                 ) VALUES (
-                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                    %s, %s
                                 )
                                 """,
                                 (
@@ -1688,14 +1847,17 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                         {
                                             "workflow_input": run["input"],
                                             "step": step["payload"],
+                                            "condition": step.get("condition"),
                                             "max_attempts": step.get("max_attempts", 1),
                                         }
                                     ),
                                     Jsonb(step["depends_on"]),
+                                    Jsonb(step["when"]),
                                     f"workflow:{run_id}:{step['id']}",
                                     step.get("max_iterations", 1),
                                 ),
                             )
+                        self._advance_workflow_run(connection, run_id)
                     else:
                         existing = connection.execute(
                             """
@@ -1720,8 +1882,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     tasks = connection.execute(
                         """
-                        SELECT task_id, step_id, step_type, join_policy, iteration,
-                               loop_max_iterations, name, status, priority,
+                        SELECT task_id, step_id, step_type, join_policy, when_policy,
+                               iteration, loop_max_iterations, name, status, priority,
                                required_role, payload, depends_on, result,
                                assigned_agent_id, attempts
                         FROM agent_control_tasks WHERE workflow_run_id = %s
@@ -1750,10 +1912,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
                 tasks = connection.execute(
                     """
-                    SELECT task_id, step_id, step_type, join_policy, iteration,
-                           loop_max_iterations, name, status, priority, required_role,
-                           payload, depends_on, result, assigned_agent_id,
-                           attempts, created_at, updated_at
+                    SELECT task_id, step_id, step_type, join_policy, when_policy,
+                           iteration, loop_max_iterations, name, status, priority,
+                           required_role, payload, depends_on, result,
+                           assigned_agent_id, attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE workflow_run_id = %s
                     ORDER BY created_at, step_id
                     """,
@@ -1855,7 +2017,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 rows = connection.execute(
                     """
                     SELECT task_id, workflow_run_id, step_id, step_type,
-                           join_policy, name, status, priority, required_role,
+                           join_policy, when_policy, name, status, priority, required_role,
                            payload, depends_on, result, assigned_agent_id,
                            attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE project_id = %s
@@ -1872,8 +2034,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT task_id, project_id, workflow_run_id, step_id, step_type,
-                           join_policy, name, status, priority, required_role, payload, depends_on,
-                           result,
+                           join_policy, when_policy, name, status, priority,
+                           required_role, payload, depends_on, result,
                            assigned_agent_id, attempts, lease_expires_at,
                            created_at, updated_at
                     FROM agent_control_tasks WHERE task_id = %s
@@ -1898,7 +2060,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     row = connection.execute(
                         """
                         SELECT t.task_id, t.project_id, t.workflow_run_id, t.step_id,
-                               t.step_type, t.iteration, t.loop_max_iterations,
+                               t.step_type, t.join_policy, t.when_policy,
+                               t.iteration, t.loop_max_iterations,
                                t.name, t.priority, t.required_role, t.payload,
                                p.name AS project_name, r.workflow_id, r.status AS run_status,
                                w.name AS workflow_name
@@ -1910,6 +2073,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND p.status = 'active'
                           AND (t.status = 'queued'
                                OR (t.status = 'leased' AND t.lease_expires_at < NOW()))
+                          AND t.step_type <> 'condition' 
                           AND (t.workflow_run_id IS NULL OR r.status = 'running')
                           AND (t.required_role IS NULL OR t.required_role = %(role)s)
                         ORDER BY t.priority DESC, t.created_at
@@ -1962,6 +2126,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         "workflow_name": row["workflow_name"],
                         "step_id": row["step_id"],
                         "step_type": row["step_type"],
+                        "join_policy": row["join_policy"],
+                        "when_policy": row["when_policy"],
                         "iteration": row["iteration"],
                         "loop_max_iterations": row["loop_max_iterations"],
                         "name": row["name"],

@@ -512,6 +512,116 @@ def test_workflow_approval_step_pauses_and_resumes_the_run(control_server, tls_m
         platform_client.close()
 
 
+def test_workflow_condition_routes_only_the_matching_branch(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "conditional-workflow",
+                "definition": {
+                    "steps": [
+                        {"id": "inspect", "name": "Inspect", "required_role": "eph"},
+                        {
+                            "id": "check",
+                            "name": "Check readiness",
+                            "type": "condition",
+                            "depends_on": ["inspect"],
+                            "condition": {
+                                "source": "inspect",
+                                "field": "readiness.ready",
+                                "equals": True,
+                            },
+                        },
+                        {
+                            "id": "apply",
+                            "name": "Apply",
+                            "depends_on": ["check"],
+                            "when": {"check": True},
+                        },
+                        {
+                            "id": "skip",
+                            "name": "Skip apply",
+                            "depends_on": ["check"],
+                            "when": {"check": False},
+                        },
+                    ]
+                },
+            },
+        )
+        run_id = uuid4()
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {},
+                "idempotency_key": f"condition-run-{run_id}",
+            },
+        )
+        by_step = {task["step_id"]: task for task in started["tasks"]}
+        assert by_step["inspect"]["status"] == "queued"
+        assert by_step["check"]["status"] == "blocked"
+        assert by_step["apply"]["status"] == "blocked"
+        assert by_step["skip"]["status"] == "blocked"
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            first = _claim(agent_client, identity)
+            assert first["task"]["step_id"] == "inspect"
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "succeeded",
+                    "result": {"readiness": {"ready": False}},
+                },
+            )
+            routed = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+            by_step = {task["step_id"]: task for task in routed["tasks"]}
+            assert by_step["check"]["status"] == "succeeded"
+            assert by_step["check"]["result"]["matched"] is False
+            assert by_step["apply"]["status"] == "cancelled"
+            assert by_step["skip"]["status"] == "queued"
+
+            second = _claim(agent_client, identity)
+            assert second["task"]["step_id"] == "skip"
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": second["task"]["task_id"],
+                    "lease_token": second["lease_token"],
+                    "status": "succeeded",
+                    "result": {"skipped": True},
+                },
+            )
+        finally:
+            agent_client.close()
+
+        finished = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert finished["run"]["status"] == "succeeded"
+        assert finished["run"]["output"]["check"]["matched"] is False
+        assert finished["run"]["output"]["skip"] == {"skipped": True}
+        assert "apply" not in finished["run"]["output"]
+    finally:
+        platform_client.close()
+
+
 def test_workflow_loop_step_requeues_until_its_iteration_budget(control_server, tls_material):
     installation_id = uuid4()
     platform_client = _tls_client(control_server, tls_material, tls_material["platform"])

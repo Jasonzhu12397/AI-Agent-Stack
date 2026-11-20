@@ -399,3 +399,105 @@ def test_workflow_loop_steps_require_a_bounded_iteration_budget():
         normalize_workflow_definition(
             {"steps": [{"id": "task", "name": "Task", "max_iterations": 2}]}
         )
+
+
+def test_workflow_condition_steps_and_branch_when_guards():
+    definition = normalize_workflow_definition(
+        {
+            "steps": [
+                {"id": "inspect", "name": "Inspect", "required_role": "eph"},
+                {
+                    "id": "check",
+                    "name": "Check readiness",
+                    "type": "condition",
+                    "depends_on": ["inspect"],
+                    "condition": {
+                        "source": "inspect",
+                        "field": "readiness.ready",
+                        "equals": True,
+                    },
+                },
+                {
+                    "id": "apply",
+                    "name": "Apply",
+                    "depends_on": ["check"],
+                    "when": {"check": True},
+                },
+                {
+                    "id": "skip",
+                    "name": "Skip apply",
+                    "depends_on": ["check"],
+                    "when": {"check": False},
+                },
+            ]
+        }
+    )
+    by_id = {step["id"]: step for step in definition["steps"]}
+    assert by_id["check"]["condition"] == {
+        "source": "inspect",
+        "field": "readiness.ready",
+        "equals": True,
+    }
+    assert by_id["apply"]["when"] == {"check": True}
+    assert by_id["check"]["required_role"] is None
+
+
+def test_workflow_condition_contract_rejects_invalid_branches():
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {"id": "a", "name": "A"},
+                    {
+                        "id": "b",
+                        "name": "B",
+                        "depends_on": ["a"],
+                        "when": {"a": True},
+                    },
+                ],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {
+                        "id": "check",
+                        "name": "Check",
+                        "type": "condition",
+                        "condition": {"field": "ready"},
+                    }
+                ],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {"id": "a", "name": "A"},
+                    {
+                        "id": "check",
+                        "name": "Check",
+                        "type": "condition",
+                        "condition": {
+                            "source": "a",
+                            "field": "ready",
+                            "equals": True,
+                        },
+                    },
+                ],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {
+                        "id": "check",
+                        "name": "Check",
+                        "type": "condition",
+                        "condition": {"field": "ready", "equals": {"nested": 1}},
+                    }
+                ],
+            }
+        )

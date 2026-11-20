@@ -234,6 +234,40 @@ as soon as one dependency succeeds, so parallel branches can merge on the first
 result while the remaining branches keep running. A failed dependency still
 fails the run, so `any` never lets a run succeed around a failure.
 
+A step `type` is `task` (default), `approval`, `loop` or `condition`. A
+condition step is evaluated by the control plane and never claimed by an Agent.
+It reads either the workflow input or an earlier step result:
+
+```json
+{
+  "id": "check",
+  "name": "Check readiness",
+  "type": "condition",
+  "depends_on": ["inspect"],
+  "condition": {
+    "source": "inspect",
+    "field": "readiness.ready",
+    "equals": true
+  }
+}
+```
+
+`source` is optional (omit it to read the workflow input), must be a dependency,
+and `field` is a dotted path. `equals` must be a scalar; the comparison is
+type-strict, so `true` does not match `1`. The step result is
+`{"matched": bool, "found": bool, "field": "...", "source": "..."}`.
+
+Branches declare `when` per condition dependency:
+
+```json
+{"id": "apply", "depends_on": ["check"], "when": {"check": true}}
+{"id": "skip", "depends_on": ["check"], "when": {"check": false}}
+```
+
+A branch is cancelled when its expected value differs from `matched`; cancelled
+branches propagate to blocked descendants that can no longer succeed. A branch
+does not run before the referenced condition has actually succeeded.
+
 A step `type` is `task` (default), `approval` or `loop`. A loop step repeats the
 same agent task within a mandatory budget of 2–10 iterations:
 

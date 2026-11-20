@@ -39,7 +39,8 @@ PROJECT_STATUSES = frozenset({"active", "archived"})
 TASK_STATUSES = frozenset(
     {"blocked", "queued", "leased", "awaiting_approval", "succeeded", "failed", "cancelled"}
 )
-WORKFLOW_STEP_TYPES = frozenset({"task", "approval", "loop"})
+WORKFLOW_STEP_TYPES = frozenset({"task", "approval", "loop", "condition"})
+CONDITION_FIELD_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
 MAX_LOOP_ITERATIONS = 10
 WORKFLOW_JOIN_POLICIES = frozenset({"all", "any"})
 WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
@@ -296,16 +297,70 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             or len(dependencies) != len(set(dependencies))
         ):
             raise WorkspaceError(f"definition.steps[{index}].depends_on must be unique step ids.")
+        when = item.get("when", {})
+        if not isinstance(when, dict) or len(when) > MAX_STEP_DEPENDENCIES:
+            raise WorkspaceError(
+                f"definition.steps[{index}].when must be an object of at most "
+                f"{MAX_STEP_DEPENDENCIES} conditions."
+            )
+        for dependency_id, expected in when.items():
+            if dependency_id not in dependencies:
+                raise WorkspaceError(
+                    f"definition.steps[{index}].when references {dependency_id}, "
+                    "which is not a dependency."
+                )
+            if not isinstance(expected, bool):
+                raise WorkspaceError(
+                    f"definition.steps[{index}].when.{dependency_id} must be a boolean."
+                )
+        step_type = item.get("type", "task")
+        condition = item.get("condition")
+        if step_type == "condition":
+            if not isinstance(condition, dict):
+                raise WorkspaceError(
+                    f"definition.steps[{index}].condition must be an object."
+                )
+            if "equals" not in condition:
+                raise WorkspaceError(
+                    f"definition.steps[{index}].condition.equals is required."
+                )
+            expected_value = condition["equals"]
+            if isinstance(expected_value, (dict, list)):
+                raise WorkspaceError(
+                    f"definition.steps[{index}].condition.equals must be a scalar."
+                )
+            field_name = _bounded_text(
+                condition.get("field"),
+                f"definition.steps[{index}].condition.field",
+                maximum=128,
+            )
+            if not CONDITION_FIELD_PATTERN.fullmatch(field_name):
+                raise WorkspaceError(
+                    f"definition.steps[{index}].condition.field must be a dotted path."
+                )
+            source = condition.get("source")
+            if source is not None:
+                source = normalize_name(
+                    source, f"definition.steps[{index}].condition.source"
+                )
+                if source not in dependencies:
+                    raise WorkspaceError(
+                        f"definition.steps[{index}].condition.source must be a dependency."
+                    )
+            condition = {"source": source, "field": field_name, "equals": expected_value}
+        else:
+            condition = None
         if step_id in dependencies:
             raise WorkspaceError(f"workflow step {step_id} cannot depend on itself.")
-        step_type = item.get("type", "task")
         if step_type not in WORKFLOW_STEP_TYPES:
             raise WorkspaceError(
-                f"definition.steps[{index}].type must be task, approval or loop."
+                f"definition.steps[{index}].type must be task, approval, loop or "
+                "condition."
             )
-        if step_type == "approval" and role not in (None, ""):
+        if step_type in {"approval", "condition"} and role not in (None, ""):
             raise WorkspaceError(
-                f"definition.steps[{index}].required_role must be empty for approval steps."
+                f"definition.steps[{index}].required_role must be empty for "
+                f"{step_type} steps."
             )
         max_iterations = item.get("max_iterations", 1)
         if (
@@ -322,7 +377,11 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
                 f"definition.steps[{index}].max_iterations must be at least 2 "
                 "for loop steps."
             )
-        if step_type != "loop" and max_iterations != 1:
+        if step_type == "condition" and max_iterations != 1:
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_iterations must be 1 for condition steps."
+            )
+        if step_type not in {"loop", "condition"} and max_iterations != 1:
             raise WorkspaceError(
                 f"definition.steps[{index}].max_iterations is only valid for "
                 "loop steps."
@@ -346,6 +405,8 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
                 "name": name,
                 "type": step_type,
                 "join": join_policy,
+                "when": dict(when),
+                "condition": condition,
                 "max_iterations": max_iterations,
                 "required_role": role or None,
                 "payload": _bounded_json(
@@ -364,6 +425,13 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             raise WorkspaceError(
                 f"workflow step {step['id']} references unknown step {missing[0]}."
             )
+        types = {item["id"]: item["type"] for item in normalized_steps}
+        for dependency_id in step["when"]:
+            if types.get(dependency_id) != "condition":
+                raise WorkspaceError(
+                    f"workflow step {step['id']}.when requires a condition dependency, "
+                    f"but {dependency_id} is not a condition step."
+                )
     _assert_acyclic(normalized_steps)
     description = _bounded_text(
         document.get("description", ""),

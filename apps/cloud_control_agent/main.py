@@ -316,8 +316,9 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
                 )
             ),
             step_type TEXT NOT NULL DEFAULT 'task' CHECK (
-                step_type IN ('task', 'approval', 'loop')
+                step_type IN ('task', 'approval', 'loop', 'condition')
             ),
+            when_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
             iteration INTEGER NOT NULL DEFAULT 1 CHECK (
                 iteration BETWEEN 1 AND 10
             ),
@@ -363,6 +364,10 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     """)
     connection.execute("""
         ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS when_policy JSONB NOT NULL DEFAULT '{}'::jsonb
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
         ADD COLUMN IF NOT EXISTS iteration INTEGER NOT NULL DEFAULT 1
     """)
     connection.execute("""
@@ -389,7 +394,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     connection.execute("""
         ALTER TABLE agent_control_tasks
         ADD CONSTRAINT agent_control_tasks_step_type_check
-        CHECK (step_type IN ('task', 'approval', 'loop'))
+        CHECK (step_type IN ('task', 'approval', 'loop', 'condition'))
     """)
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_tasks_claim_idx
