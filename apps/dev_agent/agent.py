@@ -136,6 +136,16 @@ class SoftwareAgent:
     def apply_change(self, edits: list[TextEdit], token: str) -> list[str]:
         return apply(edits, self.root, self.approvals, token)
 
+    def approve(self, token: str, approver: str = "operator") -> dict:
+        approval = self.approvals.approve(token, approver)
+        return {
+            "token": approval.token,
+            "status": approval.status,
+            "action": approval.action,
+            "approved_by": approval.approved_by,
+            "expires_at": approval.expires_at,
+        }
+
     def git_status(self) -> dict[str, Any]:
         current = status(self.root)
         return current.__dict__ | {"diff": diff(self.root)}

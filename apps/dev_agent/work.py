@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 from .agent import SoftwareAgent
 from .checkpoint import TaskStore
+from .patching import TextEdit
 from .testing import detect_test_plan
 
 ACTIONS = frozenset(
@@ -30,12 +31,13 @@ ACTIONS = frozenset(
         "security",
         "docs",
         "plan_comment",
+        "apply_patch",
         "git_status",
         "commit_plan",
         "plan",
     }
 )
-OPTIONS = frozenset({"action", "paths", "top", "output", "goal"})
+OPTIONS = frozenset({"action", "paths", "top", "output", "goal", "token", "edits"})
 MAX_RESULT_BYTES = 240 * 1024
 PHASE_FOR_ACTION = {
     "capabilities": "analyse",
@@ -48,6 +50,7 @@ PHASE_FOR_ACTION = {
     "security": "review",
     "docs": "deliver",
     "plan_comment": "change",
+    "apply_patch": "change",
     "git_status": "commit",
     "commit_plan": "commit",
     "plan": "analyse",
@@ -106,12 +109,35 @@ def validate_payload(payload: Any) -> dict:
     goal = payload.get("goal", "")
     if not isinstance(goal, str) or len(goal) > 4000:
         raise WorkPayloadError("goal must be a string of at most 4000 characters")
+    token = payload.get("token", "")
+    if not isinstance(token, str) or len(token) > 128:
+        raise WorkPayloadError("token must be a string of at most 128 characters")
+    edits = payload.get("edits", [])
+    if not isinstance(edits, list) or len(edits) > 20:
+        raise WorkPayloadError("edits must be a list of at most 20 entries")
+    normalized_edits = []
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict) or set(edit) != {"path", "old", "new"}:
+            raise WorkPayloadError(f"edits[{index}] must contain path, old and new")
+        if not all(isinstance(edit[key], str) and edit[key] for key in ("path", "old", "new")):
+            raise WorkPayloadError(f"edits[{index}] values must be non-empty strings")
+        normalized_edits.append(
+            {
+                "path": _relative(edit["path"], f"edits[{index}].path"),
+                "old": edit["old"],
+                "new": edit["new"],
+            }
+        )
+    if action == "apply_patch" and (not token or not normalized_edits):
+        raise WorkPayloadError("apply_patch requires an approved token and edits")
     return {
         "action": action,
         "paths": normalized_paths,
         "top": top,
         "output": normalized_output,
         "goal": goal,
+        "token": token,
+        "edits": normalized_edits,
     }
 
 
@@ -155,7 +181,15 @@ class SoftwareWorkExecutor:
             return {"written": self.agent.documents(request["output"])}
         if action == "plan_comment":
             plan = self.agent.comment_plan(request["top"])
-            return {"diff": plan.diff, "token": plan.token, "paths": plan.paths}
+            return {
+                "diff": plan.diff,
+                "token": plan.token,
+                "status": "pending",
+                "paths": plan.paths,
+            }
+        if action == "apply_patch":
+            edits = [TextEdit(**edit) for edit in request["edits"]]
+            return {"applied": self.agent.apply_change(edits, request["token"])}
         if action == "git_status":
             return self.agent.git_status()
         if action == "commit_plan":

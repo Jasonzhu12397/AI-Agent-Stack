@@ -103,6 +103,9 @@ def test_patch_requires_matching_one_time_approval(project):
     assert "-    return read(path)" in planned.diff
     with pytest.raises(ApprovalRequired):
         agent.apply_change(edits, "not-a-token")
+    with pytest.raises(ApprovalRequired):
+        agent.apply_change(edits, planned.token)
+    agent.approvals.approve(planned.token)
     assert agent.apply_change(edits, planned.token) == ["pkg/core.py"]
     assert "return read(path).strip()" in (project / "pkg" / "core.py").read_text()
     with pytest.raises(ApprovalRequired):
@@ -341,6 +344,7 @@ def test_docstring_plan_is_approval_gated(project):
     plan = agent.comment_plan()
     assert plan.token
     assert plan.diff
+    agent.approvals.approve(plan.token)
     applied = agent.apply_change(edits, plan.token)
     assert "pkg/cli.py" in " ".join(applied)
     source = (project / "pkg" / "cli.py").read_text()
@@ -554,3 +558,38 @@ def test_serve_claims_executes_and_reports(project):
     assert len(handled) == 1
     assert client.reported[0][1] == "succeeded"
     assert "code_understanding" in client.reported[0][2]
+
+
+def test_work_apply_patch_requires_an_approved_token(project):
+    executor = SoftwareWorkExecutor(project)
+    edits = [TextEdit("pkg/core.py", "return read(path)", "return read(path).strip()")]
+    plan = executor.agent.plan_change(edits)
+    payload = {
+        "action": "apply_patch",
+        "token": plan.token,
+        "edits": [{"path": edit.path, "old": edit.old, "new": edit.new} for edit in edits],
+    }
+    pending = executor.execute("work-pending", payload)
+    assert pending.status == "failed"
+    assert "pending" in pending.result["error"]
+    executor.agent.approvals.approve(plan.token, "reviewer")
+    applied = executor.execute("work-approved", payload)
+    assert applied.status == "succeeded"
+    assert applied.result["applied"] == ["pkg/core.py"]
+    assert "return read(path).strip()" in (project / "pkg" / "core.py").read_text()
+    reused = executor.execute("work-reused", payload)
+    assert reused.status == "failed"
+    assert "used" in reused.result["error"]
+
+
+def test_work_payload_rejects_escaping_edits():
+    with pytest.raises(WorkPayloadError):
+        validate_payload(
+            {
+                "action": "apply_patch",
+                "token": "t",
+                "edits": [{"path": "../x.py", "old": "a", "new": "b"}],
+            }
+        )
+    with pytest.raises(WorkPayloadError):
+        validate_payload({"action": "apply_patch", "token": "t", "edits": []})

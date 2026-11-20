@@ -12,6 +12,8 @@ from pathlib import Path
 PROTECTED_NAMES = {".git", ".hg", ".svn", ".env", "id_rsa", "id_ed25519"}
 PROTECTED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 MAX_READ_BYTES = 400_000
+APPROVAL_TTL_SECONDS = 86_400
+APPROVAL_STATUSES = ("pending", "approved", "used")
 
 
 class PolicyError(RuntimeError):
@@ -59,6 +61,9 @@ class Approval:
     action: str
     digest: str
     created_at: float
+    status: str = "pending"
+    expires_at: float = 0.0
+    approved_by: str = ""
 
 
 class ApprovalStore:
@@ -85,23 +90,89 @@ class ApprovalStore:
     def request(self, action: str, payload: str) -> Approval:
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         token = secrets.token_hex(16)
-        document = self._load()
-        document[token] = {
+        created = time.time()
+        entry = {
             "action": action,
             "digest": digest,
-            "created_at": time.time(),
+            "created_at": created,
+            "expires_at": created + APPROVAL_TTL_SECONDS,
+            "status": "pending",
+            "approved_at": None,
+            "approved_by": "",
             "used": False,
         }
+        document = self._load()
+        document[token] = entry
         self._save(document)
-        return Approval(token=token, action=action, digest=digest, created_at=time.time())
+        return Approval(
+            token=token,
+            action=action,
+            digest=digest,
+            created_at=created,
+            status="pending",
+            expires_at=entry["expires_at"],
+        )
+
+    def approve(self, token: str, approver: str = "operator") -> Approval:
+        """Mark a pending plan as approved; only a human/host operator should call this."""
+        return self._transition(token, "approved", approver)
+
+    def _transition(self, token: str, status: str, approver: str = "") -> Approval:
+        document = self._load()
+        entry = document.get(token)
+        if not isinstance(entry, dict):
+            raise ApprovalRequired("approval token is unknown")
+        current = entry.get("status") or ("used" if entry.get("used") else "pending")
+        if current == "used":
+            raise ApprovalRequired("approval token was already used")
+        if float(entry.get("expires_at", 0)) and time.time() > float(entry["expires_at"]):
+            raise ApprovalRequired("approval token expired")
+        if current == "approved" and status == "approved":
+            return Approval(
+                token=token,
+                action=str(entry["action"]),
+                digest=str(entry["digest"]),
+                created_at=float(entry["created_at"]),
+                status="approved",
+                expires_at=float(entry.get("expires_at", 0)),
+                approved_by=str(entry.get("approved_by", "")),
+            )
+        if current != "pending":
+            raise ApprovalRequired(f"approval token is {current}")
+        entry["status"] = status
+        entry["approved_at"] = time.time()
+        entry["approved_by"] = approver
+        entry["used"] = status == "used"
+        self._save(document)
+        return Approval(
+            token=token,
+            action=str(entry["action"]),
+            digest=str(entry["digest"]),
+            created_at=float(entry["created_at"]),
+            status=status,
+            expires_at=float(entry.get("expires_at", 0)),
+            approved_by=approver,
+        )
+
+    def entries(self) -> dict[str, dict]:
+        return self._load()
 
     def consume(self, token: str, action: str, payload: str) -> None:
         document = self._load()
         entry = document.get(token)
-        if not isinstance(entry, dict) or entry.get("used"):
+        if not isinstance(entry, dict):
+            raise ApprovalRequired("approval token is unknown")
+        status = entry.get("status") or ("used" if entry.get("used") else "pending")
+        if status == "used":
             raise ApprovalRequired("approval token is unknown or already used")
+        if status != "approved":
+            raise ApprovalRequired("approval token is pending; run dev-agent approve first")
+        if float(entry.get("expires_at", 0)) and time.time() > float(entry["expires_at"]):
+            raise ApprovalRequired("approval token expired")
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         if entry.get("action") != action or entry.get("digest") != digest:
             raise ApprovalRequired("approval token does not match this action and payload")
+        entry["status"] = "used"
         entry["used"] = True
+        entry["used_at"] = time.time()
         self._save(document)

@@ -11,6 +11,7 @@ from .agent import SoftwareAgent
 from .context import refresh_memory
 from .openapi import load_spec, write_client
 from .patching import TextEdit
+from .policy import ApprovalRequired
 from .testing import detect_test_plan
 
 
@@ -92,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
         "plan-comments", help="propose docstrings for undocumented functions"
     )
     comments.add_argument("--limit", type=int, default=20)
+
+    approve = subparsers.add_parser("approve", help="approve a pending plan token")
+    approve.add_argument("token")
+    approve.add_argument("--by", default="operator")
+
+    subparsers.add_parser("approvals", help="list approval tokens and statuses")
 
     apply_patch = subparsers.add_parser("apply-patch", help="apply an approved edit plan")
     apply_patch.add_argument("edits")
@@ -202,12 +209,21 @@ def main(argv: list[str] | None = None) -> int:
         plan = agent.plan_change(_load_edits(arguments.edits))
         print(plan.diff)
         print(f"approval-token: {plan.token}")
+        print("status: pending; run: dev-agent approve " + plan.token)
     elif arguments.command == "plan-comments":
         plan = agent.comment_plan(arguments.limit)
         print(plan.diff)
         print(f"approval-token: {plan.token}")
+        print("status: pending; run: dev-agent approve " + plan.token)
+    elif arguments.command == "approve":
+        _print(agent.approve(arguments.token, arguments.by))
+    elif arguments.command == "approvals":
+        _print(agent.approvals.entries())
     elif arguments.command == "apply-patch":
-        _print(agent.apply_change(_load_edits(arguments.edits), arguments.token))
+        try:
+            _print(agent.apply_change(_load_edits(arguments.edits), arguments.token))
+        except ApprovalRequired as error:
+            raise SystemExit(f"approval rejected: {error}") from error
     elif arguments.command == "task":
         if arguments.action == "create":
             if not arguments.value:

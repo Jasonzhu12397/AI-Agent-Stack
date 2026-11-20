@@ -46,7 +46,7 @@ schema-validated tool steps.
 | Model planning | `planner.py`: OpenAI-compatible chat completions, retry on 429/5xx, allowlisted tools, max 8 steps, JSON Schema validation | implemented |
 | Multi-agent collaboration | `collaboration.run_roles`: analyst, reviewer, security, performance and tester run concurrently; a failed role becomes data instead of aborting the run | implemented |
 | Sandbox isolation | Allowlisted, no shell, secret-scrubbed environment, timeout, output truncation; optional Docker runner | implemented |
-| Permission control | Root containment, protected paths, one-time approval token bound to the exact diff | implemented |
+| Permission control | Root containment, protected paths, pending -> approved -> used approval token bound to the exact diff, 24 hour expiry | implemented |
 | Checkpoint and resume | `checkpoint.TaskStore` journal with phases and resume | implemented |
 | Human approval for push/deploy | No push or deploy command exists; sandbox rejects them | implemented as denial |
 
@@ -71,8 +71,10 @@ Payload shape:
 ```
 
 Allowed actions: `capabilities`, `analyse`, `review`, `performance`, `profile`,
-`tests`, `test_plan`, `security`, `docs`, `plan_comment`, `git_status`,
-`commit_plan`, `plan`. Paths must stay inside the configured workspace.
+`tests`, `test_plan`, `security`, `docs`, `plan_comment`, `apply_patch`,
+`git_status`, `commit_plan`, `plan`. Paths must stay inside the configured
+workspace. `apply_patch` needs the exact edits plus a token that a host operator
+already approved; the executor cannot approve its own plan.
 
 ## Usage
 
@@ -106,13 +108,15 @@ cat > edits.json <<'JSON'
 [{"path": "pkg/core.py", "old": "return read(path)", "new": "return read(path).strip()"}]
 JSON
 dev-agent plan-patch edits.json
+dev-agent approve <printed-token> --by <operator>
 dev-agent apply-patch edits.json --token <printed-token>
 ```
 
 `plan-patch` validates every old fragment is unique and inside the project root,
-prints a unified diff, and stores a one-time approval bound to the diff digest.
-`apply-patch` consumes that token exactly once; a reused or mismatched token is
-rejected.
+prints a unified diff, and stores a **pending** approval bound to the diff digest.
+A human or host operator must run `dev-agent approve <token>` before anything can
+be written. `apply-patch` consumes an approved token exactly once; pending,
+expired, reused or mismatched tokens are rejected. Tokens expire after 24 hours.
 
 ## Safety model
 
@@ -126,6 +130,8 @@ rejected.
   are unreadable and unwritable.
 - Generated deployment artefacts are written under `.dev-agent/drafts`; publishing
   them is a separate human decision.
+- A plan token is pending until explicitly approved. Neither the CLI planner nor
+  a control-plane work item can transition its own token to approved.
 
 ## Layout
 
