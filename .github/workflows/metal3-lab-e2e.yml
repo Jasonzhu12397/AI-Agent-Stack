@@ -1,0 +1,94 @@
+name: Metal3 Lab Acceptance
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Platform project id whose BMHs and machines are verified
+        required: true
+        type: string
+      control_plane_replicas:
+        description: Expected control-plane node count
+        required: true
+        default: "3"
+        type: string
+      worker_replicas:
+        description: Expected worker node count
+        required: true
+        default: "4"
+        type: string
+
+concurrency:
+  group: metal3-lab-${{ inputs.project_id }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: Physical Metal3 acceptance
+    # This job MUST run on a runner attached to the physical lab.
+    # GitHub-hosted runners cannot prove bare-metal deployment.
+    runs-on: [self-hosted, metal3-lab, physical]
+    timeout-minutes: 120
+    environment: metal3-lab
+    env:
+      EPH_KUBECONFIG_PATH: ${{ runner.temp }}/eph.kubeconfig
+      TARGET_KUBECONFIG_PATH: ${{ runner.temp }}/target.kubeconfig
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Materialize kubeconfigs
+        env:
+          EPH_KUBECONFIG: ${{ secrets.EPH_KUBECONFIG }}
+          TARGET_KUBECONFIG: ${{ secrets.TARGET_KUBECONFIG }}
+        run: |
+          if [ -z "$EPH_KUBECONFIG" ] || [ -z "$TARGET_KUBECONFIG" ]; then
+            echo "::error::EPH_KUBECONFIG and TARGET_KUBECONFIG secrets are required; refusing to fake this run."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$EPH_KUBECONFIG" > "$EPH_KUBECONFIG_PATH"
+          printf '%s' "$TARGET_KUBECONFIG" > "$TARGET_KUBECONFIG_PATH"
+
+      - name: Preflight (read-only)
+        run: |
+          mkdir -p evidence
+          python tools/metal3_acceptance.py preflight \
+            --project "${{ inputs.project_id }}" \
+            --out evidence/preflight.json
+
+      - name: Redfish inventory (read-only)
+        run: |
+          python tools/metal3_acceptance.py redfish \
+            --project "${{ inputs.project_id }}" \
+            --out evidence/redfish.json
+
+      - name: Deployment acceptance
+        run: |
+          python tools/metal3_acceptance.py verify \
+            --project "${{ inputs.project_id }}" \
+            --kubeconfig "$EPH_KUBECONFIG_PATH" \
+            --target-kubeconfig "$TARGET_KUBECONFIG_PATH" \
+            --control-plane-replicas "${{ inputs.control_plane_replicas }}" \
+            --worker-replicas "${{ inputs.worker_replicas }}" \
+            --redfish \
+            --out evidence/acceptance.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal3-acceptance-evidence
+          path: evidence/
+          retention-days: 30
