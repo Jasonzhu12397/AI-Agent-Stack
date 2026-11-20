@@ -19,6 +19,7 @@ from packages.agent_contracts.infra_networks import (
     render_role_network_data,
     render_sriov_node_policies,
 )
+from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.storage_addon import (
     StorageAddonError,
     plan_storage_addon as plan_storage_addon_contract,
@@ -39,6 +40,7 @@ from core.cloud_control_bridge import (
     dispatch_deployment,
 )
 from core.models import (
+    AgentMachine,
     AgentNode,
     ClusterDeployment,
     InfrastructureNetworkProfile,
@@ -83,6 +85,65 @@ def _can_edit_project(user, tenant, project):
         role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
     ).exists()
     return tenant_admin or project_editor
+
+
+NETWORK_READINESS_OBSERVATION_WINDOW = datetime.timedelta(hours=24)
+
+
+def _network_readiness(project, spec):
+    """Return the pre-install network readiness report for a deployment spec.
+
+    The gate only applies when the deployment actually carries an infrastructure
+    network profile; projects without one keep the historical behaviour.
+    A machine is counted for a role only when its observed OS inventory is
+    fresh and passes the role checks for the configured networks.
+    """
+    profile = spec.get("infra_network_profile")
+    if profile is None:
+        return None
+    required_control = spec.get("control_plane_replicas", 0)
+    required_worker = spec.get("worker_replicas", 0)
+    fresh_after = timezone.now() - NETWORK_READINESS_OBSERVATION_WINDOW
+    machines = AgentMachine.objects.filter(
+        project=project,
+        observed_at__gte=fresh_after,
+    ).order_by("agent_node__name")
+    control_ready = []
+    worker_ready = []
+    blocked = []
+    for machine in machines:
+        inventory = machine.hardware_inventory
+        role_results = {}
+        for role in ("control_plane", "worker"):
+            try:
+                result = verify_host_networks(profile, role, inventory)
+            except (InfraNetworkError, ValueError):
+                role_results[role] = False
+                continue
+            role_results[role] = bool(result["ok"])
+        if role_results.get("control_plane"):
+            control_ready.append(str(machine.id))
+        if role_results.get("worker"):
+            worker_ready.append(str(machine.id))
+        if not any(role_results.values()):
+            blocked.append(
+                {
+                    "machine_id": str(machine.id),
+                    "name": machine.agent_node.name,
+                    "reason": "network_verification_failed",
+                }
+            )
+    report = {
+        "required_control_plane": required_control,
+        "required_worker": required_worker,
+        "control_plane_ready": len(control_ready),
+        "worker_ready": len(worker_ready),
+        "observed_machines": machines.count(),
+        "blocked_machines": blocked,
+    }
+    ready = len(control_ready) >= required_control and len(worker_ready) >= required_worker
+    report["ready"] = ready
+    return report
 
 
 def _validated_spec(request, *, infra_profile=None):
@@ -280,6 +341,22 @@ class ClusterDeploymentListCreateView(APIView):
         spec, payload_error = _validated_spec(request, infra_profile=infra_profile)
         if payload_error:
             return Response({"detail": payload_error}, status=400)
+        readiness = _network_readiness(project, spec)
+        if readiness is not None and not readiness["ready"]:
+            return Response(
+                {
+                    "detail": (
+                        "Network readiness gate failed: "
+                        f"{readiness['control_plane_ready']}/"
+                        f"{readiness['required_control_plane']} control-plane and "
+                        f"{readiness['worker_ready']}/"
+                        f"{readiness['required_worker']} worker nodes verified. "
+                        "Run Collect all node networks, then retry."
+                    ),
+                    "network_readiness": readiness,
+                },
+                status=409,
+            )
         cluster_name = spec["cluster_name"]
         kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()

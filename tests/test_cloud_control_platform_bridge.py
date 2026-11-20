@@ -1,4 +1,5 @@
 # ruff: noqa: I001
+import datetime
 import hashlib
 import uuid
 
@@ -96,6 +97,17 @@ def _machine(tenant, project, node, index):
             "disk_gib": 480,
         },
     )
+
+
+def _observed_network_inventory():
+    return {
+        "nics": [
+            {"name": "eno1", "mtu": 1500, "vlan": 100},
+            {"name": "eno2", "mtu": 9000, "vlan": 200},
+            {"name": "eno3", "mtu": 9000, "vlan": 300},
+        ],
+        "bonds": [],
+    }
 
 
 def _post(client, tenant, project, node, key="bridge-plan-001"):
@@ -315,7 +327,14 @@ def test_create_inherits_saved_project_network_profile(bridge_workspace, monkeyp
 
     user, tenant, project, node, client = bridge_workspace
     for index in range(1, 6):
-        _machine(tenant, project, node, index)
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_network_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.save()
     InfrastructureNetworkProfile.objects.create(
         tenant=tenant,
         project=project,
@@ -335,3 +354,48 @@ def test_create_inherits_saved_project_network_profile(bridge_workspace, monkeyp
         {"destination": "0.0.0.0/0", "gateway": "10.0.0.1"}
     ]
     assert deployment.spec["worker_data_template"]["network_data"]["networks"]["ipv4"]
+
+
+@pytest.mark.django_db
+def test_deployment_gate_blocks_without_network_observation(bridge_workspace):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    response = _post(client, tenant, project, node, key="gate-no-observation")
+    assert response.status_code == 409
+    assert response.data["network_readiness"]["ready"] is False
+    assert response.data["network_readiness"]["control_plane_ready"] == 0
+    assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
+
+
+@pytest.mark.django_db
+def test_deployment_gate_rejects_stale_observation(bridge_workspace):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_network_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now() - datetime.timedelta(hours=48)
+        machine.save()
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    response = _post(client, tenant, project, node, key="gate-stale")
+    assert response.status_code == 409
+    assert response.data["network_readiness"]["observed_machines"] == 0
