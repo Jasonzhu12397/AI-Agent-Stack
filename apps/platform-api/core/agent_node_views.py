@@ -28,6 +28,7 @@ from core.models import (
     AgentMachine,
     AgentNode,
     ClusterDeployment,
+    FirmwareUpdateJob,
     Project,
     ProjectMembership,
     Tenant,
@@ -516,12 +517,13 @@ class FleetMachineInventoryView(APIView):
                 and (node.last_seen_at is None or node.last_seen_at < stale_before)
                 else node.status
             )
+            machine = AgentMachine.objects.filter(agent_node=node).first()
             data["identity"] = {
                 "agent_node_id": str(node.id),
+                "machine_id": str(machine.id) if machine else None,
                 "name": node.name,
                 "cluster_name": node.cluster_name,
             }
-            machine = AgentMachine.objects.filter(agent_node=node).first()
             data["hardware_inventory"] = (
                 machine.hardware_inventory if machine else node.labels.get("hardware_inventory", {})
             )
@@ -1109,6 +1111,468 @@ def _redfish_identity_review(machine, systems):
         return "conflict", ["system_uuid", "product_serial"], "duplicate_machine_identity"
     return "verified", [], "dmi_redfish_match"
 
+
+
+def _bmc_credential_for(machine, tenant, project):
+    resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
+    if (
+        not resolver_path
+        and getattr(settings, "BMC_VAULT_ADDR", "")
+        and (
+            getattr(settings, "BMC_VAULT_TOKEN", "")
+            or getattr(settings, "BMC_VAULT_TOKEN_RESOLVER", "")
+            or getattr(settings, "BMC_VAULT_JWT_PATH", "")
+        )
+    ):
+        resolver_path = "core.bmc_credentials.resolve_bmc_credentials"
+    if not resolver_path:
+        raise RuntimeError("BMC credential resolver is not configured.")
+    resolver = import_string(resolver_path)
+    resolved = resolver(
+        credential_ref=machine.bmc_credential_ref,
+        trust_bundle_ref=machine.bmc_trust_bundle_ref,
+        tenant_id=str(tenant.id),
+        project_id=str(project.id),
+    )
+    if not isinstance(resolved, dict):
+        raise ValueError("BMC credential resolver returned an invalid value.")
+    username = resolved.get("username")
+    password = resolved.get("password")
+    if not isinstance(username, str) or not username:
+        raise ValueError("BMC credential resolver did not return a username.")
+    if not isinstance(password, str) or not password:
+        raise ValueError("BMC credential resolver did not return a password.")
+    trust_bundle_pem = resolved.get("trust_bundle_pem", "")
+    if trust_bundle_pem and not isinstance(trust_bundle_pem, str):
+        raise ValueError("BMC trust bundle resolver returned an invalid value.")
+    return {"username": username, "password": password}, trust_bundle_pem
+
+
+def _firmware_client(machine, credential, trust_bundle_pem):
+    parsed = urlsplit(machine.bmc_endpoint)
+    hostname = parsed.hostname or ""
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError as exc:
+        raise ValueError(
+            "Firmware management requires a literal BMC IP address."
+        ) from exc
+    if (
+        not address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ValueError("Firmware management only permits private BMC IP addresses.")
+    context = ssl.create_default_context(cadata=trust_bundle_pem or None)
+    auth = httpx.BasicAuth(credential["username"], credential["password"])
+    client = httpx.Client(
+        verify=context,
+        timeout=httpx.Timeout(10.0, connect=3.0),
+        follow_redirects=False,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+    )
+    return client, f"https://{parsed.netloc}", auth
+
+
+def _redfish_get_document(client, base_url, path, auth):
+    if not isinstance(path, str) or not re.fullmatch(
+        r"/redfish/v1/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,240}", path
+    ):
+        raise ValueError("Redfish document path is invalid.")
+    return _redfish_read_json(client, f"{base_url}{path}", auth)
+
+
+def _redfish_member_limit(paths):
+    if not isinstance(paths, list):
+        return []
+    if len(paths) > 32:
+        raise ValueError("Redfish firmware inventory exceeds the supported member limit.")
+    result = []
+    for item in paths:
+        if not isinstance(item, dict):
+            raise ValueError("Redfish firmware inventory contains an invalid member.")
+        path = item.get("@odata.id")
+        if not isinstance(path, str):
+            raise ValueError("Redfish firmware inventory member path is invalid.")
+        result.append(path)
+    return result
+
+
+def _firmware_inventory(machine, credential, trust_bundle_pem):
+    client, base_url, auth = _firmware_client(machine, credential, trust_bundle_pem)
+    with client:
+        service = _redfish_get_document(
+            client, base_url, "/redfish/v1/UpdateService", auth
+        )
+        inventory_link = service.get("FirmwareInventory")
+        firmware = []
+        if isinstance(inventory_link, dict):
+            collection_path = inventory_link.get("@odata.id")
+            collection = _redfish_get_document(
+                client, base_url, collection_path, auth
+            )
+            for member_path in _redfish_member_limit(collection.get("Members")):
+                member = _redfish_get_document(client, base_url, member_path, auth)
+                status = member.get("Status") if isinstance(member.get("Status"), dict) else {}
+                firmware.append(
+                    {
+                        "id": member.get("@odata.id", member_path),
+                        "name": member.get("Name", ""),
+                        "version": member.get("Version", ""),
+                        "updateable": bool(member.get("Updateable", False)),
+                        "status": status.get("Health", ""),
+                    }
+                )
+        service_status = service.get("Status") if isinstance(service.get("Status"), dict) else {}
+        return {
+            "service_enabled": bool(service.get("ServiceEnabled", False)),
+            "service_state": service_status.get("State", ""),
+            "firmware": firmware,
+        }
+
+
+def _firmware_action_target(service, base_url):
+    actions = service.get("Actions")
+    if not isinstance(actions, dict):
+        raise ValueError("Redfish UpdateService does not advertise SimpleUpdate.")
+    simple_update = actions.get("#UpdateService.SimpleUpdate")
+    if not isinstance(simple_update, dict):
+        raise ValueError("Redfish UpdateService does not advertise SimpleUpdate.")
+    target = simple_update.get("target")
+    if not isinstance(target, str) or not target.startswith(f"{base_url}/redfish/v1/"):
+        raise ValueError("Redfish SimpleUpdate target is invalid.")
+    return target
+
+
+def _validate_firmware_image_url(value):
+    if not isinstance(value, str) or not value or len(value) > 500:
+        raise ValueError("image_url must be a non-empty HTTPS URL.")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("image_url must be an HTTPS URL without embedded credentials.")
+    if parsed.fragment:
+        raise ValueError("image_url must not contain a fragment.")
+    return value
+
+
+def _sanitize_image_url(value):
+    parsed = urlsplit(value)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
+def _firmware_simple_update(
+    machine, credential, trust_bundle_pem, image_url, targets, apply_time
+):
+    client, base_url, auth = _firmware_client(machine, credential, trust_bundle_pem)
+    with client:
+        service = _redfish_get_document(
+            client, base_url, "/redfish/v1/UpdateService", auth
+        )
+        if not bool(service.get("ServiceEnabled", False)):
+            raise RuntimeError("Redfish UpdateService is disabled.")
+        target = _firmware_action_target(service, base_url)
+        payload = {"ImageURI": image_url, "TransferProtocol": "HTTPS"}
+        if targets:
+            payload["Targets"] = targets
+        payload["@Redfish.OperationApplyTime"] = apply_time
+        response = client.post(target, json=payload, auth=auth)
+        if 300 <= response.status_code < 400:
+            raise ValueError("Redfish SimpleUpdate redirects are not allowed.")
+        if response.status_code in (401, 403):
+            raise PermissionError("BMC authentication failed.")
+        if response.status_code not in (200, 202):
+            raise RuntimeError(
+                f"Redfish SimpleUpdate returned HTTP {response.status_code}."
+            )
+        monitor = response.headers.get("location", "")
+        if not monitor:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            if isinstance(body, dict):
+                monitor = body.get("@odata.id", "")
+        if not monitor:
+            raise RuntimeError("Redfish SimpleUpdate did not return a task monitor.")
+        if not isinstance(monitor, str) or not monitor.startswith(f"{base_url}/redfish/v1/"):
+            raise ValueError("Redfish SimpleUpdate task monitor is invalid.")
+        return {
+            "task_monitor": monitor,
+            "task_state": "",
+            "message": "Firmware update submitted to the BMC.",
+        }
+
+
+def _refresh_firmware_job(job):
+    if job.status in (FirmwareUpdateJob.Status.SUCCEEDED, FirmwareUpdateJob.Status.FAILED):
+        return job
+    if not job.task_monitor:
+        return job
+    credential, trust_bundle_pem = _bmc_credential_for(
+        job.machine, job.tenant, job.project
+    )
+    client, base_url, auth = _firmware_client(job.machine, credential, trust_bundle_pem)
+    if not job.task_monitor.startswith(f"{base_url}/redfish/v1/"):
+        raise ValueError("Firmware task monitor does not match the machine BMC.")
+    monitor_path = job.task_monitor[len(base_url) :]
+    with client:
+        task = _redfish_get_document(client, base_url, monitor_path, auth)
+    task_state = task.get("TaskState", "")
+    task_status = task.get("TaskStatus", "")
+    messages = task.get("Messages")
+    message = ""
+    if isinstance(messages, list) and messages:
+        first = messages[0]
+        if isinstance(first, dict):
+            message = str(first.get("Message", ""))[:500]
+    if task_state == "Completed":
+        job.status = FirmwareUpdateJob.Status.SUCCEEDED
+        job.finished_at = timezone.now()
+    elif task_state in ("Exception", "Cancelled", "Interrupted", "Killed"):
+        job.status = FirmwareUpdateJob.Status.FAILED
+        job.finished_at = timezone.now()
+    elif task_state:
+        job.status = FirmwareUpdateJob.Status.RUNNING
+    job.task_state = str(task_state)[:64]
+    if task_status:
+        job.message = f"{task_status}: {message}".strip()
+    elif message:
+        job.message = message
+    job.save(
+        update_fields=["status", "task_state", "message", "finished_at", "updated_at"]
+    )
+    return job
+
+
+def _firmware_job_data(job):
+    return {
+        "id": str(job.id),
+        "machine_id": str(job.machine_id),
+        "status": job.status,
+        "image_url": job.image_url,
+        "component": job.component,
+        "apply_time": job.apply_time,
+        "targets": job.targets,
+        "task_state": job.task_state,
+        "message": job.message,
+        "task_monitor": job.task_monitor,
+        "requested_by": job.requested_by.get_username(),
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
+
+
+def _firmware_error_response(exc):
+    if isinstance(exc, PermissionError):
+        return Response({"detail": "BMC authentication failed."}, status=502)
+    if isinstance(exc, httpx.TimeoutException):
+        return Response({"detail": "BMC firmware request timed out."}, status=504)
+    if isinstance(exc, httpx.HTTPError):
+        return Response(
+            {"detail": "BMC connection or TLS verification failed."}, status=502
+        )
+    if isinstance(exc, (ValueError, ImportError, AttributeError)):
+        return Response({"detail": str(exc)}, status=400)
+    if isinstance(exc, RuntimeError):
+        return Response({"detail": str(exc)}, status=502)
+    return Response({"detail": "Firmware management request failed."}, status=500)
+
+
+class FleetMachineFirmwareView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id, machine_id):
+        tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        machine = AgentMachine.objects.filter(
+            pk=machine_id, tenant=tenant, project=project
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        jobs = machine.firmware_update_jobs.all()[:20]
+        base = {
+            "machine_id": str(machine.id),
+            "bmc_configured": bool(machine.bmc_endpoint and machine.bmc_credential_ref),
+            "jobs": [_firmware_job_data(job) for job in jobs],
+        }
+        if not base["bmc_configured"]:
+            return Response(
+                {**base, "detail": "BMC endpoint and credential reference must be configured."},
+                status=200,
+            )
+        try:
+            credential, trust_bundle_pem = _bmc_credential_for(machine, tenant, project)
+            inventory = _firmware_inventory(machine, credential, trust_bundle_pem)
+        except (
+            ValueError,
+            ImportError,
+            AttributeError,
+            PermissionError,
+            RuntimeError,
+            httpx.HTTPError,
+        ) as exc:
+            return _firmware_error_response(exc)
+        return Response({**base, **inventory}, status=200)
+
+
+class FleetMachineFirmwareUpgradeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, project_id, machine_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request, tenant_id, project_id
+        )
+        project_admin = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role=ProjectMembership.Role.ADMIN,
+        ).exists()
+        if not is_tenant_admin and not project_admin:
+            return Response(
+                {"detail": "Tenant or project administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        allowed = {"image_url", "component", "apply_time", "targets", "confirm", "idempotency_key"}
+        if set(request.data) - allowed:
+            return Response(
+                {"detail": "Unsupported firmware upgrade fields were supplied."},
+                status=400,
+            )
+        if request.data.get("confirm") is not True:
+            return Response(
+                {"detail": "Explicit confirm=true is required for firmware upgrades."},
+                status=400,
+            )
+        try:
+            image_url = _validate_firmware_image_url(request.data.get("image_url"))
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        component = request.data.get("component", "")
+        if component and (not isinstance(component, str) or len(component) > 160):
+            return Response({"detail": "component must be at most 160 characters."}, status=400)
+        apply_time = request.data.get("apply_time", "Immediate")
+        if apply_time not in ("Immediate", "OnReset", "AtMaintenanceWindowStart"):
+            return Response({"detail": "apply_time is invalid."}, status=400)
+        targets = request.data.get("targets", [])
+        if not isinstance(targets, list) or len(targets) > 8:
+            return Response(
+                {"detail": "targets must be a list of at most 8 Redfish paths."},
+                status=400,
+            )
+        for target in targets:
+            if not isinstance(target, str) or not re.fullmatch(
+                r"/redfish/v1/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,240}", target
+            ):
+                return Response({"detail": "targets contains an invalid Redfish path."}, status=400)
+        idempotency_key = request.headers.get("Idempotency-Key", "")
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
+            return Response(
+                {"detail": "Idempotency-Key header is required (8-128 safe characters)."},
+                status=400,
+            )
+        machine = AgentMachine.objects.filter(
+            pk=machine_id, tenant=tenant, project=project
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        if not machine.bmc_endpoint or not machine.bmc_credential_ref:
+            return Response(
+                {"detail": "BMC endpoint and credential reference must be configured."},
+                status=409,
+            )
+        existing = FirmwareUpdateJob.objects.filter(
+            tenant=tenant, machine=machine, idempotency_key=idempotency_key
+        ).first()
+        if existing:
+            return Response(_firmware_job_data(existing), status=200)
+        try:
+            credential, trust_bundle_pem = _bmc_credential_for(machine, tenant, project)
+            result = _firmware_simple_update(
+                machine,
+                credential,
+                trust_bundle_pem,
+                image_url,
+                targets,
+                apply_time,
+            )
+        except (
+            ValueError,
+            ImportError,
+            AttributeError,
+            PermissionError,
+            RuntimeError,
+            httpx.HTTPError,
+        ) as exc:
+            return _firmware_error_response(exc)
+        with transaction.atomic():
+            job, created = FirmwareUpdateJob.objects.get_or_create(
+                tenant=tenant,
+                machine=machine,
+                idempotency_key=idempotency_key,
+                defaults={
+                    "project": project,
+                    "requested_by": request.user,
+                    "image_url": _sanitize_image_url(image_url),
+                    "component": component,
+                    "apply_time": apply_time,
+                    "targets": targets,
+                    "status": FirmwareUpdateJob.Status.SUBMITTED,
+                    "task_monitor": result["task_monitor"],
+                    "message": result["message"],
+                },
+            )
+            if created:
+                record_audit_event(
+                    request,
+                    tenant,
+                    "fleet.machine.firmware_update_requested",
+                    "firmware_update_job",
+                    job.id,
+                    project=project,
+                    metadata={
+                        "machine_id": str(machine.id),
+                        "component": component,
+                        "apply_time": apply_time,
+                        "target_count": len(targets),
+                        "image_host": urlsplit(image_url).netloc,
+                    },
+                )
+        return Response(_firmware_job_data(job), status=202 if created else 200)
+
+
+class FleetMachineFirmwareUpgradeDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id, machine_id, job_id):
+        tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        machine = AgentMachine.objects.filter(
+            pk=machine_id, tenant=tenant, project=project
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        job = FirmwareUpdateJob.objects.filter(
+            pk=job_id, machine=machine, tenant=tenant, project=project
+        ).first()
+        if job is None:
+            return Response({"detail": "Firmware update job not found."}, status=404)
+        try:
+            job = _refresh_firmware_job(job)
+        except (
+            ValueError,
+            ImportError,
+            AttributeError,
+            PermissionError,
+            RuntimeError,
+            httpx.HTTPError,
+        ) as exc:
+            return _firmware_error_response(exc)
+        return Response(_firmware_job_data(job), status=200)
 
 
 class FleetMachineLifecycleReviewView(APIView):

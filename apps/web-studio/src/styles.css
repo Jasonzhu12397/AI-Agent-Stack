@@ -307,3 +307,36 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-edge-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .workflow-edge-list span { padding: 5px 8px; border: 1px solid #28364d; border-radius: 6px; color: #9eabc1; background: #080d18; font: 10px "DM Mono", monospace; }
 .workflow-validation-result { margin-top: 14px; padding: 12px; border: 1px solid #34435c; border-radius: 9px; background: #080d18; }
+
+
+.firmware-panel {
+  display: grid;
+  gap: 12px;
+}
+.firmware-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 13px;
+  color: var(--muted, #666);
+}
+.firmware-upgrade-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+}
+.firmware-upgrade-form .el-input {
+  width: min(300px, 100%);
+}
+.firmware-upgrade-form .el-select {
+  width: 200px;
+}
+
+
+.locale-switch {
+  margin-right: 8px;
+}

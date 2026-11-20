@@ -19,6 +19,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | Usage governance | Per-tenant token budget reservation, settlement and overspend protection | Pending validation under real concurrency |
 | Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
 | Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
+| BMC firmware lifecycle | Redfish `UpdateService` inventory, administrator-only `SimpleUpdate`, idempotent jobs, task-monitor polling and audit | Code baseline; physical BMC validation pending |
 | Control workspace | Installation-scoped projects with versioned skills, referenced plugins, tasks, DAG workflows and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
 | Software engineering agent | Static project understanding, approved multi-file patches, review, static and measured (cProfile) performance, tests, debugging, git, security, OpenAPI, docs, deployment drafts, schema-validated model planning and concurrent role collaboration | Code baseline; provider calls require explicit environment configuration |
 
@@ -31,7 +32,7 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 ### 1. Application multi-Agent runtime
 
 - **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
-- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio (visual DAG canvas with node inspector and edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet, Governance, Audit and Organization.
+- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio (visual DAG canvas with node inspector and edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet with Redfish firmware management, Governance, Audit and Organization. The whole SaaS interface switches between English and Chinese through the central locale engine, persisted per browser and backed by Element Plus locale packs.
 - **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent, Workflow and Agent Team tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
 - **Agent Teams**: a project-scoped team publishes a versioned roster and one strategy: `sequential`, `coordinator`, `parallel` fan-out or `router` dispatch. Publishing materializes an immutable Workflow version made of `agent` and routing nodes, so every team run reuses the same lease, token-budget, retry and audit machinery as ordinary Workflows. Runs are idempotent by `Idempotency-Key` and expose per-member step records. See `docs/agent-teams.md`; members with plugin tools are rejected until per-member tool approvals exist.
 - **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.
@@ -177,6 +178,8 @@ Build three independent Agent images and pin each by immutable SHA-256 digest. A
 The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must provide TCP/L4 TLS passthrough unless a separately trusted client-certificate identity propagation design is implemented.
 
 ## Validation and production status
+
+BMC firmware inventory and `SimpleUpdate` are implemented for machines with a configured BMC endpoint; see [`docs/firmware-management.md`](docs/firmware-management.md). The platform API enforces administrator-only submission, explicit confirmation, HTTPS image URLs, idempotency keys, private BMC IPs and same-origin Redfish task monitors.
 
 Implemented foundations include tenant/project isolation, membership roles, token budgets, chained audit, Agent/Workflow APIs, connector approval, MCP streamable-HTTP runtime, Qdrant collection bootstrap and the three infrastructure Agent state machines. Metal3 physical acceptance runs end to end with `tools/metal3_release_run.py`, which executes every evidence stage, seals a fail-closed release manifest and blocks the release on any failure.
 

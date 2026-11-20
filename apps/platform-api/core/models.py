@@ -664,6 +664,57 @@ class AgentMachine(models.Model):
         ]
 
 
+class FirmwareUpdateJob(models.Model):
+    class Status(models.TextChoices):
+        SUBMITTED = "submitted", "Submitted"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="firmware_update_jobs"
+    )
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="firmware_update_jobs"
+    )
+    machine = models.ForeignKey(
+        AgentMachine,
+        on_delete=models.CASCADE,
+        related_name="firmware_update_jobs",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_firmware_updates",
+    )
+    image_url = models.CharField(max_length=500)
+    component = models.CharField(max_length=160, blank=True)
+    apply_time = models.CharField(max_length=32, default="Immediate")
+    targets = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.SUBMITTED,
+    )
+    task_monitor = models.CharField(max_length=500, blank=True)
+    task_state = models.CharField(max_length=64, blank=True)
+    message = models.TextField(blank=True)
+    idempotency_key = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "machine", "idempotency_key"],
+                name="uniq_firmware_job_idempotency",
+            )
+        ]
+
+
 class AgentCommand(models.Model):
     class Status(models.TextChoices):
         WAITING_APPROVAL = "waiting_approval", "Waiting approval"

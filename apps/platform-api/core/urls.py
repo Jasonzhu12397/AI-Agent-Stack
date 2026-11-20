@@ -18,6 +18,9 @@ from core.agent_node_views import (
     FleetMachineInventoryView,
     FleetMachineLifecycleReviewView,
     FleetMachineBMCConfigView,
+    FleetMachineFirmwareUpgradeDetailView,
+    FleetMachineFirmwareUpgradeView,
+    FleetMachineFirmwareView,
     AgentNodeRevokeView,
     AgentRuntimeHeartbeatView,
     AgentRuntimeInventoryReportView,
@@ -214,6 +217,24 @@ urlpatterns = [
         "fleet/machines/<uuid:machine_id>/bmc-config/",
         FleetMachineBMCConfigView.as_view(),
         name="fleet-machine-bmc-config",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "fleet/machines/<uuid:machine_id>/firmware/",
+        FleetMachineFirmwareView.as_view(),
+        name="fleet-machine-firmware",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "fleet/machines/<uuid:machine_id>/firmware/upgrades/",
+        FleetMachineFirmwareUpgradeView.as_view(),
+        name="fleet-machine-firmware-upgrade",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "fleet/machines/<uuid:machine_id>/firmware/upgrades/<uuid:job_id>/",
+        FleetMachineFirmwareUpgradeDetailView.as_view(),
+        name="fleet-machine-firmware-upgrade-detail",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"

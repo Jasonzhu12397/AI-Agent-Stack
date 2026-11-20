@@ -4,6 +4,9 @@ import {
   createAgentCommand,
   getAgentNodes,
   getFleetMachines,
+  getMachineFirmware,
+  getFirmwareUpdateJob,
+  submitFirmwareUpgrade,
   getProjectAgentCommands,
   getClusterDeployments,
   getProjects,
@@ -13,6 +16,8 @@ import {
   type AgentCommand,
   type AgentNode,
   type FleetMachine,
+  type FirmwareUpdateJob,
+  type MachineFirmware,
   type ClusterDeployment,
   type Project,
   type Tenant,
@@ -51,6 +56,17 @@ const supportedKubernetesVersions = SUPPORTED_KUBERNETES_VERSIONS;
 const selectedKubernetesVersions = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
+const firmwareDialogVisible = ref(false);
+const firmwareMachine = ref<FleetMachine | null>(null);
+const firmwareState = ref<MachineFirmware | null>(null);
+const firmwareLoading = ref(false);
+const firmwareError = ref("");
+const firmwareImageUrl = ref("");
+const firmwareComponent = ref("");
+const firmwareApplyTime = ref("Immediate");
+const firmwareBusy = ref(false);
+const firmwareMessage = ref("");
+const firmwareJobs = ref<FirmwareUpdateJob[]>([]);
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const loading = ref(false);
@@ -240,6 +256,100 @@ async function saveSriovConfig(): Promise<void> {
   } finally {
     sriovSaving.value = false;
   }
+}
+
+function firmwareMachineId(machine: FleetMachine): string {
+  return machine.identity.machine_id ?? "";
+}
+
+async function openFirmwarePanel(machine: FleetMachine): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  firmwareMachine.value = machine;
+  firmwareState.value = null;
+  firmwareJobs.value = [];
+  firmwareError.value = "";
+  firmwareMessage.value = "";
+  firmwareImageUrl.value = "";
+  firmwareComponent.value = "";
+  firmwareApplyTime.value = "Immediate";
+  firmwareDialogVisible.value = true;
+  await loadFirmwareState();
+}
+
+async function loadFirmwareState(): Promise<void> {
+  const machineId = firmwareMachine.value ? firmwareMachineId(firmwareMachine.value) : "";
+  if (!machineId) {
+    firmwareError.value = "This machine has no persisted hardware record or BMC configuration.";
+    return;
+  }
+  firmwareLoading.value = true;
+  firmwareError.value = "";
+  try {
+    firmwareState.value = await getMachineFirmware(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machineId,
+    );
+    firmwareJobs.value = firmwareState.value.jobs;
+  } catch (cause) {
+    firmwareError.value = cause instanceof Error ? cause.message : "Unable to load BMC firmware inventory.";
+  } finally {
+    firmwareLoading.value = false;
+  }
+}
+
+async function applyFirmwareUpgrade(): Promise<void> {
+  const machineId = firmwareMachine.value ? firmwareMachineId(firmwareMachine.value) : "";
+  if (!machineId || !firmwareImageUrl.value.trim()) {
+    firmwareError.value = "An HTTPS firmware image URL is required.";
+    return;
+  }
+  firmwareBusy.value = true;
+  firmwareError.value = "";
+  firmwareMessage.value = "";
+  try {
+    const job = await submitFirmwareUpgrade(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machineId,
+      {
+        image_url: firmwareImageUrl.value.trim(),
+        component: firmwareComponent.value.trim(),
+        apply_time: firmwareApplyTime.value,
+      },
+    );
+    firmwareJobs.value = [job, ...firmwareJobs.value.filter((item) => item.id !== job.id)];
+    firmwareMessage.value = "Firmware update submitted to the BMC. The task monitor is polled below.";
+  } catch (cause) {
+    firmwareError.value = cause instanceof Error ? cause.message : "Unable to submit firmware upgrade.";
+  } finally {
+    firmwareBusy.value = false;
+  }
+}
+
+async function refreshFirmwareJob(job: FirmwareUpdateJob): Promise<void> {
+  const machineId = firmwareMachine.value ? firmwareMachineId(firmwareMachine.value) : "";
+  if (!machineId) return;
+  try {
+    const updated = await getFirmwareUpdateJob(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machineId,
+      job.id,
+    );
+    firmwareJobs.value = firmwareJobs.value.map((item) =>
+      item.id === updated.id ? updated : item,
+    );
+  } catch (cause) {
+    firmwareError.value = cause instanceof Error ? cause.message : "Unable to refresh firmware task.";
+  }
+}
+
+function firmwareStatusType(status: string): "success" | "warning" | "danger" | "info" {
+  if (status === "succeeded") return "success";
+  if (status === "failed") return "danger";
+  if (status === "running") return "warning";
+  return "info";
 }
 
 function statusType(status: string): "success" | "warning" | "danger" | "info" {
@@ -512,7 +622,91 @@ onUnmounted(() => {
           <el-table-column label="Capabilities" min-width="180">
             <template #default="scope">{{ scope.row.capabilities.join(", ") || "—" }}</template>
           </el-table-column>
+          <el-table-column label="Actions" min-width="150" fixed="right">
+            <template #default="scope">
+              <el-button
+                size="small"
+                plain
+                :disabled="!scope.row.identity.machine_id"
+                @click="openFirmwarePanel(scope.row)"
+              >Firmware</el-button>
+            </template>
+          </el-table-column>
         </el-table>
+
+        <el-dialog v-model="firmwareDialogVisible" title="BMC Firmware Management" width="880px">
+          <div v-if="firmwareMachine" class="firmware-panel">
+            <div class="fleet-panel-heading">
+              <h3>{{ firmwareMachine.name }} · Redfish UpdateService</h3>
+              <el-button size="small" :loading="firmwareLoading" @click="loadFirmwareState">Reload</el-button>
+            </div>
+            <el-alert
+              v-if="firmwareError"
+              :title="firmwareError"
+              type="error"
+              show-icon
+              :closable="false"
+            />
+            <el-alert
+              v-if="firmwareMessage"
+              :title="firmwareMessage"
+              type="success"
+              show-icon
+              :closable="false"
+            />
+            <el-alert
+              v-if="firmwareState && !firmwareState.bmc_configured"
+              title="Configure the BMC endpoint and credential reference before managing firmware."
+              type="warning"
+              show-icon
+              :closable="false"
+            />
+            <div v-if="firmwareState" class="firmware-summary">
+              <span>Service enabled: <strong>{{ firmwareState.service_enabled ? "Yes" : "No" }}</strong></span>
+              <span>State: <strong>{{ firmwareState.service_state || "Unknown" }}</strong></span>
+              <span>Components: <strong>{{ firmwareState.firmware?.length ?? 0 }}</strong></span>
+            </div>
+            <el-table v-if="firmwareState?.firmware?.length" :data="firmwareState.firmware" size="small" class="task-table">
+              <el-table-column prop="name" label="Component" min-width="180" />
+              <el-table-column prop="version" label="Version" min-width="140" />
+              <el-table-column prop="status" label="Health" min-width="100" />
+              <el-table-column label="Updateable" min-width="110">
+                <template #default="scope">{{ scope.row.updateable ? "Yes" : "No" }}</template>
+              </el-table-column>
+            </el-table>
+
+            <div class="firmware-upgrade-form">
+              <h4>SimpleUpdate</h4>
+              <el-input v-model="firmwareImageUrl" size="small" placeholder="https://images.example.com/firmware.bin" />
+              <el-input v-model="firmwareComponent" size="small" placeholder="Component filter (optional, e.g. BMC)" />
+              <el-select v-model="firmwareApplyTime" size="small">
+                <el-option label="Immediate" value="Immediate" />
+                <el-option label="On reset" value="OnReset" />
+                <el-option label="At maintenance window" value="AtMaintenanceWindowStart" />
+              </el-select>
+              <el-button type="danger" size="small" :loading="firmwareBusy" @click="applyFirmwareUpgrade">Submit firmware upgrade</el-button>
+            </div>
+
+            <h4>Recent firmware jobs</h4>
+            <el-table v-if="firmwareJobs.length" :data="firmwareJobs" size="small" class="task-table">
+              <el-table-column prop="status" label="Status" min-width="110">
+                <template #default="scope"><el-tag :type="firmwareStatusType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="task_state" label="Task state" min-width="120" />
+              <el-table-column prop="image_url" label="Image" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="apply_time" label="Apply time" min-width="140" />
+              <el-table-column label="Updated" min-width="160">
+                <template #default="scope">{{ formatTime(scope.row.updated_at) }}</template>
+              </el-table-column>
+              <el-table-column label="Actions" min-width="100">
+                <template #default="scope">
+                  <el-button size="small" text @click="refreshFirmwareJob(scope.row)">Refresh</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <p v-else class="fleet-footnote">No firmware upgrades have been submitted for this machine.</p>
+          </div>
+        </el-dialog>
       </section>
     </template>
 

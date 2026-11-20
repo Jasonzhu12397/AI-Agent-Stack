@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import zhCn from "element-plus/es/locale/lang/zh-cn";
+import en from "element-plus/es/locale/lang/en";
+import { locale, setLocale } from "./i18n";
 import LoginView from "./components/LoginView.vue";
 import WorkspaceView from "./components/WorkspaceView.vue";
 import Metal3FleetView from "./components/Metal3FleetView.vue";
@@ -13,6 +16,7 @@ import {
 type Health = { status: string; database?: string };
 type ActiveView = "dashboard" | "models" | "agents" | "teams" | "workflows" | "integrations" | "knowledge" | "infrastructure" | "governance" | "audit" | "organization" | "docs";
 const activeView = ref<ActiveView>("dashboard");
+const elementLocale = computed(() => (locale.value === "zh" ? zhCn : en));
 const navItems: { id: ActiveView; label: string }[] = [
   { id: "dashboard", label: "Overview" },
   { id: "models", label: "Model Manager" },
@@ -88,6 +92,7 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <el-config-provider :locale="elementLocale">
   <LoginView v-if="!authLoading && !currentUser" @authenticated="authenticated" />
   <main v-else class="shell">
     <header class="topbar">
@@ -98,6 +103,10 @@ onUnmounted(() => {
       <div class="account-actions">
         <el-tag effect="plain" type="info">DUAL-AGENT PREVIEW</el-tag>
         <span v-if="currentUser" class="account-name">{{ currentUser.username }}</span>
+        <el-button-group class="locale-switch" size="small">
+          <el-button :type="locale === 'en' ? 'primary' : 'default'" @click="setLocale('en')">English</el-button>
+          <el-button :type="locale === 'zh' ? 'primary' : 'default'" @click="setLocale('zh')">中文</el-button>
+        </el-button-group>
         <el-button v-if="currentUser" text @click="signOut">Sign out</el-button>
       </div>
     </header>
@@ -186,4 +195,5 @@ onUnmounted(() => {
       <span>Policy first. Observable by design.</span>
     </footer>
   </main>
+  </el-config-provider>
 </template>

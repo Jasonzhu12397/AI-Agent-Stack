@@ -532,6 +532,7 @@ export type FleetMachine = AgentNode & {
     name: string;
     cluster_name: string;
     system_uuid: string;
+    machine_id: string | null;
     identity_status: "unverified" | "candidate" | "verified" | "conflict";
     identity_fingerprint: string | null;
     identity_conflicts: Array<{
@@ -565,6 +566,85 @@ export function getFleetMachines(
   if (options.nodeType) query.set("node_type", options.nodeType);
   return request(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/?" + query.toString(),
+  );
+}
+
+export type FirmwareInventoryItem = {
+  id: string;
+  name: string;
+  version: string;
+  updateable: boolean;
+  status: string;
+};
+
+export type FirmwareUpdateJob = {
+  id: string;
+  machine_id: string;
+  status: "submitted" | "running" | "succeeded" | "failed";
+  image_url: string;
+  component: string;
+  apply_time: string;
+  targets: string[];
+  task_state: string;
+  message: string;
+  task_monitor: string;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+export type MachineFirmware = {
+  machine_id: string;
+  bmc_configured: boolean;
+  detail?: string;
+  service_enabled?: boolean;
+  service_state?: string;
+  firmware?: FirmwareInventoryItem[];
+  jobs: FirmwareUpdateJob[];
+};
+
+function machineFirmwarePath(tenantId: string, projectId: string, machineId: string): string {
+  return (
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId +
+    "/fleet/machines/" + machineId + "/firmware/"
+  );
+}
+
+export function getMachineFirmware(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+): Promise<MachineFirmware> {
+  return request(machineFirmwarePath(tenantId, projectId, machineId));
+}
+
+export function submitFirmwareUpgrade(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+  input: {
+    image_url: string;
+    component?: string;
+    apply_time?: string;
+    targets?: string[];
+  },
+): Promise<FirmwareUpdateJob> {
+  return request(machineFirmwarePath(tenantId, projectId, machineId) + "upgrades/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ ...input, confirm: true }),
+  });
+}
+
+export function getFirmwareUpdateJob(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+  jobId: string,
+): Promise<FirmwareUpdateJob> {
+  return request(
+    machineFirmwarePath(tenantId, projectId, machineId) + "upgrades/" + jobId + "/",
   );
 }
 
