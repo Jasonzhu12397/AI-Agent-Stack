@@ -13,7 +13,7 @@ def test_control_stack_plans_five_components_in_canonical_order():
     probe = cert_manager.readiness_probe()
     assert probe == {
         "kind": "Deployment",
-        "name": "cert-manager-controller",
+        "name": "cert-manager",
         "namespace": "cert-manager",
     }
 
@@ -38,3 +38,42 @@ def test_rejects_malformed_version():
 def test_rejects_non_mapping_spec():
     with pytest.raises(Metal3SkillError, match="CONTROL_STACK_SPEC_INVALID"):
         plan_control_stack(["list", "not", "dict"])
+
+
+def test_ipam_probe_matches_the_vendored_release_manifest():
+    """The probe must name the Deployment the vendored IPAM release creates."""
+
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    manifest = root / "deploy/offline/addons/control-stack/ipam.yaml"
+    deployments = [
+        document
+        for document in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
+        if document and document.get("kind") == "Deployment"
+    ]
+    assert len(deployments) == 1
+    names = {component.name: component for component in plan_control_stack({})}
+    probe = names["ipam"].readiness_probe()
+    assert probe["name"] == deployments[0]["metadata"]["name"]
+    assert probe["namespace"] == deployments[0]["metadata"]["namespace"]
+
+
+def test_control_stack_probes_agree_with_readiness_checks():
+    """Two modules observe the same controllers; they must not disagree."""
+
+    from apps.eph_agent import metal3_readiness
+
+    providers = set(metal3_readiness.PROVIDER_DEPLOYMENTS)
+    planned = [
+        (component.namespace, component.controller)
+        for component in plan_control_stack({})
+    ]
+    assert set(planned) & providers == {
+        ("capm3-system", "capm3-controller-manager"),
+        ("capm3-system", "ipam-controller-manager"),
+        ("capi-system", "capi-controller-manager"),
+        ("baremetal-operator-system", "baremetal-operator-controller-manager"),
+    }

@@ -48,7 +48,7 @@ def _make_runner(existing: set[str], applied: list[str], ready: bool = True):
 
 def test_apply_skips_existing_and_records_pending_without_manifest():
     plan = plan_control_stack({})
-    existing = {"cert-manager-controller"}
+    existing = {"cert-manager"}
     applied: list[str] = []
     runner, calls = _make_runner(existing, applied)
 
@@ -75,7 +75,7 @@ def test_apply_applies_supplied_manifest_for_missing_controller():
         "cert-manager": {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
-            "metadata": {"name": "cert-manager-controller", "namespace": "cert-manager"},
+            "metadata": {"name": "cert-manager", "namespace": "cert-manager"},
         }
     }
     runner, _calls = _make_runner(set(), applied)

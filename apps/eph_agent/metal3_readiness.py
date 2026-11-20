@@ -35,7 +35,7 @@ PROVIDER_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
     ("capi-system", "capi-controller-manager"),
     ("capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"),
     ("capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"),
-    ("capm3-system", "ipam-manager"),
+    ("capm3-system", "ipam-controller-manager"),
     ("baremetal-operator-system", "baremetal-operator-controller-manager"),
     ("ai-agent-system", "registry"),
     ("ai-agent-system", "vbmc"),

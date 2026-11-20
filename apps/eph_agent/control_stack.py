@@ -45,12 +45,24 @@ class StackComponent:
 
 #: Canonical install order on the bootstrap cluster. cert-manager must lead;
 #: the CAPI core must exist before the infrastructure provider is initialized.
+#:
+#: Controller names are the Deployments each installer actually creates, not
+#: component labels: cert-manager ships ``cert-manager`` (its webhook and
+#: cainjector are separate Deployments), Metal3 IPAM ships
+#: ``ipam-controller-manager``, and the lab installs Ironic through the
+#: Ironic Standalone Operator. A mismatch here is not cosmetic: the adapter
+#: observes these names via ``kubectl get deployment`` and would wait forever
+#: on a Deployment that does not exist.
 _COMPONENTS: tuple[tuple[str, str, str], ...] = (
-    ("cert-manager", "cert-manager", "cert-manager-controller"),
-    ("ipam", "capm3-system", "ipam-manager"),
+    ("cert-manager", "cert-manager", "cert-manager"),
+    ("ipam", "capm3-system", "ipam-controller-manager"),
     ("capi-core", "capi-system", "capi-controller-manager"),
-    ("baremetal-operator", "metal3", "baremetal-operator"),
-    ("ironic", "metal3", "ironic"),
+    ("baremetal-operator", "baremetal-operator-system", "baremetal-operator-controller-manager"),
+    (
+        "ironic",
+        "ironic-standalone-operator-system",
+        "ironic-standalone-operator-controller-manager",
+    ),
     ("capm3", "capm3-system", "capm3-controller-manager"),
 )
 
