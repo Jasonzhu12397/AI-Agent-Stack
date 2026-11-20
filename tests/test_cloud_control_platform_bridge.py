@@ -267,3 +267,71 @@ def test_create_rejects_control_plane_size_the_planner_cannot_build(bridge_works
     )
     assert response.status_code == 400
     assert "1, 3, 5, 7" in response.data["detail"]
+
+
+def _network_profile():
+    return {
+        "networks": [
+            {
+                "name": "control",
+                "role": "control",
+                "vlan": 100,
+                "mtu": 1500,
+                "cidr": "10.0.0.0/24",
+                "gateway_ipv4": "10.0.0.1",
+                "ip_pools": [{"start": "10.0.0.10", "end": "10.0.0.50"}],
+                "interface": "eno1",
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                "name": "data",
+                "role": "data",
+                "vlan": 200,
+                "mtu": 9000,
+                "cidr": "10.10.0.0/24",
+                "gateway_ipv4": "10.10.0.1",
+                "ip_pools": [{"start": "10.10.0.10", "end": "10.10.0.50"}],
+                "interface": "eno2",
+                "host_roles": ["worker"],
+            },
+            {
+                "name": "storage",
+                "role": "storage-internal",
+                "vlan": 300,
+                "mtu": 9000,
+                "cidr": "10.20.0.0/24",
+                "gateway_ipv4": "10.20.0.1",
+                "ip_pools": [{"start": "10.20.0.10", "end": "10.20.0.50"}],
+                "interface": "eno3",
+                "host_roles": ["storage"],
+            },
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_create_inherits_saved_project_network_profile(bridge_workspace, monkeypatch):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    response = _post(client, tenant, project, node, key="network-profile-001")
+    assert response.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    assert deployment.spec["infra_network_profile"]["networks"][0]["name"] == "control"
+    assert deployment.spec["network_spec"]["control_plane_interface"] == "eno1"
+    assert deployment.spec["data_template"]["network_data"]["networks"]["ipv4"][0]["routes"] == [
+        {"destination": "0.0.0.0/0", "gateway": "10.0.0.1"}
+    ]
+    assert deployment.spec["worker_data_template"]["network_data"]["networks"]["ipv4"]

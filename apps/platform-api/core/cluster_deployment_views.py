@@ -41,6 +41,7 @@ from core.cloud_control_bridge import (
 from core.models import (
     AgentNode,
     ClusterDeployment,
+    InfrastructureNetworkProfile,
     ProjectMembership,
     TenantMembership,
 )
@@ -84,10 +85,12 @@ def _can_edit_project(user, tenant, project):
     return tenant_admin or project_editor
 
 
-def _validated_spec(request):
+def _validated_spec(request, *, infra_profile=None):
     spec = request.data.get("cluster_spec")
     if not isinstance(spec, dict):
         return None, "cluster_spec must be a JSON object."
+    if spec.get("infra_network_profile") is None and infra_profile is not None:
+        spec = {**spec, "infra_network_profile": infra_profile}
     payload_error = _validate_payload({"cluster_spec": spec})
     if payload_error:
         return None, payload_error
@@ -264,7 +267,17 @@ class ClusterDeploymentListCreateView(APIView):
                 {"detail": "The selected EPH agent must have a fresh heartbeat."},
                 status=409,
             )
-        spec, payload_error = _validated_spec(request)
+        raw_spec = request.data.get("cluster_spec")
+        infra_profile = None
+        if isinstance(raw_spec, dict) and raw_spec.get("infra_network_profile") is None:
+            profile_record = InfrastructureNetworkProfile.objects.filter(
+                tenant=tenant, project=project
+            ).first()
+            if profile_record is not None:
+                # The saved project profile is the single source of truth;
+                # callers do not have to paste the same JSON again.
+                infra_profile = profile_record.profile
+        spec, payload_error = _validated_spec(request, infra_profile=infra_profile)
         if payload_error:
             return Response({"detail": payload_error}, status=400)
         cluster_name = spec["cluster_name"]

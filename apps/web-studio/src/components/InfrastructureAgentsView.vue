@@ -849,13 +849,13 @@ onUnmounted(() => {
             <label>Kubernetes version
               <el-input v-model="buildKubernetesVersion" placeholder="v1.x.y" />
             </label>
-            <label>Dual-network profile (optional JSON)
+            <label>Network profile override (optional JSON)
               <el-input
                 v-model="buildNetworkProfile"
                 type="textarea"
                 :rows="6"
                 spellcheck="false"
-                placeholder="Paste the site-specific network_profile JSON; do not use example NIC names."
+                placeholder="Leave empty to use the saved project infrastructure network profile."
               />
             </label>
             <el-divider content-position="left">Rook-Ceph storage addon</el-divider>
