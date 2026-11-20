@@ -2,6 +2,7 @@
 import datetime
 import re
 import uuid
+from typing import Any
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -30,6 +31,11 @@ from apps.agent_contracts.sriov_device_plugin import (
 )
 from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
+from packages.agent_contracts.eph_network import (
+    EphNetworkError,
+    eph_network_state,
+    observed_sriov_pci_defaults,
+)
 from packages.agent_contracts.ironic_spec import (
     IronicSpecError,
     apply_provisioning_defaults,
@@ -316,7 +322,7 @@ def _network_evidence_drift(project, spec):
     return drift
 
 
-def _validated_spec(request, *, infra_profile=None):
+def _validated_spec(request, *, infra_profile=None, project=None):
     spec = request.data.get("cluster_spec")
     if not isinstance(spec, dict):
         return None, "cluster_spec must be a JSON object."
@@ -368,6 +374,22 @@ def _validated_spec(request, *, infra_profile=None):
                 "sriov_device_plugin": normalized,
             }
     infra_profile = spec.get("infra_network_profile")
+    network_defaults: dict[str, Any] = {"sriov_pci_sources": {}, "warnings": []}
+    if infra_profile is not None and project is not None:
+        inventories = list(
+            AgentMachine.objects.filter(project=project)
+            .exclude(observed_at=None)
+            .values_list("hardware_inventory", flat=True)
+        )
+        try:
+            infra_profile, sources, warnings = observed_sriov_pci_defaults(
+                infra_profile, inventories
+            )
+        except EphNetworkError as exc:
+            return None, f"infra_network_profile: {exc}"
+        spec["infra_network_profile"] = infra_profile
+        network_defaults["sriov_pci_sources"] = sources
+        network_defaults["warnings"] = warnings
     if infra_profile is not None:
         try:
             plan = plan_infra_networks(infra_profile)
@@ -398,6 +420,10 @@ def _validated_spec(request, *, infra_profile=None):
                 namespace=spec.get("namespace", "metal3"),
             )
             spec["sriov_node_policy_manifests"] = render_sriov_node_policies(plan)
+            addresses = spec.get("eph_network_addresses")
+            if addresses is not None:
+                spec["eph_network"] = eph_network_state(plan, addresses=addresses)
+                network_defaults["eph_network_configured"] = True
             storage_addon = spec.get("storage_addon")
             if isinstance(storage_addon, dict) and storage_addon.get("enabled") is True:
                 storage_network = storage_addon.get("network")
@@ -437,6 +463,9 @@ def _validated_spec(request, *, infra_profile=None):
                         spec["storage_addon"] = storage_addon
         except InfraNetworkError as exc:
             return None, f"infra_network_profile: {exc}"
+        except EphNetworkError as exc:
+            return None, f"eph_network: {exc}"
+    spec["network_defaults"] = network_defaults
     ironic_config = spec.get("ironic")
     if ironic_config is not None:
         if not isinstance(ironic_config, dict):
@@ -537,7 +566,9 @@ class ClusterDeploymentListCreateView(APIView):
                 # The saved project profile is the single source of truth;
                 # callers do not have to paste the same JSON again.
                 infra_profile = profile_record.profile
-        spec, payload_error = _validated_spec(request, infra_profile=infra_profile)
+        spec, payload_error = _validated_spec(
+            request, infra_profile=infra_profile, project=project
+        )
         if payload_error:
             return Response({"detail": payload_error}, status=400)
         readiness = _network_readiness(project, spec)
@@ -571,6 +602,8 @@ class ClusterDeploymentListCreateView(APIView):
                 ),
                 "defaults_sources": spec.get("ironic_defaults_sources") or [],
             },
+            "network_defaults": spec.get("network_defaults")
+            or {"sriov_pci_sources": {}, "warnings": []},
         }
         cluster_name = spec["cluster_name"]
         kubernetes_version = spec["kubernetes_version"]

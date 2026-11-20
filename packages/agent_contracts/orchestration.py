@@ -74,6 +74,7 @@ PHASE_ORDER: tuple[DeploymentPhase, ...] = (
 EPH_ACTIONS: frozenset[str] = frozenset(
     {
         "eph.preflight",
+        "eph.network.configure",
         "eph.source.observe",
         "eph.bootstrap.render",
         "eph.controlstack.apply",

@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -106,6 +107,51 @@ def _run_kubectl(
         "returncode": completed.returncode,
         "stdout": completed.stdout[-max_output_bytes:],
         "stderr": completed.stderr[-4000:],
+    }
+
+
+def _apply_network_state(document: Any) -> dict[str, Any]:
+    """Apply the declarative EPH network document through nmstate.
+
+    ``nmstatectl apply`` is idempotent and reconciles the whole document, so a
+    retried command converges instead of duplicating bonds or VLANs.
+    """
+
+    if not isinstance(document, dict) or not isinstance(
+        document.get("interfaces"), list
+    ):
+        return {"available": False, "error": "EPH_NETWORK_DOCUMENT_INVALID"}
+    if not document["interfaces"]:
+        return {"available": False, "error": "EPH_NETWORK_DOCUMENT_EMPTY"}
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".nmstate.yml", delete=False, encoding="utf-8"
+        ) as handle:
+            path = handle.name
+            import yaml
+
+            yaml.safe_dump(document, handle, sort_keys=False)
+        completed = subprocess.run(
+            ["nmstatectl", "apply", path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "error": type(exc).__name__}
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    return {
+        "available": True,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-2000:],
     }
 
 
@@ -220,6 +266,58 @@ def execute(
             "error_code": None if ready else "EPH_PREFLIGHT_INCOMPLETE",
             "output": evidence,
             "side_effects": False,
+        }
+    if action == "eph.network.configure":
+        payload = command.get("payload", {})
+        if not isinstance(payload, dict):
+            return {
+                "status": "failed",
+                "error_code": "EPH_NETWORK_DOCUMENT_INVALID",
+                "output": {},
+                "side_effects": False,
+            }
+        document = payload.get("eph_network", payload.get("network"))
+        if (
+            not isinstance(document, dict)
+            or not isinstance(document.get("interfaces"), list)
+            or not document["interfaces"]
+        ):
+            return {
+                "status": "failed",
+                "error_code": "EPH_NETWORK_DOCUMENT_INVALID",
+                "output": {},
+                "side_effects": False,
+            }
+        result = _apply_network_state(document)
+        if not result.get("available"):
+            return {
+                "status": "blocked",
+                "error_code": "EPH_NETWORK_NMSTATE_UNAVAILABLE",
+                "output": {
+                    "reason": result.get("error"),
+                    "already_declared": isinstance(document, dict),
+                },
+                "side_effects": False,
+            }
+        if result["returncode"] != 0:
+            return {
+                "status": "failed",
+                "error_code": "EPH_NETWORK_APPLY_FAILED",
+                "output": {"stderr": result["stderr"], "stdout": result["stdout"]},
+                "side_effects": True,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": {
+                "applied_interfaces": [
+                    item.get("name")
+                    for item in document.get("interfaces", [])
+                    if isinstance(item, dict)
+                ],
+                "stdout": result["stdout"],
+            },
+            "side_effects": True,
         }
     if action == "eph.bootstrap.render":
         payload = command.get("payload", {})

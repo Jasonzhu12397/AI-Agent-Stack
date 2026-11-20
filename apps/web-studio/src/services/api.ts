@@ -848,6 +848,18 @@ export type ClusterDeployment = {
       defaults_sources?: string[];
     };
     network_readiness?: NetworkReadinessReport | null;
+    network_defaults?: {
+      sriov_pci_sources: Record<
+        string,
+        {
+          origin: string;
+          interfaces: string[];
+          pci_addresses: string[];
+        }
+      >;
+      warnings: string[];
+      eph_network_configured?: boolean;
+    };
     eph_preflight?: EphPreflightRecord | null;
   } | null;
   error: Record<string, unknown> | null;

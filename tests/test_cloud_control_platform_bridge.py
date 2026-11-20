@@ -17,6 +17,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.cluster_deployment_views import _validated_spec
 from core.cloud_control_bridge import (
     CloudControlNotConfigured,
     FleetInventoryEmpty,
@@ -969,3 +970,124 @@ def test_eph_preflight_sync_degrades_without_cloud_control(bridge_workspace, mon
     )
     assert response.status_code == 503
     assert response.data["code"] == "eph_preflight_unavailable"
+
+
+def _pxe_sriov_profile():
+    return {
+        "networks": [
+            {
+                "name": "ctrl-net",
+                "role": "control",
+                "interface": "eno1",
+                "cidr": "172.18.0.0/24",
+                "gateway_ipv4": "172.18.0.1",
+                "ip_pools": [
+                    {"start": "172.18.0.10", "end": "172.18.0.50", "prefix": 24}
+                ],
+                "host_roles": ["control_plane"],
+            },
+            {
+                "name": "data-net",
+                "role": "data",
+                "interface": "eno2",
+                "cidr": "10.0.200.0/24",
+                "gateway_ipv4": "10.0.200.1",
+                "ip_pools": [
+                    {"start": "10.0.200.10", "end": "10.0.200.50", "prefix": 24}
+                ],
+                "host_roles": ["worker"],
+            },
+            {
+                "name": "storage-net",
+                "role": "storage-internal",
+                "interface": "eno3",
+                "cidr": "10.0.10.0/24",
+                "gateway_ipv4": "10.0.10.1",
+                "ip_pools": [
+                    {"start": "10.0.10.10", "end": "10.0.10.50", "prefix": 24}
+                ],
+                "host_roles": ["storage"],
+            },
+            {
+                "name": "sriov-dp",
+                "role": "sriov",
+                "interface": "enp55s0f0np0",
+                "num_vfs": 16,
+                "host_roles": ["worker"],
+            },
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_sriov_pci_defaults_come_from_observed_host_inventory(bridge_workspace):
+    user, tenant, project, node, client = bridge_workspace
+    machine = _machine(tenant, project, node, 1)
+    machine.hardware_inventory = {
+        **machine.hardware_inventory,
+        "nics": [
+            {
+                "name": "enp55s0f0np0",
+                "mac": "aa:bb:cc:dd:ee:01",
+                "pci_address": "0000:3b:00.0",
+                "sriov_capable": True,
+            },
+            {
+                "name": "enp55s0f0np1",
+                "mac": "aa:bb:cc:dd:ee:02",
+                "pci_address": "0000:3b:00.1",
+                "sriov_capable": True,
+            },
+        ],
+    }
+    machine.observed_at = timezone.now()
+    machine.save(update_fields=["hardware_inventory", "observed_at"])
+    request = type(
+        "Request",
+        (),
+        {
+            "data": {
+                "cluster_spec": {
+                    **_cluster_spec(),
+                    "infra_network_profile": _pxe_sriov_profile(),
+                }
+            }
+        },
+    )()
+    spec, error = _validated_spec(request, project=project)
+    assert error is None
+    policy = spec["sriov_node_policy_manifests"][0]
+    assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:3b:00.0"]
+    assert spec["network_defaults"]["sriov_pci_sources"]["sriov-dp"]["origin"] == (
+        "interface_inventory"
+    )
+
+
+@pytest.mark.django_db
+def test_sriov_pci_defaults_explicit_values_win(bridge_workspace):
+    user, tenant, project, node, client = bridge_workspace
+    machine = _machine(tenant, project, node, 1)
+    machine.hardware_inventory = {
+        **machine.hardware_inventory,
+        "nics": [
+            {
+                "name": "enp55s0f0np0",
+                "pci_address": "0000:3b:00.0",
+                "sriov_capable": True,
+            }
+        ],
+    }
+    machine.observed_at = timezone.now()
+    machine.save(update_fields=["hardware_inventory", "observed_at"])
+    profile = _pxe_sriov_profile()
+    profile["networks"][3]["pci_addresses"] = ["0000:af:00.1"]
+    request = type(
+        "Request",
+        (),
+        {"data": {"cluster_spec": {**_cluster_spec(), "infra_network_profile": profile}}},
+    )()
+    spec, error = _validated_spec(request, project=project)
+    assert error is None
+    policy = spec["sriov_node_policy_manifests"][0]
+    assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:af:00.1"]
+    assert spec["network_defaults"]["sriov_pci_sources"] == {}

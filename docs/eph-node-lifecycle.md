@@ -120,6 +120,36 @@ The web form exposes the same derivation plus a JSON template
 configuration is generated from a template and pushed to the backend rather
 than typed ad hoc.
 
+### EPH host network
+
+The EPH host is a physical machine, so its own bonds, VLANs, MTUs and routes
+also come from the project network profile. `packages/agent_contracts/eph_network.py`
+renders a single nmstate document (`eph_network_state`) from the planned
+profile plus an explicit `eph_network_addresses` map (`role -> ip/prefix`).
+Only addresses the operator owns are accepted; the control network (falling
+back to provisioning) must be addressed unless it is DHCP, and secondary
+segments require an address only when the operator supplies one. Same-link
+untagged duplicates fail with `EPH_NETWORK_PRIMARY_SEGMENT_CONFLICT`, unknown
+roles with `EPH_NETWORK_ADDRESS_ROLE_INVALID`, and malformed addresses with
+`EPH_NETWORK_ADDRESS_INVALID`.
+
+The rendered document is stored as `spec.eph_network` by the platform and
+applied by the EPH agent through the `eph.network.configure` action
+(`nmstatectl apply`, idempotent, declarative). A host without `nmstatectl` is
+reported as `status=blocked` with `EPH_NETWORK_NMSTATE_UNAVAILABLE` instead of
+half-applying the change, and a failed reconcile returns
+`EPH_NETWORK_APPLY_FAILED` with the tool stderr.
+
+SR-IOV PCI functions are not typed by hand. `observed_sriov_pci_defaults`
+reads the collected host inventory (the same `nics` records produced by
+`host.network.observe`, which PXE/discovery inventory feeds as well), matches
+the declared interface or bond ports, and falls back to functions already
+reported as `sriov_capable`. The platform applies it before planning, records
+`spec.network_defaults.sriov_pci_sources` (origin, interfaces, PCI addresses)
+and `SR-IOV_PCI_UNAVAILABLE:<network>` warnings when no function is known.
+Explicit `pci_addresses` still win, so a lab with unusual topology can override
+the inventory.
+
 ### Runtime preflight evidence
 
 `eph.preflight` reports runtime findings in `output.warnings`. The control

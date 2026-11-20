@@ -40,6 +40,13 @@ const commands = ref<AgentCommand[]>([]);
 const deployments = ref<ClusterDeployment[]>([]);
 const ephPreflightSyncing = ref<Record<string, boolean>>({});
 const ephPreflightErrors = ref<Record<string, string>>({});
+const ephNetworkAddresses = ref<Record<string, string>>({});
+const EPH_ADDRESS_ROLES = [
+  "control",
+  "provisioning",
+  "storage-internal",
+  "storage-external",
+] as const;
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const selectedNodeId = ref("");
@@ -393,6 +400,29 @@ async function loadDeployments(): Promise<void> {
   }
 }
 
+const ephAddressNetworks = computed(() =>
+  infraNetworkProfile.value.networks.filter(
+    (network) =>
+      (EPH_ADDRESS_ROLES as readonly string[]).includes(network.role) &&
+      network.enabled !== false &&
+      !!network.cidr &&
+      network.dhcp !== true,
+  ),
+);
+
+const ephNetworkTemplatePreview = computed(() => {
+  const networks = ephAddressNetworks.value;
+  if (!networks.length) return "";
+  return networks
+    .map((network) => `${network.role}: ${ephNetworkAddresses.value[network.role] || "<ip/prefix>"}`)
+    .join("\n");
+});
+
+function ephNetworkDocument(deployment: ClusterDeployment): string {
+  const document = (deployment.spec as Record<string, unknown>).eph_network;
+  return document ? JSON.stringify(document, null, 2) : "";
+}
+
 async function syncEphPreflight(deployment: ClusterDeployment): Promise<void> {
   ephPreflightSyncing.value = {
     ...ephPreflightSyncing.value,
@@ -549,6 +579,29 @@ async function generateClusterPlan(): Promise<void> {
     }
     if (ironicWorkload.spec) {
       clusterSpec.ironic = ironicWorkload.spec;
+    }
+    const addressNetworks = infraNetworkProfile.value.networks.filter(
+      (network) =>
+        (EPH_ADDRESS_ROLES as readonly string[]).includes(network.role) &&
+        network.enabled !== false &&
+        !!network.cidr &&
+        network.dhcp !== true,
+    );
+    const addresses: Record<string, string> = {};
+    for (const network of addressNetworks) {
+      const value = (ephNetworkAddresses.value[network.role] || "").trim();
+      if (value) addresses[network.role] = value;
+    }
+    const primaryRole =
+      addressNetworks.find((network) => network.role === "control")?.role ??
+      addressNetworks.find((network) => network.role === "provisioning")?.role;
+    if (primaryRole && !addresses[primaryRole]) {
+      throw new Error(
+        "EPH network requires an address for " + primaryRole + " (ip/prefix).",
+      );
+    }
+    if (Object.keys(addresses).length) {
+      clusterSpec.eph_network_addresses = addresses;
     }
     if (buildNetworkProfile.value.trim()) {
       const networkProfile: unknown = JSON.parse(buildNetworkProfile.value);
@@ -991,7 +1044,27 @@ onUnmounted(() => {
             <label>Kubernetes version
               <el-input v-model="buildKubernetesVersion" placeholder="v1.x.y" />
             </label>
-            <el-divider content-position="left">Ironic workload CR</el-divider>
+            <el-divider content-position="left">EPH host network (nmstate)</el-divider>
+            <p>
+              The EPH host gets its bonds, VLANs, MTUs and routes from the saved project
+              network profile. Enter only the address this EPH owns; the backend renders
+              the nmstate document and the agent applies it idempotently. SR-IOV PCI
+              functions are filled from host inventory, not typed here.
+            </p>
+            <template v-if="ephAddressNetworks.length">
+              <label v-for="network in ephAddressNetworks" :key="network.role">
+                {{ network.name }} · {{ network.role }} address (ip/prefix)
+                <el-input
+                  v-model="ephNetworkAddresses[network.role]"
+                  :placeholder="network.role === 'control' ? '172.18.0.3/24' : 'optional'"
+                />
+              </label>
+              <small class="ironic-prefill-note">
+                Address map preview:<br />
+                <pre class="ironic-template">{{ ephNetworkTemplatePreview }}</pre>
+              </small>
+            </template>
+            <small v-else>Save a control or provisioning network with a CIDR before configuring EPH addressing.</small>
             <p>
               The Ironic Standalone Operator is installed offline, but its workload CR is
               environment specific. Without it the EPH control stack cannot become ready;
@@ -1138,6 +1211,19 @@ onUnmounted(() => {
               <small>{{ formatTime(deployment.created_at) }} · EPH {{ deployment.eph_node_id.slice(0, 8) }}</small>
               <div v-if="deployment.plan_result" class="plan-result">
                 <span>Plan hash: {{ deployment.plan_hash || "not generated" }}</span>
+                <small v-if="deployment.preflight_result?.network_defaults?.sriov_pci_sources">
+                  SR-IOV PCI filled from inventory:
+                  {{ Object.keys(deployment.preflight_result.network_defaults.sriov_pci_sources).join(", ") || "none" }}
+                </small>
+                <small
+                  v-for="warning in deployment.preflight_result?.network_defaults?.warnings || []"
+                  :key="'net-' + warning"
+                  class="readiness-blocked"
+                >{{ warning }}</small>
+                <pre
+                  v-if="ephNetworkDocument(deployment)"
+                  class="ironic-template"
+                >{{ ephNetworkDocument(deployment) }}</pre>
                 <p v-if="deployment.plan_result.network_profile">Dual-network profile passed input validation. Runtime dataplane connectivity remains a separate check.</p>
                 <el-tag
                   :type="ironicWorkloadConfigured(deployment.spec) ? 'success' : 'warning'"
