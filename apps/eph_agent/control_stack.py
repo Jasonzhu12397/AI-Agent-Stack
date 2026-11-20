@@ -70,6 +70,18 @@ _COMPONENTS: tuple[tuple[str, str, str, dict[str, str] | None], ...] = (
     ("ipam", "capm3-system", "ipam-controller-manager", None),
     ("capi-core", "capi-system", "capi-controller-manager", None),
     (
+        "capi-bootstrap",
+        "capi-kubeadm-bootstrap-system",
+        "capi-kubeadm-bootstrap-controller-manager",
+        None,
+    ),
+    (
+        "capi-control-plane",
+        "capi-kubeadm-control-plane-system",
+        "capi-kubeadm-control-plane-controller-manager",
+        None,
+    ),
+    (
         "baremetal-operator",
         "baremetal-operator-system",
         "baremetal-operator-controller-manager",

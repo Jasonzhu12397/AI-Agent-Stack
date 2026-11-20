@@ -82,6 +82,8 @@ def test_apply_skips_existing_and_records_pending_without_manifest():
     assert evidence["apply_pending_components"] == [
         "ipam",
         "capi-core",
+        "capi-bootstrap",
+        "capi-control-plane",
         "baremetal-operator",
         "ironic",
         "capm3",
@@ -110,6 +112,8 @@ def test_apply_applies_supplied_manifest_for_missing_controller():
     assert evidence["apply_pending_components"] == [
         "ipam",
         "capi-core",
+        "capi-bootstrap",
+        "capi-control-plane",
         "baremetal-operator",
         "ironic",
         "capm3",

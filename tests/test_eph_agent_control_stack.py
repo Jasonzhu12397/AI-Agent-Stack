@@ -4,10 +4,22 @@ from apps.eph_agent.control_stack import install_order, plan_control_stack
 from apps.eph_agent.metal3_skill import Metal3SkillError
 
 
-def test_control_stack_plans_five_components_in_canonical_order():
+def test_control_stack_plans_every_component_in_canonical_order():
     planned = plan_control_stack({})
     assert [component.name for component in planned] == install_order()
-    assert [component.install_order for component in planned] == [1, 2, 3, 4, 5, 6]
+    assert [component.install_order for component in planned] == list(
+        range(1, len(planned) + 1)
+    )
+    assert install_order() == [
+        "cert-manager",
+        "ipam",
+        "capi-core",
+        "capi-bootstrap",
+        "capi-control-plane",
+        "baremetal-operator",
+        "ironic",
+        "capm3",
+    ]
     cert_manager = planned[0]
     assert cert_manager.namespace == "cert-manager"
     probe = cert_manager.readiness_probe()
@@ -75,5 +87,13 @@ def test_control_stack_probes_agree_with_readiness_checks():
         ("capm3-system", "capm3-controller-manager"),
         ("capm3-system", "ipam-controller-manager"),
         ("capi-system", "capi-controller-manager"),
+        (
+            "capi-kubeadm-bootstrap-system",
+            "capi-kubeadm-bootstrap-controller-manager",
+        ),
+        (
+            "capi-kubeadm-control-plane-system",
+            "capi-kubeadm-control-plane-controller-manager",
+        ),
         ("baremetal-operator-system", "baremetal-operator-controller-manager"),
     }
