@@ -72,16 +72,19 @@ done
 
 echo "Server-side validation of platform-rendered SriovNetworkNodePolicy"
 RENDERED_POLICY="${split_dir}/rendered-sriov-policy.yaml"
-PYTHONPATH="${ROOT_DIR}/packages" python3 - "${RENDERED_POLICY}" <<'PY'
+python3 - "${RENDERED_POLICY}" "${ROOT_DIR}" <<'PY'
+import importlib.util
 import sys
 from pathlib import Path
 
 import yaml
 
-from agent_contracts.infra_networks import (
-    plan_infra_networks,
-    render_sriov_node_policies,
-)
+module_path = Path(sys.argv[2]) / "packages/agent_contracts/infra_networks.py"
+module_spec = importlib.util.spec_from_file_location("infra_networks_contract", module_path)
+contract = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(contract)
+plan_infra_networks = contract.plan_infra_networks
+render_sriov_node_policies = contract.render_sriov_node_policies
 
 profile = {
     "networks": [
