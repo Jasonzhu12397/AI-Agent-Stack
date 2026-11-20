@@ -709,4 +709,59 @@ class ClusterDeploymentDetailView(APIView):
                 user=request.user,
             ).exists():
                 return Response({"detail": "Project membership required."}, status=403)
-        return Response(_deployment_data(deployment))
+        data = _deployment_data(deployment)
+        drift = _network_evidence_drift(deployment.project, deployment.spec)
+        if drift is None:
+            data["network_evidence_status"] = "missing"
+        else:
+            data["network_evidence_status"] = {
+                "status": "drift" if drift else "current",
+                "drift": drift,
+            }
+        return Response(data)
+
+
+class ClusterDeploymentNetworkEvidenceView(APIView):
+    """Pre-execution evidence check for Target and control-plane automation."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            if not ProjectMembership.objects.filter(
+                project=deployment.project,
+                user=request.user,
+            ).exists():
+                return Response({"detail": "Project membership required."}, status=403)
+        drift = _network_evidence_drift(deployment.project, deployment.spec)
+        if drift is None:
+            return Response(
+                {
+                    "status": "missing",
+                    "detail": "This deployment has no bound network evidence.",
+                },
+                status=409,
+            )
+        if drift:
+            return Response(
+                {
+                    "status": "drift",
+                    "detail": (
+                        "Node network inventory changed after the readiness check. "
+                        "Re-run network collection and create a new deployment."
+                    ),
+                    "drift": drift,
+                },
+                status=409,
+            )
+        return Response(
+            {
+                "status": "current",
+                "checked_machines": len(deployment.spec.get("network_evidence") or []),
+            },
+            status=200,
+        )

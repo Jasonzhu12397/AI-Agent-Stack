@@ -54,6 +54,7 @@ from core.agent_views import (
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
 from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
+    ClusterDeploymentNetworkEvidenceView,
     ClusterDeploymentListCreateView,
 )
 from core.knowledge_views import (
@@ -209,6 +210,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/",
         ClusterDeploymentDetailView.as_view(),
         name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/network/evidence/verify/",
+        ClusterDeploymentNetworkEvidenceView.as_view(),
+        name="cluster-deployment-network-evidence-verify",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",

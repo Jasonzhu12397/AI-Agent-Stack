@@ -70,23 +70,69 @@ done
 
 "${KUBECTL}" apply -f "${split_dir}/resources.yaml"
 
-echo "Server-side validation of a rendered policy shape"
-cat <<'YAML' | "${KUBECTL}" apply --dry-run=server -f -
-apiVersion: sriovnetwork.openshift.io/v1
-kind: SriovNetworkNodePolicy
-metadata:
-  name: ci-dry-run
-  namespace: sriov-network-operator
-spec:
-  nodeSelector:
-    feature.node.kubernetes.io/network-sriov.capable: "true"
-  numVfs: 8
-  nicSelector:
-    rootDevices:
-      - "0000:03:00.0"
-  deviceType: netdevice
-  isRdma: false
-  resourceName: ci-dry-run
-YAML
+echo "Server-side validation of platform-rendered SriovNetworkNodePolicy"
+RENDERED_POLICY="${split_dir}/rendered-sriov-policy.yaml"
+PYTHONPATH="${ROOT_DIR}/packages" python3 - "${RENDERED_POLICY}" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+from agent_contracts.infra_networks import (
+    plan_infra_networks,
+    render_sriov_node_policies,
+)
+
+profile = {
+    "networks": [
+        {
+            "name": "ci-control",
+            "role": "control",
+            "vlan": 100,
+            "mtu": 1500,
+            "cidr": "10.0.0.0/24",
+            "gateway_ipv4": "10.0.0.1",
+            "ip_pools": [{"start": "10.0.0.10", "end": "10.0.0.50"}],
+            "interface": "eno1",
+            "host_roles": ["control_plane", "worker"],
+        },
+        {
+            "name": "ci-data",
+            "role": "data",
+            "vlan": 200,
+            "mtu": 9000,
+            "cidr": "10.10.0.0/24",
+            "gateway_ipv4": "10.10.0.1",
+            "ip_pools": [{"start": "10.10.0.10", "end": "10.10.0.50"}],
+            "interface": "eno2",
+            "host_roles": ["worker"],
+        },
+        {
+            "name": "ci-storage",
+            "role": "storage-internal",
+            "vlan": 300,
+            "mtu": 9000,
+            "cidr": "10.20.0.0/24",
+            "gateway_ipv4": "10.20.0.1",
+            "ip_pools": [{"start": "10.20.0.10", "end": "10.20.0.50"}],
+            "interface": "eno3",
+            "host_roles": ["storage"],
+        },
+        {
+            "name": "ci-dpdk",
+            "role": "sriov",
+            "vlan": 3400,
+            "mtu": 9000,
+            "interface": "ens3f0",
+            "pci_addresses": ["0000:03:00.0"],
+            "num_vfs": 8,
+            "host_roles": ["worker"],
+        }
+    ]
+}
+documents = render_sriov_node_policies(plan_infra_networks(profile))
+Path(sys.argv[1]).write_text(yaml.safe_dump_all(documents, sort_keys=False))
+PY
+"${KUBECTL}" apply --dry-run=server -f "${RENDERED_POLICY}"
 
 echo "Metal3 and SR-IOV CRDs are present and accept rendered manifests"

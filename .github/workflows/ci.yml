@@ -260,6 +260,8 @@ jobs:
           echo "${kubectl_sha256}  kubectl" | sha256sum -c -
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
+      - name: Install PyYAML for renderer validation
+        run: python3 -m pip install --quiet "PyYAML>=6.0,<7.0"
       - name: Create kind cluster
         run: kind create cluster --name metal3-crds --wait 120s
       - name: Apply CRDs and validate rendered manifests

@@ -847,6 +847,9 @@ export type ClusterDeployment = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+  network_evidence_status?:
+    | "missing"
+    | { status: "current" | "drift"; drift: Array<Record<string, unknown>> };
 };
 
 export function getClusterDeployments(

@@ -605,3 +605,39 @@ def test_deployment_gate_detects_inventory_drift(bridge_workspace, monkeypatch):
     assert any(
         item["code"] == "NETWORK_EVIDENCE_STALE" for item in second.data["drift"]
     )
+
+
+@pytest.mark.django_db
+def test_network_evidence_verify_endpoint_reports_current(bridge_workspace, monkeypatch):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_network_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.inventory_revision = 2
+        machine.save()
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    created = _post(client, tenant, project, node, key="evidence-verify")
+    assert created.status_code == 202
+    deployment_id = created.data["id"]
+    detail = client.get(f"/api/v1/cluster-deployments/{deployment_id}/")
+    assert detail.data["network_evidence_status"]["status"] == "current"
+    verified = client.post(f"/api/v1/cluster-deployments/{deployment_id}/network/evidence/verify/")
+    assert verified.status_code == 200
+    assert verified.data["status"] == "current"
+    assert verified.data["checked_machines"] == 5
