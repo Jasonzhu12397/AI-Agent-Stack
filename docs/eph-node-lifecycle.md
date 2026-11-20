@@ -127,14 +127,17 @@ also come from the project network profile. `packages/agent_contracts/eph_networ
 renders a single nmstate document (`eph_network_state`) from the planned
 profile plus an explicit `eph_network_addresses` map (`role -> ip/prefix`).
 Only addresses the operator owns are accepted; the control network (falling
-back to provisioning) must be addressed unless it is DHCP, and secondary
+back to provisioning) must be addressed unless it is DHCP, and when the Ironic
+workload is prefilled the EPH-owned provisioning (or control) address wins over
+the network gateway default, and secondary
 segments require an address only when the operator supplies one. Same-link
 untagged duplicates fail with `EPH_NETWORK_PRIMARY_SEGMENT_CONFLICT`, unknown
 roles with `EPH_NETWORK_ADDRESS_ROLE_INVALID`, and malformed addresses with
 `EPH_NETWORK_ADDRESS_INVALID`.
 
 The rendered document is stored as `spec.eph_network` by the platform and
-applied by the EPH agent through the `eph.network.configure` action
+forwarded in every `eph.controlstack.apply` payload, where it is applied before
+any control-stack manifest. The standalone `eph.network.configure` action
 (`nmstatectl apply`, idempotent, declarative). A host without `nmstatectl` is
 reported as `status=blocked` with `EPH_NETWORK_NMSTATE_UNAVAILABLE` instead of
 half-applying the change, and a failed reconcile returns

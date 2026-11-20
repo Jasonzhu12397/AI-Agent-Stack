@@ -164,3 +164,16 @@ def test_untrusted_network_shapes_do_not_crash_the_validator():
     # surfaces the missing networking values instead of an AttributeError.
     assert spec is None
     assert error is not None
+
+
+def test_eph_owned_address_wins_over_the_gateway_prefill():
+    spec = _cluster_spec()
+    spec["eph_network_addresses"] = {
+        "control": "10.40.0.20/24",
+        "provisioning": "10.40.0.30/24",
+    }
+    result, error = _validate(spec, _profile())
+
+    assert error is None
+    assert result["ironic"]["networking"]["ip_address"] == "10.40.0.30"
+    assert result["eph_network_addresses"]["provisioning"] == "10.40.0.30/24"

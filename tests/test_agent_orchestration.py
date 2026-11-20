@@ -235,3 +235,19 @@ def test_control_stack_payload_omits_a_non_mapping_ironic_block():
         {"cluster_name": "edge-01", "ironic": "registry.local/ironic:37.0"},
     )
     assert "ironic" not in payload
+
+
+def test_build_payload_forwards_eph_network_document():
+    spec = {
+        "cluster_name": "edge-01",
+        "eph_network": {
+            "interfaces": [{"name": "bond_control", "type": "bond"}],
+            "routes": {"config": []},
+        },
+        "eph_network_addresses": {"control": "172.18.0.3/24"},
+        "network_defaults": {"sriov_pci_sources": {}, "warnings": []},
+    }
+    payload = build_payload(uuid4(), "eph.controlstack.apply", spec)
+    assert payload["eph_network"] == spec["eph_network"]
+    assert payload["eph_network_addresses"] == {"control": "172.18.0.3/24"}
+    assert payload["network_defaults"] == {"sriov_pci_sources": {}, "warnings": []}

@@ -364,6 +364,37 @@ def execute(
             if not isinstance(payload, dict):
                 raise ControlStackAdapterError("COMMAND_PAYLOAD_INVALID")
             spec = payload.get("spec", payload)
+            network_document = payload.get("eph_network")
+            network_evidence: dict[str, Any] = {}
+            if isinstance(network_document, dict):
+                network_result = _apply_network_state(network_document)
+                if not network_result.get("available"):
+                    return {
+                        "status": "blocked",
+                        "error_code": "EPH_NETWORK_NMSTATE_UNAVAILABLE",
+                        "output": {
+                            "resource_type": "CONTROL_STACK",
+                            "network_reason": network_result.get("error"),
+                        },
+                        "side_effects": False,
+                    }
+                if network_result["returncode"] != 0:
+                    return {
+                        "status": "failed",
+                        "error_code": "EPH_NETWORK_APPLY_FAILED",
+                        "output": {
+                            "resource_type": "CONTROL_STACK",
+                            "stderr": network_result["stderr"],
+                        },
+                        "side_effects": True,
+                    }
+                network_evidence = {
+                    "network_interfaces": [
+                        item.get("name")
+                        for item in network_document.get("interfaces", [])
+                        if isinstance(item, dict)
+                    ]
+                }
             manifests = payload.get("manifests")
             plan = plan_control_stack(spec)
             offline = load_component_manifests([item.name for item in plan])
@@ -393,7 +424,11 @@ def execute(
                     crd_name=IRONIC_CRD_NAME,
                 )
             readiness = wait_for_control_stack_ready(plan, _run_kubectl, lease_lost_event)
-            evidence = {**applied, "readiness": readiness}
+            evidence = {
+                **network_evidence,
+                **applied,
+                "readiness": readiness,
+            }
         except IronicRenderError as exc:
             return {
                 "status": "failed",

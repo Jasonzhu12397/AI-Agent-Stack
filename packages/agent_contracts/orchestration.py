@@ -322,6 +322,9 @@ def build_payload(
         "storage_addon",
         "infra_network_profile",
         "ironic",
+        "eph_network",
+        "network_defaults",
+        "eph_network_addresses",
     ):
         value = spec.get(field_name)
         if isinstance(value, dict):

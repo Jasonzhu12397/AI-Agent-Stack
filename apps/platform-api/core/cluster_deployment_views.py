@@ -482,9 +482,16 @@ def _validated_spec(request, *, infra_profile=None, project=None):
             None,
         )
         if provisioning is not None:
+            defaults = provisioning_defaults(provisioning)
+            addresses = spec.get("eph_network_addresses")
+            if isinstance(addresses, dict):
+                owned = addresses.get("provisioning") or addresses.get("control")
+                if isinstance(owned, str) and owned.strip():
+                    # The EPH-owned address beats the network gateway guess.
+                    defaults["ip_address"] = owned.split("/", 1)[0].strip()
             ironic_config, filled = apply_provisioning_defaults(
                 ironic_config,
-                provisioning_defaults(provisioning),
+                defaults,
             )
             if filled:
                 # Persist the resolved values so the dispatch payload and the
