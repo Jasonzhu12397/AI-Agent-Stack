@@ -55,6 +55,49 @@ Only the Target Agent may initiate cleanup after Target Agent adoption, CAPI piv
 
 After EPH cleanup is verified, Target Agent drives CAPI/Metal3/Ironic Worker provisioning. Every Target Worker receives chronyd installation/configuration/enablement with only the Ironic internal IP/VIP as its NTP source. Verify UDP/123 reachability and that chronyd selected the expected internal source before kubeadm join. Worker completion requires matching CAPI Machine and Kubernetes Node identities, Ready conditions, chronyd verification and network postflight.
 
+## Ironic workload CR
+
+`eph.controlstack.apply` renders and applies the `Ironic` custom resource next
+to the Ironic Standalone Operator. The CR is not optional: the control stack
+readiness probe requires the `Ironic` resource `Ready` condition, so a stack
+without it would block until `CONTROL_STACK_READY_TIMEOUT:ironic`. The action
+therefore fails fast with `IRONIC_WORKLOAD_CR_REQUIRED` when neither
+`spec.ironic` nor an `Ironic` document in the supplied manifests is present.
+
+All environment-specific values are required from the deployment spec:
+
+| Key | Required | Maps to |
+| --- | --- | --- |
+| `ironic.api_credentials_name` | yes | `spec.apiCredentialsName` |
+| `ironic.version` | yes | `spec.version` |
+| `ironic.images.ironic` | yes | `spec.images.ironic` |
+| `ironic.images.deploy_ramdisk_downloader` | yes | `spec.images.deployRamdiskDownloader` |
+| `ironic.images.keepalived` | yes | `spec.images.keepalived` |
+| `ironic.networking.interface` | yes | `spec.networking.interface` |
+| `ironic.networking.ip_address` | yes | `spec.networking.ipAddress` |
+| `ironic.networking.{api_port,rpc_port,image_server_port,image_server_tls_port}` | no | ports |
+| `ironic.networking.{external_ip,external_callback_url,image_server_external_url,ip_address_manager}` | no | networking strings |
+| `ironic.networking.{mac_addresses,disable_host_network,bind_interface}` | no | list / booleans |
+
+The namespace is fixed to `baremetal-operator-system` because that is where the
+readiness probe looks; any other value is rejected
+(`IRONIC_NAMESPACE_UNSUPPORTED`). The renderer never fills in a missing value:
+each absent required key produces its own error code
+(`IRONIC_CREDENTIALS_REQUIRED`, `IRONIC_VERSION_REQUIRED`,
+`IRONIC_IMAGE_REQUIRED`, `IRONIC_INTERFACE_REQUIRED`,
+`IRONIC_IP_ADDRESS_REQUIRED`) and the action returns `status=failed` without
+touching the cluster.
+
+The CR is applied separately from the operator manifest, only after
+`kubectl wait --for condition=established crd/ironics.ironic.metal3.io`: a CR
+cannot share a single server-side apply with the CRD that introduces it. If the
+payload supplies both `spec.ironic` and an `Ironic` document in its manifest
+source, the action refuses the ambiguity with `IRONIC_CR_MULTIPLE_SOURCES`.
+
+CI validates the contract in two ways: unit tests pin the rendered document,
+and `tests/integration/kind_metal3_crds.sh` installs the real `Ironic` CRD in a
+kind cluster and server-side dry-runs the rendered CR.
+
 ## Recovery and idempotency
 
 - Persist deployment ID, Target Cluster UID, source/target BMH hardware identity inventory, phase, generation, command idempotency keys and operation results in durable cloud storage.

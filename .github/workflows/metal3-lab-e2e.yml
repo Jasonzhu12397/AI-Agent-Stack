@@ -26,10 +26,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  lab-readiness:
+    name: Lab readiness report
+    # A GitHub-hosted runner cannot reach the lab, so this job only judges the
+    # workflow inputs and the shape of the kubeconfigs. It never fails the run:
+    # a missing secret produces a report and a skipped acceptance stage.
+    runs-on: ubuntu-latest
+    environment: metal3-lab
+    timeout-minutes: 20
+    outputs:
+      ready: ${{ steps.readiness.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Materialize kubeconfig candidates
+        env:
+          EPH_KUBECONFIG: ${{ secrets.EPH_KUBECONFIG }}
+          TARGET_KUBECONFIG: ${{ secrets.TARGET_KUBECONFIG }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lab" evidence
+          umask 077
+          : > "$RUNNER_TEMP/lab/eph.kubeconfig"
+          : > "$RUNNER_TEMP/lab/target.kubeconfig"
+          if [ -n "$EPH_KUBECONFIG" ]; then
+            printf '%s' "$EPH_KUBECONFIG" > "$RUNNER_TEMP/lab/eph.kubeconfig"
+          fi
+          if [ -n "$TARGET_KUBECONFIG" ]; then
+            printf '%s' "$TARGET_KUBECONFIG" > "$RUNNER_TEMP/lab/target.kubeconfig"
+          fi
+
+      - name: Readiness report
+        id: readiness
+        env:
+          EPH_KUBECONFIG: ${{ secrets.EPH_KUBECONFIG }}
+          TARGET_KUBECONFIG: ${{ secrets.TARGET_KUBECONFIG }}
+        run: |
+          eph="$RUNNER_TEMP/lab/eph.kubeconfig"
+          target="$RUNNER_TEMP/lab/target.kubeconfig"
+          if [ -z "$EPH_KUBECONFIG" ]; then rm -f "$eph"; fi
+          if [ -z "$TARGET_KUBECONFIG" ]; then rm -f "$target"; fi
+          python tools/metal3_lab_readiness.py \
+            --project "${{ inputs.project_id }}" \
+            --control-plane-replicas "${{ inputs.control_plane_replicas }}" \
+            --worker-replicas "${{ inputs.worker_replicas }}" \
+            --eph-kubeconfig "$eph" \
+            --target-kubeconfig "$target" \
+            --out evidence/lab-readiness.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo "### Lab readiness"
+            echo ""
+            echo '```json'
+            cat evidence/lab-readiness.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal3-lab-readiness
+          path: evidence/lab-readiness.json
+          retention-days: 30
+
   acceptance:
     name: Physical Metal3 acceptance
     # This job MUST run on a runner attached to the physical lab.
     # GitHub-hosted runners cannot prove bare-metal deployment.
+    needs: lab-readiness
+    if: needs.lab-readiness.outputs.ready == 'true'
     runs-on: [self-hosted, metal3-lab, physical]
     timeout-minutes: 120
     environment: metal3-lab
@@ -54,7 +128,7 @@ jobs:
           TARGET_KUBECONFIG: ${{ secrets.TARGET_KUBECONFIG }}
         run: |
           if [ -z "$EPH_KUBECONFIG" ] || [ -z "$TARGET_KUBECONFIG" ]; then
-            echo "::error::EPH_KUBECONFIG and TARGET_KUBECONFIG secrets are required; refusing to fake this run."
+            echo "::error::Readiness passed without secrets; report and lab state disagree."
             exit 1
           fi
           umask 077

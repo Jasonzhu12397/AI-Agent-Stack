@@ -8,6 +8,7 @@ from apps.eph_agent.control_stack import StackComponent, plan_control_stack
 from apps.eph_agent.control_stack_adapter import (
     ControlStackAdapterError,
     apply_control_stack,
+    apply_workload_resource,
     wait_for_control_stack_ready,
 )
 
@@ -250,3 +251,51 @@ def test_ironic_cr_condition_false_blocks_readiness():
     assert observed["custom_resource"]["ready"] is False
     assert observed["custom_resource"]["reason"] == "CONDITION_NOT_READY"
     assert observed["custom_resource"]["conditions"][0]["reason"] == "DependencyNotReady"
+
+
+def test_workload_cr_waits_for_its_crd_before_applying():
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        calls.append(arguments)
+        return {"available": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    document = {
+        "apiVersion": "ironic.metal3.io/v1alpha1",
+        "kind": "Ironic",
+        "metadata": {"name": "ironic", "namespace": "baremetal-operator-system"},
+        "spec": {},
+    }
+
+    apply_workload_resource(
+        document,
+        runner,
+        crd_name="ironics.ironic.metal3.io",
+    )
+
+    kinds = [call[0] for call in calls]
+    assert kinds == ["wait", "apply", "apply"]
+    assert calls[0][-1] == "crd/ironics.ironic.metal3.io"
+    assert "--dry-run=server" in calls[1]
+    assert "--dry-run=server" not in calls[2]
+
+
+def test_workload_cr_refuses_to_apply_when_lease_is_lost():
+    class LostLease:
+        @staticmethod
+        def is_set() -> bool:
+            return True
+
+    with pytest.raises(ControlStackAdapterError) as excinfo:
+        apply_workload_resource(
+            {"apiVersion": "ironic.metal3.io/v1alpha1", "kind": "Ironic"},
+            lambda *_args, **_kwargs: {"available": True, "returncode": 0},
+            lease_lost_event=LostLease(),
+        )
+    assert str(excinfo.value) == "COMMAND_LEASE_LOST_BEFORE_CONTROL_STACK_APPLY"
+
+
+def test_workload_cr_rejects_non_documents():
+    with pytest.raises(ControlStackAdapterError) as excinfo:
+        apply_workload_resource([], lambda *_args, **_kwargs: {})
+    assert str(excinfo.value) == "CONTROL_STACK_WORKLOAD_DOCUMENT_INVALID"

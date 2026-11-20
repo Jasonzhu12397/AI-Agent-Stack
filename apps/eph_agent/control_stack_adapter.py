@@ -272,6 +272,39 @@ def _apply_manifest(
             path.unlink(missing_ok=True)
 
 
+def apply_workload_resource(
+    document: dict[str, Any],
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+    crd_name: str | None = None,
+) -> None:
+    """Apply a workload CR after waiting for its CRD to be served.
+
+    A CR cannot share one server-side apply with the CRD that introduces it:
+    the API discovery used for the batch happens before the CRD is persisted.
+    The control stack therefore applies the operator first, waits here for
+    ``established`` and only then applies the custom resource.
+    """
+
+    if not isinstance(document, dict):
+        raise ControlStackAdapterError("CONTROL_STACK_WORKLOAD_DOCUMENT_INVALID")
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        raise ControlStackAdapterError("COMMAND_LEASE_LOST_BEFORE_CONTROL_STACK_APPLY")
+    if crd_name:
+        _invoke(
+            runner,
+            [
+                "wait",
+                "--for",
+                "condition=established",
+                "--timeout=120s",
+                f"crd/{crd_name}",
+            ],
+            150,
+        )
+    _apply_manifest(document, runner, lease_lost_event)
+
+
 def apply_control_stack(
     plan: list[StackComponent],
     runner: Callable[..., dict[str, Any]],

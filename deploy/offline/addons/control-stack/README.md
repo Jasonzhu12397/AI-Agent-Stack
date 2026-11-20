@@ -45,10 +45,40 @@ namespaces as the first document.
 
 `ironic.yaml` installs the operator only. The `Ironic` workload CR is
 environment specific (Ironic and ramdisk images, provisioning interface, IP
-address, credentials), so the EPH Agent requires it in the command payload
-instead of guessing values here. Because the control stack readiness probe waits
-for the `Ironic` CR `Ready` condition, a deployment without that CR stays
-blocked rather than reporting a false success.
+address, credentials), so the EPH Agent renders it from `spec.ironic` in the
+command payload instead of guessing values here. When neither the payload nor
+the supplied manifests contain the CR, the action fails fast with
+`IRONIC_WORKLOAD_CR_REQUIRED` rather than waiting for
+`CONTROL_STACK_READY_TIMEOUT:ironic`.
+
+Payload contract (all values must come from the deployment, no defaults are
+invented for required keys):
+
+```yaml
+ironic:
+  api_credentials_name: ironic-auth        # required
+  version: "37.0"                          # required
+  namespace: baremetal-operator-system     # optional, must stay this value
+  images:                                  # required
+    ironic: registry.local/ironic:37.0
+    deploy_ramdisk_downloader: registry.local/ipa-downloader:latest
+    keepalived: registry.local/keepalived:2.2.4
+    deploy_ramdisk_branch: latest          # optional
+  networking:
+    interface: eno2                        # required
+    ip_address: 10.130.60.84               # required
+    image_server_port: 8080                # optional pass-through
+    disable_host_network: true             # optional pass-through
+```
+
+`apps/eph_agent/ironic_cr.py` validates the contract and emits the CR
+(`ironic.metal3.io/v1alpha1`, name `ironic`). After
+`eph_single_node_ready` the EPH applies the operator, waits for
+`crd/ironics.ironic.metal3.io` to report `established`, and only then applies
+the CR; a CR sharing one apply with its CRD would fail API discovery. The
+readiness probe then observes the workload's real `Ready` condition. Supplying
+both `spec.ironic` and an `Ironic` document in the manifest payload is rejected
+as `IRONIC_CR_MULTIPLE_SOURCES`.
 
 ## Verification
 
@@ -56,3 +86,6 @@ blocked rather than reporting a false success.
 component has a file, every file parses through the real loader, every readiness
 probe names a Deployment that exists in the corresponding manifest, and the
 Ironic CR probe matches the CRD group/version shipped in `ironic.yaml`.
+`tests/test_eph_ironic_cr_render.py` pins the rendered CR shape, and
+`tests/integration/kind_metal3_crds.sh` installs the real `Ironic` CRD and
+server-side dry-runs a platform-rendered CR, so a schema drift fails CI.

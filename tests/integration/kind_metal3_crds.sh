@@ -177,3 +177,67 @@ for manifest in "${ROOT_DIR}"/deploy/offline/addons/control-stack/*.yaml; do
   "${KUBECTL}" apply --dry-run=server -f "${manifest}" >/dev/null
 done
 echo "All control-stack manifests are accepted by the API server"
+
+echo "Server-side validation of the platform-rendered Ironic CR"
+"${KUBECTL}" create namespace baremetal-operator-system --dry-run=client -o yaml \
+  | "${KUBECTL}" apply -f - >/dev/null
+python3 - "${ROOT_DIR}" "${split_dir}/ironic-crd.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+documents = list(
+    yaml.safe_load_all(
+        (root / "deploy/offline/addons/control-stack/ironic.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+)
+crd = [
+    document
+    for document in documents
+    if document
+    and document.get("kind") == "CustomResourceDefinition"
+    and document["spec"]["names"]["kind"] == "Ironic"
+]
+Path(sys.argv[2]).write_text(yaml.safe_dump_all(crd, sort_keys=False))
+PY
+"${KUBECTL}" apply -f "${split_dir}/ironic-crd.yaml" >/dev/null
+"${KUBECTL}" wait --for condition=established --timeout=120s \
+  crd/ironics.ironic.metal3.io
+python3 - "${ROOT_DIR}" "${split_dir}/rendered-ironic-cr.yaml" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+import yaml
+
+spec = importlib.util.spec_from_file_location(
+    "ironic_cr_contract",
+    Path(sys.argv[1]) / "apps/eph_agent/ironic_cr.py",
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+document = module.render_ironic_cr(
+    {
+        "ironic": {
+            "api_credentials_name": "ironic-auth",
+            "version": "37.0",
+            "images": {
+                "ironic": "registry.local/ironic:37.0",
+                "deploy_ramdisk_downloader": "registry.local/ipa-downloader:latest",
+                "keepalived": "registry.local/keepalived:2.2.4",
+            },
+            "networking": {
+                "interface": "eno2",
+                "ip_address": "10.130.60.84",
+                "image_server_port": 8080,
+            },
+        }
+    }
+)
+Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
+PY
+"${KUBECTL}" apply --dry-run=server -f "${split_dir}/rendered-ironic-cr.yaml"

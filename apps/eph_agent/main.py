@@ -37,10 +37,17 @@ from .control_stack import plan_control_stack
 from .control_stack_adapter import (
     ControlStackAdapterError,
     apply_control_stack,
+    apply_workload_resource,
     wait_for_control_stack_ready,
 )
 from .control_stack_manifests import load_component_manifests
 from .fleet_planning import PlanningError, plan_fleet_request
+from .ironic_cr import (
+    IRONIC_CRD_NAME,
+    IronicRenderError,
+    contains_ironic_cr,
+    render_ironic_cr,
+)
 from .metal3_skill import (
     Metal3SkillError,
     apply_baremetalhosts,
@@ -259,14 +266,35 @@ def execute(
             else:
                 merged = offline
             manifests = merged
+            ironic_documents = manifests.get("ironic")
+            manifest_has_ironic_cr = contains_ironic_cr(ironic_documents)
+            rendered_ironic = render_ironic_cr(spec)
+            if manifest_has_ironic_cr and rendered_ironic is not None:
+                raise IronicRenderError("IRONIC_CR_MULTIPLE_SOURCES")
+            if not manifest_has_ironic_cr and rendered_ironic is None:
+                raise IronicRenderError("IRONIC_WORKLOAD_CR_REQUIRED")
             applied = apply_control_stack(
                 plan,
                 _run_kubectl,
                 lease_lost_event,
                 manifests,
             )
+            if rendered_ironic is not None:
+                apply_workload_resource(
+                    rendered_ironic,
+                    _run_kubectl,
+                    lease_lost_event,
+                    crd_name=IRONIC_CRD_NAME,
+                )
             readiness = wait_for_control_stack_ready(plan, _run_kubectl, lease_lost_event)
             evidence = {**applied, "readiness": readiness}
+        except IronicRenderError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"resource_type": "CONTROL_STACK"},
+                "side_effects": False,
+            }
         except Metal3SkillError as exc:
             return {
                 "status": "failed",
