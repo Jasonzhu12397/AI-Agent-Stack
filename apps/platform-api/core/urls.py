@@ -17,6 +17,7 @@ from core.agent_node_views import (
     AgentNodeListCreateView,
     FleetMachineInventoryView,
     FleetMachineNetworkVerifyView,
+    FleetNetworkCollectView,
     FleetMachineLifecycleReviewView,
     FleetMachineBMCConfigView,
     FleetMachineFirmwareUpgradeDetailView,
@@ -224,6 +225,12 @@ urlpatterns = [
         "fleet/machines/<uuid:machine_id>/bmc-config/",
         FleetMachineBMCConfigView.as_view(),
         name="fleet-machine-bmc-config",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
+        "fleet/network/collect/",
+        FleetNetworkCollectView.as_view(),
+        name="fleet-network-collect",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"

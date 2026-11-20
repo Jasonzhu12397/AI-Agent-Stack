@@ -2183,6 +2183,88 @@ class AgentNodeClientCertificateView(APIView):
         return Response(_node_data(node))
 
 
+class FleetNetworkCollectView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, project_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        tenant, project, is_admin = _tenant_and_project(request, tenant_id, project_id)
+        project_editor = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+        if not is_admin and not project_editor:
+            return Response({"detail": "Project editor permission required."}, status=403)
+        requested_ids = request.data.get("node_ids")
+        nodes = AgentNode.objects.filter(
+            tenant=tenant,
+            project=project,
+            status=AgentNode.Status.ONLINE,
+            node_type__in=[
+                AgentNode.NodeType.EPH_NODE,
+                AgentNode.NodeType.TARGET_CLUSTER,
+            ],
+        ).order_by("name", "id")
+        if requested_ids is not None:
+            if not isinstance(requested_ids, list) or len(requested_ids) > 500:
+                return Response(
+                    {"detail": "node_ids must be a list of at most 500 ids."},
+                    status=400,
+                )
+            try:
+                parsed = [uuid.UUID(str(item)) for item in requested_ids]
+            except (TypeError, ValueError, AttributeError):
+                return Response({"detail": "node_ids contains an invalid id."}, status=400)
+            nodes = nodes.filter(id__in=parsed)
+        idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+        if not idempotency_key or len(idempotency_key) > 96:
+            return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
+        plan_hash = _payload_hash("host.network.observe", {})
+        queued = []
+        skipped = []
+        with transaction.atomic():
+            for node in nodes:
+                key = f"{idempotency_key}:{node.id}"
+                command, created = AgentCommand.objects.get_or_create(
+                    tenant=tenant,
+                    idempotency_key=key,
+                    defaults={
+                        "project": project,
+                        "node": node,
+                        "requested_by": request.user,
+                        "command_type": "host.network.observe",
+                        "payload": {},
+                        "status": AgentCommand.Status.QUEUED,
+                        "plan_hash": plan_hash,
+                    },
+                )
+                if created:
+                    queued.append({"node_id": str(node.id), "command_id": str(command.id)})
+                else:
+                    skipped.append({"node_id": str(node.id), "reason": "already_queued"})
+        if queued:
+            record_audit_event(
+                request,
+                tenant,
+                "fleet.network.collect_queued",
+                "project",
+                project.id,
+                project=project,
+                metadata={"queued": len(queued), "skipped": len(skipped)},
+            )
+        return Response(
+            {
+                "queued_count": len(queued),
+                "skipped_count": len(skipped),
+                "queued": queued,
+                "skipped": skipped,
+            },
+            status=202,
+        )
+
+
 class AgentNodeCommandListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 

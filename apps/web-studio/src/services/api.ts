@@ -597,6 +597,25 @@ export type HostNetworkVerification = {
   }>;
 };
 
+export function collectFleetNetwork(
+  tenantId: string,
+  projectId: string,
+): Promise<{
+  queued_count: number;
+  skipped_count: number;
+  queued: Array<{ node_id: string; command_id: string }>;
+  skipped: Array<{ node_id: string; reason: string }>;
+}> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/network/collect/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({}),
+    },
+  );
+}
+
 export function verifyFleetMachineNetwork(
   tenantId: string,
   projectId: string,

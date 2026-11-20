@@ -4,6 +4,7 @@ import {
   createAgentCommand,
   getAgentNodes,
   getFleetMachines,
+  collectFleetNetwork,
   getMachineFirmware,
   getFirmwareUpdateJob,
   submitFirmwareUpgrade,
@@ -48,6 +49,8 @@ const inventoryCount = ref(0);
 const inventorySearch = ref("");
 const inventoryStatus = ref("");
 const inventoryNodeType = ref("");
+const collectBusy = ref(false);
+const collectMessage = ref("");
 const deployments = ref<ClusterDeployment[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const commandCount = ref(0);
@@ -264,6 +267,22 @@ async function saveSriovConfig(): Promise<void> {
     sriovSaveMessage.value = cause instanceof Error ? cause.message : "Unable to save SR-IOV configuration.";
   } finally {
     sriovSaving.value = false;
+  }
+}
+
+async function collectAllNetworks(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  collectBusy.value = true;
+  collectMessage.value = "";
+  try {
+    const result = await collectFleetNetwork(selectedTenantId.value, selectedProjectId.value);
+    collectMessage.value =
+      "Queued " + result.queued_count + " node(s), skipped " + result.skipped_count + ".";
+    await refreshData();
+  } catch (cause) {
+    collectMessage.value = cause instanceof Error ? cause.message : "Unable to queue network collection.";
+  } finally {
+    collectBusy.value = false;
   }
 }
 
