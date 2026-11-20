@@ -1,3 +1,10 @@
+# The upstream IPAM release assumes the namespace already exists; the EPH
+# applies this file as a single unit, so it is declared first here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capm3-system
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:

@@ -81,3 +81,12 @@ def test_ironic_custom_resource_is_declared_by_its_manifest():
         f"{group}/{version}" == probe["api_version"] and kind == probe["kind"]
         for version, group, kind in served
     )
+
+
+def test_every_manifest_declares_its_namespace_first():
+    """The EPH applies each file as one unit, so the namespace must come first."""
+
+    for component in plan_control_stack({}):
+        documents = _documents(component.name)
+        assert documents[0].get("kind") == "Namespace", component.name
+        assert documents[0]["metadata"]["name"] == component.namespace, component.name

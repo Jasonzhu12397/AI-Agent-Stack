@@ -160,6 +160,18 @@ PY
 echo "Metal3 and SR-IOV CRDs are present and accept rendered manifests"
 
 echo "Server-side validation of every vendored control-stack manifest"
+# Server-side dry-run never persists a Namespace object, so namespaced
+# resources would fail even though a real apply creates the namespace first.
+for namespace in \
+  capm3-system \
+  capi-system \
+  capi-kubeadm-bootstrap-system \
+  capi-kubeadm-control-plane-system \
+  baremetal-operator-system \
+  ironic-standalone-operator-system; do
+  "${KUBECTL}" create namespace "${namespace}" --dry-run=client -o yaml \
+    | "${KUBECTL}" apply -f - >/dev/null
+done
 for manifest in "${ROOT_DIR}"/deploy/offline/addons/control-stack/*.yaml; do
   echo "  $(basename "${manifest}")"
   "${KUBECTL}" apply --dry-run=server -f "${manifest}" >/dev/null

@@ -7,7 +7,7 @@ names must equal the component names in that plan.
 | Component | File | Version | SHA256 | Namespace / controller |
 | --- | --- | --- | --- | --- |
 | cert-manager | `cert-manager.yaml` | v1.16.3 | `5dda0f9c9dbed90825a0073f1c0f986c8a49e9b6c97a7701c87733afadc734bf` | cert-manager / cert-manager |
-| Metal3 IPAM | `ipam.yaml` | v1.9.6 | `854609a7a90e8ab83a13a1d332c977985e42fe9304f4da0ad1896e89240ab55d` | capm3-system / ipam-controller-manager |
+| Metal3 IPAM | `ipam.yaml` | v1.9.6 | `920ab5c2ce87ba963983b971986584d56d954f453fd70b92ec034babcb014cd3` | capm3-system / ipam-controller-manager |
 | Cluster API core | `capi-core.yaml` | v1.14.4 | `0030264eb0a0d90ebacc9da8f6bbb717bee32e45ffadc4a74784fb5ad7b9bb0b` | capi-system / capi-controller-manager |
 | Kubeadm bootstrap | `capi-bootstrap.yaml` | v1.14.4 | `cf805775f24d197581b06e938bcd0eb9a9ed49d675f67e0f689ce7b71e5e397c` | capi-kubeadm-bootstrap-system / capi-kubeadm-bootstrap-controller-manager |
 | Kubeadm control plane | `capi-control-plane.yaml` | v1.14.4 | `7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb68be12d3c1805be438` | capi-kubeadm-control-plane-system / capi-kubeadm-control-plane-controller-manager |
@@ -29,12 +29,17 @@ the IPAM controller image; the other images are pinned inside their manifests.
 
 ## Local patches
 
-`ipam.yaml`: the upstream release ships `${VAR:=default}` placeholders in the
-controller args, which Kubernetes does not expand. They are replaced with their
-defaults (`:8443`, `false`, `VersionTLS13`); without this the manager exits at
-startup and the IPPool admission webhook never serves.
+`ipam.yaml` carries two local patches:
 
-The other files are unmodified upstream release artifacts.
+- The upstream release ships `${VAR:=default}` placeholders in the controller
+  args, which Kubernetes does not expand. They are replaced with their defaults
+  (`:8443`, `false`, `VersionTLS13`); without this the manager exits at startup
+  and the IPPool admission webhook never serves.
+- The upstream file assumes `capm3-system` already exists. A `Namespace`
+  document is prepended because the EPH applies each component file as one unit.
+
+The other files are unmodified upstream release artifacts and declare their own
+namespaces as the first document.
 
 ## Not included
 
