@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ import pytest
 
 from apps.dev_agent.agent import SoftwareAgent
 from apps.dev_agent.checkpoint import TaskStore
+from apps.dev_agent.collaboration import run_roles
 from apps.dev_agent.context import build_memory, refresh_memory, write_agents_md
 from apps.dev_agent.debugging import analyse_traceback, parse_gdb_backtrace
 from apps.dev_agent.deployment import generate_ci, generate_dockerfile, preflight, rollback_steps
@@ -22,8 +24,10 @@ from apps.dev_agent.model import ModelOutputError, parse_tool_call, validate_sch
 from apps.dev_agent.openapi import generate_python_client, generate_typescript_client, mock_example
 from apps.dev_agent.patching import PatchError, TextEdit, plan
 from apps.dev_agent.performance import analyse_performance, summarise
+from apps.dev_agent.planner import OpenAICompatiblePlanner, PlannerConfig, PlannerError
 from apps.dev_agent.policy import ApprovalRequired, PolicyError, read_text
 from apps.dev_agent.reviewer import review_paths
+from apps.dev_agent.roles import RoleResult
 from apps.dev_agent.sandbox import SandboxViolation, run, validate_command
 from apps.dev_agent.scanner import call_chain, module_outline, scan_project
 from apps.dev_agent.security import parse_npm_audit, parse_pip_audit, scan_secrets
@@ -334,3 +338,85 @@ def test_docstring_plan_is_approval_gated(project):
     source = (project / "pkg" / "cli.py").read_text()
     assert '"""Main."""' in source
     compile(source, "pkg/cli.py", "exec")
+
+
+def test_planner_retries_and_validates_steps():
+    calls = []
+
+    def transport(url, headers, payload, timeout):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise TimeoutError("transient")
+        content = json.dumps(
+            {
+                "steps": [
+                    {
+                        "tool": "run_tests",
+                        "arguments": {"coverage": True},
+                        "rationale": "prove the baseline",
+                    }
+                ]
+            }
+        )
+        return {"choices": [{"message": {"content": content}}]}
+
+    planner = OpenAICompatiblePlanner(
+        PlannerConfig(
+            base_url="https://llm.example/v1",
+            model="test-model",
+            api_key="secret",
+            max_retries=2,
+            backoff_seconds=0,
+        ),
+        transport=transport,
+    )
+    plan = planner.plan("stabilise tests", "context")
+    assert plan.steps[0]["tool"] == "run_tests"
+    assert len(calls) == 2
+    assert calls[0]["model"] == "test-model"
+
+
+def test_planner_rejects_tools_outside_the_allowlist():
+    def transport(url, headers, payload, timeout):
+        content = json.dumps(
+            {"steps": [{"tool": "deploy", "arguments": {}, "rationale": "ship it"}]}
+        )
+        return {"choices": [{"message": {"content": content}}]}
+
+    planner = OpenAICompatiblePlanner(
+        PlannerConfig(base_url="https://llm.example/v1", model="m"), transport=transport
+    )
+    with pytest.raises(ModelOutputError):
+        planner.plan("do something")
+
+
+def test_planner_requires_http_base_url():
+    with pytest.raises(PlannerError):
+        OpenAICompatiblePlanner(PlannerConfig(base_url="llm.example", model="m"))
+
+
+def test_collaboration_runs_roles_concurrently_and_keeps_failures():
+    import threading
+
+    barrier = threading.Barrier(3)
+
+    def role(name):
+        def run():
+            barrier.wait(timeout=2)
+            return RoleResult(name, "succeeded", name, {"name": name})
+
+        return run
+
+    def broken():
+        barrier.wait(timeout=2)
+        raise ValueError("boom")
+
+    report = run_roles(
+        {"analyst": role("analyst"), "reviewer": role("reviewer"), "security": broken},
+        max_workers=3,
+    )
+    assert report.results["analyst"].status == "succeeded"
+    assert report.results["reviewer"].status == "succeeded"
+    assert report.results["security"].status == "failed"
+    assert report.ok is False
+    assert report.as_dict()["roles"]["analyst"]["status"] == "succeeded"

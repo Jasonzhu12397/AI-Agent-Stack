@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .checkpoint import TaskStore
+from .collaboration import default_tasks, run_roles
 from .context import ProjectMemory, refresh_memory, write_agents_md
 from .deployment import write_manifests
 from .docs import docstring_edits, write_docs
@@ -15,6 +16,7 @@ from .gitops import commit_message, diff, status
 from .openapi import load_spec
 from .patching import TextEdit, apply, digest_payload, plan
 from .performance import analyse_performance, summarise
+from .planner import OpenAICompatiblePlanner, PlannerConfig, describe_plan
 from .policy import ApprovalStore, read_text
 from .roles import AnalystRole, DebugRole, DeployRole, ReviewRole, SecurityRole, analyse
 from .scanner import ProjectIndex, scan_project
@@ -44,7 +46,8 @@ CAPABILITIES = {
     "pr_review": "implemented: tools/dev_agent_pr_review.py posts a single updated PR comment",
     "sandbox": "implemented: allowlisted, secret-scrubbed, timeout-bounded runner",
     "checkpoint": "implemented: durable task journal and resume",
-    "model_planning": "adapter required: no remote model call is made in this package",
+    "model_planning": "implemented: OpenAI-compatible adapter with schema-validated, bounded plans",
+    "collaboration": "implemented: concurrent analyst/reviewer/security/performance/tester roles",
 }
 
 
@@ -79,6 +82,21 @@ class SoftwareAgent:
 
     def performance(self, paths: list[str] | None = None) -> dict:
         return summarise(analyse_performance(self.root, paths))
+
+    def collaborate(self, paths: list[str] | None = None) -> dict:
+        return run_roles(default_tasks(self.root, paths)).as_dict()
+
+    def plan(self, goal: str, context: str | None = None, planner=None) -> dict:
+        if planner is None:
+            config = PlannerConfig.from_env()
+            if config is None:
+                raise RuntimeError(
+                    "set DEV_AGENT_LLM_BASE_URL and DEV_AGENT_LLM_MODEL to enable planning"
+                    " (or pass a planner instance)"
+                )
+            planner = OpenAICompatiblePlanner(config)
+        context = context if context is not None else self.index.outline()
+        return describe_plan(planner.plan(goal, context))
 
     def comment_plan(self, limit: int = 20) -> ChangePlan:
         return self.plan_change(docstring_edits(self.index, limit=limit))

@@ -5,9 +5,10 @@ Agent: read code, change code, review it, test it, debug it, and prepare a
 deployment. It is a library plus a CLI, packaged as `ai-agent-stack` and exposed
 as the `dev-agent` console script.
 
-The design is intentionally deterministic. Every capability below is real code
+The design is deterministic by default. Every capability below is real code
 with tests; no capability is a mocked model response. Remote model planning is
-an optional adapter and is not wired into this package.
+an optional adapter that must be explicitly configured and can only propose
+schema-validated tool steps.
 
 ## Capability mapping
 
@@ -39,7 +40,9 @@ an optional adapter and is not wired into this package.
 | Automatic comments | `docs.docstring_edits` proposes signature-block insertions, applied only through the approval token | implemented |
 | Pull request automation | `.github/workflows/dev-agent-review.yml` runs `tools/dev_agent_pr_review.py`, which posts or updates one review comment on changed Python files | implemented |
 | Project memory | `.dev-agent/memory.json` plus a generated `AGENTS.md` | implemented |
-| Tool calling | `roles` are deterministic tools; the model adapter is not wired | partial |
+| Tool calling | `roles` are deterministic tools; `planner.OpenAICompatiblePlanner` turns a model reply into a bounded, validated tool plan that the caller executes | implemented |
+| Model planning | `planner.py`: OpenAI-compatible chat completions, retry on 429/5xx, allowlisted tools, max 8 steps, JSON Schema validation | implemented |
+| Multi-agent collaboration | `collaboration.run_roles`: analyst, reviewer, security, performance and tester run concurrently; a failed role becomes data instead of aborting the run | implemented |
 | Sandbox isolation | Allowlisted, no shell, secret-scrubbed environment, timeout, output truncation; optional Docker runner | implemented |
 | Permission control | Root containment, protected paths, one-time approval token bound to the exact diff | implemented |
 | Checkpoint and resume | `checkpoint.TaskStore` journal with phases and resume | implemented |
@@ -55,6 +58,8 @@ dev-agent review
 dev-agent test --coverage
 dev-agent security
 dev-agent performance
+dev-agent collaborate
+dev-agent plan --goal "stabilise the failing test suite"
 dev-agent plan-comments --limit 20
 dev-agent memory
 dev-agent git-status
@@ -111,6 +116,8 @@ rejected.
 | `openapi.py` | spec parsing, client generation |
 | `docs.py` | README, architecture, API documents |
 | `performance.py` | static performance rules |
+| `planner.py` | OpenAI-compatible planning adapter |
+| `collaboration.py` | concurrent role execution |
 | `deployment.py` | Dockerfile, Kubernetes, CI, pre-flight, rollback |
 | `sandbox.py` | allowlisted command execution |
 | `checkpoint.py` | durable task journal |
@@ -121,8 +128,13 @@ rejected.
 
 ## Known limits
 
-- No remote LLM call is made. Planning is deterministic; an adapter must produce
-  schema-validated tool calls through `model.parse_tool_call`.
+- Without `DEV_AGENT_LLM_BASE_URL` and `DEV_AGENT_LLM_MODEL`, no remote call is
+  made. When set, planning sends the goal and a capped workspace outline to that
+  gateway; setting these variables is an explicit decision to share that context.
+  The API key is read from `DEV_AGENT_LLM_API_KEY` and never placed in the
+  sandbox environment.
+- A model plan is advisory. It cannot execute, cannot push or deploy, and every
+  patch still needs a one-time approval token.
 - `npm` and `go` test execution is supported, but only pytest summary and
   coverage output are parsed.
 - The in-process sandbox confines commands by allowlist and environment, not by

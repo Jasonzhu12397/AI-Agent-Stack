@@ -40,6 +40,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("security", help="scan for credentials and dependency audit commands")
 
+    collaborate = subparsers.add_parser(
+        "collaborate", help="run analyst, review, security, performance and tests concurrently"
+    )
+    collaborate.add_argument("paths", nargs="*")
+
+    plan = subparsers.add_parser("plan", help="ask an OpenAI-compatible model for a tool plan")
+    plan.add_argument("--goal", required=True)
+    plan.add_argument("--context")
+
     performance = subparsers.add_parser("performance", help="static performance findings")
     performance.add_argument("paths", nargs="*")
     subparsers.add_parser("memory", help="refresh project memory and rewrite AGENTS.md")
@@ -118,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         _print(agent.security())
     elif arguments.command == "performance":
         _print(agent.performance(arguments.paths or None))
+    elif arguments.command == "collaborate":
+        _print(agent.collaborate(arguments.paths or None))
+    elif arguments.command == "plan":
+        _print(agent.plan(arguments.goal, arguments.context))
     elif arguments.command == "memory":
         refresh_memory(root)
         _print(
