@@ -5,6 +5,8 @@ import {
   getAgentNodes,
   getFleetMachines,
   collectFleetNetwork,
+  pxeBootFleetMachines,
+  type PxeBootResult,
   getMachineFirmware,
   getFirmwareUpdateJob,
   submitFirmwareUpgrade,
@@ -51,6 +53,9 @@ const inventoryStatus = ref("");
 const inventoryNodeType = ref("");
 const collectBusy = ref(false);
 const collectMessage = ref("");
+const pxeBootBusy = ref(false);
+const pxeBootMessage = ref("");
+const pxeBootResults = ref<PxeBootResult | null>(null);
 const deployments = ref<ClusterDeployment[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const commandCount = ref(0);
@@ -267,6 +272,33 @@ async function saveSriovConfig(): Promise<void> {
     sriovSaveMessage.value = cause instanceof Error ? cause.message : "Unable to save SR-IOV configuration.";
   } finally {
     sriovSaving.value = false;
+  }
+}
+
+async function runPxeBoot(execution: boolean): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  if (execution && !window.confirm("Set a one-time PXE boot override and reset every BMC-configured machine?")) {
+    return;
+  }
+  pxeBootBusy.value = true;
+  pxeBootMessage.value = "";
+  try {
+    pxeBootResults.value = await pxeBootFleetMachines(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      execution,
+    );
+    const result = pxeBootResults.value;
+    pxeBootMessage.value =
+      (execution ? "Executed " : "Planned ") +
+      result.machine_count +
+      " machine(s).";
+    await refreshData();
+  } catch (cause) {
+    pxeBootMessage.value =
+      cause instanceof Error ? cause.message : "Unable to reach the BMC fleet.";
+  } finally {
+    pxeBootBusy.value = false;
   }
 }
 
@@ -664,6 +696,25 @@ onUnmounted(() => {
             <el-option label="Revoked" value="revoked" />
           </el-select>
           <el-button size="small" type="primary" plain :loading="refreshing" @click="refreshData">Apply filters</el-button>
+          <el-button size="small" plain :loading="collectBusy" @click="collectAllNetworks">
+            Collect all node networks
+          </el-button>
+          <el-button size="small" plain :loading="pxeBootBusy" @click="runPxeBoot(false)">
+            Plan PXE boot
+          </el-button>
+          <el-button size="small" type="warning" :loading="pxeBootBusy" @click="runPxeBoot(true)">
+            Execute PXE boot
+          </el-button>
+        </div>
+        <p v-if="collectMessage" class="task-note">{{ collectMessage }}</p>
+        <p v-if="pxeBootMessage" class="task-note">{{ pxeBootMessage }}</p>
+        <div v-if="pxeBootResults" class="pxe-boot-results">
+          <small>PXE boot ({{ pxeBootResults.execution ? "executed" : "planned" }})</small>
+          <ul>
+            <li v-for="item in pxeBootResults.results" :key="item.machine_id">
+              {{ item.name }}: {{ item.status }}<template v-if="item.error_code"> · {{ item.error_code }}</template>
+            </li>
+          </ul>
         </div>
         <el-table :data="inventory" size="small" class="task-table">
           <el-table-column prop="name" label="Agent / Node" min-width="160" />

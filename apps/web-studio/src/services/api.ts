@@ -611,6 +611,38 @@ export type HostNetworkVerification = {
   }>;
 };
 
+export type PxeBootResult = {
+  execution: boolean;
+  machine_count: number;
+  executed: number;
+  results: Array<{
+    machine_id: string;
+    name: string;
+    status: "planned" | "executed" | "skipped" | "failed";
+    error_code?: string;
+    evidence?: Record<string, unknown>;
+  }>;
+};
+
+export function pxeBootFleetMachines(
+  tenantId: string,
+  projectId: string,
+  execution: boolean,
+  machineIds?: string[],
+): Promise<PxeBootResult> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/pxe-boot/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        execution,
+        ...(execution ? { confirm: "PXE_ONCE" } : {}),
+        ...(machineIds ? { machine_ids: machineIds } : {}),
+      }),
+    },
+  );
+}
+
 export function collectFleetNetwork(
   tenantId: string,
   projectId: string,

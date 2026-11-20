@@ -368,3 +368,16 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   border-radius: 6px;
   background: var(--el-fill-color-lighter, #fafafa);
 }
+
+.pxe-boot-results {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.pxe-boot-results ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

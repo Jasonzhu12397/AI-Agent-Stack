@@ -23,6 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.bmc_pxe_boot import PxeBootError, pxe_boot_machine
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
 from core.audit import record_audit_event
@@ -2988,4 +2989,125 @@ class AgentProjectCommandListView(APIView):
                 "offset": offset,
                 "results": [_command_data(command) for command in page],
             }
+        )
+
+
+class FleetPxeBootView(APIView):
+    """Plan or execute a one-time PXE boot for discovered machines.
+
+    The EPH owns Ironic; this endpoint only performs the Redfish one-time boot
+    override and reset that make the machines boot into the inspection image.
+    Execution is explicit and confirmed, and each machine fails independently.
+    """
+
+    permission_classes = [IsAuthenticated]
+    MAX_MACHINES = 100
+    CONFIRMATION = "PXE_ONCE"
+
+    def post(self, request, tenant_id, project_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request, tenant_id, project_id
+        )
+        project_admin = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role=ProjectMembership.Role.ADMIN,
+        ).exists()
+        if not is_tenant_admin and not project_admin:
+            return Response(
+                {"detail": "Tenant or project administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        execute = request.data.get("execution", False)
+        if not isinstance(execute, bool):
+            return Response({"detail": "execution must be a boolean."}, status=400)
+        if execute and request.data.get("confirm") != self.CONFIRMATION:
+            return Response(
+                {
+                    "detail": f"execution requires confirm={self.CONFIRMATION}.",
+                    "confirmation": self.CONFIRMATION,
+                },
+                status=400,
+            )
+        machine_ids = request.data.get("machine_ids")
+        queryset = AgentMachine.objects.filter(tenant=tenant, project=project)
+        if machine_ids is not None:
+            if (
+                not isinstance(machine_ids, list)
+                or not machine_ids
+                or len(machine_ids) > self.MAX_MACHINES
+            ):
+                return Response(
+                    {"detail": "machine_ids must be a non-empty list of up to 100 UUIDs."},
+                    status=400,
+                )
+            parsed = []
+            for item in machine_ids:
+                try:
+                    parsed.append(uuid.UUID(str(item)))
+                except (TypeError, ValueError):
+                    return Response({"detail": "machine_ids contains an invalid UUID."}, status=400)
+            queryset = queryset.filter(pk__in=parsed)
+        else:
+            queryset = queryset.exclude(bmc_endpoint="").exclude(bmc_credential_ref="")
+        machines = list(queryset.order_by("agent_node__name")[: self.MAX_MACHINES])
+        if not machines:
+            return Response({"detail": "No machines with BMC configuration found."}, status=404)
+        results = []
+        executed = 0
+        for machine in machines:
+            entry = {
+                "machine_id": str(machine.id),
+                "name": machine.agent_node.name,
+            }
+            if not machine.bmc_endpoint or not machine.bmc_credential_ref:
+                results.append(
+                    {
+                        **entry,
+                        "status": "skipped",
+                        "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED",
+                    }
+                )
+                continue
+            try:
+                credential, trust_bundle_pem = _bmc_credential_for(machine, tenant, project)
+                evidence = pxe_boot_machine(
+                    endpoint=machine.bmc_endpoint,
+                    credential=credential,
+                    trust_bundle_pem=trust_bundle_pem,
+                    execute=execute,
+                )
+            except (PxeBootError, ValueError, ImportError, AttributeError, RuntimeError) as exc:
+                code = exc.code if isinstance(exc, PxeBootError) else "PXE_BOOT_REQUEST_FAILED"
+                results.append({**entry, "status": "failed", "error_code": code})
+                continue
+            observed_at = timezone.now().isoformat()
+            inventory = dict(machine.hardware_inventory or {})
+            pxe_record = {
+                **evidence,
+                "execution": execute,
+                "requested_at": observed_at,
+            }
+            inventory["pxe_boot"] = pxe_record
+            machine.hardware_inventory = inventory
+            machine.save(update_fields=["hardware_inventory", "updated_at"])
+            if execute:
+                executed += 1
+            results.append(
+                {
+                    **entry,
+                    "status": "executed" if execute else "planned",
+                    "evidence": pxe_record,
+                }
+            )
+        return Response(
+            {
+                "execution": execute,
+                "machine_count": len(machines),
+                "executed": executed,
+                "results": results,
+            },
+            status=200,
         )

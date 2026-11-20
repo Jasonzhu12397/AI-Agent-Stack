@@ -179,6 +179,21 @@ CI validates the contract in two ways: unit tests pin the rendered document,
 and `tests/integration/kind_metal3_crds.sh` installs the real `Ironic` CRD in a
 kind cluster and server-side dry-runs the rendered CR.
 
+## PXE discovery boot
+
+`POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/pxe-boot/` drives the Redfish operations that make discovered machines boot into the Ironic inspection image. The body accepts `execution` (boolean, default `false`), `confirm` (must equal `PXE_ONCE` when executing) and optional `machine_ids` (up to 100 UUIDs; the default is every machine with BMC endpoint and credential configured).
+
+`apps/platform-api/core/bmc_pxe_boot.py` is the single implementation of the BMC side:
+
+- `read_system` requires exactly one Redfish Systems member and a `/redfish/v1/Systems/<id>` path, so an ambiguous service root fails closed.
+- `build_pxe_boot_plan` requires `Boot.BootSourceOverrideSupported` to contain `Pxe` (case insensitive) and a known `PowerState`; a powered-off host resets with `On`, anything else with `ForceRestart`.
+- Execution first PATCHes `Boot.BootSourceOverrideTarget=Pxe` with `BootSourceOverrideEnabled=Once`, then POSTs `ComputerSystem.Reset`. A plan-only request performs GET requests and never mutates the BMC.
+- BMC addresses must resolve to private addresses; the platform also honours `bmc_tls_verify` and the machine trust bundle.
+
+Each machine is isolated: a failure records its error code (`PXE_BOOT_*`) without aborting the batch. The resulting plan or execution evidence is stored under `AgentMachine.hardware_inventory["pxe_boot"]` so the fleet view can show what was requested and when; it does not change `observed_at` or `inventory_revision`, because a boot override is not an inventory observation.
+
+The platform only performs the boot override. PXE itself belongs to the EPH Ironic deployment: the inspection image boots IPA, and `host.network.observe` (or `metal3.host.inspect`) refreshes `AgentMachine.hardware_inventory` with NIC names, addresses and SR-IOV PCI BDFs. Standard BMH `status.hardware` carries NIC names/MAC/model/speed only, so PCI addresses always come from the OS/IPA inventory, never from the Redfish plan.
+
 ## Recovery and idempotency
 
 - Persist deployment ID, Target Cluster UID, source/target BMH hardware identity inventory, phase, generation, command idempotency keys and operation results in durable cloud storage.
