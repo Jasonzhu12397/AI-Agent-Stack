@@ -1720,8 +1720,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     tasks = connection.execute(
                         """
-                        SELECT task_id, step_id, step_type, join_policy, name,
-                               status, priority, required_role, payload, depends_on, result,
+                        SELECT task_id, step_id, step_type, join_policy, iteration,
+                               loop_max_iterations, name, status, priority,
+                               required_role, payload, depends_on, result,
                                assigned_agent_id, attempts
                         FROM agent_control_tasks WHERE workflow_run_id = %s
                         ORDER BY created_at, step_id
@@ -1749,9 +1750,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
                 tasks = connection.execute(
                     """
-                    SELECT task_id, step_id, step_type, join_policy, name,
-                           status, priority, required_role, payload, depends_on, result,
-                           assigned_agent_id, attempts, created_at, updated_at
+                    SELECT task_id, step_id, step_type, join_policy, iteration,
+                           loop_max_iterations, name, status, priority, required_role,
+                           payload, depends_on, result, assigned_agent_id,
+                           attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE workflow_run_id = %s
                     ORDER BY created_at, step_id
                     """,
