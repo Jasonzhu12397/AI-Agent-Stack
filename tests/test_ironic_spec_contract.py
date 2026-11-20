@@ -86,3 +86,33 @@ def test_normalizer_keeps_passthrough_networking_values():
     assert networking["imageServerPort"] == 8080
     assert networking["disableHostNetwork"] is True
     assert networking["macAddresses"] == ["00:11:22:33:44:55"]
+
+
+def test_importing_the_contract_does_not_pull_in_pydantic():
+    """The Metal3 CRD CI job installs only PyYAML and must stay able to import it."""
+
+    import subprocess
+    import sys
+
+    script = (
+        "import sys;"
+        "import packages.agent_contracts.ironic_spec as spec;"
+        "assert 'pydantic' not in sys.modules, 'pydantic was imported eagerly';"
+        "print(spec.CRD_NAME)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(__import__("pathlib").Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ironics.ironic.metal3.io"
+
+
+def test_package_exports_still_resolve_lazily():
+    from packages.agent_contracts import AgentRole, plan_next_step
+
+    assert AgentRole is not None
+    assert callable(plan_next_step)
