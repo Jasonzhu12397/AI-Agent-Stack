@@ -40,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("security", help="scan for credentials and dependency audit commands")
 
+    profile = subparsers.add_parser("profile", help="profile the test suite with cProfile")
+    profile.add_argument("--top", type=int, default=15)
+
     collaborate = subparsers.add_parser(
         "collaborate", help="run analyst, review, security, performance and tests concurrently"
     )
@@ -127,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         _print(agent.security())
     elif arguments.command == "performance":
         _print(agent.performance(arguments.paths or None))
+    elif arguments.command == "profile":
+        _print(agent.profile(arguments.top).as_dict())
     elif arguments.command == "collaborate":
         _print(agent.collaborate(arguments.paths or None))
     elif arguments.command == "plan":

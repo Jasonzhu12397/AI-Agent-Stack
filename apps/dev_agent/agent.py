@@ -18,6 +18,7 @@ from .patching import TextEdit, apply, digest_payload, plan
 from .performance import analyse_performance, summarise
 from .planner import OpenAICompatiblePlanner, PlannerConfig, describe_plan
 from .policy import ApprovalStore, read_text
+from .profiling import ProfileReport, profile_pytest
 from .roles import AnalystRole, DebugRole, DeployRole, ReviewRole, SecurityRole, analyse
 from .scanner import ProjectIndex, scan_project
 from .testing import TestReport, repair_loop, run_tests
@@ -42,7 +43,7 @@ CAPABILITIES = {
     "deployment": "implemented: Dockerfile/K8s/CI generation, pre-flight, rollback plan",
     "docs": "implemented: README, architecture and API docs from static analysis",
     "comments": "implemented: approval-gated docstring insertion for undocumented functions",
-    "performance": "implemented: static N+1, loop nesting, blocking sleep and query-shape rules",
+    "performance": "implemented: static rules plus real cProfile hotspot reports",
     "pr_review": "implemented: tools/dev_agent_pr_review.py posts a single updated PR comment",
     "sandbox": "implemented: allowlisted, secret-scrubbed, timeout-bounded runner",
     "checkpoint": "implemented: durable task journal and resume",
@@ -82,6 +83,9 @@ class SoftwareAgent:
 
     def performance(self, paths: list[str] | None = None) -> dict:
         return summarise(analyse_performance(self.root, paths))
+
+    def profile(self, top: int = 15) -> ProfileReport:
+        return profile_pytest(self.root, top=top)
 
     def collaborate(self, paths: list[str] | None = None) -> dict:
         return run_roles(default_tasks(self.root, paths)).as_dict()

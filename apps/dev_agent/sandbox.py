@@ -81,7 +81,12 @@ def validate_command(command: list[str]) -> None:
         Path(program).name in {"python", "python3"}
         and os.path.realpath(program) == os.path.realpath(sys.executable)
     ):
-        if len(arguments) < 2 or arguments[0] != "-m" or arguments[1] not in PYTHON_MODULES:
+        if len(arguments) >= 6 and arguments[:2] == ["-m", "cProfile"]:
+            if arguments[2] != "-o" or arguments[4:] != ["-m", "pytest", "-q"]:
+                raise SandboxViolation(
+                    "cProfile is only allowed as: -m cProfile -o <file> -m pytest -q"
+                )
+        elif len(arguments) < 2 or arguments[0] != "-m" or arguments[1] not in PYTHON_MODULES:
             raise SandboxViolation("python may only run the allowlisted modules")
     elif program in {"pytest", "ruff", "go", "pip-audit"}:
         if program == "go" and (not arguments or arguments[0] not in {"test", "build", "vet"}):

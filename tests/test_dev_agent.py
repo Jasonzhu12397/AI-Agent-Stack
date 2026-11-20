@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cProfile
 import json
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from apps.dev_agent.patching import PatchError, TextEdit, plan
 from apps.dev_agent.performance import analyse_performance, summarise
 from apps.dev_agent.planner import OpenAICompatiblePlanner, PlannerConfig, PlannerError
 from apps.dev_agent.policy import ApprovalRequired, PolicyError, read_text
+from apps.dev_agent.profiling import load_profile, profile_callable, profile_pytest, render_report
 from apps.dev_agent.reviewer import review_paths
 from apps.dev_agent.roles import RoleResult
 from apps.dev_agent.sandbox import SandboxViolation, run, validate_command
@@ -420,3 +422,51 @@ def test_collaboration_runs_roles_concurrently_and_keeps_failures():
     assert report.results["security"].status == "failed"
     assert report.ok is False
     assert report.as_dict()["roles"]["analyst"]["status"] == "succeeded"
+
+
+def test_profile_callable_reports_hotspots(tmp_path):
+    def hot():
+        total = 0
+        for value in range(20000):
+            total += value
+        return total
+
+    report = profile_callable(hot, top=5)
+    assert report.total_calls > 0
+    assert any(hotspot.function == "hot" for hotspot in report.hotspots)
+    dumped = tmp_path / "run.prof"
+    profiler = cProfile.Profile()
+    profiler.enable()
+    hot()
+    profiler.disable()
+    profiler.dump_stats(str(dumped))
+    loaded = load_profile(dumped, top=5)
+    assert any(hotspot.function == "hot" for hotspot in loaded.hotspots)
+    assert "cumulative" in render_report(loaded)
+
+
+def test_sandbox_restricts_cprofile_shape():
+    validate_command(
+        [
+            sys.executable,
+            "-m",
+            "cProfile",
+            "-o",
+            "/tmp/run.prof",
+            "-m",
+            "pytest",
+            "-q",
+        ]
+    )
+    with pytest.raises(SandboxViolation):
+        validate_command([sys.executable, "-m", "cProfile", "evil.py"])
+    with pytest.raises(SandboxViolation):
+        validate_command(
+            [sys.executable, "-m", "cProfile", "-o", "/tmp/x", "-m", "pytest", "-k", "x"]
+        )
+
+
+def test_profile_pytest_runs_the_fixture_suite(project):
+    report = profile_pytest(project, top=3, timeout=120)
+    assert report.returncode == 0
+    assert report.hotspots

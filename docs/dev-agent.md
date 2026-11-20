@@ -31,6 +31,7 @@ schema-validated tool steps.
 | Dependency and secret security | `security.scan_secrets`, `parse_pip_audit`, `parse_npm_audit` | implemented; audit execution uses the sandbox allowlist |
 | SQL injection / XSS | SQL sinks in `reviewer`; XSS is left to template-specific rules | partial |
 | Performance analysis | `performance.analyse_performance`: cubic loop nests, N+1 queries, serial HTTP in loops, blocking sleep in async code, whole-file reads in loops, quadratic string/list building, `SELECT *` | implemented |
+| Real profiling | `profiling.profile_pytest` runs the suite under `cProfile`, persists `.dev-agent/profiles/pytest.prof` and reports cumulative hotspots; `profile_callable` profiles a library call in-process | implemented |
 | Refactor / complexity advice | Loop-nest and query-shape findings from `performance` | partial |
 | OpenAPI ingestion and clients | `openapi.load_spec`, Python and TypeScript generators, mock examples | implemented |
 | Deployment artefacts | `deployment.generate_dockerfile`, Kubernetes manifests, CI YAML | implemented |
@@ -58,6 +59,7 @@ dev-agent review
 dev-agent test --coverage
 dev-agent security
 dev-agent performance
+dev-agent profile --top 15
 dev-agent collaborate
 dev-agent plan --goal "stabilise the failing test suite"
 dev-agent plan-comments --limit 20
@@ -116,6 +118,7 @@ rejected.
 | `openapi.py` | spec parsing, client generation |
 | `docs.py` | README, architecture, API documents |
 | `performance.py` | static performance rules |
+| `profiling.py` | cProfile run, persistence and hotspot report |
 | `planner.py` | OpenAI-compatible planning adapter |
 | `collaboration.py` | concurrent role execution |
 | `deployment.py` | Dockerfile, Kubernetes, CI, pre-flight, rollback |
@@ -141,7 +144,10 @@ rejected.
   kernel isolation. Use the Docker runner when process-level isolation is required.
 - Conflict resolution only detects markers and lists conflicted files; merging
   remains a human action.
-- Performance findings are static heuristics; run a profiler before large rewrites.
+- Static performance findings are heuristics; `dev-agent profile` provides the
+  measured hotspot list before a large rewrite.
+- Profiling only accepts `python -m cProfile -o <file> -m pytest -q`; the sandbox
+  rejects cProfile used as a generic script runner.
 - Deployment generation produces drafts, not applied manifests. Pre-flight consumes
   reported node facts; it does not query a cluster itself.
 - Real hardware/BMC/Metal3 validation is out of scope for this package.
