@@ -12,7 +12,7 @@
     "ipa-downloader": "quay.io/metal3-io/ironic-ipa-downloader:latest",
     "baremetal-operator": "quay.io/metal3-io/baremetal-operator:main",
     "capm3": "quay.io/metal3-io/cluster-api-provider-metal3:main",
-    "ipam": "quay.io/metal3-io/ip-address-manager:main",
+    "ipam": "quay.io/metal3-io/ip-address-manager:v1.9.6",
     "irso": "quay.io/metal3-io/ironic-standalone-operator:latest",
     "capi-controller": "registry.k8s.io/cluster-api/cluster-api-controller:v1.14.0",
     "capi-kubeadm-bootstrap": "registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.0",
@@ -35,7 +35,18 @@
     "csi-resizer": "registry.k8s.io/sig-storage/csi-resizer:v1.13.2",
     "csi-provisioner": "registry.k8s.io/sig-storage/csi-provisioner:v5.2.0",
     "csi-snapshotter": "registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1",
-    "csi-attacher": "registry.k8s.io/sig-storage/csi-attacher:v4.8.1"
+    "csi-attacher": "registry.k8s.io/sig-storage/csi-attacher:v4.8.1",
+    "sriov-network-operator": "ghcr.io/k8snetworkplumbingwg/sriov-network-operator:v1.6.0",
+    "sriov-network-operator-config-daemon": "ghcr.io/k8snetworkplumbingwg/sriov-network-operator-config-daemon:v1.6.0",
+    "sriov-cni": "ghcr.io/k8snetworkplumbingwg/sriov-cni:v2.10.0",
+    "ib-sriov-cni": "ghcr.io/k8snetworkplumbingwg/ib-sriov-cni:v1.3.0",
+    "ovs-cni-plugin": "ghcr.io/k8snetworkplumbingwg/ovs-cni-plugin:v0.39.0",
+    "rdma-cni": "ghcr.io/k8snetworkplumbingwg/rdma-cni:v1.4.0",
+    "sriov-network-device-plugin": "ghcr.io/k8snetworkplumbingwg/sriov-network-device-plugin:v3.10.0",
+    "network-resources-injector": "ghcr.io/k8snetworkplumbingwg/network-resources-injector:v1.8.0",
+    "sriov-network-operator-webhook": "ghcr.io/k8snetworkplumbingwg/sriov-network-operator-webhook:v1.6.0",
+    "sriov-network-metrics-exporter": "ghcr.io/k8snetworkplumbingwg/sriov-network-metrics-exporter:v1.2.0",
+    "kube-rbac-proxy": "gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0"
   },
   "binaries": {
     "clusterctl": {

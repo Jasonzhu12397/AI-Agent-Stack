@@ -47,6 +47,7 @@ class StackComponent:
 #: the CAPI core must exist before the infrastructure provider is initialized.
 _COMPONENTS: tuple[tuple[str, str, str], ...] = (
     ("cert-manager", "cert-manager", "cert-manager-controller"),
+    ("ipam", "capm3-system", "ipam-manager"),
     ("capi-core", "capi-system", "capi-controller-manager"),
     ("baremetal-operator", "metal3", "baremetal-operator"),
     ("ironic", "metal3", "ironic"),

@@ -7,7 +7,7 @@ from apps.eph_agent.metal3_skill import Metal3SkillError
 def test_control_stack_plans_five_components_in_canonical_order():
     planned = plan_control_stack({})
     assert [component.name for component in planned] == install_order()
-    assert [component.install_order for component in planned] == [1, 2, 3, 4, 5]
+    assert [component.install_order for component in planned] == [1, 2, 3, 4, 5, 6]
     cert_manager = planned[0]
     assert cert_manager.namespace == "cert-manager"
     probe = cert_manager.readiness_probe()

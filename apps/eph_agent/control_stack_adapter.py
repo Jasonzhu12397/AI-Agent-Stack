@@ -146,11 +146,14 @@ def _existing_component(
 
 
 def _apply_manifest(
-    manifest: dict[str, Any],
+    manifest: dict[str, Any] | list[dict[str, Any]],
     runner: Callable[..., dict[str, Any]],
     lease_lost_event: Any,
 ) -> None:
-    serialized = yaml.safe_dump(manifest, sort_keys=False)
+    if isinstance(manifest, list):
+        serialized = yaml.safe_dump_all(manifest, sort_keys=False)
+    else:
+        serialized = yaml.safe_dump(manifest, sort_keys=False)
     encoded = serialized.encode("utf-8")
     if len(encoded) > MAX_MANIFEST_BYTES:
         raise ControlStackAdapterError("CONTROL_STACK_MANIFEST_TOO_LARGE")
@@ -202,7 +205,7 @@ def apply_control_stack(
     plan: list[StackComponent],
     runner: Callable[..., dict[str, Any]],
     lease_lost_event: Any = None,
-    manifests: dict[str, dict[str, Any]] | None = None,
+    manifests: dict[str, dict[str, Any] | list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Apply the control-stack plan idempotently through the injected runner.
 

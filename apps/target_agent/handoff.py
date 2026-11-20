@@ -212,6 +212,13 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         if evidence.get("storage_addon_enabled") is True:
             _require(evidence, "storage_addon_ready")
             _require(evidence, "storage_addon_plan_sha256")
+        if evidence.get("sriov_policies_expected") is True:
+            _require(evidence, "sriov_operator_ready")
+            _require_positive_count(
+                evidence,
+                "sriov_policies_applied",
+                "HANDOFF_SRIOV_POLICIES_NOT_APPLIED",
+            )
     return normalized
 
 

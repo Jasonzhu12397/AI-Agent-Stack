@@ -7,6 +7,7 @@ import {
   getMachineFirmware,
   getFirmwareUpdateJob,
   submitFirmwareUpgrade,
+  verifyFleetMachineNetwork,
   getProjectAgentCommands,
   getClusterDeployments,
   getProjects,
@@ -17,6 +18,7 @@ import {
   type AgentNode,
   type FleetMachine,
   type FirmwareUpdateJob,
+  type HostNetworkVerification,
   type MachineFirmware,
   type ClusterDeployment,
   type Project,
@@ -56,6 +58,12 @@ const supportedKubernetesVersions = SUPPORTED_KUBERNETES_VERSIONS;
 const selectedKubernetesVersions = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
+const networkDialogVisible = ref(false);
+const networkMachine = ref<FleetMachine | null>(null);
+const networkHostRole = ref<"control_plane" | "worker" | "storage">("worker");
+const networkVerification = ref<HostNetworkVerification | null>(null);
+const networkLoading = ref(false);
+const networkError = ref("");
 const firmwareDialogVisible = ref(false);
 const firmwareMachine = ref<FleetMachine | null>(null);
 const firmwareState = ref<MachineFirmware | null>(null);
@@ -260,6 +268,48 @@ async function saveSriovConfig(): Promise<void> {
 
 function firmwareMachineId(machine: FleetMachine): string {
   return machine.identity.machine_id ?? "";
+}
+
+function networkMachineId(machine: FleetMachine): string {
+  return machine.identity.machine_id || "";
+}
+
+async function openNetworkPanel(machine: FleetMachine): Promise<void> {
+  networkMachine.value = machine;
+  networkVerification.value = null;
+  networkError.value = "";
+  networkHostRole.value = "worker";
+  networkDialogVisible.value = true;
+  await loadNetworkVerification();
+}
+
+async function loadNetworkVerification(): Promise<void> {
+  const machineId = networkMachine.value ? networkMachineId(networkMachine.value) : "";
+  if (!machineId || !selectedTenantId.value || !selectedProjectId.value) {
+    networkError.value = "This machine has no persisted hardware record.";
+    return;
+  }
+  networkLoading.value = true;
+  networkError.value = "";
+  try {
+    networkVerification.value = await verifyFleetMachineNetwork(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machineId,
+      networkHostRole.value,
+    );
+  } catch (cause) {
+    networkVerification.value = null;
+    networkError.value = cause instanceof Error ? cause.message : "Unable to verify host network.";
+  } finally {
+    networkLoading.value = false;
+  }
+}
+
+function networkFindingType(status: string): "success" | "danger" | "warning" {
+  if (status === "pass") return "success";
+  if (status === "fail") return "danger";
+  return "warning";
 }
 
 async function openFirmwarePanel(machine: FleetMachine): Promise<void> {
@@ -630,9 +680,64 @@ onUnmounted(() => {
                 :disabled="!scope.row.identity.machine_id"
                 @click="openFirmwarePanel(scope.row)"
               >Firmware</el-button>
+              <el-button
+                size="small"
+                plain
+                :disabled="!scope.row.identity.machine_id"
+                @click="openNetworkPanel(scope.row)"
+              >Network</el-button>
             </template>
           </el-table-column>
         </el-table>
+
+        <el-dialog v-model="networkDialogVisible" title="Host Network Verification" width="820px">
+          <div v-if="networkMachine" class="firmware-panel">
+            <div class="fleet-panel-heading">
+              <h3>{{ networkMachine.name }} · Declared vs observed</h3>
+              <el-button size="small" :loading="networkLoading" @click="loadNetworkVerification">Re-check</el-button>
+            </div>
+            <div class="fleet-version-control" style="margin-bottom: 12px">
+              <el-select v-model="networkHostRole" size="small" style="width: 170px" @change="loadNetworkVerification">
+                <el-option label="Control plane" value="control_plane" />
+                <el-option label="Worker" value="worker" />
+                <el-option label="Storage" value="storage" />
+              </el-select>
+              <el-tag v-if="networkVerification" :type="networkFindingType(networkVerification.status)" size="small">
+                {{ networkVerification.status }}
+              </el-tag>
+            </div>
+            <el-alert
+              v-if="networkError"
+              :title="networkError"
+              type="warning"
+              show-icon
+              :closable="false"
+            />
+            <template v-if="networkVerification">
+              <p class="fleet-footnote">
+                Checked: {{ networkVerification.checked_networks.join(", ") || "none" }} ·
+                Switch evidence {{ networkVerification.switch_verified ? "present" : "missing (unknown)" }}
+              </p>
+              <el-table :data="networkVerification.findings" size="small" class="task-table">
+                <el-table-column prop="code" label="Finding" min-width="220" />
+                <el-table-column label="Status" min-width="90">
+                  <template #default="scope">
+                    <el-tag :type="networkFindingType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="network" label="Network" min-width="110" />
+                <el-table-column prop="interface" label="Interface" min-width="110" />
+                <el-table-column label="Expected" min-width="150">
+                  <template #default="scope">{{ scope.row.expected ?? "—" }}</template>
+                </el-table-column>
+                <el-table-column label="Observed" min-width="150">
+                  <template #default="scope">{{ scope.row.observed ?? "—" }}</template>
+                </el-table-column>
+              </el-table>
+              <p v-if="!networkVerification.findings.length" class="fleet-footnote">No findings.</p>
+            </template>
+          </div>
+        </el-dialog>
 
         <el-dialog v-model="firmwareDialogVisible" title="BMC Firmware Management" width="880px">
           <div v-if="firmwareMachine" class="firmware-panel">

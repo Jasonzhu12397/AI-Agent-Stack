@@ -4,6 +4,7 @@ WORKDIR /workspace
 COPY deploy/offline/assets/wheels /opt/offline-wheels
 COPY deploy/offline/assets/bin/kubectl /usr/local/bin/kubectl
 COPY deploy/offline/addons/rook-ceph /opt/addons/rook-ceph
+COPY deploy/offline/addons/sriov-network-operator /opt/addons/sriov-network-operator
 RUN chmod 0755 /usr/local/bin/kubectl && \
     pip install --no-index --find-links=/opt/offline-wheels "httpx>=0.27,<1.0" "pydantic>=2.8,<3.0" "psycopg[binary]>=3.2,<4.0" "PyYAML>=6.0,<7.0"
 COPY pyproject.toml README.md ./

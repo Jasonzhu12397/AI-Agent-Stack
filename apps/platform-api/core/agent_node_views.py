@@ -22,6 +22,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from packages.agent_contracts.host_network_verify import verify_host_networks
+from packages.agent_contracts.infra_networks import InfraNetworkError
 from core.audit import record_audit_event
 from core.models import (
     AgentCommand,
@@ -29,6 +31,7 @@ from core.models import (
     AgentNode,
     ClusterDeployment,
     FirmwareUpdateJob,
+    InfrastructureNetworkProfile,
     Project,
     ProjectMembership,
     Tenant,
@@ -1427,6 +1430,65 @@ def _firmware_error_response(exc):
     if isinstance(exc, RuntimeError):
         return Response({"detail": str(exc)}, status=502)
     return Response({"detail": "Firmware management request failed."}, status=500)
+
+
+class FleetMachineNetworkVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id, machine_id):
+        tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        allowed = TenantMembership.objects.filter(
+            tenant=tenant,
+            user=request.user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists() or ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+        if not allowed:
+            return Response({"detail": "Project editor or admin role required."}, status=403)
+        machine = AgentMachine.objects.filter(
+            pk=machine_id, tenant=tenant, project=project
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        profile_record = InfrastructureNetworkProfile.objects.filter(
+            tenant=tenant, project=project
+        ).first()
+        if profile_record is None:
+            return Response(
+                {"detail": "Infrastructure network profile is not configured."},
+                status=409,
+            )
+        host_role = request.query_params.get("host_role", "worker")
+        if host_role not in {"control_plane", "worker", "storage"}:
+            return Response({"detail": "Unknown host_role."}, status=400)
+        try:
+            report = verify_host_networks(
+                profile_record.profile,
+                host_role,
+                machine.hardware_inventory or {},
+            )
+        except InfraNetworkError as exc:
+            return Response(
+                {"detail": f"Infrastructure network profile is invalid: {exc.code}"},
+                status=409,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(
+            {
+                "machine_id": str(machine.id),
+                "machine_name": machine.agent_node.name,
+                "inventory_source": machine.inventory_source,
+                "observed_at": machine.observed_at.isoformat()
+                if machine.observed_at
+                else None,
+                **report,
+            },
+            status=200,
+        )
 
 
 class FleetMachineFirmwareView(APIView):

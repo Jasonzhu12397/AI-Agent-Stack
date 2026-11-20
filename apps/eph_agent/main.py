@@ -38,6 +38,7 @@ from .control_stack_adapter import (
     apply_control_stack,
     wait_for_control_stack_ready,
 )
+from .control_stack_manifests import load_component_manifests
 from .fleet_planning import PlanningError, plan_fleet_request
 from .metal3_skill import (
     Metal3SkillError,
@@ -231,6 +232,12 @@ def execute(
             spec = payload.get("spec", payload)
             manifests = payload.get("manifests")
             plan = plan_control_stack(spec)
+            offline = load_component_manifests([item.name for item in plan])
+            if isinstance(manifests, dict):
+                merged = {**offline, **manifests}
+            else:
+                merged = offline
+            manifests = merged
             applied = apply_control_stack(
                 plan,
                 _run_kubectl,

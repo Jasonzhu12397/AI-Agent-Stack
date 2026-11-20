@@ -569,6 +569,42 @@ export function getFleetMachines(
   );
 }
 
+export type HostNetworkFinding = {
+  code: string;
+  status: "pass" | "fail" | "unknown";
+  network: string | null;
+  interface: string | null;
+  expected: unknown;
+  observed: unknown;
+};
+
+export type HostNetworkVerification = {
+  machine_id: string;
+  machine_name: string;
+  inventory_source: string;
+  observed_at: string | null;
+  host_role: "control_plane" | "worker" | "storage";
+  status: "pass" | "fail" | "unknown";
+  ok: boolean;
+  checked_networks: string[];
+  findings: HostNetworkFinding[];
+  switch_verified: boolean;
+  observed_interfaces: string[];
+};
+
+export function verifyFleetMachineNetwork(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+  hostRole: "control_plane" | "worker" | "storage",
+): Promise<HostNetworkVerification> {
+  const query = new URLSearchParams({ host_role: hostRole });
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId +
+    "/fleet/machines/" + machineId + "/network/verify/?" + query.toString(),
+  );
+}
+
 export type FirmwareInventoryItem = {
   id: string;
   name: string;

@@ -56,6 +56,7 @@ def test_apply_skips_existing_and_records_pending_without_manifest():
 
     assert evidence["already_present_components"] == ["cert-manager"]
     assert evidence["apply_pending_components"] == [
+        "ipam",
         "capi-core",
         "baremetal-operator",
         "ironic",
@@ -83,6 +84,7 @@ def test_apply_applies_supplied_manifest_for_missing_controller():
 
     assert evidence["applied_components"] == ["cert-manager"]
     assert evidence["apply_pending_components"] == [
+        "ipam",
         "capi-core",
         "baremetal-operator",
         "ironic",

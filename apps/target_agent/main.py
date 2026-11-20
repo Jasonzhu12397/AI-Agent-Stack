@@ -62,6 +62,7 @@ from .ntp_policy import (
     validate_worker_ntp_sources,
 )
 from .postflight import verify_target_postflight
+from .sriov_operator import SriovOperatorError, execute_sriov_operator
 from .storage_addon import StorageAddonInstallError, execute_storage_addon
 from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
@@ -1134,16 +1135,23 @@ def execute(
                 runner=_kubectl,
                 lease_lost_event=lease_lost_event,
             )
+            sriov_evidence = execute_sriov_operator(
+                payload.get("sriov_node_policy_manifests"),
+                runner=_kubectl,
+                lease_lost_event=lease_lost_event,
+            )
             evidence = {
                 **previous_evidence,
                 **applied,
                 "readiness": readiness,
                 **storage_evidence,
+                **sriov_evidence,
             }
         except (
             NetworkStackAdapterError,
             NetworkStackError,
             StorageAddonInstallError,
+            SriovOperatorError,
             TypeError,
             AttributeError,
         ) as exc:
@@ -1158,7 +1166,8 @@ def execute(
             "error_code": None,
             "output": evidence,
             "side_effects": applied.get("side_effects", False)
-            or storage_evidence.get("side_effects", False),
+            or storage_evidence.get("side_effects", False)
+            or sriov_evidence.get("side_effects", False),
         }
     if action == "target.worker.provision":
         try:
