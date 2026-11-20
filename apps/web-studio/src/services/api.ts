@@ -117,6 +117,16 @@ async function csrfToken(): Promise<string> {
   return result.csrf_token;
 }
 
+export class ApiError extends Error {
+  data: Record<string, unknown>;
+
+  constructor(message: string, data: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiError";
+    this.data = data;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -135,7 +145,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
   const payload = (await response.json()) as T & { detail?: string };
   if (!response.ok) {
-    throw new Error(payload.detail ?? `Request failed with HTTP ${response.status}`);
+    throw new ApiError(
+      payload.detail ?? `Request failed with HTTP ${response.status}`,
+      payload as Record<string, unknown>,
+    );
   }
   return payload;
 }
@@ -843,6 +856,16 @@ export function getClusterDeployments(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/",
   );
 }
+
+export type NetworkReadinessReport = {
+  required_control_plane: number;
+  required_worker: number;
+  control_plane_ready: number;
+  worker_ready: number;
+  observed_machines: number;
+  ready: boolean;
+  blocked_machines: Array<{ machine_id: string; name: string; reason: string }>;
+};
 
 export type InfraNetwork = {
   name: string;

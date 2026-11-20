@@ -5,6 +5,8 @@ import {
   cancelClusterDeployment,
   createAgentCommand,
   createClusterDeployment,
+  ApiError,
+  type NetworkReadinessReport,
   enrollAgentNode,
   getAgentCommands,
   getAgentNodes,
@@ -91,6 +93,7 @@ const enrollmentToken = ref("");
 const enrollmentNodeId = ref("");
 const deploymentTargetNodeIds = ref<Record<string, string>>({});
 const error = ref("");
+const networkReadiness = ref<NetworkReadinessReport | null>(null);
 const info = ref("");
 const loading = ref(false);
 const submitting = ref(false);
@@ -485,6 +488,11 @@ async function generateClusterPlan(): Promise<void> {
     await loadDeployments();
     await loadCommands();
   } catch (cause) {
+    if (cause instanceof ApiError) {
+      const report = cause.data.network_readiness;
+      networkReadiness.value =
+        report && typeof report === "object" ? (report as NetworkReadinessReport) : null;
+    }
     error.value = cause instanceof Error ? cause.message : "Unable to create cluster plan.";
   } finally {
     submitting.value = false;
@@ -638,6 +646,28 @@ onUnmounted(() => {
     </div>
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
+    <el-card v-if="networkReadiness" shadow="never" class="readiness-card">
+      <template #header>Pre-install network readiness</template>
+      <el-descriptions :column="3" size="small" border>
+        <el-descriptions-item label="Control plane">
+          {{ networkReadiness.control_plane_ready }} / {{ networkReadiness.required_control_plane }}
+        </el-descriptions-item>
+        <el-descriptions-item label="Worker">
+          {{ networkReadiness.worker_ready }} / {{ networkReadiness.required_worker }}
+        </el-descriptions-item>
+        <el-descriptions-item label="Observed machines">
+          {{ networkReadiness.observed_machines }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <ul v-if="networkReadiness.blocked_machines.length" class="readiness-blocked">
+        <li v-for="machine in networkReadiness.blocked_machines" :key="machine.machine_id">
+          {{ machine.name }}: {{ machine.reason }}
+        </li>
+      </ul>
+      <p v-else class="readiness-hint">
+        No machine currently passes both role checks. Run network collection again.
+      </p>
+    </el-card>
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
 
     <div class="infra-scope">
