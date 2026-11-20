@@ -648,11 +648,6 @@ def test_project_skills_grant_only_listed_actions():
 
 def test_executor_enforces_the_project_skill_catalog(project):
     executor = SoftwareWorkExecutor(project)
-    allowed = {
-        "work-skill-1",
-        "kind",
-        "software",
-    }
     result = executor.execute(
         "work-skill-1",
         {"action": "review"},
@@ -666,7 +661,6 @@ def test_executor_enforces_the_project_skill_catalog(project):
     )
     assert denied.status == "failed"
     assert "not granted" in denied.result["error"]
-    assert allowed
 
 
 def test_control_plane_approval_redeems_before_apply(project):

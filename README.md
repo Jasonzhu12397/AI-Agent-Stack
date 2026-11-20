@@ -42,8 +42,8 @@ Platform Agents and Workflows execute in the Platform Worker. They are separate 
 
 ### 2. Infrastructure multi-Agent control system
 
-0. **Software engineering agent** — a CLI/library in `apps/dev_agent` that reads a repository, proposes and applies approved patches, runs tests, analyses crashes and prepares git/security/docs/deployment artefacts; see `docs/dev-agent.md`.
-1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination. It also hosts installation-scoped project workspaces (projects, versioned skills, referenced plugins and leased work items); see `docs/cloud-control-workspace.md`.
+0. **Software engineering agent** — a CLI/library in `apps/dev_agent` that reads a repository, proposes and applies approved patches, runs tests, analyses crashes and prepares git/security/docs/deployment artefacts; see `docs/dev-agent.md`. Both EPH and Target Pods run it as a default `dev-agent-worker` sidecar over a shared `software-workspace` PVC, and it claims only `kind: "software"` work.
+1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination. It also hosts installation-scoped project workspaces (projects, versioned skills, referenced plugins and leased work items) and single-approver patch approvals bound to a work item and SHA-256 payload digest; approvals never gate autonomous EPH/Target deployment work. See `docs/cloud-control-workspace.md`.
 2. **EPH Agent** — runs in the temporary EPH Live OS / single-node Kubernetes cluster. Renders bootstrap configuration, applies CAPI/BMO/Ironic/CAPM3, creates BMH and target-CAPI resources, and records source-side identity evidence.
 3. **Target Agent** — runs as three replicas on the target Control Plane with Kubernetes Lease leader election. Owns Target takeover, CAPI Pivot (`clusterctl move`), BMH migration, EPH cleanup, worker provisioning, NTP attestation and data-plane readiness.
 
