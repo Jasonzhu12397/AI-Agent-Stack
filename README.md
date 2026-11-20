@@ -185,7 +185,7 @@ Not yet production-complete:
 - Subscription billing and plan management.
 - MCP stdio transport, server mode and complete provider OAuth/token refresh.
 - Realtime WebSocket/SSE event streaming.
-- Loop Workflow nodes in the SaaS Platform editor. The Cloud Control workflow engine supports parallel branches (`join: "all" | "any"`), `condition` steps with `when`-guarded branches, bounded `loop` steps with `max_iterations`, human approval steps (`type: "approval"`), and per-run deadlines enforced by reconciliation. The SaaS Workflow Studio now inserts `approval` nodes, accepts `condition`/`agent` nodes through the JSON definition editor, supports `any/all` joins and offers approve/reject actions; bounded loop and per-run deadlines remain Cloud Control only.
+- Loop Workflow nodes in the SaaS Platform editor. The Cloud Control workflow engine supports parallel branches (`join: "all" | "any"`), `condition` steps with `when`-guarded branches, bounded `loop` steps with `max_iterations`, human approval steps (`type: "approval"`), and per-run deadlines enforced by reconciliation. The SaaS Workflow Studio now inserts `approval` nodes, accepts `condition`/`agent` nodes through the JSON definition editor, supports `any/all` joins, enforces per-run deadlines (`deadline_seconds`, default 86400) and offers approve/reject actions; bounded loop remains Cloud Control only.
 - Multi-provider model routing and fallback chains.
 - Redis-backed cache/queue coordination; pgvector and S3-compatible object storage.
 - Real CAPI/Metal3/Ironic deployment, CAPI Pivot, BMH migration, EPH cleanup and physical Worker acceptance.

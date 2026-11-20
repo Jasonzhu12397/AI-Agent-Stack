@@ -82,7 +82,7 @@ All routes require an authenticated session and server-side tenant/project membe
 | POST | `/api/v1/workflow-runs/{run_id}/steps/{node_id}/approve/` | Approve a suspended approval node and requeue the run |
 | POST | `/api/v1/workflow-runs/{run_id}/steps/{node_id}/reject/` | Reject a suspended approval node and fail the run |
 
-Run creation requires `Idempotency-Key` and a JSON object in `input`. Reusing the same key and payload returns the existing run; reusing it with a different payload returns HTTP 409.
+Run creation requires `Idempotency-Key` and a JSON object in `input`. It also accepts `deadline_seconds` from 60 to 604800, defaulting to 86400; the response exposes `deadline_at`. Reusing the same key and payload returns the existing run; reusing it with a different payload returns HTTP 409.
 
 ## Persistence and execution
 
@@ -92,6 +92,7 @@ Run creation requires `Idempotency-Key` and a JSON object in `input`. Reusing th
 - Completed node outputs are written to the run state after each step. A subsequent attempt reuses successful steps and retries an interrupted/failed step.
 - An `approval` node persists `WorkflowStepRun.status = awaiting_approval`, moves the task to `waiting_approval` and releases its lease. The approval API marks the step succeeded and requeues the task, which resumes from the persisted step outputs; rejection marks the step and task failed and finishes the run. Approvals are single-approver gates; project/tenant administrators may decide them.
 - Tool nodes run through ToolRouter, but WorkflowStepRun does not yet provide a durable external-call receipt or exactly-once guarantee. A crash after a connector side effect but before the step is persisted as successful can cause a retry; connector handlers must be idempotent until a persisted execution ledger is added.
+- Every worker cycle expires runs whose `deadline_at` passed: the task becomes failed with `WORKFLOW_DEADLINE_EXCEEDED`, the run stores the same error, and running/awaiting-approval steps are failed. The engine also checks the deadline before every node, so a hung run cannot keep executing past it. Approval decisions after the deadline are refused.
 - A lease expiry at the maximum attempt count marks the task and WorkflowRun terminal.
 - Cancellation is cooperative. It cannot roll back a model call already completed.
 

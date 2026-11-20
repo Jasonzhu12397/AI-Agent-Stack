@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Q
@@ -23,6 +24,7 @@ from core.models import (
 )
 from core.workflow_engine import (
     WorkflowValidationError,
+    expire_workflow_runs,
     validate_model_references,
     validate_workflow_definition,
 )
@@ -31,6 +33,10 @@ from core.workflow_serializers import (
     WorkflowRunSerializer,
     WorkflowVersionSerializer,
 )
+
+DEFAULT_WORKFLOW_DEADLINE_SECONDS = 86400
+MIN_WORKFLOW_DEADLINE_SECONDS = 60
+MAX_WORKFLOW_DEADLINE_SECONDS = 604800
 
 
 def workflow_tenant(request, tenant_id):
@@ -300,6 +306,22 @@ class WorkflowRunListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         input_data = request.data.get("input", {})
+        deadline_seconds = request.data.get(
+            "deadline_seconds", DEFAULT_WORKFLOW_DEADLINE_SECONDS
+        )
+        if (
+            isinstance(deadline_seconds, bool)
+            or not isinstance(deadline_seconds, int)
+            or not MIN_WORKFLOW_DEADLINE_SECONDS
+            <= deadline_seconds
+            <= MAX_WORKFLOW_DEADLINE_SECONDS
+        ):
+            return Response(
+                {
+                    "detail": "deadline_seconds must be an integer between 60 and 604800."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not isinstance(input_data, dict) or len(json.dumps(input_data)) > 65536:
             return Response(
@@ -319,6 +341,7 @@ class WorkflowRunListCreateView(APIView):
         payload = {
             "workflow_version_id": str(version.id),
             "input_data": input_data,
+            "deadline_seconds": deadline_seconds,
         }
         with transaction.atomic():
             task, created = Task.objects.get_or_create(
@@ -347,6 +370,8 @@ class WorkflowRunListCreateView(APIView):
                     "workflow_version": version,
                     "input_data": input_data,
                     "state": {"input": input_data},
+                    "deadline_at": timezone.now()
+                    + timedelta(seconds=deadline_seconds),
                 },
             )
         record_audit_event(
@@ -444,6 +469,12 @@ class WorkflowStepApprovalView(APIView):
             return Response(
                 {"detail": "Project administrator permission required."},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+        if run.deadline_at and run.deadline_at <= timezone.now():
+            expire_workflow_runs(limit=100)
+            return Response(
+                {"detail": "Workflow run deadline exceeded before the decision."},
+                status=status.HTTP_409_CONFLICT,
             )
         now = timezone.now()
         with transaction.atomic():

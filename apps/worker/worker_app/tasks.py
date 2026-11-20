@@ -39,8 +39,10 @@ from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
 from core.workflow_engine import (
     WorkflowApprovalPending,
+    WorkflowDeadlineExceeded,
     WorkflowValidationError,
     execute_workflow_run,
+    expire_workflow_runs,
 )
 from django.db import transaction
 from django.db.models import F, Q
@@ -1176,6 +1178,17 @@ def process_task(task, worker_id):
         finish_task(task.id, task.lease_token, result)
     except TaskSuspendedForApproval:
         return
+    except WorkflowDeadlineExceeded:
+        fail_task(
+            task.id,
+            task.lease_token,
+            {
+                "code": "WORKFLOW_DEADLINE_EXCEEDED",
+                "message": "The workflow run exceeded its deadline.",
+                "retryable": False,
+            },
+            retryable=False,
+        )
     except PermanentTaskError as exc:
         fail_task(
             task.id,
@@ -1202,6 +1215,7 @@ def process_task(task, worker_id):
 
 def process_once(worker_id, lease_seconds=150):
     expire_pending_tool_approvals(limit=100)
+    expire_workflow_runs(limit=100)
     task = claim_next_task(worker_id, lease_seconds=lease_seconds)
     if task is None:
         return False

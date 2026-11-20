@@ -50,6 +50,6 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
         model = WorkflowRun
         fields = [
             "id", "task_id", "workflow_version_id", "task_status", "input_data",
-            "state", "output_data", "steps", "created_at", "finished_at",
+            "state", "output_data", "deadline_at", "steps", "created_at", "finished_at",
         ]
         read_only_fields = fields

@@ -511,6 +511,7 @@ class WorkflowRun(models.Model):
     input_data = models.JSONField(default=dict)
     state = models.JSONField(default=dict)
     output_data = models.JSONField(null=True, blank=True)
+    deadline_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 

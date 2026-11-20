@@ -25,6 +25,7 @@ from core.workflow_engine import (
     _execute_node,
     _workflow_output_budget,
     execute_workflow_run,
+    expire_workflow_runs,
     validate_model_references,
     validate_workflow_definition,
 )
@@ -1533,3 +1534,48 @@ def test_workflow_validator_rejects_oversized_approval_instructions(workflow_wor
     definition["nodes"][1]["config"]["instructions"] = "x" * 4001
     with pytest.raises(WorkflowValidationError):
         validate_workflow_definition(definition)
+
+
+@pytest.mark.django_db
+def test_workflow_run_deadline_is_enforced_and_exposed(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Deadline workflow",
+        slug="deadline-workflow",
+        draft_definition=linear_workflow(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    assert (
+        client.post(f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json").status_code
+        == 201
+    )
+    invalid = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "too short"}, "deadline_seconds": 59},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-deadline-invalid",
+    )
+    assert invalid.status_code == 400
+    started = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "too slow"}, "deadline_seconds": 60},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-deadline-valid",
+    )
+    assert started.status_code == 202
+    assert started.data["deadline_at"] is not None
+    run = WorkflowRun.objects.select_related("task").get(pk=started.data["id"])
+    run.deadline_at = timezone.now() - timezone.timedelta(seconds=1)
+    run.save(update_fields=["deadline_at"])
+
+    assert expire_workflow_runs(limit=10) >= 1
+    run.refresh_from_db()
+    task = Task.objects.get(pk=run.task_id)
+    assert task.status == Task.Status.FAILED
+    assert task.error["code"] == "WORKFLOW_DEADLINE_EXCEEDED"
+    assert run.output_data["error"] == "WORKFLOW_DEADLINE_EXCEEDED"
+    assert run.finished_at is not None

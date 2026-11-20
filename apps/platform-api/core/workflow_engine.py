@@ -5,6 +5,7 @@ import re
 import uuid
 from collections import deque
 
+from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -75,6 +76,10 @@ def _workflow_output_budget(
         - output_tokens
         - estimated_input_tokens,
     )
+
+
+class WorkflowDeadlineExceeded(Exception):
+    """Raised when a run passed its absolute deadline."""
 
 
 class WorkflowApprovalPending(Exception):
@@ -1096,6 +1101,92 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
     raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
 
 
+def _mark_workflow_deadline_exceeded(workflow_run):
+    now = timezone.now()
+    workflow_run.output_data = {
+        "error": "WORKFLOW_DEADLINE_EXCEEDED",
+        "deadline_at": workflow_run.deadline_at.isoformat()
+        if workflow_run.deadline_at
+        else None,
+    }
+    workflow_run.finished_at = now
+    workflow_run.save(update_fields=["output_data", "finished_at"])
+    raise WorkflowDeadlineExceeded("Workflow run deadline exceeded")
+
+
+def expire_workflow_runs(limit=100):
+    """Fail running workflow runs whose absolute deadline has passed.
+
+    Each worker cycle calls this before claiming new work, so queued or
+    awaiting-approval runs cannot outlive their deadline even when no worker
+    would otherwise touch them.
+    """
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise ValueError("Workflow expiry limit must be between 1 and 1000")
+    now = timezone.now()
+    expired = 0
+    with transaction.atomic():
+        runs = list(
+            WorkflowRun.objects.select_for_update(skip_locked=True)
+            .filter(deadline_at__lte=now, finished_at__isnull=True)
+            .order_by("deadline_at")[:limit]
+        )
+        for run in runs:
+            task = Task.objects.select_for_update().get(pk=run.task_id)
+            if task.status in {
+                Task.Status.SUCCEEDED,
+                Task.Status.FAILED,
+                Task.Status.CANCELLED,
+            }:
+                run.finished_at = now
+                run.save(update_fields=["finished_at"])
+                continue
+            task.status = Task.Status.FAILED
+            task.error = {
+                "code": "WORKFLOW_DEADLINE_EXCEEDED",
+                "message": "The workflow run exceeded its deadline.",
+                "retryable": False,
+            }
+            task.finished_at = now
+            task.lease_owner = None
+            task.lease_token = None
+            task.lease_expires_at = None
+            task.save(
+                update_fields=[
+                    "status",
+                    "error",
+                    "finished_at",
+                    "lease_owner",
+                    "lease_token",
+                    "lease_expires_at",
+                    "updated_at",
+                ]
+            )
+            run.output_data = {
+                "error": "WORKFLOW_DEADLINE_EXCEEDED",
+                "deadline_at": run.deadline_at.isoformat() if run.deadline_at else None,
+            }
+            run.finished_at = now
+            run.save(update_fields=["output_data", "finished_at"])
+            WorkflowStepRun.objects.filter(
+                workflow_run=run,
+                status__in=[
+                    WorkflowStepRun.Status.RUNNING,
+                    WorkflowStepRun.Status.AWAITING_APPROVAL,
+                ],
+            ).update(
+                status=WorkflowStepRun.Status.FAILED,
+                error={
+                    "code": "WORKFLOW_DEADLINE_EXCEEDED",
+                    "message": "The workflow run exceeded its deadline.",
+                },
+                finished_at=now,
+            )
+            expired += 1
+    return expired
+
+
 def _suspend_workflow_for_approval(workflow_run, node, state, task):
     """Persist the approval checkpoint and release the task lease.
 
@@ -1144,6 +1235,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
     workflow = workflow_run.workflow_version.workflow
     if workflow.tenant_id != task.tenant_id or workflow.project_id != task.project_id:
         raise WorkflowValidationError("Workflow run scope does not match its task.")
+    if workflow_run.deadline_at and workflow_run.deadline_at <= timezone.now():
+        _mark_workflow_deadline_exceeded(workflow_run)
     graph = validate_workflow_definition(workflow_run.workflow_version.definition_snapshot)
     validate_model_references(graph, workflow.tenant, workflow.project)
     state = dict(workflow_run.state or {})
@@ -1199,6 +1292,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
                     },
                 )
                 continue
+        if workflow_run.deadline_at and workflow_run.deadline_at <= timezone.now():
+            _mark_workflow_deadline_exceeded(workflow_run)
         if node["type"] == "approval":
             _suspend_workflow_for_approval(workflow_run, node, state, task)
         if not renew_lease(task.id, task.lease_token, worker_id):
