@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 dev-agent = "apps.dev_agent.cli:main"
+dev-agent-worker = "apps.dev_agent.worker:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<9.0", "pytest-django>=4.9,<5.0", "ruff>=0.6,<1.0"]

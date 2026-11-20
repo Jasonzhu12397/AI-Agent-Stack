@@ -57,6 +57,7 @@ jobs:
         run: |
           python -m apps.dev_agent capabilities
           python -m apps.dev_agent scan --module apps.dev_agent.scanner
+          python -m apps.dev_agent.worker --help
           python tools/dev_agent_pr_review.py --base HEAD --head HEAD
 
   control-postgres:

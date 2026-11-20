@@ -32,6 +32,7 @@ ACTIONS = frozenset(
         "docs",
         "plan_comment",
         "apply_patch",
+        "bugfix",
         "git_status",
         "commit_plan",
         "plan",
@@ -51,6 +52,7 @@ PHASE_FOR_ACTION = {
     "docs": "deliver",
     "plan_comment": "change",
     "apply_patch": "change",
+    "bugfix": "change",
     "git_status": "commit",
     "commit_plan": "commit",
     "plan": "analyse",
@@ -130,6 +132,8 @@ def validate_payload(payload: Any) -> dict:
         )
     if action == "apply_patch" and (not token or not normalized_edits):
         raise WorkPayloadError("apply_patch requires an approved token and edits")
+    if action == "bugfix" and not normalized_edits:
+        raise WorkPayloadError("bugfix requires edits")
     return {
         "action": action,
         "paths": normalized_paths,
@@ -153,9 +157,15 @@ def _bound(result: Any) -> dict:
 
 
 class SoftwareWorkExecutor:
-    def __init__(self, root: str | Path, agent: SoftwareAgent | None = None) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        agent: SoftwareAgent | None = None,
+        autonomous: bool = False,
+        actor: str = "operator",
+    ) -> None:
         self.root = Path(root).resolve()
-        self.agent = agent or SoftwareAgent(self.root)
+        self.agent = agent or SoftwareAgent(self.root, autonomous=autonomous, actor=actor)
         self.store = TaskStore(self.root)
 
     def _run(self, request: dict) -> Any:
@@ -190,6 +200,25 @@ class SoftwareWorkExecutor:
         if action == "apply_patch":
             edits = [TextEdit(**edit) for edit in request["edits"]]
             return {"applied": self.agent.apply_change(edits, request["token"])}
+        if action == "bugfix":
+            edits = [TextEdit(**edit) for edit in request["edits"]]
+            if request["token"]:
+                token = request["token"]
+            elif self.agent.autonomous:
+                token = self.agent.plan_change(edits).token
+            else:
+                raise WorkPayloadError(
+                    "bugfix needs an approved token unless the agent runs autonomously"
+                )
+            applied = self.agent.apply_change(edits, token)
+            tests = self.agent.tests()
+            return {
+                "applied": applied,
+                "tests": {"passed": tests.passed, "failed": tests.failed, "ok": tests.ok},
+                "approval": "autonomous"
+                if self.agent.autonomous and not request["token"]
+                else "token",
+            }
         if action == "git_status":
             return self.agent.git_status()
         if action == "commit_plan":
@@ -240,10 +269,15 @@ class SoftwareWorkExecutor:
 
 
 def serve(
-    client: WorkClient, root: str | Path, max_items: int = 1, kind: str = "software"
+    client: WorkClient,
+    root: str | Path,
+    max_items: int = 1,
+    kind: str = "software",
+    autonomous: bool = True,
+    actor: str = "software-agent",
 ) -> list[dict]:
     """Claim up to max_items software work items, execute them and report."""
-    executor = SoftwareWorkExecutor(root)
+    executor = SoftwareWorkExecutor(root, autonomous=autonomous, actor=actor)
     handled: list[dict] = []
     for _ in range(max_items):
         claimed = client.claim_work(kind=kind)

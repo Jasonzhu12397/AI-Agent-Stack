@@ -593,3 +593,43 @@ def test_work_payload_rejects_escaping_edits():
         )
     with pytest.raises(WorkPayloadError):
         validate_payload({"action": "apply_patch", "token": "t", "edits": []})
+
+
+def test_autonomous_agent_approves_its_own_repo_scoped_patch(project):
+    agent = SoftwareAgent(project, autonomous=True, actor="eph-agent")
+    edits = [TextEdit("pkg/cli.py", "return load('x')", "return load('y')")]
+    plan = agent.plan_change(edits)
+    entry = agent.approvals.entries()[plan.token]
+    assert entry["status"] == "approved"
+    assert entry["approved_by"] == "eph-agent"
+    assert agent.apply_change(edits, plan.token) == ["pkg/cli.py"]
+    assert "return load('y')" in (project / "pkg" / "cli.py").read_text()
+
+
+def test_autonomous_bugfix_applies_and_runs_tests(project):
+    executor = SoftwareWorkExecutor(project, autonomous=True, actor="target-agent")
+    execution = executor.execute(
+        "work-bugfix-auto",
+        {
+            "action": "bugfix",
+            "edits": [{"path": "pkg/cli.py", "old": "return load('x')", "new": "return load('y')"}],
+        },
+    )
+    assert execution.status == "succeeded"
+    assert execution.result["applied"] == ["pkg/cli.py"]
+    assert execution.result["approval"] == "autonomous"
+    assert execution.result["tests"]["passed"] == 1
+    assert execution.result["tests"]["ok"] is True
+
+
+def test_manual_bugfix_requires_a_token(project):
+    executor = SoftwareWorkExecutor(project)
+    execution = executor.execute(
+        "work-bugfix-manual",
+        {
+            "action": "bugfix",
+            "edits": [{"path": "pkg/cli.py", "old": "return load('x')", "new": "return load('y')"}],
+        },
+    )
+    assert execution.status == "failed"
+    assert "approved token" in execution.result["error"]

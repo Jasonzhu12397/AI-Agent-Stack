@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     work.add_argument("--payload", help="JSON file or - for stdin (execute)")
     work.add_argument("--role", choices=["eph", "target"], help="agent role for serve")
     work.add_argument("--max-items", type=int, default=1)
+    work.add_argument("--autonomous", action="store_true", help="auto-approve patches")
+    work.add_argument("--actor", default="software-agent")
 
     profile = subparsers.add_parser("profile", help="profile the test suite with cProfile")
     profile.add_argument("--top", type=int, default=15)
@@ -160,7 +162,15 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(document, dict) and "payload" in document
                 else {"work_id": arguments.work_id, "kind": "software", "payload": document}
             )
-            _print(SoftwareWorkExecutor(root).execute_work_item(work).as_dict())
+            _print(
+                SoftwareWorkExecutor(
+                    root,
+                    autonomous=arguments.autonomous,
+                    actor=arguments.actor,
+                )
+                .execute_work_item(work)
+                .as_dict()
+            )
         else:
             if not arguments.role:
                 raise SystemExit("work serve requires --role")
@@ -169,7 +179,15 @@ def main(argv: list[str] | None = None) -> int:
 
             client = AgentControlClient(AgentSettings.from_environment(arguments.role))
             try:
-                _print(serve(client, root, max_items=arguments.max_items))
+                _print(
+                    serve(
+                        client,
+                        root,
+                        max_items=arguments.max_items,
+                        autonomous=True,
+                        actor=f"{arguments.role}-agent",
+                    )
+                )
             finally:
                 client.close()
     elif arguments.command == "profile":

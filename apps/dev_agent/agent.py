@@ -53,10 +53,12 @@ CAPABILITIES = {
 
 
 class SoftwareAgent:
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, autonomous: bool = False, actor: str = "operator") -> None:
         self.root = Path(root).resolve()
         self.store = TaskStore(self.root)
         self.approvals = ApprovalStore(self.root)
+        self.autonomous = autonomous
+        self.actor = actor
         self._index: ProjectIndex | None = None
 
     @property
@@ -130,8 +132,10 @@ class SoftwareAgent:
 
     def plan_change(self, edits: list[TextEdit]) -> ChangePlan:
         rendered = plan(edits, self.root)
-        token = self.approvals.request("apply-patch", digest_payload(edits)).token
-        return ChangePlan(rendered, token, [edit.path for edit in edits])
+        approval = self.approvals.request("apply-patch", digest_payload(edits))
+        if self.autonomous:
+            approval = self.approvals.approve(approval.token, self.actor)
+        return ChangePlan(rendered, approval.token, [edit.path for edit in edits])
 
     def apply_change(self, edits: list[TextEdit], token: str) -> list[str]:
         return apply(edits, self.root, self.approvals, token)

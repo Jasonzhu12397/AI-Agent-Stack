@@ -46,9 +46,29 @@ schema-validated tool steps.
 | Model planning | `planner.py`: OpenAI-compatible chat completions, retry on 429/5xx, allowlisted tools, max 8 steps, JSON Schema validation | implemented |
 | Multi-agent collaboration | `collaboration.run_roles`: analyst, reviewer, security, performance and tester run concurrently; a failed role becomes data instead of aborting the run | implemented |
 | Sandbox isolation | Allowlisted, no shell, secret-scrubbed environment, timeout, output truncation; optional Docker runner | implemented |
-| Permission control | Root containment, protected paths, pending -> approved -> used approval token bound to the exact diff, 24 hour expiry | implemented |
+| Permission control | Root containment, protected paths, pending -> approved -> used approval token bound to the exact diff, 24 hour expiry. Interactive mode always requires a human approval; EPH/Target autonomous mode approves repo-scoped patches itself and records the actor | implemented |
 | Checkpoint and resume | `checkpoint.TaskStore` journal with phases and resume | implemented |
 | Human approval for push/deploy | No push or deploy command exists; sandbox rejects them | implemented as denial |
+
+## Autonomy for EPH and Target agents
+
+Deployment agents are production workers, not interactive tools. They must install
+Kubernetes and repair code without a human in the loop. An agent constructed with
+`autonomous=True` auto-approves its own plan, but only inside the mounted
+workspace and only for patch application. It still cannot push, deploy or read
+protected credential files, and every auto-approval records `approved_by`
+(`eph-agent` or `target-agent`) in `.dev-agent/approvals.json`.
+
+```bash
+# Run inside an EPH or Target pod with the repository mounted at /workspace
+dev-agent-worker --role eph --root /workspace --once
+dev-agent-worker --role target --root /workspace
+```
+
+The worker claims only `kind: "software"` work, performs `bugfix` (apply edits
+then run the suite) and reports the result. It uses the agent's existing mTLS
+identity, so no new credentials are needed. It does not consume deployment or
+inspection work.
 
 ## Control-plane work
 
@@ -73,8 +93,9 @@ Payload shape:
 Allowed actions: `capabilities`, `analyse`, `review`, `performance`, `profile`,
 `tests`, `test_plan`, `security`, `docs`, `plan_comment`, `apply_patch`,
 `git_status`, `commit_plan`, `plan`. Paths must stay inside the configured
-workspace. `apply_patch` needs the exact edits plus a token that a host operator
-already approved; the executor cannot approve its own plan.
+workspace. In interactive mode `apply_patch` needs a token that a host operator
+already approved. In autonomous EPH/Target mode the worker approves its own
+repo-scoped plan and records the actor. `bugfix` applies edits and runs tests.
 
 ## Usage
 
@@ -130,8 +151,11 @@ expired, reused or mismatched tokens are rejected. Tokens expire after 24 hours.
   are unreadable and unwritable.
 - Generated deployment artefacts are written under `.dev-agent/drafts`; publishing
   them is a separate human decision.
-- A plan token is pending until explicitly approved. Neither the CLI planner nor
-  a control-plane work item can transition its own token to approved.
+- Interactive plan tokens are pending until explicitly approved. Only a process
+  started with `autonomous=True` (the EPH/Target worker) may approve its own
+  repo-scoped patch, and the approval actor is journaled.
+- Autonomous bugfix never rolls back automatically when tests fail; the work
+  result reports `tests.ok = false` together with the applied paths.
 
 ## Layout
 
@@ -151,6 +175,7 @@ expired, reused or mismatched tokens are rejected. Tokens expire after 24 hours.
 | `performance.py` | static performance rules |
 | `profiling.py` | cProfile run, persistence and hotspot report |
 | `work.py` | control-plane software work validation, execution and reporting |
+| `worker.py` | autonomous EPH/Target software work loop |
 | `planner.py` | OpenAI-compatible planning adapter |
 | `collaboration.py` | concurrent role execution |
 | `deployment.py` | Dockerfile, Kubernetes, CI, pre-flight, rollback |

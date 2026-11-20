@@ -10,5 +10,6 @@ COPY pyproject.toml README.md ./
 COPY packages/agent_contracts ./packages/agent_contracts
 COPY packages/agent_transport ./packages/agent_transport
 COPY apps/eph_agent ./apps/eph_agent
+COPY apps/dev_agent ./apps/dev_agent
 USER 10001:10001
 ENTRYPOINT ["python", "-m", "apps.eph_agent.main"]
