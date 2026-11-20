@@ -80,7 +80,7 @@ from pathlib import Path
 
 import yaml
 
-module_path = Path(sys.argv[2]) / "packages/agent_contracts/infra_networks.py"
+module_path = Path(sys.argv[3]) / "packages/agent_contracts/infra_networks.py"
 module_spec = importlib.util.spec_from_file_location("infra_networks_contract", module_path)
 contract = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(contract)
