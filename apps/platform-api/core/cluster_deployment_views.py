@@ -111,16 +111,37 @@ def _network_readiness(project, spec):
     control_ready = []
     worker_ready = []
     blocked = []
+    with_findings = []
     for machine in machines:
         inventory = machine.hardware_inventory
         role_results = {}
+        role_reports = {}
         for role in ("control_plane", "worker"):
             try:
                 result = verify_host_networks(profile, role, inventory)
-            except (InfraNetworkError, ValueError):
+            except (InfraNetworkError, ValueError) as exc:
                 role_results[role] = False
+                role_reports[role] = {
+                    "ok": False,
+                    "checked_networks": [],
+                    "findings": [
+                        {
+                            "code": "HOST_NETWORK_PROFILE_INVALID",
+                            "status": "fail",
+                            "network": None,
+                            "interface": None,
+                            "expected": None,
+                            "observed": str(exc),
+                        }
+                    ],
+                }
                 continue
             role_results[role] = bool(result["ok"])
+            role_reports[role] = {
+                "ok": bool(result["ok"]),
+                "checked_networks": result.get("checked_networks", []),
+                "findings": result.get("findings", [])[:20],
+            }
         if role_results.get("control_plane"):
             control_ready.append(str(machine.id))
         if role_results.get("worker"):
@@ -133,6 +154,14 @@ def _network_readiness(project, spec):
                     "reason": "network_verification_failed",
                 }
             )
+        if not all(role_results.values()):
+            with_findings.append(
+                {
+                    "machine_id": str(machine.id),
+                    "name": machine.agent_node.name,
+                    "roles": role_reports,
+                }
+            )
     report = {
         "required_control_plane": required_control,
         "required_worker": required_worker,
@@ -140,6 +169,7 @@ def _network_readiness(project, spec):
         "worker_ready": len(worker_ready),
         "observed_machines": machines.count(),
         "blocked_machines": blocked,
+        "machines_with_findings": with_findings,
     }
     ready = len(control_ready) >= required_control and len(worker_ready) >= required_worker
     report["ready"] = ready

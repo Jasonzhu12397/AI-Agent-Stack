@@ -659,9 +659,23 @@ onUnmounted(() => {
           {{ networkReadiness.observed_machines }}
         </el-descriptions-item>
       </el-descriptions>
-      <ul v-if="networkReadiness.blocked_machines.length" class="readiness-blocked">
-        <li v-for="machine in networkReadiness.blocked_machines" :key="machine.machine_id">
-          {{ machine.name }}: {{ machine.reason }}
+      <ul v-if="networkReadiness.machines_with_findings.length" class="readiness-blocked">
+        <li v-for="machine in networkReadiness.machines_with_findings" :key="machine.machine_id">
+          <strong>{{ machine.name }}</strong>
+          <div v-for="(role, roleName) in machine.roles" :key="roleName" class="readiness-role">
+            <span class="readiness-role-name">{{ roleName }}</span>
+            <span v-if="role.ok" class="readiness-pass">pass</span>
+            <ul v-else>
+              <li v-for="(finding, index) in role.findings" :key="index">
+                {{ finding.network ?? "unknown network" }} /
+                {{ finding.interface ?? "unknown interface" }}:
+                {{ finding.code }}
+                <span v-if="finding.expected !== null">
+                  (expected {{ finding.expected }}, observed {{ finding.observed }})
+                </span>
+              </li>
+            </ul>
+          </div>
         </li>
       </ul>
       <p v-else class="readiness-hint">

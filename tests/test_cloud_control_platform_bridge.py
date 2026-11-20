@@ -399,3 +399,36 @@ def test_deployment_gate_rejects_stale_observation(bridge_workspace):
     response = _post(client, tenant, project, node, key="gate-stale")
     assert response.status_code == 409
     assert response.data["network_readiness"]["observed_machines"] == 0
+
+
+@pytest.mark.django_db
+def test_deployment_gate_reports_per_network_findings(bridge_workspace):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        inventory = _observed_network_inventory()
+        inventory["nics"][1]["vlan"] = 999
+        machine.hardware_inventory = {**machine.hardware_inventory, **inventory}
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.save()
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    response = _post(client, tenant, project, node, key="gate-findings")
+    assert response.status_code == 409
+    readiness = response.data["network_readiness"]
+    assert readiness["control_plane_ready"] == 5
+    assert readiness["worker_ready"] == 0
+    worker_findings = [
+        finding
+        for machine in readiness["machines_with_findings"]
+        for finding in machine["roles"]["worker"]["findings"]
+    ]
+    assert any(finding["code"] == "HOST_VLAN_MISMATCH" for finding in worker_findings)
+    assert any(finding["network"] == "data" for finding in worker_findings)

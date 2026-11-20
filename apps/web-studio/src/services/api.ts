@@ -864,7 +864,30 @@ export type NetworkReadinessReport = {
   worker_ready: number;
   observed_machines: number;
   ready: boolean;
-  blocked_machines: Array<{ machine_id: string; name: string; reason: string }>;
+  machines_with_findings: Array<{
+    machine_id: string;
+    name: string;
+    roles?: Record<
+      string,
+      {
+        ok: boolean;
+        checked_networks: string[];
+        findings: Array<{
+          code: string;
+          status: string;
+          network: string | null;
+          interface: string | null;
+          expected: unknown;
+          observed: unknown;
+        }>;
+      }
+    >;
+  }>;
+  blocked_machines: Array<{
+    machine_id: string;
+    name: string;
+    reason: string;
+  }>;
 };
 
 export type InfraNetwork = {
