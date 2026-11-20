@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - metal3-lab
+    - physical

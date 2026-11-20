@@ -107,9 +107,6 @@ jobs:
     runs-on: [self-hosted, metal3-lab, physical]
     timeout-minutes: 120
     environment: metal3-lab
-    env:
-      EPH_KUBECONFIG_PATH: ${{ runner.temp }}/eph.kubeconfig
-      TARGET_KUBECONFIG_PATH: ${{ runner.temp }}/target.kubeconfig
     steps:
       - uses: actions/checkout@v4
 
@@ -132,8 +129,8 @@ jobs:
             exit 1
           fi
           umask 077
-          printf '%s' "$EPH_KUBECONFIG" > "$EPH_KUBECONFIG_PATH"
-          printf '%s' "$TARGET_KUBECONFIG" > "$TARGET_KUBECONFIG_PATH"
+          printf '%s' "$EPH_KUBECONFIG" > "$RUNNER_TEMP/eph.kubeconfig"
+          printf '%s' "$TARGET_KUBECONFIG" > "$RUNNER_TEMP/target.kubeconfig"
 
       - name: Preflight (read-only)
         run: |
@@ -149,6 +146,9 @@ jobs:
             --out evidence/redfish.json
 
       - name: Deployment acceptance
+        env:
+          EPH_KUBECONFIG_PATH: ${{ runner.temp }}/eph.kubeconfig
+          TARGET_KUBECONFIG_PATH: ${{ runner.temp }}/target.kubeconfig
         run: |
           python tools/metal3_acceptance.py verify \
             --project "${{ inputs.project_id }}" \
