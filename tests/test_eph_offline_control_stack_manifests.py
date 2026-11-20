@@ -83,6 +83,17 @@ def test_ironic_custom_resource_is_declared_by_its_manifest():
     )
 
 
+def test_the_loader_and_the_adapter_share_one_size_limit():
+    """A manifest accepted by the loader must never be rejected at apply time."""
+
+    from apps.eph_agent import control_stack_adapter, control_stack_manifests
+
+    assert control_stack_adapter.MAX_MANIFEST_BYTES == control_stack_manifests.MAX_MANIFEST_BYTES
+    for component in plan_control_stack({}):
+        path = MANIFEST_DIR / f"{component.name}.yaml"
+        assert path.stat().st_size <= control_stack_manifests.MAX_MANIFEST_BYTES
+
+
 def test_every_manifest_declares_its_namespace_first():
     """The EPH applies each file as one unit, so the namespace must come first."""
 

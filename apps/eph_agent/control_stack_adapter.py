@@ -28,9 +28,9 @@ from typing import Any
 import yaml
 
 from .control_stack import StackComponent
+from .control_stack_manifests import MAX_MANIFEST_BYTES
 from .metal3_skill import Metal3SkillError
 
-MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 FIELD_MANAGER = "ai-agent-eph-agent"
 DEFAULT_TIMEOUT_SECONDS = 1800
 
@@ -291,17 +291,22 @@ def apply_workload_resource(
     if lease_lost_event is not None and lease_lost_event.is_set():
         raise ControlStackAdapterError("COMMAND_LEASE_LOST_BEFORE_CONTROL_STACK_APPLY")
     if crd_name:
-        _invoke(
-            runner,
-            [
-                "wait",
-                "--for",
-                "condition=established",
-                "--timeout=120s",
-                f"crd/{crd_name}",
-            ],
-            150,
-        )
+        try:
+            _invoke(
+                runner,
+                [
+                    "wait",
+                    "--for",
+                    "condition=established",
+                    "--timeout=120s",
+                    f"crd/{crd_name}",
+                ],
+                150,
+            )
+        except ControlStackAdapterError as exc:
+            raise ControlStackAdapterError(
+                "CONTROL_STACK_CRD_NOT_ESTABLISHED"
+            ) from exc
     _apply_manifest(document, runner, lease_lost_event)
 
 

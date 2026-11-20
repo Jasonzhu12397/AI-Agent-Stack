@@ -71,7 +71,9 @@ ironic:
     disable_host_network: true             # optional pass-through
 ```
 
-`apps/eph_agent/ironic_cr.py` validates the contract and emits the CR
+`packages/agent_contracts/ironic_spec.py` owns the validation rules (shared with
+the platform API), and `apps/eph_agent/ironic_cr.py` wraps the normalised spec
+into the CR
 (`ironic.metal3.io/v1alpha1`, name `ironic`). After
 `eph_single_node_ready` the EPH applies the operator, waits for
 `crd/ironics.ironic.metal3.io` to report `established`, and only then applies

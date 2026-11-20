@@ -1083,6 +1083,15 @@ onUnmounted(() => {
                 >
                   {{ deployment.plan_result.adapter_enabled === true ? "Adapter enabled" : "Apply adapter disabled" }}
                 </el-tag>
+                <ul
+                  v-if="deployment.preflight_result?.ironic_workload?.warnings?.length"
+                  class="readiness-blocked"
+                >
+                  <li
+                    v-for="warning in deployment.preflight_result.ironic_workload.warnings"
+                    :key="warning"
+                  >Ironic workload: {{ warning }}</li>
+                </ul>
                 <ul v-if="missingRequirements(deployment).length">
                   <li v-for="item in missingRequirements(deployment)" :key="item">{{ item }}</li>
                 </ul>

@@ -299,3 +299,24 @@ def test_workload_cr_rejects_non_documents():
     with pytest.raises(ControlStackAdapterError) as excinfo:
         apply_workload_resource([], lambda *_args, **_kwargs: {})
     assert str(excinfo.value) == "CONTROL_STACK_WORKLOAD_DOCUMENT_INVALID"
+
+
+def test_workload_cr_reports_a_crd_that_never_became_ready():
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        if arguments[0] == "wait":
+            return {
+                "available": True,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "timed out waiting for the condition",
+            }
+        return {"available": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    with pytest.raises(ControlStackAdapterError) as excinfo:
+        apply_workload_resource(
+            {"apiVersion": "ironic.metal3.io/v1alpha1", "kind": "Ironic"},
+            runner,
+            crd_name="ironics.ironic.metal3.io",
+        )
+
+    assert str(excinfo.value) == "CONTROL_STACK_CRD_NOT_ESTABLISHED"

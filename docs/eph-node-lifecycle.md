@@ -88,8 +88,11 @@ each absent required key produces its own error code
 `IRONIC_IP_ADDRESS_REQUIRED`) and the action returns `status=failed` without
 touching the cluster.
 
-The platform validates the same contract at deployment creation: an invalid
-`cluster_spec.ironic` returns HTTP 400 with the renderer's error code
+The rules live once in `packages/agent_contracts/ironic_spec.py`; the EPH
+renderer, the platform validator and the deployment form all consume the same
+contract instead of re-implementing it. The platform validates the contract at
+deployment creation: an invalid `cluster_spec.ironic` returns HTTP 400 with the
+normaliser's error code
 (`ironic: IRONIC_IMAGE_REQUIRED`), before any fleet dispatch. The dispatch
 payload always re-injects `ironic` from the deployment spec, because a cached
 `plan_result.cloud_control.spec` may predate it. The orchestration contract

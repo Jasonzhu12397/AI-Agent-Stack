@@ -840,8 +840,11 @@ export type ClusterDeployment = {
   status: string;
   spec: Record<string, unknown>;
   plan_hash: string;
-  preflight_result: Record<string, unknown> | null;
   plan_result: Record<string, unknown> | null;
+  preflight_result?: {
+    ironic_workload?: { configured: boolean; warnings: string[] };
+    network_readiness?: NetworkReadinessReport | null;
+  } | null;
   error: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;

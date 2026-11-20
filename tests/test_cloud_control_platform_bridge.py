@@ -598,7 +598,7 @@ def test_deployment_persists_network_preflight_evidence(bridge_workspace, monkey
     response = _post(client, tenant, project, node, key="evidence-persist")
     assert response.status_code == 202
     deployment = ClusterDeployment.objects.get(id=response.data["id"])
-    preflight = deployment.plan_result["preflight"]["network_readiness"]
+    preflight = deployment.preflight_result["network_readiness"]
     assert preflight["ready"] is True
     assert len(preflight["evidence"]) == 5
     assert deployment.spec["network_evidence"] == preflight["evidence"]
@@ -761,3 +761,78 @@ def test_dispatch_carries_the_ironic_workload_config(bridge_workspace, monkeypat
     )
     assert repeated.status_code == 200
     assert calls[-1]["spec"]["ironic"] == _ironic_config()
+
+
+@pytest.mark.django_db
+def test_preflight_result_records_the_ironic_workload_gap(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+
+    response = _post(client, tenant, project, node, key="preflight-ironic")
+
+    assert response.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    assert deployment.preflight_result["ironic_workload"] == {
+        "configured": False,
+        "warnings": ["IRONIC_WORKLOAD_CR_REQUIRED"],
+    }
+    detail = client.get(f"/api/v1/cluster-deployments/{deployment.id}/")
+    assert detail.data["preflight_result"]["ironic_workload"]["configured"] is False
+
+
+@pytest.mark.django_db
+def test_configured_ironic_workload_has_no_preflight_warning(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    spec = _cluster_spec()
+    spec["ironic"] = _ironic_config()
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/cluster-deployments/",
+        {"eph_node_id": str(node.id), "cluster_spec": spec},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="preflight-ironic-configured",
+    )
+
+    assert response.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    assert deployment.preflight_result["ironic_workload"] == {
+        "configured": True,
+        "warnings": [],
+    }
+
+
+@pytest.mark.django_db
+def test_dispatch_spec_is_persisted_so_repeats_cannot_drop_fields(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    calls = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        return {"created": True, "phase": "not_started", "sequence": 0}
+
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        fake_dispatch,
+    )
+
+    first = _post(client, tenant, project, node, key="persisted-spec")
+    assert first.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=first.data["id"])
+    assert deployment.plan_result["cloud_control"]["spec"] == calls[0]["spec"]
+
+    repeated = _post(client, tenant, project, node, key="persisted-spec")
+    assert repeated.status_code == 200
+    assert calls[-1]["spec"] == deployment.plan_result["cloud_control"]["spec"]

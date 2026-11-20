@@ -30,7 +30,10 @@ from apps.agent_contracts.sriov_device_plugin import (
 )
 from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
-from apps.eph_agent.ironic_cr import IronicRenderError, render_ironic_cr
+from packages.agent_contracts.ironic_spec import (
+    IronicSpecError,
+    normalize_ironic_config,
+)
 from core.cloud_control_bridge import (
     CloudControlBridgeError,
     CloudControlNotConfigured,
@@ -65,6 +68,7 @@ def _deployment_data(deployment):
         "status": deployment.status,
         "spec": deployment.spec,
         "plan_result": deployment.plan_result,
+        "preflight_result": deployment.preflight_result,
         "cloud_control": plan_result.get("cloud_control"),
         "error": deployment.error,
         "created_at": deployment.created_at,
@@ -432,8 +436,8 @@ def _validated_spec(request, *, infra_profile=None):
     ironic_config = spec.get("ironic")
     if ironic_config is not None:
         try:
-            render_ironic_cr({"ironic": ironic_config})
-        except IronicRenderError as exc:
+            normalize_ironic_config(ironic_config)
+        except IronicSpecError as exc:
             return None, f"ironic: {exc.code}"
     storage_addon = spec.get("storage_addon")
     if storage_addon is not None:
@@ -528,6 +532,18 @@ class ClusterDeploymentListCreateView(APIView):
         if readiness is not None:
             # Bind the plan to the exact inventory revision it was validated against.
             spec["network_evidence"] = readiness["evidence"]
+        ironic_section = spec.get("ironic")
+        preflight = {
+            "network_readiness": readiness,
+            "ironic_workload": {
+                "configured": isinstance(ironic_section, dict),
+                "warnings": (
+                    []
+                    if isinstance(ironic_section, dict)
+                    else ["IRONIC_WORKLOAD_CR_REQUIRED"]
+                ),
+            },
+        }
         cluster_name = spec["cluster_name"]
         kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
@@ -549,6 +565,7 @@ class ClusterDeploymentListCreateView(APIView):
                     cluster_name=cluster_name,
                     kubernetes_version=kubernetes_version,
                     spec=spec,
+                    preflight_result=preflight,
                     status=ClusterDeployment.Status.PREFLIGHT_QUEUED,
                     idempotency_key=idempotency_key,
                 )
@@ -574,16 +591,9 @@ class ClusterDeploymentListCreateView(APIView):
             )
 
         plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
-        if readiness is not None:
-            plan_result = {
-                **plan_result,
-                "preflight": {
-                    **(plan_result.get("preflight") or {}),
-                    "network_readiness": readiness,
-                },
-            }
-            deployment.plan_result = plan_result
-            deployment.save(update_fields=["plan_result", "updated_at"])
+        if deployment.preflight_result != preflight:
+            deployment.preflight_result = preflight
+            deployment.save(update_fields=["preflight_result", "updated_at"])
         drift = _network_evidence_drift(project, deployment.spec)
         if drift:
             return Response(
@@ -650,6 +660,17 @@ class ClusterDeploymentListCreateView(APIView):
             }
             if forwarded:
                 control_spec = {**control_spec, **forwarded}
+            cached = plan_result.get("cloud_control")
+            if isinstance(cached, dict) and cached.get("spec") != control_spec:
+                # Store the exact bytes handed to the control plane. A cached
+                # plan that predates a field would otherwise keep dropping it
+                # on every repeated submission.
+                plan_result = {
+                    **plan_result,
+                    "cloud_control": {**cached, "spec": control_spec},
+                }
+                deployment.plan_result = plan_result
+                deployment.save(update_fields=["plan_result", "updated_at"])
         try:
             result = dispatch_deployment(
                 deployment_id=deployment.id,
