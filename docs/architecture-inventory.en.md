@@ -122,7 +122,7 @@ Acceptance bar: every button connects to a real API, can persist data, execute t
 | Login | `LoginView.vue` | Calls `/api/v1/auth/csrf\|login\|logout\|me` | 【Baseline】 | Full auth experience, error states, session recovery to be checked |
 | Dashboard | `DashboardView.vue` | Pulls real tasks / nodes pagination; computed derives active/succeeded/online metrics | 【Baseline】 | Metrics come from task/node tables, not independent monitoring signals; trends and realtime refresh to be added |
 | Agent Studio | `AgentStudioView.vue` | Calls agents / publish / runs / model test | 【Baseline】 | Multi-step tool-call progress display and failure recovery to be improved |
-| Workflow Studio | `WorkflowStudioView.vue` | JSON text editing (`JSON.parse` draft); parses nodes/edges for read-only node display | 【Baseline】 (editing/validation) | 【To develop】 Drag-and-drop canvas, parallel/loop/approval nodes, visual edge editing |
+| Workflow Studio | `WorkflowStudioView.vue` | Visual DAG canvas with layer layout, draggable nodes, node inspector, edge editor and JSON fallback; approve/reject actions | 【Implemented】 (visual editing/validation/approval/loop) | 【To develop】 Drag-to-connect edges, persisted node coordinates |
 | Model Manager | `ModelManagerView.vue` | Calls model-providers / models / model-configs test | 【Baseline】 | Provider coverage, routing and fallback strategy UI to be added |
 | Integration Hub | `IntegrationHubView.vue` | Calls connectors / installations / connections / test / status | 【Baseline】 | Real connectors, OAuth flow, and connection health loop to be completed |
 | Knowledge Base | `KnowledgeBaseView.vue` | Calls knowledge-bases / documents / retry | 【Baseline】 | Full RAG chain (embedding/retrieval/recall quality) to be checked |

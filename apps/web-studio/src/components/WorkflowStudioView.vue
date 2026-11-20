@@ -30,6 +30,21 @@ const error = ref("");
 const notice = ref("");
 const validating = ref(false);
 const decidingNode = ref("");
+const selectedNodeId = ref("");
+const nodeIdDraft = ref("");
+const nodeTypeDraft = ref("llm");
+const nodeConfigText = ref("{}");
+const edgeSource = ref("");
+const edgeTarget = ref("");
+const edgeWhen = ref("none");
+const canvasPositions = ref<Record<string, { x: number; y: number }>>({});
+const dragState = ref<{
+  nodeId: string;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+} | null>(null);
 const validationResult = ref<{
   is_valid: boolean;
   errors: string[];
@@ -50,6 +65,286 @@ const previewGraph = computed(() => {
     return { nodes: [], edges: [], parseError: "The draft is not valid JSON yet." };
   }
 });
+
+type CanvasNode = {
+  node: Record<string, unknown>;
+  id: string;
+  x: number;
+  y: number;
+};
+
+type CanvasEdge = {
+  edge: Record<string, unknown>;
+  sourceId: string;
+  targetId: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  when: string;
+};
+
+const NODE_WIDTH = 172;
+const NODE_HEIGHT = 78;
+const LAYER_GAP = 236;
+const ROW_GAP = 108;
+
+const canvasLayout = computed(() => {
+  const nodes = previewGraph.value.nodes;
+  const edges = previewGraph.value.edges;
+  const ids = nodes.map((node) => String(node.id ?? "")).filter(Boolean);
+  const incoming: Record<string, string[]> = {};
+  const outgoing: Record<string, string[]> = {};
+  for (const id of ids) {
+    incoming[id] = [];
+    outgoing[id] = [];
+  }
+  for (const edge of edges) {
+    const source = String(edge.source ?? "");
+    const target = String(edge.target ?? "");
+    if (source in incoming && target in incoming) {
+      incoming[target].push(source);
+      outgoing[source].push(target);
+    }
+  }
+  const layers: Record<string, number> = {};
+  const queue = ids.filter((id) => incoming[id].length === 0);
+  for (const id of queue) layers[id] = 0;
+  while (queue.length > 0) {
+    const id = queue.shift() as string;
+    for (const target of outgoing[id]) {
+      layers[target] = Math.max(layers[target] ?? 0, (layers[id] ?? 0) + 1);
+      if (ids.indexOf(target) >= 0) {
+        incoming[target] = incoming[target].filter((source) => source !== id);
+        if (incoming[target].length === 0) queue.push(target);
+      }
+    }
+  }
+  for (const id of ids) if (!(id in layers)) layers[id] = 0;
+  const rows: Record<number, string[]> = {};
+  for (const id of ids) {
+    const layer = layers[id] ?? 0;
+    rows[layer] = rows[layer] ?? [];
+    rows[layer].push(id);
+  }
+  const positions: Record<string, { x: number; y: number }> = {};
+  let maxLayer = 0;
+  let maxRows = 1;
+  for (const [layerText, rowIds] of Object.entries(rows)) {
+    const layer = Number(layerText);
+    maxLayer = Math.max(maxLayer, layer);
+    maxRows = Math.max(maxRows, rowIds.length);
+    rowIds.forEach((id, rowIndex) => {
+      positions[id] = canvasPositions.value[id] ?? {
+        x: 24 + layer * LAYER_GAP,
+        y: 24 + rowIndex * ROW_GAP,
+      };
+    });
+  }
+  const canvasNodes: CanvasNode[] = nodes
+    .map((node) => {
+      const id = String(node.id ?? "");
+      return { node, id, x: positions[id]?.x ?? 24, y: positions[id]?.y ?? 24 };
+    })
+    .filter((item) => item.id);
+  const canvasEdges: CanvasEdge[] = [];
+  for (const edge of edges) {
+    const sourceId = String(edge.source ?? "");
+    const targetId = String(edge.target ?? "");
+    const source = positions[sourceId];
+    const target = positions[targetId];
+    if (!source || !target) continue;
+    const when = typeof edge.when === "boolean" ? String(edge.when) : "";
+    canvasEdges.push({
+      edge,
+      sourceId,
+      targetId,
+      x1: source.x + NODE_WIDTH,
+      y1: source.y + NODE_HEIGHT / 2,
+      x2: target.x,
+      y2: target.y + NODE_HEIGHT / 2,
+      when,
+    });
+  }
+  return {
+    nodes: canvasNodes,
+    edges: canvasEdges,
+    width: Math.max(680, 24 + (maxLayer + 1) * LAYER_GAP + NODE_WIDTH),
+    height: Math.max(260, 48 + maxRows * ROW_GAP),
+  };
+});
+
+function commitDefinition(definition: Record<string, unknown>): void {
+  definitionText.value = JSON.stringify(definition, null, 2);
+  validationResult.value = null;
+}
+
+function selectNode(node: Record<string, unknown>): void {
+  selectedNodeId.value = String(node.id ?? "");
+  nodeIdDraft.value = String(node.id ?? "");
+  nodeTypeDraft.value = String(node.type ?? "llm");
+  nodeConfigText.value = JSON.stringify(node.config ?? {}, null, 2);
+}
+
+function startNodeDrag(event: PointerEvent, item: CanvasNode): void {
+  selectNode(item.node);
+  dragState.value = {
+    nodeId: item.id,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: item.x,
+    originY: item.y,
+  };
+  event.preventDefault();
+}
+
+function onCanvasPointerMove(event: PointerEvent): void {
+  if (!dragState.value) return;
+  const nextX = Math.max(0, dragState.value.originX + event.clientX - dragState.value.startX);
+  const nextY = Math.max(0, dragState.value.originY + event.clientY - dragState.value.startY);
+  canvasPositions.value = {
+    ...canvasPositions.value,
+    [dragState.value.nodeId]: { x: nextX, y: nextY },
+  };
+}
+
+function onCanvasPointerUp(): void {
+  dragState.value = null;
+}
+
+function applyNodeDraft(): void {
+  const definition = parseDefinition();
+  if (!definition) return;
+  const nodes = Array.isArray(definition.nodes)
+    ? [...(definition.nodes as Record<string, unknown>[])]
+    : [];
+  const edges = Array.isArray(definition.edges)
+    ? [...(definition.edges as Record<string, unknown>[])]
+    : [];
+  const index = nodes.findIndex((node) => String(node.id) === selectedNodeId.value);
+  if (index < 0) {
+    error.value = "Select a node before applying changes.";
+    return;
+  }
+  const nextId = nodeIdDraft.value.trim();
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(nextId)) {
+    error.value = "Node IDs must match A-Z, a-z, 0-9, underscore or dash, up to 120 characters.";
+    return;
+  }
+  if (nodes.some((node, itemIndex) => itemIndex !== index && String(node.id) === nextId)) {
+    error.value = "Node IDs must be unique.";
+    return;
+  }
+  let config: unknown;
+  try {
+    config = JSON.parse(nodeConfigText.value || "{}");
+  } catch {
+    error.value = "Node config must be valid JSON.";
+    return;
+  }
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    error.value = "Node config must be a JSON object.";
+    return;
+  }
+  const previousId = String(nodes[index].id ?? "");
+  nodes[index] = {
+    ...nodes[index],
+    id: nextId,
+    type: nodeTypeDraft.value,
+    config,
+  };
+  const nextEdges = edges.map((edge) => ({
+    ...edge,
+    source: String(edge.source) === previousId ? nextId : edge.source,
+    target: String(edge.target) === previousId ? nextId : edge.target,
+  }));
+  definition.nodes = nodes;
+  definition.edges = nextEdges;
+  commitDefinition(definition);
+  if (previousId !== nextId && canvasPositions.value[previousId]) {
+    const nextPositions = { ...canvasPositions.value, [nextId]: canvasPositions.value[previousId] };
+    delete nextPositions[previousId];
+    canvasPositions.value = nextPositions;
+  }
+  selectedNodeId.value = nextId;
+  notice.value = "Node " + nextId + " updated.";
+  error.value = "";
+}
+
+function removeSelectedNode(): void {
+  if (!selectedNodeId.value) return;
+  const definition = parseDefinition();
+  if (!definition) return;
+  const nodes = Array.isArray(definition.nodes)
+    ? (definition.nodes as Record<string, unknown>[])
+    : [];
+  const edges = Array.isArray(definition.edges)
+    ? (definition.edges as Record<string, unknown>[])
+    : [];
+  definition.nodes = nodes.filter((node) => String(node.id) !== selectedNodeId.value);
+  definition.edges = edges.filter(
+    (edge) =>
+      String(edge.source) !== selectedNodeId.value &&
+      String(edge.target) !== selectedNodeId.value,
+  );
+  commitDefinition(definition);
+  selectedNodeId.value = "";
+  edgeSource.value = "";
+  edgeTarget.value = "";
+  notice.value = "Node removed.";
+  error.value = "";
+}
+
+function addEdge(): void {
+  if (!edgeSource.value || !edgeTarget.value) {
+    error.value = "Choose a source and target node.";
+    return;
+  }
+  if (edgeSource.value === edgeTarget.value) {
+    error.value = "Self edges are not allowed.";
+    return;
+  }
+  const definition = parseDefinition();
+  if (!definition) return;
+  const edges = Array.isArray(definition.edges)
+    ? [...(definition.edges as Record<string, unknown>[])]
+    : [];
+  if (
+    edges.some(
+      (edge) =>
+        String(edge.source) === edgeSource.value &&
+        String(edge.target) === edgeTarget.value,
+    )
+  ) {
+    error.value = "That edge already exists.";
+    return;
+  }
+  const edge: Record<string, unknown> = {
+    source: edgeSource.value,
+    target: edgeTarget.value,
+  };
+  if (edgeWhen.value === "true" || edgeWhen.value === "false") {
+    edge.when = edgeWhen.value === "true";
+  }
+  edges.push(edge);
+  definition.edges = edges;
+  commitDefinition(definition);
+  notice.value = "Edge added.";
+  error.value = "";
+}
+
+function removeEdge(index: number): void {
+  const definition = parseDefinition();
+  if (!definition) return;
+  const edges = Array.isArray(definition.edges)
+    ? [...(definition.edges as Record<string, unknown>[])]
+    : [];
+  edges.splice(index, 1);
+  definition.edges = edges;
+  commitDefinition(definition);
+  notice.value = "Edge removed.";
+  error.value = "";
+}
 
 function nodeLabel(node: Record<string, unknown>): string {
   return String(node.name ?? node.id ?? "Unnamed node");
@@ -356,10 +651,14 @@ watch(
 
 onMounted(() => {
   void loadWorkflows();
+  window.addEventListener("pointermove", onCanvasPointerMove);
+  window.addEventListener("pointerup", onCanvasPointerUp);
   refreshTimer = window.setInterval(() => void loadRuns(), 5000);
 });
 onUnmounted(() => {
   if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
+  window.removeEventListener("pointermove", onCanvasPointerMove);
+  window.removeEventListener("pointerup", onCanvasPointerUp);
 });
 </script>
 
@@ -411,21 +710,119 @@ onUnmounted(() => {
           <el-button size="small" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
-        <div v-else class="workflow-pipeline-row">
-          <template v-for="(node, index) in previewGraph.nodes" :key="String(node.id ?? index)">
-            <article class="workflow-node-card">
-              <el-tag size="small" effect="plain">{{ nodeType(node) }}</el-tag>
-              <strong>{{ nodeLabel(node) }}</strong>
-              <code>{{ String(node.id ?? "no-id") }}</code>
-              <small v-if="node.config && typeof node.config === 'object'">
-                {{ nodeDetail(node) }}
-              </small>
+        <div v-else class="workflow-canvas-grid">
+          <div class="workflow-canvas-scroll">
+          <div
+            class="workflow-canvas"
+            :style="{ width: canvasLayout.width + 'px', height: canvasLayout.height + 'px' }"
+            @pointerdown.self="selectedNodeId = ''"
+          >
+            <svg
+              class="workflow-canvas-edges"
+              :width="canvasLayout.width"
+              :height="canvasLayout.height"
+            >
+              <defs>
+                <marker
+                  id="workflow-arrow"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#5d7398" />
+                </marker>
+              </defs>
+              <line
+                v-for="(edge, index) in canvasLayout.edges"
+                :key="index"
+                :x1="edge.x1"
+                :y1="edge.y1"
+                :x2="edge.x2"
+                :y2="edge.y2"
+                stroke="#5d7398"
+                stroke-width="1.5"
+                marker-end="url(#workflow-arrow)"
+              />
+              <text
+                v-for="(edge, index) in canvasLayout.edges.filter((item) => item.when)"
+                :key="'when-' + index"
+                :x="(edge.x1 + edge.x2) / 2"
+                :y="(edge.y1 + edge.y2) / 2 - 4"
+                fill="#8ea2c4"
+                font-size="10"
+                text-anchor="middle"
+              >
+                when {{ edge.when }}
+              </text>
+            </svg>
+            <article
+              v-for="item in canvasLayout.nodes"
+              :key="item.id"
+              class="workflow-canvas-node"
+              :class="{ selected: selectedNodeId === item.id }"
+              :style="{ left: item.x + 'px', top: item.y + 'px', width: NODE_WIDTH + 'px' }"
+              @pointerdown.stop="startNodeDrag($event, item)"
+            >
+              <el-tag size="small" effect="plain">{{ nodeType(item.node) }}</el-tag>
+              <strong>{{ nodeLabel(item.node) }}</strong>
+              <code>{{ item.id }}</code>
+              <small v-if="nodeDetail(item.node)">{{ nodeDetail(item.node) }}</small>
             </article>
-            <span v-if="index < previewGraph.nodes.length - 1" class="workflow-node-arrow">→</span>
-          </template>
-        </div>
-        <div v-if="previewGraph.edges.length" class="workflow-edge-list">
-          <span v-for="(edge, index) in previewGraph.edges" :key="index">{{ edgeLabel(edge) }}</span>
+          </div>
+          </div>
+          <aside class="workflow-node-inspector">
+            <div class="workflow-run-heading">
+              <h4>Node inspector</h4>
+              <el-tag v-if="selectedNodeId" size="small" effect="plain">{{ selectedNodeId }}</el-tag>
+            </div>
+            <el-empty v-if="!selectedNodeId" description="Select a node on the canvas" :image-size="48" />
+            <template v-else>
+              <label class="workflow-field">
+                <span>Node ID</span>
+                <el-input v-model="nodeIdDraft" size="small" spellcheck="false" />
+              </label>
+              <label class="workflow-field">
+                <span>Node type</span>
+                <el-select v-model="nodeTypeDraft" size="small">
+                  <el-option v-for="type in ['start','llm','condition','knowledge_search','tool','agent','approval','loop','end']" :key="type" :label="type" :value="type" />
+                </el-select>
+              </label>
+              <label class="workflow-field">
+                <span>Config (JSON)</span>
+                <el-input v-model="nodeConfigText" type="textarea" :rows="7" resize="vertical" spellcheck="false" />
+              </label>
+              <div class="workflow-actions">
+                <el-button size="small" type="primary" plain @click="applyNodeDraft">Apply node</el-button>
+                <el-button size="small" type="danger" plain @click="removeSelectedNode">Delete node</el-button>
+              </div>
+            </template>
+            <div class="workflow-edge-editor">
+              <h4>Edges</h4>
+              <div class="workflow-edge-form">
+                <el-select v-model="edgeSource" size="small" placeholder="Source">
+                  <el-option v-for="node in previewGraph.nodes" :key="'s-' + String(node.id)" :label="String(node.id)" :value="String(node.id)" />
+                </el-select>
+                <el-select v-model="edgeTarget" size="small" placeholder="Target">
+                  <el-option v-for="node in previewGraph.nodes" :key="'t-' + String(node.id)" :label="String(node.id)" :value="String(node.id)" />
+                </el-select>
+                <el-select v-model="edgeWhen" size="small" placeholder="when">
+                  <el-option label="no guard" value="none" />
+                  <el-option label="when true" value="true" />
+                  <el-option label="when false" value="false" />
+                </el-select>
+                <el-button size="small" @click="addEdge">Add edge</el-button>
+              </div>
+              <div class="workflow-edge-list">
+                <span v-for="(edge, index) in previewGraph.edges" :key="index">
+                  {{ edgeLabel(edge) }}
+                  <button class="workflow-edge-remove" type="button" @click="removeEdge(index)">×</button>
+                </span>
+              </div>
+            </div>
+          </aside>
         </div>
         <div v-if="validationResult" class="workflow-validation-result">
           <div class="workflow-run-heading">

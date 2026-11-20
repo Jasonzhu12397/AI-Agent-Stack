@@ -100,7 +100,7 @@ Run creation requires `Idempotency-Key` and a JSON object in `input`. It also ac
 
 ## Vue Studio
 
-The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search`, `tool`, `condition`, `agent`, `approval` and `loop` nodes, save, publish, enqueue runs, poll execution history, display step statuses and approve/reject suspended steps. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
+The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search`, `tool`, `condition`, `agent`, `approval` and `loop` nodes, save, publish, enqueue runs, poll execution history, display step statuses and approve/reject suspended steps. The draft is shown on a visual DAG canvas: nodes are laid out by execution layer, can be dragged, selected and edited in a node inspector, and edges can be added or removed with source/target/when controls. Drag positions are local to the session; the JSON definition remains the persisted source of truth, and server validation remains authoritative.
 
 ## Not implemented in this milestone
 
