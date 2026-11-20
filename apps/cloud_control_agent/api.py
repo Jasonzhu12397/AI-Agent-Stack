@@ -1685,7 +1685,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             self._send(200, {
                 "accepted": True,
                 "task_id": task["task_id"],
-                "status": task["status"],
+                "status": "queued" if retrying else task["status"],
                 "workflow_run_id": task["workflow_run_id"],
                 "workflow_run_status": run_status,
                 "retrying": retrying,
