@@ -34,8 +34,28 @@ echo "Installing cert-manager ${CERT_MANAGER_VERSION} (IPAM webhook prerequisite
 echo "Applying Metal3 IPAM manifests"
 "${KUBECTL}" apply -f "${IPAM_MANIFEST}"
 
-echo "Applying SR-IOV Network Operator manifests"
-"${KUBECTL}" apply -f "${SRIOV_MANIFEST}"
+echo "Applying SR-IOV CRDs first, then the operator resources"
+# kubectl discovery cannot resolve SriovOperatorConfig in the same batch that
+# creates its CRD, so mirror the production installer's two-phase apply.
+split_dir="$(mktemp -d)"
+trap 'rm -rf "${split_dir}"' EXIT
+awk -v dir="${split_dir}" '
+  BEGIN { n = 0; file = sprintf("%s/doc-%03d.yaml", dir, n) }
+  /^--- *$/ { n++; file = sprintf("%s/doc-%03d.yaml", dir, n); next }
+  { print > file }
+' "${SRIOV_MANIFEST}"
+: > "${split_dir}/crds.yaml"
+: > "${split_dir}/resources.yaml"
+for doc in "${split_dir}"/doc-*.yaml; do
+  [ -s "${doc}" ] || continue
+  kind="$(awk '/^kind:/ {print $2; exit}' "${doc}")"
+  if [ "${kind}" = "CustomResourceDefinition" ]; then
+    cat "${doc}" >> "${split_dir}/crds.yaml"
+  else
+    cat "${doc}" >> "${split_dir}/resources.yaml"
+  fi
+done
+"${KUBECTL}" apply -f "${split_dir}/crds.yaml"
 
 echo "Waiting for required CRDs"
 for crd in \
@@ -45,6 +65,8 @@ for crd in \
   sriovnetworknodepolicies.sriovnetwork.openshift.io; do
   "${KUBECTL}" wait --for condition=established --timeout=120s "crd/${crd}"
 done
+
+"${KUBECTL}" apply -f "${split_dir}/resources.yaml"
 
 echo "Server-side validation of a rendered policy shape"
 cat <<'YAML' | "${KUBECTL}" apply --dry-run=server -f -
