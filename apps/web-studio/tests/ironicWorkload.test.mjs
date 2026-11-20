@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   buildIronicWorkload,
   ironicWorkloadConfigured,
+  ironicWorkloadTemplate,
+  provisioningNetworkDefaults,
 } from "../src/domain/ironicWorkload.ts";
 
 const complete = {
@@ -60,4 +62,48 @@ test("deployment spec detection distinguishes configured from missing", () => {
   assert.equal(ironicWorkloadConfigured({ ironic: "registry.local/ironic:37.0" }), false);
   assert.equal(ironicWorkloadConfigured(null), false);
   assert.equal(ironicWorkloadConfigured({ ironic: { version: "37.0" } }), true);
+});
+
+test("provisioning network defaults prefer the bond and the declared gateway", () => {
+  const profile = {
+    networks: [
+      { role: "control", interface: "eno1" },
+      {
+        role: "provisioning",
+        enabled: true,
+        interface: "eno4",
+        gateway_ipv4: "10.40.0.1",
+        bond: { name: "bond-prov", interfaces: ["eno4", "eno5"] },
+      },
+    ],
+  };
+  assert.deepEqual(provisioningNetworkDefaults(profile), {
+    interfaceName: "bond-prov",
+    ipAddress: "10.40.0.1",
+  });
+});
+
+test("disabled or absent provisioning networks yield blank defaults", () => {
+  assert.deepEqual(provisioningNetworkDefaults({ networks: [] }), {
+    interfaceName: "",
+    ipAddress: "",
+  });
+  assert.deepEqual(
+    provisioningNetworkDefaults({
+      networks: [{ role: "provisioning", enabled: false, interface: "eno4" }],
+    }),
+    { interfaceName: "", ipAddress: "" },
+  );
+});
+
+test("template renders the exact payload or names what is missing", () => {
+  assert.equal(ironicWorkloadTemplate({ ...complete, enabled: false }), "");
+  assert.equal(
+    JSON.parse(ironicWorkloadTemplate(complete)).ironic.networking.interface,
+    "eno2",
+  );
+  assert.equal(
+    ironicWorkloadTemplate({ ...complete, keepalivedImage: "" }),
+    "Missing: Keepalived image",
+  );
 });

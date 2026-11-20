@@ -54,3 +54,45 @@ export function ironicWorkloadConfigured(spec: unknown): boolean {
   const ironic = (spec as Record<string, unknown>).ironic;
   return Boolean(ironic) && typeof ironic === "object" && !Array.isArray(ironic);
 }
+
+export type IronicProvisioningDefaults = {
+  interfaceName: string;
+  ipAddress: string;
+};
+
+type ProvisioningNetworkLike = {
+  role?: string;
+  enabled?: boolean;
+  interface?: string | null;
+  gateway_ipv4?: string | null;
+  bond?: { name?: string } | null;
+};
+
+export function provisioningNetworkDefaults(
+  profile: { networks?: ProvisioningNetworkLike[] } | null | undefined,
+): IronicProvisioningDefaults {
+  const empty: IronicProvisioningDefaults = { interfaceName: "", ipAddress: "" };
+  const networks = profile && Array.isArray(profile.networks) ? profile.networks : [];
+  const provisioning = networks.find(
+    (network) => network && network.role === "provisioning" && network.enabled !== false,
+  );
+  if (!provisioning) return empty;
+  const interfaceName =
+    provisioning.bond && typeof provisioning.bond.name === "string"
+      ? provisioning.bond.name.trim()
+      : typeof provisioning.interface === "string"
+        ? provisioning.interface.trim()
+        : "";
+  const ipAddress =
+    typeof provisioning.gateway_ipv4 === "string" ? provisioning.gateway_ipv4.trim() : "";
+  return { interfaceName, ipAddress };
+}
+
+export function ironicWorkloadTemplate(values: IronicWorkloadValues): string {
+  if (!values.enabled) return "";
+  const result = buildIronicWorkload(values);
+  if (!result.spec) {
+    return "Missing: " + result.missing.join(", ");
+  }
+  return JSON.stringify({ ironic: result.spec }, null, 2);
+}

@@ -18,6 +18,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.cloud_control_bridge import (
+    CloudControlNotConfigured,
     FleetInventoryEmpty,
     build_cloud_control_spec,
     control_identity,
@@ -777,10 +778,9 @@ def test_preflight_result_records_the_ironic_workload_gap(bridge_workspace, monk
 
     assert response.status_code == 202
     deployment = ClusterDeployment.objects.get(id=response.data["id"])
-    assert deployment.preflight_result["ironic_workload"] == {
-        "configured": False,
-        "warnings": ["IRONIC_WORKLOAD_CR_REQUIRED"],
-    }
+    ironic_workload = deployment.preflight_result["ironic_workload"]
+    assert ironic_workload["configured"] is False
+    assert ironic_workload["warnings"] == ["IRONIC_WORKLOAD_CR_REQUIRED"]
     detail = client.get(f"/api/v1/cluster-deployments/{deployment.id}/")
     assert detail.data["preflight_result"]["ironic_workload"]["configured"] is False
 
@@ -806,10 +806,9 @@ def test_configured_ironic_workload_has_no_preflight_warning(bridge_workspace, m
 
     assert response.status_code == 202
     deployment = ClusterDeployment.objects.get(id=response.data["id"])
-    assert deployment.preflight_result["ironic_workload"] == {
-        "configured": True,
-        "warnings": [],
-    }
+    ironic_workload = deployment.preflight_result["ironic_workload"]
+    assert ironic_workload["configured"] is True
+    assert ironic_workload["warnings"] == []
 
 
 @pytest.mark.django_db
@@ -836,3 +835,137 @@ def test_dispatch_spec_is_persisted_so_repeats_cannot_drop_fields(bridge_workspa
     repeated = _post(client, tenant, project, node, key="persisted-spec")
     assert repeated.status_code == 200
     assert calls[-1]["spec"] == deployment.plan_result["cloud_control"]["spec"]
+
+
+class _StubPreflightClient:
+    def __init__(self, payload=None, error=None):
+        self._payload = payload
+        self._error = error
+        self.closed = False
+
+    def get_deployment_preflight(self, deployment_id):
+        if self._error is not None:
+            raise self._error
+        return {**self._payload, "deployment_id": str(deployment_id)}
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.django_db
+def test_eph_preflight_sync_stores_runtime_warnings(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    created = _post(client, tenant, project, node)
+    assert created.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=created.data["id"])
+    stub = _StubPreflightClient(
+        payload={
+            "available": True,
+            "reason": None,
+            "status": "blocked",
+            "error_code": "EPH_PREFLIGHT_INCOMPLETE",
+            "command_id": str(uuid.uuid4()),
+            "output": {
+                "eph_ready": False,
+                "warnings": [
+                    "IRONIC_IMAGE_REQUIRED",
+                    "IRONIC_IMAGE_REQUIRED",
+                    "x" * 200,
+                ],
+                "observed_at": "2026-11-20T01:02:03+00:00",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        lambda: stub,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/preflight/eph/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    record = response.data["eph_preflight"]
+    assert record["available"] is True
+    assert record["status"] == "blocked"
+    assert record["eph_ready"] is False
+    assert record["warnings"][0] == "IRONIC_IMAGE_REQUIRED"
+    assert record["warnings"][1] == "x" * 160
+    assert len(record["warnings"]) == 2
+    assert record["synced_at"]
+    deployment.refresh_from_db()
+    stored = deployment.preflight_result["eph_preflight"]
+    assert stored["warnings"][0] == "IRONIC_IMAGE_REQUIRED"
+    # Existing platform-side conclusions must survive the merge.
+    assert "network_readiness" in deployment.preflight_result
+    assert "ironic_workload" in deployment.preflight_result
+    assert stub.closed is True
+
+
+@pytest.mark.django_db
+def test_eph_preflight_sync_reports_missing_run(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    created = _post(client, tenant, project, node)
+    deployment = ClusterDeployment.objects.get(id=created.data["id"])
+    stub = _StubPreflightClient(
+        payload={
+            "available": False,
+            "reason": "EPH_PREFLIGHT_NOT_RUN",
+            "status": None,
+            "output": {},
+        }
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        lambda: stub,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/preflight/eph/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert response.data["eph_preflight"]["available"] is False
+    assert response.data["eph_preflight"]["reason"] == "EPH_PREFLIGHT_NOT_RUN"
+    assert response.data["eph_preflight"]["warnings"] == []
+
+
+@pytest.mark.django_db
+def test_eph_preflight_sync_degrades_without_cloud_control(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    created = _post(client, tenant, project, node)
+    deployment = ClusterDeployment.objects.get(id=created.data["id"])
+
+    def fail():
+        raise CloudControlNotConfigured("Cloud Control is not configured.")
+
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        fail,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/preflight/eph/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 503
+    assert response.data["code"] == "eph_preflight_unavailable"

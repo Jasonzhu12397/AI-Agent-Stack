@@ -147,3 +147,53 @@ def normalize_ironic_config(ironic: Any) -> dict[str, Any]:
         "images": images,
         "networking": networking,
     }
+
+
+def provisioning_defaults(network: Any) -> dict[str, str]:
+    """Return the Ironic networking values implied by a provisioning network.
+
+    Only values the profile actually declares are returned: the link is the
+    bond when present, and the address is the network's declared gateway. The
+    gateway is a prefill default (an EPH host usually owns it on the
+    provisioning segment) and stays editable; the caller must not treat it as
+    authoritative when the profile leaves it unset.
+    """
+
+    if not isinstance(network, dict):
+        return {}
+    defaults: dict[str, str] = {}
+    bond = network.get("bond")
+    if isinstance(bond, dict) and isinstance(bond.get("name"), str) and bond["name"].strip():
+        defaults["interface"] = bond["name"].strip()
+    elif isinstance(network.get("interface"), str) and network["interface"].strip():
+        defaults["interface"] = network["interface"].strip()
+    gateway = network.get("gateway_ipv4")
+    if isinstance(gateway, str) and gateway.strip():
+        defaults["ip_address"] = gateway.strip()
+    return defaults
+
+
+def apply_provisioning_defaults(
+    ironic: Any,
+    defaults: dict[str, str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Fill only absent networking keys and report which keys came from defaults."""
+
+    if not isinstance(ironic, dict):
+        return ironic, []
+    networking = ironic.get("networking")
+    if networking is None:
+        networking = {}
+    if not isinstance(networking, dict):
+        return ironic, []
+    filled = dict(networking)
+    sources: list[str] = []
+    if not filled.get("interface") and defaults.get("interface"):
+        filled["interface"] = defaults["interface"]
+        sources.append("interface")
+    if not filled.get("ip_address") and defaults.get("ip_address"):
+        filled["ip_address"] = defaults["ip_address"]
+        sources.append("ip_address")
+    if not sources:
+        return ironic, []
+    return {**ironic, "networking": filled}, sources

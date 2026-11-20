@@ -340,3 +340,31 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .locale-switch {
   margin-right: 8px;
 }
+
+.ironic-prefill-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+
+.ironic-template {
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.6rem;
+  border-radius: 6px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+.eph-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--el-border-color-light, #e4e7ed);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter, #fafafa);
+}

@@ -100,6 +100,42 @@ forwards `ironic` as a mapping in the `eph.controlstack.apply` payload, and
 `eph.preflight` reports `IRONIC_WORKLOAD_CR_REQUIRED` or the renderer code in
 `output.warnings` so the gap surfaces before the node is bootstrapped.
 
+### Provisioning defaults
+
+The deployment form can prefill `ironic.networking.interface` and
+`ironic.networking.ip_address` from the project provisioning network: the bond
+name wins over the bare interface name, and the gateway IPv4 address is the
+prefill default. Those values are editable, non-authoritative defaults - a real
+lab may run Ironic on any host address inside the provisioning network, so the
+operator remains responsible for the actual address. Image addresses stay
+manual, because the registry mirrors differ per installation.
+
+`packages/agent_contracts/ironic_spec.py:provisioning_defaults` derives the
+defaults from the profile and `apply_provisioning_defaults` fills only missing
+keys, reporting the filled keys in `spec.ironic_defaults_sources`. The platform
+applies it inside `_validated_spec` before normalisation, so the EPH always
+receives a complete payload while explicit operator values continue to win.
+The web form exposes the same derivation plus a JSON template
+(`{"ironic": {...}}`) that the operator can review before submitting, so the
+configuration is generated from a template and pushed to the backend rather
+than typed ad hoc.
+
+### Runtime preflight evidence
+
+`eph.preflight` reports runtime findings in `output.warnings`. The control
+plane stores that command result, and the platform mirrors it onto the
+deployment through `POST /api/v1/cluster-deployments/<id>/preflight/eph/sync/`.
+The endpoint reads the newest `eph.preflight` result from Cloud Control
+(`GET /api/v1/control/deployments/<id>/preflight`), sanitises the warning list
+(deduplicated, at most 32 entries of 160 characters) and stores it under
+`preflight_result.eph_preflight` together with `status`, `error_code`,
+`eph_ready`, `observed_at`, `command_id` and `synced_at`. Platform-side
+conclusions such as `network_readiness` and `ironic_workload` are preserved by
+the merge. An unavailable control plane returns 503/502 with
+`eph_preflight_unavailable` instead of pretending the observation failed the
+deployment, and the detail page shows both the stored snapshot and its sync
+time so operators can tell a stale record from a fresh one.
+
 The CR is applied separately from the operator manifest, only after
 `kubectl wait --for condition=established crd/ironics.ironic.metal3.io`: a CR
 cannot share a single server-side apply with the CRD that introduces it. If the

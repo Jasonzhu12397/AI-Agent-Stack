@@ -842,8 +842,13 @@ export type ClusterDeployment = {
   plan_hash: string;
   plan_result: Record<string, unknown> | null;
   preflight_result?: {
-    ironic_workload?: { configured: boolean; warnings: string[] };
+    ironic_workload?: {
+      configured: boolean;
+      warnings: string[];
+      defaults_sources?: string[];
+    };
     network_readiness?: NetworkReadinessReport | null;
+    eph_preflight?: EphPreflightRecord | null;
   } | null;
   error: Record<string, unknown> | null;
   created_at: string;
@@ -854,6 +859,30 @@ export type ClusterDeployment = {
     | "missing"
     | { status: "current" | "drift"; drift: Array<Record<string, unknown>> };
 };
+
+export type EphPreflightRecord = {
+  available: boolean;
+  reason: string | null;
+  status: string | null;
+  error_code: string | null;
+  eph_ready: boolean | null;
+  warnings: string[];
+  observed_at: string | null;
+  command_id: string | null;
+  synced_at: string;
+};
+
+export function syncClusterDeploymentEphPreflight(
+  deploymentId: string,
+): Promise<{
+  eph_preflight: EphPreflightRecord;
+  preflight_result: ClusterDeployment["preflight_result"];
+}> {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/preflight/eph/sync/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
 
 export function getClusterDeployments(
   tenantId: string,

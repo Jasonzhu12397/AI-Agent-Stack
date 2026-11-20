@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 import httpx
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from apps.cloud_control_agent.api import create_handler
 from apps.cloud_control_agent.main import initialize_store
@@ -1295,5 +1296,71 @@ def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_serve
 
         run = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
         assert run["run"]["status"] == "succeeded"
+    finally:
+        platform_client.close()
+
+
+def test_deployment_preflight_returns_the_latest_eph_result(control_server, tls_material):
+    platform_client = _tls_client(
+        control_server,
+        tls_material,
+        tls_material["platform"],
+    )
+    installation_id = uuid4()
+    agent_id = uuid4()
+    deployment_id = uuid4()
+    try:
+        _register_agent(platform_client, agent_id, installation_id)
+        _post(
+            platform_client,
+            "/api/v1/control/deployments",
+            {
+                "deployment_id": str(deployment_id),
+                "installation_id": str(installation_id),
+                "cluster_id": str(uuid4()),
+                "spec": {"cluster_name": "preflight-lab"},
+            },
+        )
+        missing = _get(
+            platform_client,
+            f"/api/v1/control/deployments/{deployment_id}/preflight",
+        )
+        assert missing["available"] is False
+        assert missing["reason"] == "EPH_PREFLIGHT_NOT_RUN"
+        with psycopg.connect(_database_url()) as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_control_commands (
+                    command_id, deployment_id, target_agent_id, required_role,
+                    action, idempotency_key, payload, status, result
+                )
+                VALUES (%s, %s, %s, 'eph', 'eph.preflight', %s, '{}'::jsonb,
+                        'succeeded', %s)
+                """,
+                (
+                    uuid4(),
+                    deployment_id,
+                    agent_id,
+                    f"preflight-{uuid4()}",
+                    Jsonb(
+                        {
+                            "output": {
+                                "eph_ready": False,
+                                "warnings": ["IRONIC_IMAGE_REQUIRED"],
+                                "observed_at": "2026-11-20T01:02:03+00:00",
+                            }
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+        synced = _get(
+            platform_client,
+            f"/api/v1/control/deployments/{deployment_id}/preflight",
+        )
+        assert synced["available"] is True
+        assert synced["status"] == "succeeded"
+        assert synced["output"]["warnings"] == ["IRONIC_IMAGE_REQUIRED"]
+        assert synced["output"]["eph_ready"] is False
     finally:
         platform_client.close()

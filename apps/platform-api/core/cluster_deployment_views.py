@@ -32,13 +32,17 @@ from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
 from packages.agent_contracts.ironic_spec import (
     IronicSpecError,
+    apply_provisioning_defaults,
     normalize_ironic_config,
+    provisioning_defaults,
 )
+from core.cloud_control_client import CloudControlDispatchError
 from core.cloud_control_bridge import (
     CloudControlBridgeError,
     CloudControlNotConfigured,
     FleetInventoryEmpty,
     FleetInventoryInsufficient,
+    build_cloud_control_client,
     build_cloud_control_spec,
     control_identity,
     dispatch_deployment,
@@ -435,6 +439,29 @@ def _validated_spec(request, *, infra_profile=None):
             return None, f"infra_network_profile: {exc}"
     ironic_config = spec.get("ironic")
     if ironic_config is not None:
+        if not isinstance(ironic_config, dict):
+            return None, "ironic: IRONIC_SPEC_INVALID"
+        networks = (spec.get("infra_network_profile") or {}).get("networks")
+        provisioning = next(
+            (
+                network
+                for network in (networks or [])
+                if isinstance(network, dict)
+                and network.get("role") == "provisioning"
+                and network.get("enabled", True)
+            ),
+            None,
+        )
+        if provisioning is not None:
+            ironic_config, filled = apply_provisioning_defaults(
+                ironic_config,
+                provisioning_defaults(provisioning),
+            )
+            if filled:
+                # Persist the resolved values so the dispatch payload and the
+                # EPH never have to re-derive them from the profile.
+                spec["ironic"] = ironic_config
+                spec["ironic_defaults_sources"] = filled
         try:
             normalize_ironic_config(ironic_config)
         except IronicSpecError as exc:
@@ -542,6 +569,7 @@ class ClusterDeploymentListCreateView(APIView):
                     if isinstance(ironic_section, dict)
                     else ["IRONIC_WORKLOAD_CR_REQUIRED"]
                 ),
+                "defaults_sources": spec.get("ironic_defaults_sources") or [],
             },
         }
         cluster_name = spec["cluster_name"]
@@ -759,6 +787,83 @@ class ClusterDeploymentDetailView(APIView):
                 "drift": drift,
             }
         return Response(data)
+
+
+class ClusterDeploymentEphPreflightView(APIView):
+    """Pull the EPH runtime preflight verdict back onto the platform record.
+
+    Readiness gating stays on the platform; this endpoint only mirrors what the
+    EPH reported so the detail page can show runtime warnings instead of
+    inferring them from the spec. The stored snapshot is explicit and timestamped,
+    so a stale sync is visible rather than silently trusted.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    MAX_WARNINGS = 32
+    MAX_WARNING_LENGTH = 160
+
+    def post(self, request, deployment_id):
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            if not ProjectMembership.objects.filter(
+                project=deployment.project,
+                user=request.user,
+            ).exists():
+                return Response({"detail": "Project membership required."}, status=403)
+        client = None
+        try:
+            client = build_cloud_control_client()
+            payload = client.get_deployment_preflight(deployment.id)
+        except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
+            return Response(
+                {"detail": str(exc), "code": "eph_preflight_unavailable"},
+                status=503,
+            )
+        except CloudControlDispatchError:
+            return Response(
+                {
+                    "detail": "Cloud Control request failed.",
+                    "code": "eph_preflight_unavailable",
+                },
+                status=502,
+            )
+        finally:
+            if client is not None:
+                client.close()
+        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+        raw_warnings = output.get("warnings")
+        warnings = []
+        if isinstance(raw_warnings, list):
+            for item in raw_warnings[: self.MAX_WARNINGS]:
+                text = str(item)[: self.MAX_WARNING_LENGTH]
+                if text and text not in warnings:
+                    warnings.append(text)
+        record = {
+            "available": bool(payload.get("available")),
+            "reason": payload.get("reason"),
+            "status": payload.get("status"),
+            "error_code": payload.get("error_code"),
+            "eph_ready": output.get("eph_ready"),
+            "warnings": warnings,
+            "observed_at": output.get("observed_at"),
+            "command_id": payload.get("command_id"),
+            "synced_at": timezone.now().isoformat(),
+        }
+        preflight = (
+            dict(deployment.preflight_result)
+            if isinstance(deployment.preflight_result, dict)
+            else {}
+        )
+        preflight["eph_preflight"] = record
+        deployment.preflight_result = preflight
+        deployment.save(update_fields=["preflight_result", "updated_at"])
+        return Response(
+            {"eph_preflight": record, "preflight_result": preflight}
+        )
 
 
 class ClusterDeploymentNetworkEvidenceView(APIView):

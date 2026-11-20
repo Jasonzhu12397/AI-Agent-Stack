@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { buildIronicWorkload, ironicWorkloadConfigured } from "../domain/ironicWorkload.ts";
+import {
+  buildIronicWorkload,
+  ironicWorkloadConfigured,
+  ironicWorkloadTemplate,
+  provisioningNetworkDefaults,
+} from "../domain/ironicWorkload.ts";
 import {
   approveAgentCommand,
   cancelClusterDeployment,
@@ -14,6 +19,7 @@ import {
   getClusterDeployments,
   getInfraNetworkProfile,
   saveInfraNetworkProfile,
+  syncClusterDeploymentEphPreflight,
   runClusterDeploymentPostflight,
   getProjects,
   getTenants,
@@ -32,6 +38,8 @@ const projects = ref<Project[]>([]);
 const nodes = ref<AgentNode[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const deployments = ref<ClusterDeployment[]>([]);
+const ephPreflightSyncing = ref<Record<string, boolean>>({});
+const ephPreflightErrors = ref<Record<string, string>>({});
 const selectedTenantId = ref("");
 const selectedProjectId = ref("");
 const selectedNodeId = ref("");
@@ -84,6 +92,29 @@ const buildIronicRamdiskDownloaderImage = ref("");
 const buildIronicKeepalivedImage = ref("");
 const buildIronicInterface = ref("");
 const buildIronicIpAddress = ref("");
+const provisioningDefaults = computed(() => provisioningNetworkDefaults(infraNetworkProfile.value));
+const ironicTemplate = computed(() =>
+  ironicWorkloadTemplate({
+    enabled: buildIronicEnabled.value,
+    credentialsName: buildIronicCredentialsName.value,
+    version: buildIronicVersion.value,
+    ironicImage: buildIronicImage.value,
+    ramdiskDownloaderImage: buildIronicRamdiskDownloaderImage.value,
+    keepalivedImage: buildIronicKeepalivedImage.value,
+    interfaceName: buildIronicInterface.value,
+    ipAddress: buildIronicIpAddress.value,
+  }),
+);
+
+function fillIronicFromProvisioning(): void {
+  buildIronicEnabled.value = true;
+  if (!buildIronicInterface.value.trim() && provisioningDefaults.value.interfaceName) {
+    buildIronicInterface.value = provisioningDefaults.value.interfaceName;
+  }
+  if (!buildIronicIpAddress.value.trim() && provisioningDefaults.value.ipAddress) {
+    buildIronicIpAddress.value = provisioningDefaults.value.ipAddress;
+  }
+}
 const buildStorageEnabled = ref(false);
 const buildRookVersion = ref("v1.17.4");
 const buildCephImage = ref("quay.io/ceph/ceph:v19.2.2");
@@ -359,6 +390,31 @@ async function loadDeployments(): Promise<void> {
     }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load cluster plans.";
+  }
+}
+
+async function syncEphPreflight(deployment: ClusterDeployment): Promise<void> {
+  ephPreflightSyncing.value = {
+    ...ephPreflightSyncing.value,
+    [deployment.id]: true,
+  };
+  ephPreflightErrors.value = { ...ephPreflightErrors.value, [deployment.id]: "" };
+  try {
+    const response = await syncClusterDeploymentEphPreflight(deployment.id);
+    deployment.preflight_result = response.preflight_result;
+  } catch (cause) {
+    ephPreflightErrors.value = {
+      ...ephPreflightErrors.value,
+      [deployment.id]:
+        cause instanceof ApiError
+          ? cause.message
+          : "Unable to sync the EPH preflight result.",
+    };
+  } finally {
+    ephPreflightSyncing.value = {
+      ...ephPreflightSyncing.value,
+      [deployment.id]: false,
+    };
   }
 }
 
@@ -943,6 +999,16 @@ onUnmounted(() => {
             </p>
             <el-switch v-model="buildIronicEnabled" active-text="Configure the Ironic workload CR" />
             <template v-if="buildIronicEnabled">
+              <div class="ironic-prefill-row">
+                <el-button size="small" plain @click="fillIronicFromProvisioning">
+                  Fill interface / address from provisioning network
+                </el-button>
+                <small>
+                  Interface {{ provisioningDefaults.interfaceName || "not declared" }} · address
+                  {{ provisioningDefaults.ipAddress || "no gateway declared" }}. The gateway is a
+                  prefill default; edit it if the EPH owns a different address.
+                </small>
+              </div>
               <div class="replica-fields">
                 <label>API credentials Secret name
                   <el-input v-model="buildIronicCredentialsName" placeholder="ironic-auth" />
@@ -968,6 +1034,8 @@ onUnmounted(() => {
                   <el-input v-model="buildIronicIpAddress" placeholder="10.130.60.84" />
                 </label>
               </div>
+              <p>Payload template sent to the platform (it normalised and forwards it to the EPH):</p>
+              <pre class="ironic-template">{{ ironicTemplate }}</pre>
             </template>
             <label>Network profile override (optional JSON)
               <el-input
@@ -1092,6 +1160,44 @@ onUnmounted(() => {
                     :key="warning"
                   >Ironic workload: {{ warning }}</li>
                 </ul>
+                <div class="eph-preflight">
+                  <div class="command-topline">
+                    <strong>EPH preflight</strong>
+                    <el-button
+                      size="small"
+                      :loading="ephPreflightSyncing[deployment.id] === true"
+                      @click="syncEphPreflight(deployment)"
+                    >Sync EPH preflight</el-button>
+                  </div>
+                  <template v-if="deployment.preflight_result?.eph_preflight">
+                    <el-tag
+                      :type="deployment.preflight_result.eph_preflight.eph_ready ? 'success' : 'warning'"
+                      size="small"
+                    >
+                      {{ deployment.preflight_result.eph_preflight.available ? (deployment.preflight_result.eph_preflight.eph_ready ? "EPH ready" : "EPH not ready") : "EPH preflight unavailable" }}
+                    </el-tag>
+                    <small>
+                      Observed {{ formatTime(deployment.preflight_result.eph_preflight.observed_at) }}
+                      · Synced {{ formatTime(deployment.preflight_result.eph_preflight.synced_at) }}
+                      <template v-if="deployment.preflight_result.eph_preflight.reason">
+                        · {{ deployment.preflight_result.eph_preflight.reason }}
+                      </template>
+                    </small>
+                    <ul
+                      v-if="deployment.preflight_result.eph_preflight.warnings.length"
+                      class="readiness-blocked"
+                    >
+                      <li
+                        v-for="warning in deployment.preflight_result.eph_preflight.warnings"
+                        :key="'eph-' + warning"
+                      >EPH preflight: {{ warning }}</li>
+                    </ul>
+                  </template>
+                  <small v-else>Runtime EPH warnings are not synced yet.</small>
+                  <small v-if="ephPreflightErrors[deployment.id]" class="readiness-blocked">
+                    {{ ephPreflightErrors[deployment.id] }}
+                  </small>
+                </div>
                 <ul v-if="missingRequirements(deployment).length">
                   <li v-for="item in missingRequirements(deployment)" :key="item">{{ item }}</li>
                 </ul>
