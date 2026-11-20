@@ -69,7 +69,13 @@ function edgeLabel(edge: Record<string, unknown>): string {
   return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
 }
 
-type InsertableNodeType = "llm" | "knowledge_search" | "tool" | "approval";
+type InsertableNodeType =
+  | "llm"
+  | "knowledge_search"
+  | "tool"
+  | "condition"
+  | "agent"
+  | "approval";
 
 function addWorkflowNode(type: InsertableNodeType): void {
   const definition = parseDefinition();
@@ -99,7 +105,11 @@ function addWorkflowNode(type: InsertableNodeType): void {
       ? { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 }
       : type === "approval"
         ? { instructions: "Confirm this workflow step before it continues" }
-        : { tool_id: "", arguments: {} };
+        : type === "condition"
+          ? { input_key: "input", equals: "" }
+          : type === "agent"
+            ? { agent_version_id: "", instructions: "" }
+            : { tool_id: "", arguments: {} };
   const node = { id: nodeId, type, config };
   const edgeIndex = edges.indexOf(previousEdge);
   edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
@@ -386,6 +396,8 @@ onUnmounted(() => {
           <el-button size="small" @click="addWorkflowNode('llm')">＋ LLM</el-button>
           <el-button size="small" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
           <el-button size="small" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
+          <el-button size="small" @click="addWorkflowNode('condition')">＋ Condition</el-button>
+          <el-button size="small" @click="addWorkflowNode('agent')">＋ Agent</el-button>
           <el-button size="small" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
