@@ -112,8 +112,17 @@ def _network_readiness(project, spec):
     worker_ready = []
     blocked = []
     with_findings = []
+    evidence = []
     for machine in machines:
         inventory = machine.hardware_inventory
+        evidence.append(
+            {
+                "machine_id": str(machine.id),
+                "name": machine.agent_node.name,
+                "inventory_revision": machine.inventory_revision,
+                "observed_at": machine.observed_at.isoformat(),
+            }
+        )
         role_results = {}
         role_reports = {}
         for role in ("control_plane", "worker"):
@@ -242,12 +251,56 @@ def _network_readiness(project, spec):
         "required_sriov_workers": required_worker if policies else 0,
         "sriov_ready": len(sriov_ready) if policies else 0,
         "sriov_findings": sriov_findings,
+        "evidence": evidence,
+        "evaluated_at": timezone.now().isoformat(),
     }
     ready = len(control_ready) >= required_control and len(worker_ready) >= required_worker
     if policies:
         ready = ready and len(sriov_ready) >= required_worker
     report["ready"] = ready
     return report
+
+
+def _network_evidence_drift(project, spec):
+    """Compare the stored collection evidence with the current machine inventory."""
+    evidence = spec.get("network_evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return None
+    drift = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            drift.append({"machine_id": None, "code": "NETWORK_EVIDENCE_INVALID"})
+            continue
+        machine_id = item.get("machine_id")
+        machine = AgentMachine.objects.filter(
+            project=project,
+            id=machine_id,
+        ).first()
+        if machine is None:
+            drift.append(
+                {
+                    "machine_id": machine_id,
+                    "code": "NETWORK_EVIDENCE_MACHINE_MISSING",
+                }
+            )
+            continue
+        revision = item.get("inventory_revision")
+        observed_at = item.get("observed_at")
+        current_observed = (
+            machine.observed_at.isoformat() if machine.observed_at is not None else None
+        )
+        if revision != machine.inventory_revision or observed_at != current_observed:
+            drift.append(
+                {
+                    "machine_id": machine_id,
+                    "code": "NETWORK_EVIDENCE_STALE",
+                    "expected_revision": revision,
+                    "current_revision": machine.inventory_revision,
+                    "expected_observed_at": observed_at,
+                    "current_observed_at": current_observed,
+                }
+            )
+    return drift
 
 
 def _validated_spec(request, *, infra_profile=None):
@@ -461,6 +514,9 @@ class ClusterDeploymentListCreateView(APIView):
                 },
                 status=409,
             )
+        if readiness is not None:
+            # Bind the plan to the exact inventory revision it was validated against.
+            spec["network_evidence"] = readiness["evidence"]
         cluster_name = spec["cluster_name"]
         kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
@@ -491,10 +547,15 @@ class ClusterDeploymentListCreateView(APIView):
                     tenant=tenant,
                     idempotency_key=idempotency_key,
                 )
+        def _spec_signature(value):
+            if not isinstance(value, dict):
+                return value
+            return {key: item for key, item in value.items() if key != "network_evidence"}
+
         if (
             deployment.project_id != project.id
             or deployment.eph_node_id != eph_node.id
-            or deployment.spec != spec
+            or _spec_signature(deployment.spec) != _spec_signature(spec)
         ):
             return Response(
                 {"detail": "Idempotency-Key was used for a different cluster plan."},
@@ -502,6 +563,29 @@ class ClusterDeploymentListCreateView(APIView):
             )
 
         plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+        if readiness is not None:
+            plan_result = {
+                **plan_result,
+                "preflight": {
+                    **(plan_result.get("preflight") or {}),
+                    "network_readiness": readiness,
+                },
+            }
+            deployment.plan_result = plan_result
+            deployment.save(update_fields=["plan_result", "updated_at"])
+        drift = _network_evidence_drift(project, deployment.spec)
+        if drift:
+            return Response(
+                {
+                    "detail": (
+                        "Node network inventory changed after the readiness check. "
+                        "Collect all node networks again before installing."
+                    ),
+                    "code": "NETWORK_EVIDENCE_DRIFT",
+                    "drift": drift,
+                },
+                status=409,
+            )
         control = plan_result.get("cloud_control")
         if isinstance(control, dict) and isinstance(control.get("spec"), dict):
             installation_id = uuid.UUID(control["installation_id"])

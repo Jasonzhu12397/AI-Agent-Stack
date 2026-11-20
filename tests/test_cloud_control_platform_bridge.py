@@ -528,3 +528,80 @@ def test_deployment_gate_reports_missing_sriov_pci(bridge_workspace):
         finding["code"] == "SRIOV_PCI_ADDRESS_MISSING"
         for finding in readiness["sriov_findings"]
     )
+
+
+@pytest.mark.django_db
+def test_deployment_persists_network_preflight_evidence(bridge_workspace, monkeypatch):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    machines = []
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_network_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.inventory_revision = 3
+        machine.save()
+        machines.append(machine)
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    response = _post(client, tenant, project, node, key="evidence-persist")
+    assert response.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    preflight = deployment.plan_result["preflight"]["network_readiness"]
+    assert preflight["ready"] is True
+    assert len(preflight["evidence"]) == 5
+    assert deployment.spec["network_evidence"] == preflight["evidence"]
+    assert all(item["inventory_revision"] == 3 for item in preflight["evidence"])
+
+
+@pytest.mark.django_db
+def test_deployment_gate_detects_inventory_drift(bridge_workspace, monkeypatch):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    machines = []
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_network_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.save()
+        machines.append(machine)
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_network_profile(),
+        updated_by=user,
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    first = _post(client, tenant, project, node, key="evidence-drift")
+    assert first.status_code == 202
+    changed = machines[0]
+    changed.inventory_revision = changed.inventory_revision + 1
+    changed.observed_at = timezone.now()
+    changed.save()
+    second = _post(client, tenant, project, node, key="evidence-drift")
+    assert second.status_code == 409
+    assert second.data["code"] == "NETWORK_EVIDENCE_DRIFT"
+    assert any(
+        item["code"] == "NETWORK_EVIDENCE_STALE" for item in second.data["drift"]
+    )

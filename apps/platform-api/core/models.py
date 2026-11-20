@@ -636,6 +636,7 @@ class AgentMachine(models.Model):
     identity_conflicts = models.JSONField(default=list)
     hardware_inventory = models.JSONField(default=dict)
     inventory_source = models.CharField(max_length=48, default="agent_report")
+    inventory_revision = models.PositiveIntegerField(default=0)
     observed_at = models.DateTimeField(null=True, blank=True)
     bmc_credential_ref = models.CharField(max_length=160, blank=True)
     bmc_endpoint = models.URLField(max_length=500, blank=True)

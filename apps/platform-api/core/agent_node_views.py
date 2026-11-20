@@ -1511,6 +1511,7 @@ class FleetMachineNetworkVerifyView(APIView):
                 "machine_id": str(machine.id),
                 "machine_name": machine.agent_node.name,
                 "inventory_source": machine.inventory_source,
+                "inventory_revision": machine.inventory_revision,
                 "observed_at": machine.observed_at.isoformat()
                 if machine.observed_at
                 else None,
@@ -2910,11 +2911,13 @@ class AgentRuntimeResultView(APIView):
                         machine.hardware_inventory = merged
                         machine.observed_at = timezone.now()
                         machine.inventory_source = "host_network_observe"
+                        machine.inventory_revision = machine.inventory_revision + 1
                         machine.save(
                             update_fields=[
                                 "hardware_inventory",
                                 "observed_at",
                                 "inventory_source",
+                                "inventory_revision",
                                 "updated_at",
                             ]
                         )

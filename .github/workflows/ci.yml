@@ -242,6 +242,37 @@ jobs:
           path: reports/control-postgres.xml
           retention-days: 7
 
+  metal3-crds:
+    name: Metal3 and SR-IOV CRD integration
+    needs: [static]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kind and kubectl
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+          kubectl_version=$(jq -r '.binaries.kubectl.version' deploy/offline/images.json)
+          kubectl_sha256=$(jq -r '.binaries.kubectl.sha256' deploy/offline/images.json)
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
+          echo "${kubectl_sha256}  kubectl" | sha256sum -c -
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+      - name: Create kind cluster
+        run: kind create cluster --name metal3-crds --wait 120s
+      - name: Apply CRDs and validate rendered manifests
+        run: bash tests/integration/kind_metal3_crds.sh
+      - name: Cluster diagnostics
+        if: always()
+        run: |
+          kubectl get crd || true
+          kubectl get pods -A || true
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name metal3-crds || true
+
   agent-images:
     name: Agent image build (${{ matrix.image }})
     needs: [static]
@@ -304,7 +335,7 @@ jobs:
   # ---------------- Stage 3: required quality gate ----------------
   quality-gate:
     name: Required quality gate
-    needs: [static, python-schema, web, compose-config, unit-tests, control-postgres, agent-images, compose-e2e]
+    needs: [static, python-schema, web, compose-config, unit-tests, control-postgres, metal3-crds, agent-images, compose-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -326,6 +357,7 @@ jobs:
           check compose-config "${{ needs['compose-config'].result }}"
           check unit-tests "${{ needs['unit-tests'].result }}"
           check control-postgres "${{ needs['control-postgres'].result }}"
+          check metal3-crds "${{ needs['metal3-crds'].result }}"
           check agent-images "${{ needs['agent-images'].result }}"
           check compose-e2e "${{ needs['compose-e2e'].result }}"
           if [ "$failures" -ne 0 ]; then

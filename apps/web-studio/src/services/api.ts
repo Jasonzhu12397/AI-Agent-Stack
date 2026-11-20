@@ -595,6 +595,7 @@ export type HostNetworkVerification = {
   machine_id: string;
   machine_name: string;
   inventory_source: string;
+  inventory_revision: number;
   observed_at: string | null;
   host_role: "control_plane" | "worker" | "storage";
   status: "pass" | "fail" | "unknown";
