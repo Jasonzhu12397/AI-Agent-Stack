@@ -460,7 +460,7 @@ def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_serve
         workflow_id = uuid4()
         _post(platform_client, f"/api/v1/control/projects/{project_id}/workflows", {
             "workflow_id": str(workflow_id),
-            "name": "Retry workflow",
+            "name": "retry-workflow",
             "definition": {
                 "steps": [{
                     "id": "prepare",
