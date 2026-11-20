@@ -97,6 +97,57 @@ def test_pci_mismatch_fails_for_worker():
     assert any(item["code"] == "HOST_PCI_MISMATCH" for item in result["findings"])
 
 
+def test_sriov_vf_count_mismatch_fails():
+    observed = {
+        "nics": [
+            {"name": "eno1"},
+            {"name": "eno3"},
+            {
+                "name": "eno5",
+                "pci_address": "0000:3b:00.1",
+                "sriov_totalvfs": 8,
+                "sriov_numvfs": 4,
+            },
+        ],
+        "bonds": [],
+    }
+    result = verify_host_networks(PROFILE, "worker", observed)
+    assert any(item["code"] == "HOST_SRIOV_NUMVFS_MISMATCH" for item in result["findings"])
+
+
+def test_sriov_totalvfs_insufficient_fails():
+    observed = {
+        "nics": [
+            {"name": "eno1"},
+            {"name": "eno3"},
+            {
+                "name": "eno5",
+                "pci_address": "0000:3b:00.1",
+                "sriov_totalvfs": 4,
+                "sriov_numvfs": 4,
+            },
+        ],
+        "bonds": [],
+    }
+    result = verify_host_networks(PROFILE, "worker", observed)
+    assert any(
+        item["code"] == "HOST_SRIOV_TOTALVFS_INSUFFICIENT" for item in result["findings"]
+    )
+
+
+def test_sriov_vf_count_unknown_without_sysfs_values():
+    observed = {
+        "nics": [
+            {"name": "eno1"},
+            {"name": "eno3"},
+            {"name": "eno5", "pci_address": "0000:3b:00.1"},
+        ],
+        "bonds": [],
+    }
+    result = verify_host_networks(PROFILE, "worker", observed)
+    assert any(item["code"] == "HOST_SRIOV_VFS_UNKNOWN" for item in result["findings"])
+
+
 def test_missing_pci_evidence_is_unknown():
     observed = {
         "nics": [{"name": "eno1"}, {"name": "eno3"}],

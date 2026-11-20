@@ -589,6 +589,12 @@ export type HostNetworkVerification = {
   checked_networks: string[];
   findings: HostNetworkFinding[];
   observed_interfaces: string[];
+  observed_nics: Array<Record<string, unknown> & {
+    name: string;
+    pci_address?: string;
+    sriov_numvfs?: number;
+    sriov_totalvfs?: number;
+  }>;
 };
 
 export function verifyFleetMachineNetwork(

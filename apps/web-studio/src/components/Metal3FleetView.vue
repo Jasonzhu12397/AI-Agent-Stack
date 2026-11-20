@@ -743,6 +743,23 @@ onUnmounted(() => {
                 Checked: {{ networkVerification.checked_networks.join(", ") || "none" }} ·
                 OS interfaces: {{ networkVerification.observed_interfaces.join(", ") || "none" }}
               </p>
+              <el-table :data="networkVerification.observed_nics" size="small" class="task-table">
+                <el-table-column prop="name" label="OS interface" min-width="130" />
+                <el-table-column prop="mtu" label="MTU" min-width="70" />
+                <el-table-column prop="pci_address" label="PCI address" min-width="140" />
+                <el-table-column prop="driver" label="Driver" min-width="100" />
+                <el-table-column label="VLANs" min-width="100">
+                  <template #default="scope">{{ (scope.row.vlans || []).join(", ") || "—" }}</template>
+                </el-table-column>
+                <el-table-column label="SR-IOV VFs" min-width="110">
+                  <template #default="scope">
+                    <span v-if="scope.row.sriov_numvfs !== undefined">
+                      {{ scope.row.sriov_numvfs }} / {{ scope.row.sriov_totalvfs ?? "?" }}
+                    </span>
+                    <span v-else>—</span>
+                  </template>
+                </el-table-column>
+              </el-table>
               <el-table :data="networkVerification.findings" size="small" class="task-table">
                 <el-table-column prop="code" label="Finding" min-width="220" />
                 <el-table-column label="Status" min-width="90">

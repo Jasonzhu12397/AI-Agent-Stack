@@ -95,6 +95,32 @@ def test_collector_uses_sysfs_for_pci(tmp_path: Path):
     assert by_name["eno3"]["pci_address"] == "0000:3b:00.1"
 
 
+def test_collector_reads_pci_and_sriov_metadata(tmp_path: Path):
+    device = tmp_path / "eno3" / "device"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text("0x8086\n", encoding="utf-8")
+    (device / "device").write_text("0x1572\n", encoding="utf-8")
+    (device / "numa_node").write_text("0\n", encoding="utf-8")
+    (device / "sriov_totalvfs").write_text("8\n", encoding="utf-8")
+    (device / "sriov_numvfs").write_text("4\n", encoding="utf-8")
+    driver = tmp_path / "eno3" / "driver-src"
+    driver.mkdir()
+    (tmp_path / "eno3" / "device" / "driver").symlink_to(driver)
+    (tmp_path / "eno3" / "device" / "pci").symlink_to("/sys/devices/pci0000:3b/0000:3b:00.1")
+    # Override the device symlink location used for PCI identification.
+    (tmp_path / "eno3" / "device-link").unlink(missing_ok=True)
+    result = collect_local_host_networks(Runner(), sysfs_root=tmp_path)
+    by_name = {nic["name"]: nic for nic in result["nics"]}
+    metadata = by_name["eno3"]
+    # The stub sysfs directory is not a PCI symlink, so no fake PCI id is invented.
+    assert "pci_address" not in metadata or metadata["pci_address"] == "0000:3b:00.1"
+    assert metadata["pci_vendor_id"] == "0x8086"
+    assert metadata["pci_device_id"] == "0x1572"
+    assert metadata["numa_node"] == 0
+    assert metadata["sriov_totalvfs"] == 8
+    assert metadata["sriov_numvfs"] == 4
+
+
 def test_collector_reports_ip_failure(tmp_path: Path):
     with pytest.raises(HostNetworkObserveError) as excinfo:
         collect_local_host_networks(Runner(fail=True), sysfs_root=tmp_path)

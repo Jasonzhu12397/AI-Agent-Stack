@@ -84,6 +84,7 @@ def observe_host_networks(
     addr_payload: Any,
     *,
     pci_lookup: Callable[[str], str] | None = None,
+    metadata_lookup: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build ``nics`` and ``bonds`` entries from real OS link state."""
 
@@ -115,6 +116,21 @@ def observe_host_networks(
         pci = pci_lookup(name) if pci_lookup is not None else ""
         if pci:
             entry["pci_address"] = pci.lower()
+        if metadata_lookup is not None:
+            metadata = metadata_lookup(name)
+            if isinstance(metadata, dict):
+                for key in (
+                    "pci_address",
+                    "pci_vendor_id",
+                    "pci_device_id",
+                    "driver",
+                    "numa_node",
+                    "sriov_totalvfs",
+                    "sriov_numvfs",
+                    "sriov_capable",
+                ):
+                    if key in metadata and metadata[key] not in (None, ""):
+                        entry[key] = metadata[key]
         master = link.get("master")
         if kind == "bond" or (isinstance(master, str) and master):
             entry["master"] = master if isinstance(master, str) else ""

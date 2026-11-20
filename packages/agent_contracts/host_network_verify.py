@@ -293,6 +293,48 @@ def verify_host_networks(
                         expected=pci,
                     )
                 )
+        if network["role"] == "sriov" and network["pci_addresses"]:
+            for nic in index.values():
+                if _pci(nic.get("pci_address") or nic.get("pci")) not in network[
+                    "pci_addresses"
+                ]:
+                    continue
+                total_vfs = nic.get("sriov_totalvfs")
+                num_vfs = nic.get("sriov_numvfs")
+                if isinstance(total_vfs, int) and not isinstance(total_vfs, bool):
+                    if total_vfs < network["num_vfs"]:
+                        findings.append(
+                            _finding(
+                                "HOST_SRIOV_TOTALVFS_INSUFFICIENT",
+                                "fail",
+                                network=network["name"],
+                                interface=_name(nic) or link,
+                                expected=network["num_vfs"],
+                                observed=total_vfs,
+                            )
+                        )
+                if isinstance(num_vfs, int) and not isinstance(num_vfs, bool):
+                    if num_vfs != network["num_vfs"]:
+                        findings.append(
+                            _finding(
+                                "HOST_SRIOV_NUMVFS_MISMATCH",
+                                "fail",
+                                network=network["name"],
+                                interface=_name(nic) or link,
+                                expected=network["num_vfs"],
+                                observed=num_vfs,
+                            )
+                        )
+                elif not isinstance(total_vfs, int) or isinstance(total_vfs, bool):
+                    findings.append(
+                        _finding(
+                            "HOST_SRIOV_VFS_UNKNOWN",
+                            "unknown",
+                            network=network["name"],
+                            interface=_name(nic) or link,
+                            expected=network["num_vfs"],
+                        )
+                    )
     if not checked:
         findings.append(
             _finding("HOST_ROLE_HAS_NO_NETWORK", "fail", network=None, interface=None)
@@ -304,6 +346,25 @@ def verify_host_networks(
         status = "unknown"
     else:
         status = "pass"
+    observed_nics = [
+        {
+            key: nic[key]
+            for key in (
+                "name",
+                "mtu",
+                "vlans",
+                "pci_address",
+                "pci_vendor_id",
+                "pci_device_id",
+                "driver",
+                "numa_node",
+                "sriov_totalvfs",
+                "sriov_numvfs",
+            )
+            if key in nic and nic[key] not in (None, "", [])
+        }
+        for nic in index.values()
+    ]
     return {
         "host_role": host_role,
         "status": status,
@@ -311,4 +372,5 @@ def verify_host_networks(
         "checked_networks": checked,
         "findings": findings,
         "observed_interfaces": sorted(index),
+        "observed_nics": observed_nics,
     }
