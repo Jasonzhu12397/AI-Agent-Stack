@@ -43,6 +43,7 @@ The model UUID is illustrative. A real enabled chat model belonging to the same 
 | `tool` | `tool_id`, optional `arguments` or `arguments_from` | Executes an installed project connector tool through the trusted ToolRouter |
 | `agent` | `agent_version_id`, optional `instructions`, `input_from` | Invokes a published agent version owned by the same tenant/project |
 | `approval` | optional `instructions` (≤4000 chars) | Suspends the run in `waiting_approval` until a tenant/project administrator approves or rejects the step |
+| `loop` | `max_iterations` (2–10), `body` = inline `llm` / `tool` / `knowledge_search` / `agent`; optional `input_from` | Repeats the body with the previous iteration output as `{{input}}`, persists every iteration in `state._loops`, and stops early only when the body returns exactly `{"continue": false}` |
 | `end` | optional `source_node` | Returns the referenced node output, or the accumulated state |
 
 All nodes except `start` accept the `join` field documented below.
@@ -61,7 +62,7 @@ The server checks:
 - stable unique node IDs and supported node types;
 - one start node, at least one end node, no self/duplicate edges, no cycles and no unreachable nodes;
 - valid condition branches and source references that point to earlier nodes;
-- valid UUID model references, enabled chat model, tenant ownership, token ceiling and timeout range;
+- valid UUID model references, enabled chat model, tenant ownership, token ceiling and timeout range; loop bodies reject outer-node input references and are validated recursively, with model/tool/agent scope checked at run time;
 - Knowledge Base IDs that belong to the same tenant/project, with an enabled embedding model;
 - Tool IDs that belong to an approved, enabled plugin and an installed project-scoped version, with the required permissions granted; high/critical-risk tools are rejected until a Workflow Human Approval node exists;
 - no credential-like keys in node configuration.
@@ -92,14 +93,15 @@ Run creation requires `Idempotency-Key` and a JSON object in `input`. It also ac
 - Completed node outputs are written to the run state after each step. A subsequent attempt reuses successful steps and retries an interrupted/failed step.
 - An `approval` node persists `WorkflowStepRun.status = awaiting_approval`, moves the task to `waiting_approval` and releases its lease. The approval API marks the step succeeded and requeues the task, which resumes from the persisted step outputs; rejection marks the step and task failed and finishes the run. Approvals are single-approver gates; project/tenant administrators may decide them.
 - Tool nodes run through ToolRouter, but WorkflowStepRun does not yet provide a durable external-call receipt or exactly-once guarantee. A crash after a connector side effect but before the step is persisted as successful can cause a retry; connector handlers must be idempotent until a persisted execution ledger is added.
+- Loop iterations are checkpointed in `state._loops[loop_id] = {next_iteration, outputs, last, stopped}` and the checkpoint is written after every body call, so a retried worker resumes at the next iteration instead of replaying completed ones.
 - Every worker cycle expires runs whose `deadline_at` passed: the task becomes failed with `WORKFLOW_DEADLINE_EXCEEDED`, the run stores the same error, and running/awaiting-approval steps are failed. The engine also checks the deadline before every node, so a hung run cannot keep executing past it. Approval decisions after the deadline are refused.
 - A lease expiry at the maximum attempt count marks the task and WorkflowRun terminal.
 - Cancellation is cooperative. It cannot roll back a model call already completed.
 
 ## Vue Studio
 
-The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search`, `tool` and `approval` nodes, save, publish, enqueue runs, poll execution history, display step statuses and approve/reject suspended steps. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
+The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search`, `tool`, `condition`, `agent`, `approval` and `loop` nodes, save, publish, enqueue runs, poll execution history, display step statuses and approve/reject suspended steps. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
 
 ## Not implemented in this milestone
 
-Loop/Iterator, standalone HTTP Request node, Code sandbox, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. The `tool` node is available only through the trusted ToolRouter; high/critical-risk tools are blocked, and execution fails closed when no trusted handler is registered. This does not provide exactly-once delivery for external connector side effects.
+Standalone HTTP Request node, Code sandbox, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. The `tool` node is available only through the trusted ToolRouter; high/critical-risk tools are blocked, and execution fails closed when no trusted handler is registered. This does not provide exactly-once delivery for external connector side effects.

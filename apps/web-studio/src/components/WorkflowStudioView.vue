@@ -75,7 +75,8 @@ type InsertableNodeType =
   | "tool"
   | "condition"
   | "agent"
-  | "approval";
+  | "approval"
+  | "loop";
 
 function addWorkflowNode(type: InsertableNodeType): void {
   const definition = parseDefinition();
@@ -109,7 +110,15 @@ function addWorkflowNode(type: InsertableNodeType): void {
           ? { input_key: "input", equals: "" }
           : type === "agent"
             ? { agent_version_id: "", instructions: "" }
-            : { tool_id: "", arguments: {} };
+            : type === "loop"
+              ? {
+                  max_iterations: 3,
+                  body: {
+                    type: "llm",
+                    config: { model_config_id: "", prompt_template: "Refine: {{input}}" },
+                  },
+                }
+              : { tool_id: "", arguments: {} };
   const node = { id: nodeId, type, config };
   const edgeIndex = edges.indexOf(previousEdge);
   edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
@@ -399,6 +408,7 @@ onUnmounted(() => {
           <el-button size="small" @click="addWorkflowNode('condition')">＋ Condition</el-button>
           <el-button size="small" @click="addWorkflowNode('agent')">＋ Agent</el-button>
           <el-button size="small" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
+          <el-button size="small" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-pipeline-row">
@@ -442,8 +452,8 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes: start, llm, knowledge_search, tool, condition, agent, approval and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
-            Approval nodes suspend the run in task status waiting_approval until a project administrator approves or rejects them from the execution history. The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
+            Supported execution nodes: start, llm, knowledge_search, tool, condition, agent, approval, loop and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
+            Loop nodes repeat an inline llm/tool/knowledge_search/agent body up to max_iterations (2–10) and persist each iteration in the run state; a body output of exactly {"continue": false} stops early. Approval nodes suspend the run in task status waiting_approval until a project administrator approves or rejects them from the execution history. The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
           </p>
           <div class="workflow-actions">
             <el-button :loading="saving" @click="saveDraft">Save draft</el-button>

@@ -1579,3 +1579,85 @@ def test_workflow_run_deadline_is_enforced_and_exposed(workflow_workspace):
     assert task.error["code"] == "WORKFLOW_DEADLINE_EXCEEDED"
     assert run.output_data["error"] == "WORKFLOW_DEADLINE_EXCEEDED"
     assert run.finished_at is not None
+
+
+def _loop_definition(model_id, max_iterations=3):
+    return {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "refine",
+                "type": "loop",
+                "config": {
+                    "max_iterations": max_iterations,
+                    "body": {
+                        "type": "llm",
+                        "config": {
+                            "model_config_id": str(model_id),
+                            "prompt_template": "Refine: {{input}}",
+                            "max_tokens": 128,
+                            "timeout_seconds": 20,
+                        },
+                    },
+                },
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "refine"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "refine"},
+            {"source": "refine", "target": "end"},
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_bounded_loop_executes_its_body_for_every_iteration(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Loop workflow",
+        slug="loop-workflow",
+        draft_definition=_loop_definition(model.id, max_iterations=3),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    assert (
+        client.post(f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json").status_code
+        == 201
+    )
+    started = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "iterate"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-loop-001",
+    )
+    assert started.status_code == 202
+    assert process_once("workflow-loop-worker") is True
+    run = WorkflowRun.objects.get(pk=started.data["id"])
+    assert run.task.status == Task.Status.SUCCEEDED
+    assert run.output_data["iterations"] == 3
+    assert len(run.output_data["outputs"]) == 3
+    assert run.output_data["stopped_early"] is False
+    assert run.state["_loops"]["refine"]["next_iteration"] == 3
+
+
+@pytest.mark.django_db
+def test_workflow_validator_rejects_invalid_loop_contracts(workflow_workspace):
+    _, _, _, model = workflow_workspace
+    for value in (1, 11, True, "3"):
+        definition = _loop_definition(model.id)
+        definition["nodes"][1]["config"]["max_iterations"] = value
+        with pytest.raises(WorkflowValidationError):
+            validate_workflow_definition(definition)
+
+    definition = _loop_definition(model.id)
+    definition["nodes"][1]["config"]["body"]["config"]["source_node"] = "start"
+    with pytest.raises(WorkflowValidationError):
+        validate_workflow_definition(definition)
+
+    definition = _loop_definition(model.id)
+    definition["nodes"][1]["config"]["body"]["type"] = "approval"
+    with pytest.raises(WorkflowValidationError):
+        validate_workflow_definition(definition)

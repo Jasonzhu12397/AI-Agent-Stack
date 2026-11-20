@@ -118,6 +118,7 @@ def validate_workflow_definition(definition):
             "tool",
             "agent",
             "approval",
+            "loop",
             "end",
         }:
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
@@ -261,6 +262,64 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Approval node {node_id} instructions are invalid."
                 )
+        if node_type == "loop":
+            max_iterations = config.get("max_iterations")
+            if (
+                isinstance(max_iterations, bool)
+                or not isinstance(max_iterations, int)
+                or not 2 <= max_iterations <= 10
+            ):
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} max_iterations must be an integer from 2 to 10."
+                )
+            body = config.get("body")
+            if not isinstance(body, dict):
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} requires an inline body object."
+                )
+            body_type = body.get("type")
+            if body_type not in {"llm", "tool", "knowledge_search", "agent"}:
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} body type is not supported."
+                )
+            body_config = body.get("config", {})
+            if not isinstance(body_config, dict):
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} body config must be an object."
+                )
+            if any(
+                key in body_config
+                for key in ("input_from", "source_node", "arguments_from", "gather_from")
+            ):
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} body must use the iteration input."
+                )
+            if contains_secret(body_config):
+                raise WorkflowValidationError(
+                    f"Loop node {node_id} body config cannot contain credential material."
+                )
+            body_node_id = f"{node_id}_body"
+            validate_workflow_definition(
+                {
+                    "nodes": [
+                        {"id": "start", "type": "start", "config": {}},
+                        {
+                            "id": body_node_id,
+                            "type": body_type,
+                            "config": body_config,
+                        },
+                        {
+                            "id": "end",
+                            "type": "end",
+                            "config": {"source_node": body_node_id},
+                        },
+                    ],
+                    "edges": [
+                        {"source": "start", "target": body_node_id},
+                        {"source": body_node_id, "target": "end"},
+                    ],
+                }
+            )
         if node_type in {
             "llm",
             "condition",
@@ -268,6 +327,7 @@ def validate_workflow_definition(definition):
             "tool",
             "agent",
             "approval",
+            "loop",
             "end",
         }:
             source_node = (
@@ -405,6 +465,15 @@ def validate_workflow_definition(definition):
 def validate_model_references(graph, tenant, project):
     for node in graph["nodes"].values():
         config = node["config"]
+        if node["type"] == "loop":
+            body = config["body"]
+            body_node = {
+                "id": f"{node['id']}_body",
+                "type": body["type"],
+                "config": body.get("config", {}),
+            }
+            validate_model_references({"nodes": {body_node["id"]: body_node}}, tenant, project)
+            continue
         if node["type"] == "knowledge_search":
             knowledge_bases = KnowledgeBase.objects.filter(
                 id__in=config["knowledge_base_ids"],
@@ -609,6 +678,61 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
     config = node["config"]
     if node_type == "start":
         return input_data
+    if node_type == "loop":
+        loops = state.get("_loops")
+        if not isinstance(loops, dict):
+            loops = {}
+        progress = loops.get(node["id"], {})
+        if not isinstance(progress, dict):
+            progress = {}
+        outputs = list(progress.get("outputs", []))
+        current = progress.get("last")
+        if not outputs:
+            current = _step_input(node, state)
+        stopped = bool(progress.get("stopped", False))
+        start_iteration = int(progress.get("next_iteration", 0))
+        max_iterations = config["max_iterations"]
+        for iteration in range(start_iteration, max_iterations):
+            if stopped:
+                break
+            body = config["body"]
+            body_node = {
+                "id": f"{node['id']}#{iteration}",
+                "type": body["type"],
+                "config": body.get("config", {}),
+            }
+            original_input = state.get("input")
+            state["input"] = current
+            try:
+                output = _execute_node(
+                    body_node,
+                    state,
+                    input_data,
+                    tenant,
+                    project,
+                    task,
+                    workflow_run,
+                )
+            finally:
+                state["input"] = original_input
+            outputs.append(output)
+            current = output
+            stopped = isinstance(output, dict) and output.get("continue") is False
+            loops[node["id"]] = {
+                "next_iteration": iteration + 1,
+                "outputs": outputs,
+                "last": current,
+                "stopped": stopped,
+            }
+            state["_loops"] = loops
+            if workflow_run is not None:
+                WorkflowRun.objects.filter(pk=workflow_run.pk).update(state=state)
+        return {
+            "iterations": len(outputs),
+            "outputs": outputs,
+            "output": outputs[-1] if outputs else None,
+            "stopped_early": stopped,
+        }
     if node_type == "condition":
         source_node = config.get("input_from") or config.get("source_node")
         if source_node:
@@ -955,9 +1079,13 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if not isinstance(pending_llm, dict):
             raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
         pending_llm = {**pending_llm, node["id"]: output}
-        WorkflowRun.objects.filter(task=task).update(
-            state={"_token_usage": usage, "_pending_llm": pending_llm}
+        checkpoint_state = {
+            key: value for key, value in state.items() if key == "_loops"
+        }
+        checkpoint_state.update(
+            {"_token_usage": usage, "_pending_llm": pending_llm}
         )
+        WorkflowRun.objects.filter(task=task).update(state=checkpoint_state)
         state["_token_usage"] = usage
         state["_pending_llm"] = pending_llm
         if (
@@ -1087,9 +1215,13 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if not isinstance(pending_llm, dict):
             raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
         pending_llm = {**pending_llm, node["id"]: output}
-        WorkflowRun.objects.filter(task=task).update(
-            state={"_token_usage": usage, "_pending_llm": pending_llm}
+        checkpoint_state = {
+            key: value for key, value in state.items() if key == "_loops"
+        }
+        checkpoint_state.update(
+            {"_token_usage": usage, "_pending_llm": pending_llm}
         )
+        WorkflowRun.objects.filter(task=task).update(state=checkpoint_state)
         state["_token_usage"] = usage
         state["_pending_llm"] = pending_llm
         if (
