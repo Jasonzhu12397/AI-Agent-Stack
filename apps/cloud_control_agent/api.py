@@ -44,6 +44,7 @@ from .workspace import (
     normalize_task,
     normalize_work,
     normalize_work_result,
+    normalize_workflow_decision,
     normalize_workflow_definition,
     normalize_workflow_run,
     normalize_workspace_path,
@@ -613,6 +614,17 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("WORKFLOW_ACTION_INVALID")
                     return
                 if self.path.startswith("/api/v1/control/workflow-runs/"):
+                    parts = self.path.strip("/").split("/")
+                    if len(parts) == 8 and parts[3] == "workflow-runs" and parts[5] == "steps":
+                        run_raw = parts[4]
+                        step_id = parts[6]
+                        if parts[7] == "approve":
+                            self._decide_workflow_step(run_raw, step_id, document, "approved")
+                            return
+                        if parts[7] == "reject":
+                            self._decide_workflow_step(run_raw, step_id, document, "rejected")
+                            return
+                        raise ControlApiError("WORKFLOW_DECISION_INVALID")
                     if self.path.endswith("/cancel"):
                         run_raw = self.path.rsplit("/", 2)[-2]
                         self._cancel_workflow_run(run_raw)
@@ -1389,6 +1401,182 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 },
             )
 
+        @staticmethod
+        def _initial_step_status(step: dict[str, Any]) -> str:
+            if step["depends_on"]:
+                return "blocked"
+            return "awaiting_approval" if step.get("type", "task") == "approval" else "queued"
+
+        def _advance_workflow_run(self, connection: Any, run_id: UUID) -> str:
+            connection.execute(
+                """
+                UPDATE agent_control_tasks t
+                SET status = CASE
+                        WHEN t.step_type = 'approval' THEN 'awaiting_approval'
+                        ELSE 'queued'
+                    END,
+                    updated_at = NOW()
+                WHERE t.workflow_run_id = %s AND t.status = 'blocked'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
+                      LEFT JOIN agent_control_tasks d
+                        ON d.workflow_run_id = t.workflow_run_id
+                       AND d.step_id = dep.value
+                      WHERE d.task_id IS NULL OR d.status <> 'succeeded'
+                  )
+                """,
+                (run_id,),
+            )
+            active = connection.execute(
+                """
+                SELECT COUNT(*) AS active FROM agent_control_tasks
+                WHERE workflow_run_id = %s
+                  AND status IN ('blocked', 'queued', 'leased', 'awaiting_approval')
+                """,
+                (run_id,),
+            ).fetchone()
+            if active and active["active"] == 0:
+                output = connection.execute(
+                    """
+                    SELECT COALESCE(jsonb_object_agg(step_id, result), '{}'::jsonb)
+                        AS output
+                    FROM agent_control_tasks
+                    WHERE workflow_run_id = %s AND status = 'succeeded'
+                      AND step_id IS NOT NULL
+                    """,
+                    (run_id,),
+                ).fetchone()
+                connection.execute(
+                    """
+                    UPDATE agent_control_workflow_runs
+                    SET status = 'succeeded', output = %s,
+                        finished_at = NOW(), updated_at = NOW()
+                    WHERE run_id = %s AND status = 'running'
+                    """,
+                    (Jsonb(output["output"] if output else {}), run_id),
+                )
+                return "succeeded"
+            return "running"
+
+        def _decide_workflow_step(
+            self,
+            raw_run: str,
+            raw_step: str,
+            document: dict[str, Any],
+            decision: str,
+        ) -> None:
+            self._require_platform_api()
+            run_id = _parse_uuid(raw_run, "RUN_ID")
+            try:
+                step_id = normalize_name(raw_step)
+                decision_body = normalize_workflow_decision(
+                    decided_by=document.get("decided_by"),
+                    reason=document.get("reason", ""),
+                )
+            except WorkspaceError as exc:
+                raise ControlApiError(str(exc)) from exc
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                with connection.transaction():
+                    run = connection.execute(
+                        """
+                        SELECT run_id, status FROM agent_control_workflow_runs
+                        WHERE run_id = %s FOR UPDATE
+                        """,
+                        (run_id,),
+                    ).fetchone()
+                    if run is None:
+                        raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
+                    task = connection.execute(
+                        """
+                        SELECT task_id, step_id, step_type, name, status, payload
+                        FROM agent_control_tasks
+                        WHERE workflow_run_id = %s AND step_id = %s
+                        FOR UPDATE
+                        """,
+                        (run_id, step_id),
+                    ).fetchone()
+                    if task is None:
+                        raise ControlApiError("WORKFLOW_STEP_NOT_FOUND")
+                    if task["step_type"] != "approval":
+                        raise ControlApiError("WORKFLOW_STEP_NOT_APPROVAL")
+                    if run["status"] != "running":
+                        raise ControlApiError("WORKFLOW_RUN_NOT_ACTIVE")
+                    if task["status"] != "awaiting_approval":
+                        raise ControlApiError("WORKFLOW_STEP_NOT_AWAITING_APPROVAL")
+                    result = {
+                        "decision": decision,
+                        "decided_by": decision_body["decided_by"],
+                        "reason": decision_body["reason"],
+                    }
+                    if decision == "approved":
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'succeeded', result = %s, updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (Jsonb(result), task["task_id"]),
+                        )
+                        run_status = self._advance_workflow_run(connection, run_id)
+                    else:
+                        reason = decision_body["reason"] or "rejected by operator"
+                        result["reason"] = reason
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'failed', result = %s, updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (Jsonb(result), task["task_id"]),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE agent_control_workflow_runs
+                            SET status = 'failed', output = %s,
+                                finished_at = NOW(), updated_at = NOW()
+                            WHERE run_id = %s AND status = 'running'
+                            """,
+                            (
+                                Jsonb(
+                                    {
+                                        "failed_step": step_id,
+                                        "error": reason,
+                                        "decision": "rejected",
+                                    }
+                                ),
+                                run_id,
+                            ),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'cancelled', lease_token_hash = NULL,
+                                lease_expires_at = NULL, updated_at = NOW()
+                            WHERE workflow_run_id = %s
+                              AND status IN ('blocked', 'queued', 'leased', 'awaiting_approval')
+                            """,
+                            (run_id,),
+                        )
+                        run_status = "failed"
+                    task_row = connection.execute(
+                        """
+                        SELECT task_id, step_id, step_type, name, status, result, updated_at
+                        FROM agent_control_tasks WHERE task_id = %s
+                        """,
+                        (task["task_id"],),
+                    ).fetchone()
+            self._send(
+                200,
+                {
+                    "decided": True,
+                    "decision": decision,
+                    "workflow_run_id": str(run_id),
+                    "workflow_run_status": run_status,
+                    "task": task_row,
+                },
+            )
+
         def _start_workflow_run(self, workflow_id: UUID, document: dict[str, Any]) -> None:
             self._require_platform_api()
             run_id = _parse_uuid(document.get("run_id"), "RUN_ID")
@@ -1457,17 +1645,18 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 """
                                 INSERT INTO agent_control_tasks (
                                     task_id, project_id, workflow_run_id, step_id,
-                                    name, status, required_role, payload, depends_on,
-                                    idempotency_key
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    step_type, name, status, required_role, payload,
+                                    depends_on, idempotency_key
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                 """,
                                 (
                                     uuid4(),
                                     workflow["project_id"],
                                     run_id,
                                     step["id"],
+                                    step.get("type", "task"),
                                     step["name"],
-                                    "queued" if not step["depends_on"] else "blocked",
+                                    self._initial_step_status(step),
                                     step["required_role"],
                                     Jsonb(
                                         {
@@ -1504,8 +1693,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     tasks = connection.execute(
                         """
-                        SELECT task_id, step_id, name, status, priority, required_role,
-                               payload, depends_on, result, assigned_agent_id, attempts
+                        SELECT task_id, step_id, step_type, name, status, priority,
+                               required_role, payload, depends_on, result,
+                               assigned_agent_id, attempts
                         FROM agent_control_tasks WHERE workflow_run_id = %s
                         ORDER BY created_at, step_id
                         """,
@@ -1532,9 +1722,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
                 tasks = connection.execute(
                     """
-                    SELECT task_id, step_id, name, status, priority, required_role,
-                           payload, depends_on, result, assigned_agent_id,
-                           attempts, created_at, updated_at
+                    SELECT task_id, step_id, step_type, name, status, priority,
+                           required_role, payload, depends_on, result,
+                           assigned_agent_id, attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE workflow_run_id = %s
                     ORDER BY created_at, step_id
                     """,
@@ -1564,7 +1754,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         SET status = 'cancelled', lease_token_hash = NULL,
                             lease_expires_at = NULL, updated_at = NOW()
                         WHERE workflow_run_id = %s
-                          AND status IN ('blocked', 'queued', 'leased')
+                          AND status IN ('blocked', 'queued', 'leased', 'awaiting_approval')
                         """,
                         (run_id,),
                     )
@@ -1635,8 +1825,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 rows = connection.execute(
                     """
-                    SELECT task_id, workflow_run_id, step_id, name, status, priority,
-                           required_role, payload, depends_on, result,
+                    SELECT task_id, workflow_run_id, step_id, step_type, name, status,
+                           priority, required_role, payload, depends_on, result,
                            assigned_agent_id, attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE project_id = %s
                     ORDER BY created_at DESC
@@ -1651,8 +1841,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 row = connection.execute(
                     """
-                    SELECT task_id, project_id, workflow_run_id, step_id, name, status,
-                           priority, required_role, payload, depends_on, result,
+                    SELECT task_id, project_id, workflow_run_id, step_id, step_type,
+                           name, status, priority, required_role, payload, depends_on,
+                           result,
                            assigned_agent_id, attempts, lease_expires_at,
                            created_at, updated_at
                     FROM agent_control_tasks WHERE task_id = %s
@@ -1853,59 +2044,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             SET status = 'cancelled', lease_token_hash = NULL,
                                 lease_expires_at = NULL, updated_at = NOW()
                             WHERE workflow_run_id = %s
-                              AND status IN ('blocked', 'queued', 'leased')
+                              AND status IN (
+                                  'blocked', 'queued', 'leased', 'awaiting_approval'
+                              )
                             """,
                             (run_id,),
                         )
                         run_status = "failed"
                     elif run_id is not None:
-                        connection.execute(
-                            """
-                            UPDATE agent_control_tasks t
-                            SET status = 'queued', updated_at = NOW()
-                            WHERE t.workflow_run_id = %s AND t.status = 'blocked'
-                              AND NOT EXISTS (
-                                  SELECT 1
-                                  FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
-                                  LEFT JOIN agent_control_tasks d
-                                    ON d.workflow_run_id = t.workflow_run_id
-                                   AND d.step_id = dep.value
-                                  WHERE d.task_id IS NULL OR d.status <> 'succeeded'
-                              )
-                            """,
-                            (run_id,),
-                        )
-                        active = connection.execute(
-                            """
-                            SELECT COUNT(*) AS active FROM agent_control_tasks
-                            WHERE workflow_run_id = %s
-                              AND status IN ('blocked', 'queued', 'leased')
-                            """,
-                            (run_id,),
-                        ).fetchone()
-                        if active and active["active"] == 0:
-                            output = connection.execute(
-                                """
-                                SELECT COALESCE(jsonb_object_agg(step_id, result), '{}'::jsonb)
-                                    AS output
-                                FROM agent_control_tasks
-                                WHERE workflow_run_id = %s AND status = 'succeeded'
-                                  AND step_id IS NOT NULL
-                                """,
-                                (run_id,),
-                            ).fetchone()
-                            connection.execute(
-                                """
-                                UPDATE agent_control_workflow_runs
-                                SET status = 'succeeded', output = %s,
-                                    finished_at = NOW(), updated_at = NOW()
-                                WHERE run_id = %s AND status = 'running'
-                                """,
-                                (Jsonb(output["output"] if output else {}), run_id),
-                            )
-                            run_status = "succeeded"
-                        else:
-                            run_status = "running"
+                        run_status = self._advance_workflow_run(connection, run_id)
             self._send(
                 200,
                 {

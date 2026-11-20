@@ -274,3 +274,62 @@ def test_approval_contract_requires_sha256_digest_and_bounded_ttl():
             requested_by="alice",
             ttl_seconds=10,
         )
+
+
+def test_workflow_definition_accepts_human_approval_steps():
+    definition = normalize_workflow_definition(
+        {
+            "steps": [
+                {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
+                {
+                    "id": "review",
+                    "name": "Review plan",
+                    "type": "approval",
+                    "depends_on": ["prepare"],
+                    "payload": {"instructions": "Verify the host inventory"},
+                },
+                {
+                    "id": "apply",
+                    "name": "Apply changes",
+                    "depends_on": ["review"],
+                },
+            ],
+        }
+    )
+    steps = {step["id"]: step for step in definition["steps"]}
+    assert steps["review"]["type"] == "approval"
+    assert steps["review"]["required_role"] is None
+    assert steps["prepare"]["type"] == "task"
+
+
+def test_workflow_definition_rejects_invalid_approval_steps():
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {
+                        "id": "review",
+                        "name": "Review",
+                        "type": "approval",
+                        "required_role": "eph",
+                    }
+                ],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {
+                        "id": "review",
+                        "name": "Review",
+                        "type": "approval",
+                        "max_attempts": 2,
+                    }
+                ],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {"steps": [{"id": "review", "name": "Review", "type": "manual"}]}
+        )

@@ -310,7 +310,13 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             step_id TEXT,
             name TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'queued' CHECK (
-                status IN ('blocked', 'queued', 'leased', 'succeeded', 'failed', 'cancelled')
+                status IN (
+                    'blocked', 'queued', 'leased', 'awaiting_approval',
+                    'succeeded', 'failed', 'cancelled'
+                )
+            ),
+            step_type TEXT NOT NULL DEFAULT 'task' CHECK (
+                step_type IN ('task', 'approval')
             ),
             priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 9),
             required_role TEXT CHECK (
@@ -328,6 +334,32 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (workflow_run_id, step_id)
         )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS step_type TEXT NOT NULL DEFAULT 'task'
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        DROP CONSTRAINT IF EXISTS agent_control_tasks_status_check
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD CONSTRAINT agent_control_tasks_status_check CHECK (
+            status IN (
+                'blocked', 'queued', 'leased', 'awaiting_approval',
+                'succeeded', 'failed', 'cancelled'
+            )
+        )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        DROP CONSTRAINT IF EXISTS agent_control_tasks_step_type_check
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD CONSTRAINT agent_control_tasks_step_type_check
+        CHECK (step_type IN ('task', 'approval'))
     """)
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_tasks_claim_idx

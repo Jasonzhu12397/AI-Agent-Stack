@@ -393,6 +393,172 @@ def test_project_workspace_and_workflow_run_against_postgres(control_server, tls
         platform_client.close()
 
 
+def test_workflow_approval_step_pauses_and_resumes_the_run(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "approval-workflow",
+                "definition": {
+                    "steps": [
+                        {"id": "prepare", "name": "Prepare", "required_role": "eph"},
+                        {
+                            "id": "review",
+                            "name": "Review plan",
+                            "type": "approval",
+                            "depends_on": ["prepare"],
+                        },
+                        {
+                            "id": "apply",
+                            "name": "Apply",
+                            "depends_on": ["review"],
+                        },
+                    ]
+                },
+            },
+        )
+        run_id = uuid4()
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {"cluster": "edge-02"},
+                "idempotency_key": f"approval-run-{run_id}",
+            },
+        )
+        by_step = {task["step_id"]: task for task in started["tasks"]}
+        assert by_step["prepare"]["status"] == "queued"
+        assert by_step["review"]["status"] == "blocked"
+        assert by_step["apply"]["status"] == "blocked"
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            first = _claim(agent_client, identity)
+            assert first["task"]["step_id"] == "prepare"
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "succeeded",
+                    "result": {"hosts": 2},
+                },
+            )
+            paused = _post(agent_client, "/api/v1/agent-control/tasks/claim", identity)
+            assert paused["task"] is None
+        finally:
+            agent_client.close()
+
+        paused_run = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        by_step = {task["step_id"]: task for task in paused_run["tasks"]}
+        assert by_step["review"]["status"] == "awaiting_approval"
+        assert by_step["review"]["step_type"] == "approval"
+        assert by_step["apply"]["status"] == "blocked"
+        assert paused_run["run"]["status"] == "running"
+
+        approved = _post(
+            platform_client,
+            f"/api/v1/control/workflow-runs/{run_id}/steps/review/approve",
+            {"decided_by": "bob"},
+        )
+        assert approved["workflow_run_status"] == "running"
+        assert approved["task"]["status"] == "succeeded"
+        assert approved["task"]["result"]["decision"] == "approved"
+
+        resumed_run = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        by_step = {task["step_id"]: task for task in resumed_run["tasks"]}
+        assert by_step["apply"]["status"] == "queued"
+
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            second = _claim(agent_client, identity)
+            assert second["task"]["step_id"] == "apply"
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": second["task"]["task_id"],
+                    "lease_token": second["lease_token"],
+                    "status": "succeeded",
+                    "result": {"applied": True},
+                },
+            )
+        finally:
+            agent_client.close()
+
+        finished = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert finished["run"]["status"] == "succeeded"
+        assert finished["run"]["output"]["review"]["decision"] == "approved"
+        assert finished["run"]["output"]["apply"] == {"applied": True}
+    finally:
+        platform_client.close()
+
+
+def test_workflow_approval_rejection_fails_the_run(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "approval-reject",
+                "definition": {
+                    "steps": [
+                        {"id": "review", "name": "Review", "type": "approval"},
+                        {"id": "apply", "name": "Apply", "depends_on": ["review"]},
+                    ]
+                },
+            },
+        )
+        run_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {},
+                "idempotency_key": f"reject-run-{run_id}",
+            },
+        )
+        rejected = _post(
+            platform_client,
+            f"/api/v1/control/workflow-runs/{run_id}/steps/review/reject",
+            {"decided_by": "bob", "reason": "host inventory is incomplete"},
+        )
+        assert rejected["workflow_run_status"] == "failed"
+        assert rejected["task"]["status"] == "failed"
+        assert rejected["task"]["result"]["reason"] == "host inventory is incomplete"
+        run = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert run["run"]["status"] == "failed"
+        assert run["run"]["output"]["failed_step"] == "review"
+        by_step = {task["step_id"]: task for task in run["tasks"]}
+        assert by_step["apply"]["status"] == "cancelled"
+    finally:
+        platform_client.close()
+
+
 def test_concurrent_task_claims_do_not_overlap(control_server, tls_material):
     installation_id = uuid4()
     platform_client = _tls_client(control_server, tls_material, tls_material["platform"])

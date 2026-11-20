@@ -25,6 +25,7 @@ MAX_STEP_NAME_LENGTH = 128
 MAX_WORKFLOW_DESCRIPTION_LENGTH = 512
 MAX_APPROVAL_ACTION_LENGTH = 128
 MAX_APPROVER_LENGTH = 128
+MAX_DECISION_REASON_LENGTH = 512
 APPROVAL_STATUSES = frozenset({"pending", "approved", "rejected", "used", "expired"})
 DIGEST_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
@@ -35,7 +36,10 @@ CONFIG_REF_PATTERN = re.compile(r"^(?:secret|vault|config)://[A-Za-z0-9._/-]{1,1
 WORK_KINDS = frozenset({"deployment", "maintenance", "inspection", "diagnostic", "software"})
 PLUGIN_KINDS = frozenset({"connector", "tool", "runtime"})
 PROJECT_STATUSES = frozenset({"active", "archived"})
-TASK_STATUSES = frozenset({"blocked", "queued", "leased", "succeeded", "failed", "cancelled"})
+TASK_STATUSES = frozenset(
+    {"blocked", "queued", "leased", "awaiting_approval", "succeeded", "failed", "cancelled"}
+)
+WORKFLOW_STEP_TYPES = frozenset({"task", "approval"})
 WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
 AGENT_ROLES = frozenset({"eph", "target"})
 
@@ -287,6 +291,15 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             raise WorkspaceError(f"definition.steps[{index}].depends_on must be unique step ids.")
         if step_id in dependencies:
             raise WorkspaceError(f"workflow step {step_id} cannot depend on itself.")
+        step_type = item.get("type", "task")
+        if step_type not in WORKFLOW_STEP_TYPES:
+            raise WorkspaceError(
+                f"definition.steps[{index}].type must be task or approval."
+            )
+        if step_type == "approval" and role not in (None, ""):
+            raise WorkspaceError(
+                f"definition.steps[{index}].required_role must be empty for approval steps."
+            )
         max_attempts = item.get("max_attempts", 1)
         if (
             not isinstance(max_attempts, int)
@@ -296,10 +309,15 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             raise WorkspaceError(
                 f"definition.steps[{index}].max_attempts must be an integer from 1 to 5."
             )
+        if step_type == "approval" and max_attempts != 1:
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_attempts must be 1 for approval steps."
+            )
         normalized_steps.append(
             {
                 "id": step_id,
                 "name": name,
+                "type": step_type,
                 "required_role": role or None,
                 "payload": _bounded_json(
                     item.get("payload"),
@@ -379,6 +397,22 @@ def normalize_workflow_run(*, input: Any, idempotency_key: Any) -> dict[str, Any
             idempotency_key,
             "idempotency_key",
             maximum=MAX_IDEMPOTENCY_KEY_LENGTH,
+        ),
+    }
+
+
+def normalize_workflow_decision(*, decided_by: Any, reason: Any = "") -> dict[str, Any]:
+    return {
+        "decided_by": _bounded_text(
+            decided_by,
+            "decided_by",
+            maximum=MAX_APPROVER_LENGTH,
+        ),
+        "reason": _bounded_text(
+            reason,
+            "reason",
+            maximum=MAX_DECISION_REASON_LENGTH,
+            required=False,
         ),
     }
 

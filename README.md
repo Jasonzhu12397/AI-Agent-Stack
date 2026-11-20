@@ -185,7 +185,7 @@ Not yet production-complete:
 - Subscription billing and plan management.
 - MCP stdio transport, server mode and complete provider OAuth/token refresh.
 - Realtime WebSocket/SSE event streaming.
-- Parallel, loop and human-approval Workflow nodes.
+- Parallel and loop Workflow nodes. Human-approval steps exist in the Cloud Control workflow engine (`type: "approval"`), but the SaaS Platform workflow editor does not expose them yet.
 - Multi-provider model routing and fallback chains.
 - Redis-backed cache/queue coordination; pgvector and S3-compatible object storage.
 - Real CAPI/Metal3/Ironic deployment, CAPI Pivot, BMH migration, EPH cleanup and physical Worker acceptance.

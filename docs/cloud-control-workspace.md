@@ -212,22 +212,46 @@ A workflow definition is a JSONB DAG with one to 32 steps:
   "steps": [
     {"id": "prepare", "name": "Prepare hosts", "required_role": "eph", "max_attempts": 2},
     {
+      "id": "review",
+      "name": "Review host inventory",
+      "type": "approval",
+      "depends_on": ["prepare"],
+      "payload": {"instructions": "Confirm the BMH list before apply"}
+    },
+    {
       "id": "verify",
       "name": "Verify hosts",
-      "depends_on": ["prepare"],
+      "depends_on": ["review"],
       "payload": {"checks": ["bmh", "k8s"]}
     }
   ]
 }
 ```
 
+A step `type` is `task` (default) or `approval`. An approval step must not set
+`required_role` and must keep `max_attempts` at 1. It is never claimable by an
+Agent: when its dependencies succeed it moves to `awaiting_approval`, and the
+run stays `running` until a platform operator posts a decision:
+
+```json
+{"decided_by": "bob", "reason": "optional rejection reason"}
+```
+
+`approve` marks the step `succeeded`, records `{decision, decided_by, reason}`
+as its result and immediately unblocks its dependents. `reject` marks the step
+`failed`, fails the run with `{failed_step, error, decision}` in `output`, and
+cancels every remaining `blocked`, `queued`, `leased` or `awaiting_approval`
+task. Approval decisions require the `platform-api` certificate; Agent
+certificates cannot decide workflow steps.
+
 Creating a workflow publishes version 1. `POST /workflows/{id}/versions`
 appends a new immutable version and advances `latest_version`. Existing runs
 keep the version they started with; they are not retroactively edited.
 
 Starting a run materializes one task per step. Steps without dependencies are
-`queued`; steps with dependencies are `blocked`. When an Agent reports a task
-`succeeded`, blocked tasks whose dependencies all succeeded become `queued`. A
+`queued` (or `awaiting_approval` for approval steps); steps with dependencies are
+`blocked`. When a step succeeds, blocked tasks whose dependencies all succeeded
+become `queued`, while approval steps become `awaiting_approval`. A
 failed task is retried while its `max_attempts` budget (1–5, default 1) is not
 exhausted: the control plane clears the result, returns it to `queued` and keeps
 the run `running`, reporting `"retrying": true`. Once the budget is exhausted the
@@ -244,7 +268,8 @@ certificate identity and require the active token.
 
 - Skill and plugin manifests are capped at 64 KiB; work payloads and results at
   256 KiB.
-- Work kinds are `deployment`, `maintenance`, `inspection` and `diagnostic`.
+- Work kinds are `deployment`, `maintenance`, `inspection`, `diagnostic` and
+  `software`.
 - Work priority is an integer from 0 to 9.
 - The control plane does not execute skills, install plugins or fetch plugin
   credentials. It records the catalog, dispatches work and retains audit state.
