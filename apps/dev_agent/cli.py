@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--coverage", action="store_true")
 
     subparsers.add_parser("security", help="scan for credentials and dependency audit commands")
+
+    performance = subparsers.add_parser("performance", help="static performance findings")
+    performance.add_argument("paths", nargs="*")
     subparsers.add_parser("memory", help="refresh project memory and rewrite AGENTS.md")
     subparsers.add_parser("git-status", help="git status and diff")
     subparsers.add_parser("git-commit-message", help="suggest a conventional commit message")
@@ -65,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         "plan-patch", help="validate edits and emit a diff plus approval token"
     )
     patch.add_argument("edits", help="JSON list of {path, old, new}")
+
+    comments = subparsers.add_parser(
+        "plan-comments", help="propose docstrings for undocumented functions"
+    )
+    comments.add_argument("--limit", type=int, default=20)
 
     apply_patch = subparsers.add_parser("apply-patch", help="apply an approved edit plan")
     apply_patch.add_argument("edits")
@@ -108,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         _print({"command": plan.command, "framework": plan.framework} if plan else None)
     elif arguments.command == "security":
         _print(agent.security())
+    elif arguments.command == "performance":
+        _print(agent.performance(arguments.paths or None))
     elif arguments.command == "memory":
         refresh_memory(root)
         _print(
@@ -137,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
         _print(str(destination))
     elif arguments.command == "plan-patch":
         plan = agent.plan_change(_load_edits(arguments.edits))
+        print(plan.diff)
+        print(f"approval-token: {plan.token}")
+    elif arguments.command == "plan-comments":
+        plan = agent.comment_plan(arguments.limit)
         print(plan.diff)
         print(f"approval-token: {plan.token}")
     elif arguments.command == "apply-patch":

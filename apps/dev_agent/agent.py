@@ -10,10 +10,11 @@ from typing import Any
 from .checkpoint import TaskStore
 from .context import ProjectMemory, refresh_memory, write_agents_md
 from .deployment import write_manifests
-from .docs import write_docs
+from .docs import docstring_edits, write_docs
 from .gitops import commit_message, diff, status
 from .openapi import load_spec
 from .patching import TextEdit, apply, digest_payload, plan
+from .performance import analyse_performance, summarise
 from .policy import ApprovalStore, read_text
 from .roles import AnalystRole, DebugRole, DeployRole, ReviewRole, SecurityRole, analyse
 from .scanner import ProjectIndex, scan_project
@@ -38,6 +39,9 @@ CAPABILITIES = {
     "openapi": "implemented: clients for Python and TypeScript plus mock examples",
     "deployment": "implemented: Dockerfile/K8s/CI generation, pre-flight, rollback plan",
     "docs": "implemented: README, architecture and API docs from static analysis",
+    "comments": "implemented: approval-gated docstring insertion for undocumented functions",
+    "performance": "implemented: static N+1, loop nesting, blocking sleep and query-shape rules",
+    "pr_review": "implemented: tools/dev_agent_pr_review.py posts a single updated PR comment",
     "sandbox": "implemented: allowlisted, secret-scrubbed, timeout-bounded runner",
     "checkpoint": "implemented: durable task journal and resume",
     "model_planning": "adapter required: no remote model call is made in this package",
@@ -72,6 +76,12 @@ class SoftwareAgent:
 
     def security(self) -> dict:
         return SecurityRole().run(self.root).data
+
+    def performance(self, paths: list[str] | None = None) -> dict:
+        return summarise(analyse_performance(self.root, paths))
+
+    def comment_plan(self, limit: int = 20) -> ChangePlan:
+        return self.plan_change(docstring_edits(self.index, limit=limit))
 
     def tests(self, coverage: bool = False) -> TestReport:
         return run_tests(self.root, coverage=coverage)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .openapi import operations
+from .patching import TextEdit
 from .scanner import ProjectIndex
 
 
@@ -73,6 +74,44 @@ def missing_docstrings(index: ProjectIndex) -> list[str]:
             if not function.docstring and function.name != "__init__":
                 missing.append(f"{module.name}:{function.line} {function.name}")
     return missing
+
+
+def _summary(name: str) -> str:
+    words = name.replace("_", " ").strip()
+    return f"{words[:1].upper()}{words[1:]}." if words else "Implementation."
+
+
+def docstring_edits(index: ProjectIndex, limit: int = 100) -> list[TextEdit]:
+    """Build insertion edits for functions that lack a docstring.
+
+    The edit replaces the signature block, so uniqueness is checked by the
+    patching layer before anything is written. Duplicate signatures are skipped
+    rather than guessed.
+    """
+    edits: list[TextEdit] = []
+    for module in index.modules.values():
+        path = index.root / module.path
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for function in module.functions:
+            if function.docstring or function.name == "__init__":
+                continue
+            node = function.node
+            if not node or not getattr(node, "body", None):
+                continue
+            start = node.lineno - 1
+            body_line = node.body[0].lineno - 1
+            if body_line <= start:
+                continue
+            indent = lines[body_line][: len(lines[body_line]) - len(lines[body_line].lstrip())]
+            signature = "\n".join(lines[start:body_line])
+            replacement = signature + "\n" + indent + f'"""{_summary(function.name)}"""'
+            edits.append(TextEdit(path=module.path, old=signature, new=replacement))
+            if len(edits) >= limit:
+                return edits
+    return edits
 
 
 def write_docs(index: ProjectIndex, output: Path, spec: dict | None = None) -> list[Path]:

@@ -53,6 +53,11 @@ jobs:
         run: python apps/platform-api/manage.py migrate --noinput
       - name: Test
         run: pytest
+      - name: Dev agent CLI smoke
+        run: |
+          python -m apps.dev_agent capabilities
+          python -m apps.dev_agent scan --module apps.dev_agent.scanner
+          python tools/dev_agent_pr_review.py --base HEAD --head HEAD
 
   control-postgres:
     runs-on: ubuntu-latest

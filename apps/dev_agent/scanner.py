@@ -38,6 +38,7 @@ class FunctionInfo:
     line: int
     calls: list[str] = field(default_factory=list)
     docstring: str = ""
+    node: ast.AST | None = None
 
 
 @dataclass
@@ -203,6 +204,7 @@ def _function_info(qualified_name: str, node: ast.AST) -> FunctionInfo:
         line=node.lineno,
         calls=calls,
         docstring=ast.get_docstring(node) or "",
+        node=node,
     )
 
 

@@ -11,7 +11,7 @@ from apps.dev_agent.checkpoint import TaskStore
 from apps.dev_agent.context import build_memory, refresh_memory, write_agents_md
 from apps.dev_agent.debugging import analyse_traceback, parse_gdb_backtrace
 from apps.dev_agent.deployment import generate_ci, generate_dockerfile, preflight, rollback_steps
-from apps.dev_agent.docs import render_architecture, render_readme
+from apps.dev_agent.docs import docstring_edits, render_architecture, render_readme
 from apps.dev_agent.gitops import (
     append_changelog,
     changelog_entry,
@@ -21,6 +21,7 @@ from apps.dev_agent.gitops import (
 from apps.dev_agent.model import ModelOutputError, parse_tool_call, validate_schema
 from apps.dev_agent.openapi import generate_python_client, generate_typescript_client, mock_example
 from apps.dev_agent.patching import PatchError, TextEdit, plan
+from apps.dev_agent.performance import analyse_performance, summarise
 from apps.dev_agent.policy import ApprovalRequired, PolicyError, read_text
 from apps.dev_agent.reviewer import review_paths
 from apps.dev_agent.sandbox import SandboxViolation, run, validate_command
@@ -301,3 +302,35 @@ def test_agent_discovery_is_journaled(project):
     assert record.phase == "review"
     assert record.checkpoint["review"]["count"] >= 0
     assert "sandbox" in agent.capabilities()
+
+
+def test_performance_rules_cover_n_plus_one_and_loop_nesting(tmp_path):
+    (tmp_path / "slow.py").write_text(
+        "import asyncio\n\nasync def poll(db):\n    await asyncio.sleep(1)\n\n"
+        "def scan(db):\n    text = ''\n    for a in range(10):\n        for b in range(10):\n"
+        "            for c in range(10):\n                db.execute('select * from t')\n"
+        "                text += 'x'\n"
+    )
+    findings = analyse_performance(tmp_path)
+    rules = {finding.rule for finding in findings}
+    assert {"nested_loops", "n_plus_one", "select_star"} <= rules
+    assert "blocking_sleep_in_async" in rules
+    assert "quadratic_string_build" in rules
+    summary = summarise(findings)
+    assert summary["total"] == len(findings)
+    assert summary["by_severity"]["high"] >= 2
+
+
+def test_docstring_plan_is_approval_gated(project):
+    index = scan_project(project)
+    edits = docstring_edits(index)
+    assert edits
+    agent = SoftwareAgent(project)
+    plan = agent.comment_plan()
+    assert plan.token
+    assert plan.diff
+    applied = agent.apply_change(edits, plan.token)
+    assert "pkg/cli.py" in " ".join(applied)
+    source = (project / "pkg" / "cli.py").read_text()
+    assert '"""Main."""' in source
+    compile(source, "pkg/cli.py", "exec")
