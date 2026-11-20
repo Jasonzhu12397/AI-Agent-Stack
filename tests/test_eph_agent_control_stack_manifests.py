@@ -34,3 +34,21 @@ def test_rejects_empty_manifest(tmp_path: Path):
     with pytest.raises(ControlStackManifestError) as excinfo:
         load_component_manifests(["empty"], tmp_path)
     assert excinfo.value.code == "CONTROL_STACK_MANIFEST_EMPTY"
+
+
+def test_shipped_ipam_manifest_has_no_unexpanded_shell_placeholders():
+    """Kubernetes does not expand ``${VAR:=default}`` inside container args."""
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    manifest = root / "deploy/offline/addons/control-stack/ipam.yaml"
+    deployments = [
+        document
+        for document in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
+        if document and document.get("kind") == "Deployment"
+    ]
+    assert deployments
+    for container in deployments[0]["spec"]["template"]["spec"]["containers"]:
+        for argument in container.get("args", []):
+            assert "${" not in argument, argument

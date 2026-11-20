@@ -714,9 +714,9 @@ spec:
       containers:
       - args:
         - --webhook-port=9443
-        - --diagnostics-address=${IPAM_DIAGNOSTICS_ADDRESS:=:8443}
-        - --insecure-diagnostics=${IPAM_INSECURE_DIAGNOSTICS:=false}
-        - --tls-min-version=${TLS_MIN_VERSION:=VersionTLS13}
+        - --diagnostics-address=:8443
+        - --insecure-diagnostics=false
+        - --tls-min-version=VersionTLS13
         command:
         - /manager
         env:
