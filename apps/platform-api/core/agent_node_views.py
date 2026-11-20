@@ -40,6 +40,7 @@ from core.models import (
 
 
 EPH_COMMANDS = {
+    "host.network.observe",
     "node.health",
     "host.preflight",
     "cluster.plan",
@@ -59,6 +60,7 @@ EPH_COMMANDS = {
     "cluster.capi.pivot.execute",
 }
 TARGET_COMMANDS = {
+    "host.network.observe",
     "node.health",
     "cluster.provider.compatibility",
     "cluster.health",

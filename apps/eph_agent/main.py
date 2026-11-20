@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from packages.agent_contracts.host_network_observe import HostNetworkObserveError
 from packages.agent_contracts.orchestration import (
     EPH_ACTIONS,
     EPH_CHECKPOINT_PHASES,
@@ -118,6 +119,26 @@ def execute(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    if action == "host.network.observe":
+        from packages.agent_contracts.host_network_probe import collect_local_host_networks
+
+        try:
+            observation = collect_local_host_networks(
+                lambda argv: _run_read_only(argv, timeout=20)
+            )
+        except HostNetworkObserveError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": observation,
+            "side_effects": False,
+        }
     if action == "eph.preflight":
         source_kubeconfig = Path(os.environ.get("EPH_KUBECONFIG", ""))
         nodes = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])

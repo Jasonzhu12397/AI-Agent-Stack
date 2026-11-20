@@ -106,6 +106,9 @@ def test_control_plane_cloud_init_uses_bond_and_ip_pool() -> None:
     assert data["networks"]["ipv4"][0]["ipAddressFromIPPool"] == "ccd-control"
     assert data["services"]["dns"] == ["10.0.60.53", "10.0.61.53"]
     assert "bond_data" not in [link["id"] for link in data["links"].get("bonds", [])]
+    assert data["networks"]["ipv4"][0]["routes"] == [
+        {"destination": "0.0.0.0/0", "gateway": "10.0.60.1"}
+    ]
 
 
 def test_worker_cloud_init_carries_data_and_storage_segments() -> None:
@@ -120,6 +123,13 @@ def test_worker_cloud_init_carries_data_and_storage_segments() -> None:
     }
     bond_ids = {item["id"] for item in data["links"]["bonds"]}
     assert bond_ids == {"bond_control", "bond_data"}
+    default_routes = [
+        route
+        for item in data["networks"]["ipv4"]
+        for route in item.get("routes", [])
+        if route["destination"] == "0.0.0.0/0"
+    ]
+    assert default_routes == [{"destination": "0.0.0.0/0", "gateway": "10.0.60.1"}]
 
 
 def test_ip_pools_render_with_cluster_and_gateway() -> None:

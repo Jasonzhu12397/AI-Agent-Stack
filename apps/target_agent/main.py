@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from packages.agent_contracts.host_network_observe import HostNetworkObserveError
+from packages.agent_contracts.host_network_probe import collect_local_host_networks
 from packages.agent_contracts.orchestration import TARGET_CHECKPOINT_PHASES
 from packages.agent_contracts.outcomes import is_retryable_outcome
 from packages.agent_transport import (
@@ -115,6 +117,26 @@ def _configure_in_cluster_kubeconfig() -> None:
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(config, stream)
     os.environ["KUBECONFIG"] = path
+
+
+def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=dict(os.environ),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "error": type(exc).__name__}
+    return {
+        "available": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-2000:],
+    }
 
 
 def _kubectl(
@@ -1010,6 +1032,24 @@ def execute(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    if action == "host.network.observe":
+        try:
+            observation = collect_local_host_networks(
+                lambda argv: _run_read_only(argv, timeout=20)
+            )
+        except HostNetworkObserveError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": observation,
+            "side_effects": False,
+        }
     if action == "target.cluster.observe":
         result = _kubectl(["get", "nodes", "-o", "json"])
         return {

@@ -330,13 +330,21 @@ def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, 
         if network["dhcp"]:
             ipv4_dhcp.append({"id": network["name"], "link": link})
             continue
-        ipv4.append(
-            {
-                "id": network["name"],
-                "link": link,
-                "ipAddressFromIPPool": network["name"],
-            }
-        )
+        address = {
+            "id": network["name"],
+            "link": link,
+            "ipAddressFromIPPool": network["name"],
+        }
+        if network["role"] == "control" and network["gateway_ipv4"] is not None:
+            # The OS needs an explicit default route; Metal3 networkData does
+            # not infer one from the IPPool gateway.
+            address["routes"] = [
+                {
+                    "destination": "0.0.0.0/0",
+                    "gateway": network["gateway_ipv4"],
+                }
+            ]
+        ipv4.append(address)
     networks: dict[str, Any] = {}
     if ipv4:
         networks["ipv4"] = ipv4
