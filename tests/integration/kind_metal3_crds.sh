@@ -33,6 +33,14 @@ echo "Installing cert-manager ${CERT_MANAGER_VERSION} (IPAM webhook prerequisite
 
 echo "Applying Metal3 IPAM manifests"
 "${KUBECTL}" apply -f "${IPAM_MANIFEST}"
+# The IPPool admission webhook must actually answer: a dry-run that skips it
+# would only prove the structural schema, not that real admission accepts the
+# platform's rendered pools.
+echo "Waiting for the IPAM webhook to serve requests"
+"${KUBECTL}" wait --for condition=Ready --timeout=180s \
+  certificate/ipam-serving-cert -n capm3-system
+"${KUBECTL}" rollout status deployment/ipam-controller-manager \
+  -n capm3-system --timeout=240s
 
 echo "Applying SR-IOV CRDs first, then the operator resources"
 # kubectl discovery cannot resolve SriovOperatorConfig in the same batch that
