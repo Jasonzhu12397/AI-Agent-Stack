@@ -43,6 +43,26 @@ python tools/metal3_acceptance.py verify --project <project-id> \
 Every command prints JSON and exits `1` when any check is `fail`. Evidence files
 contain machine names, MAC addresses and state, never BMC usernames or passwords.
 
+## Release gate
+
+`tools/metal3_release_evidence.py` turns the individual evidence files into a
+fail-closed release manifest. It requires `metal3-preflight`,
+`metal3-redfish-evidence` and `metal3-cluster-evidence` by default, rejects any
+evidence whose `status` is `fail` or whose checks contain a failure, and refuses
+to pass when a required kind is missing. The manifest records each file's
+SHA-256, size, evidence kind and timestamp plus the git commit, so the release
+can be audited later without trusting mutable files on disk.
+
+```bash
+python tools/metal3_release_evidence.py \
+  --evidence-dir evidence \
+  --out evidence/release-manifest.json
+```
+
+Add `--require metal3-acceptance` to also require the aggregate verification
+report. The command exits `1` whenever the manifest is not `pass`; attach the
+manifest, not just the raw evidence, to the release record.
+
 ## What still requires real hardware
 
 The repository unit tests mock Redfish and kubectl responses. They do not prove:
