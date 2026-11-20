@@ -30,6 +30,8 @@ def firmware_workspace(db):
         tenant=tenant,
         project=project,
         agent_node=node,
+        vendor="HPE",
+        product_name="ProLiant DL380 Gen10",
         bmc_endpoint="https://192.168.10.20",
         bmc_credential_ref="vault://lab/bmc/rack-a-01",
         bmc_trust_bundle_ref="vault://lab/ca/redfish",
@@ -198,3 +200,20 @@ def test_firmware_job_detail_refreshes_task_state(firmware_workspace, monkeypatc
     assert response.status_code == 200
     assert response.data["status"] == "running"
     assert response.data["task_state"] == "Running"
+
+
+@pytest.mark.django_db
+def test_firmware_vendor_scope_rejects_unsupported_bmc(firmware_workspace):
+    _, tenant, project, machine, client = firmware_workspace
+    machine.vendor = "Supermicro"
+    machine.product_name = "SYS-1029U"
+    machine.save(update_fields=["vendor", "product_name"])
+    response = client.get(base_url(tenant, project, machine))
+    assert response.status_code == 422
+    assert response.data["supported_vendors"] == [
+        "HPE",
+        "Dell",
+        "Inspur",
+        "H3C",
+        "Lenovo",
+    ]

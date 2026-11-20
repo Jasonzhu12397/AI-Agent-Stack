@@ -655,6 +655,12 @@ onUnmounted(() => {
               :closable="false"
             />
             <el-alert
+              title="Firmware updates are enabled for HPE, Dell, Inspur, H3C and Lenovo BMCs only."
+              type="info"
+              show-icon
+              :closable="false"
+            />
+            <el-alert
               v-if="firmwareState && !firmwareState.bmc_configured"
               title="Configure the BMC endpoint and credential reference before managing firmware."
               type="warning"

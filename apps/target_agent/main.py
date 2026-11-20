@@ -62,6 +62,7 @@ from .ntp_policy import (
     validate_worker_ntp_sources,
 )
 from .postflight import verify_target_postflight
+from .storage_addon import StorageAddonInstallError, execute_storage_addon
 from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
 
@@ -1073,6 +1074,7 @@ def execute(
             "bmh_registry_migrated",
             "eph_cleanup_verified",
             "workers_ready",
+            "network_ready",
         }:
             return {
                 "status": "blocked",
@@ -1110,10 +1112,38 @@ def execute(
                     checkpoint,
                     HandoffPhase.WORKERS_READY.value,
                 )
-            evidence = {**previous_evidence, **applied, "readiness": readiness}
+            elif current_phase == "network_ready":
+                previous_evidence = _validated_checkpoint_evidence(
+                    checkpoint,
+                    HandoffPhase.NETWORK_READY.value,
+                )
+            worker_network_contract = payload.get("worker_network_contract")
+            if not isinstance(worker_network_contract, dict):
+                worker_network_contract = previous_evidence.get(
+                    "worker_network_contract"
+                )
+            if not isinstance(worker_network_contract, dict):
+                command_evidence = payload.get("evidence")
+                if isinstance(command_evidence, dict):
+                    worker_network_contract = command_evidence.get(
+                        "worker_network_contract"
+                    )
+            storage_evidence = execute_storage_addon(
+                payload.get("storage_addon"),
+                worker_network_contract=worker_network_contract,
+                runner=_kubectl,
+                lease_lost_event=lease_lost_event,
+            )
+            evidence = {
+                **previous_evidence,
+                **applied,
+                "readiness": readiness,
+                **storage_evidence,
+            }
         except (
             NetworkStackAdapterError,
             NetworkStackError,
+            StorageAddonInstallError,
             TypeError,
             AttributeError,
         ) as exc:
@@ -1127,7 +1157,8 @@ def execute(
             "status": "succeeded",
             "error_code": None,
             "output": evidence,
-            "side_effects": applied.get("side_effects", False),
+            "side_effects": applied.get("side_effects", False)
+            or storage_evidence.get("side_effects", False),
         }
     if action == "target.worker.provision":
         try:

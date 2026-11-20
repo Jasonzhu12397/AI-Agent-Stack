@@ -316,6 +316,7 @@ def build_payload(
         "network_spec",
         "plugins",
         "manifests",
+        "storage_addon",
     ):
         value = spec.get(field_name)
         if isinstance(value, dict):

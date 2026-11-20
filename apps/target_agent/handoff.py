@@ -209,6 +209,9 @@ def validate_phase_evidence(phase: HandoffPhase, evidence: dict[str, Any]) -> di
         _require(evidence, "worker_chronyd_bootstrap_sync_verified")
         _require(evidence, "data_plane_pod_packet_path_verified")
         _require(evidence, "deployment_checkpoint_durable")
+        if evidence.get("storage_addon_enabled") is True:
+            _require(evidence, "storage_addon_ready")
+            _require(evidence, "storage_addon_plan_sha256")
     return normalized
 
 

@@ -36,6 +36,18 @@ const buildKubernetesVersion = ref("");
 const buildControlPlaneReplicas = ref(3);
 const buildWorkerReplicas = ref(3);
 const buildNetworkProfile = ref("");
+const buildStorageEnabled = ref(false);
+const buildRookVersion = ref("v1.17.4");
+const buildCephImage = ref("quay.io/ceph/ceph:v19.2.2");
+const buildStorageInternalName = ref("ceph-cluster-net");
+const buildStorageInternalInterface = ref("");
+const buildStorageInternalCidr = ref("");
+const buildStorageExternalName = ref("ceph-public-net");
+const buildStorageExternalInterface = ref("");
+const buildStorageExternalCidr = ref("");
+const buildStorageNodes = ref(
+  '[{"name": "worker-0", "devices": ["/dev/nvme0n1"]}]',
+);
 const commandType = ref("node.health");
 const commandPayload = ref("{}");
 const enrollmentToken = ref("");
@@ -258,6 +270,51 @@ async function generateClusterPlan(): Promise<void> {
       control_plane_replicas: buildControlPlaneReplicas.value,
       worker_replicas: buildWorkerReplicas.value,
     };
+    if (buildStorageEnabled.value) {
+      let storageNodes: unknown;
+      try {
+        storageNodes = JSON.parse(buildStorageNodes.value);
+      } catch {
+        throw new Error("Storage nodes must be valid JSON.");
+      }
+      if (!Array.isArray(storageNodes) || storageNodes.length === 0) {
+        throw new Error("Storage nodes must be a non-empty JSON array.");
+      }
+      if (
+        !buildStorageInternalInterface.value.trim() ||
+        !buildStorageInternalCidr.value.trim() ||
+        !buildStorageExternalInterface.value.trim() ||
+        !buildStorageExternalCidr.value.trim()
+      ) {
+        throw new Error("Both storage networks require an interface and CIDR.");
+      }
+      clusterSpec.storage_addon = {
+        enabled: true,
+        type: "rook-ceph",
+        rook_version: buildRookVersion.value.trim(),
+        ceph_image: buildCephImage.value.trim(),
+        network: {
+          internal: {
+            name: buildStorageInternalName.value.trim(),
+            interface: buildStorageInternalInterface.value.trim(),
+            cidr: buildStorageInternalCidr.value.trim(),
+            mtu: 9000,
+            ipam: "whereabouts",
+          },
+          external: {
+            name: buildStorageExternalName.value.trim(),
+            interface: buildStorageExternalInterface.value.trim(),
+            cidr: buildStorageExternalCidr.value.trim(),
+            mtu: 9000,
+            ipam: "whereabouts",
+          },
+        },
+        storage: { nodes: storageNodes, replication: 3, failure_domain: "host" },
+        mon: { count: 3 },
+        mgr: { count: 2 },
+        storage_classes: { block: true, filesystem: true },
+      };
+    }
     if (buildNetworkProfile.value.trim()) {
       const networkProfile: unknown = JSON.parse(buildNetworkProfile.value);
       if (networkProfile === null || Array.isArray(networkProfile) || typeof networkProfile !== "object") {
@@ -542,6 +599,54 @@ onUnmounted(() => {
                 placeholder="Paste the site-specific network_profile JSON; do not use example NIC names."
               />
             </label>
+            <el-divider content-position="left">Rook-Ceph storage addon</el-divider>
+            <p>
+              Control traffic stays on the control network. CNF/application data uses the data or
+              SR-IOV network. Ceph replication uses the internal storage network and Ceph public
+              traffic uses the external storage network; all four CIDRs must not overlap.
+            </p>
+            <el-switch v-model="buildStorageEnabled" active-text="Deploy Rook-Ceph" />
+            <template v-if="buildStorageEnabled">
+              <div class="replica-fields">
+                <label>Rook version
+                  <el-input v-model="buildRookVersion" placeholder="v1.17.4" />
+                </label>
+                <label>Ceph image
+                  <el-input v-model="buildCephImage" placeholder="quay.io/ceph/ceph:v19.2.2" />
+                </label>
+              </div>
+              <div class="replica-fields">
+                <label>Internal network name
+                  <el-input v-model="buildStorageInternalName" />
+                </label>
+                <label>Internal interface
+                  <el-input v-model="buildStorageInternalInterface" placeholder="eno5" />
+                </label>
+                <label>Internal CIDR
+                  <el-input v-model="buildStorageInternalCidr" placeholder="192.168.60.0/24" />
+                </label>
+              </div>
+              <div class="replica-fields">
+                <label>External network name
+                  <el-input v-model="buildStorageExternalName" />
+                </label>
+                <label>External interface
+                  <el-input v-model="buildStorageExternalInterface" placeholder="eno6" />
+                </label>
+                <label>External CIDR
+                  <el-input v-model="buildStorageExternalCidr" placeholder="192.168.61.0/24" />
+                </label>
+              </div>
+              <label>Storage nodes JSON
+                <el-input
+                  v-model="buildStorageNodes"
+                  type="textarea"
+                  :rows="4"
+                  spellcheck="false"
+                  placeholder='[{"name": "worker-0", "devices": ["/dev/nvme0n1"]}]'
+                />
+              </label>
+            </template>
             <div class="replica-fields">
               <label>Control plane replicas
                 <el-input-number v-model="buildControlPlaneReplicas" :min="1" :max="9" />

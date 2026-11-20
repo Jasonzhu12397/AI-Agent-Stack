@@ -74,3 +74,11 @@ hardware record and configured BMC endpoint/credential reference.
 
 For physical acceptance evidence, keep the firmware job ID, BMC task state and
 post-upgrade inventory snapshot with the Metal3 release manifest.
+
+## Supported BMC vendors
+
+Firmware inventory and `SimpleUpdate` are enabled only for HPE, Dell, Inspur
+(浪潮), H3C and Lenovo BMCs. Vendor matching normalizes `AgentMachine.vendor`
+and `product_name` (case-insensitive, including Chinese manufacturer names).
+Other vendors return HTTP `422` with the supported vendor list before any
+Redfish request is made, so unsupported controllers are never contacted.

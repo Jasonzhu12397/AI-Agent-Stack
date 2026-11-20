@@ -27,7 +27,15 @@
     "calico-cni": "docker.io/calico/cni:v3.30.2",
     "calico-pod2daemon-flexvol": "docker.io/calico/pod2daemon-flexvol:v3.30.2",
     "calico-kube-controllers": "docker.io/calico/kube-controllers:v3.30.2",
-    "tigera-operator": "quay.io/tigera/operator:v1.38.2"
+    "tigera-operator": "quay.io/tigera/operator:v1.38.2",
+    "rook-ceph-operator": "docker.io/rook/ceph:v1.17.4",
+    "ceph": "quay.io/ceph/ceph:v19.2.2",
+    "cephcsi": "quay.io/cephcsi/cephcsi:v3.14.0",
+    "csi-node-driver-registrar": "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0",
+    "csi-resizer": "registry.k8s.io/sig-storage/csi-resizer:v1.13.2",
+    "csi-provisioner": "registry.k8s.io/sig-storage/csi-provisioner:v5.2.0",
+    "csi-snapshotter": "registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1",
+    "csi-attacher": "registry.k8s.io/sig-storage/csi-attacher:v4.8.1"
   },
   "binaries": {
     "clusterctl": {
@@ -53,28 +61,67 @@
   "services": {
     "vbmc": {
       "container": {
-        "ports": [{"containerPort": 6240, "hostPort": 6240}]
+        "ports": [
+          {
+            "containerPort": 6240,
+            "hostPort": 6240
+          }
+        ]
       },
-      "pod": {"hostNetwork": true, "dnsPolicy": "ClusterFirstWithHostNet"}
+      "pod": {
+        "hostNetwork": true,
+        "dnsPolicy": "ClusterFirstWithHostNet"
+      }
     },
     "sushy-tools": {
       "container": {
-        "ports": [{"containerPort": 8000, "hostPort": 8000}]
+        "ports": [
+          {
+            "containerPort": 8000,
+            "hostPort": 8000
+          }
+        ]
       },
-      "pod": {"hostNetwork": true, "dnsPolicy": "ClusterFirstWithHostNet"}
+      "pod": {
+        "hostNetwork": true,
+        "dnsPolicy": "ClusterFirstWithHostNet"
+      }
     },
     "httpd-infra": {
       "container": {
-        "command": ["/bin/runhttpd"],
-        "env": [{"name": "PROVISIONING_INTERFACE", "value": "ironicendpoint"}],
-        "ports": [{"containerPort": 6180, "hostPort": 6180}],
-        "volumeMounts": [{"name": "shared", "mountPath": "/shared"}]
+        "command": [
+          "/bin/runhttpd"
+        ],
+        "env": [
+          {
+            "name": "PROVISIONING_INTERFACE",
+            "value": "ironicendpoint"
+          }
+        ],
+        "ports": [
+          {
+            "containerPort": 6180,
+            "hostPort": 6180
+          }
+        ],
+        "volumeMounts": [
+          {
+            "name": "shared",
+            "mountPath": "/shared"
+          }
+        ]
       },
       "pod": {
         "hostNetwork": true,
         "dnsPolicy": "ClusterFirstWithHostNet",
         "volumes": [
-          {"name": "shared", "hostPath": {"path": "/opt/metal3-data", "type": "DirectoryOrCreate"}}
+          {
+            "name": "shared",
+            "hostPath": {
+              "path": "/opt/metal3-data",
+              "type": "DirectoryOrCreate"
+            }
+          }
         ]
       }
     }

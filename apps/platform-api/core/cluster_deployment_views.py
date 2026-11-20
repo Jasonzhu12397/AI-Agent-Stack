@@ -10,6 +10,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from packages.agent_contracts.storage_addon import (
+    StorageAddonError,
+    plan_storage_addon as plan_storage_addon_contract,
+)
 from apps.agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     validate_sriov_device_plugin_config,
@@ -120,6 +124,22 @@ def _validated_spec(request):
                 **worker_config,
                 "sriov_device_plugin": normalized,
             }
+    storage_addon = spec.get("storage_addon")
+    if storage_addon is not None:
+        worker_contract = spec.get("worker_network_contract")
+        if not isinstance(worker_contract, dict) and isinstance(
+            spec.get("worker_provisioning"), dict
+        ):
+            worker_contract = spec["worker_provisioning"].get(
+                "worker_network_contract"
+            ) or spec["worker_provisioning"].get("network_contract")
+        try:
+            spec["storage_addon"] = plan_storage_addon_contract(
+                storage_addon,
+                worker_network_contract=worker_contract,
+            )
+        except StorageAddonError as exc:
+            return None, f"storage_addon: {exc}"
     return spec, None
 
 

@@ -98,6 +98,8 @@ Target Workers ---> Calico eBPF data plane / CNI / SR-IOV
 - Kubernetes runs with Calico eBPF and kube-proxy replacement; kube-proxy is not installed.
 - Target Workers synchronize time only from the Target Control Plane's Ironic internal IP/VIP over UDP/123; external NTP pools and fallback are prohibited.
 - Kubernetes Control Plane management uses ordinary NIC connectivity. Pod traffic uses a separate Data Plane, with Multus and SR-IOV/DPDK where required.
+- The optional Rook-Ceph storage addon keeps storage traffic off both the control and data planes: Ceph replication uses an `internal` Multus network, Ceph public/client traffic uses an `external` Multus network, and all storage CIDRs and NICs must be disjoint from the control and data contracts.
+- Rook-Ceph v1.17.4 manifests and Ceph v19.2.2 images are vendored for offline target installation; the Target Agent installs the operator, waits for a `Ready` CephCluster, then creates the requested block (`ceph-rbd`) and filesystem (`cephfs`) StorageClasses.
 
 The complete lifecycle is implemented at code-baseline and mock-test level. Real Live ISO, BMC, IPA, CAPI Pivot, physical Worker and Calico eBPF end-to-end acceptance remain outstanding.
 
@@ -179,7 +181,7 @@ The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must pro
 
 ## Validation and production status
 
-BMC firmware inventory and `SimpleUpdate` are implemented for machines with a configured BMC endpoint; see [`docs/firmware-management.md`](docs/firmware-management.md). The platform API enforces administrator-only submission, explicit confirmation, HTTPS image URLs, idempotency keys, private BMC IPs and same-origin Redfish task monitors.
+BMC firmware inventory and `SimpleUpdate` are implemented for HPE, Dell, Inspur, H3C and Lenovo machines with a configured BMC endpoint; other vendors are rejected with `422` before any Redfish call. See [`docs/firmware-management.md`](docs/firmware-management.md). The platform API enforces administrator-only submission, explicit confirmation, HTTPS image URLs, idempotency keys, private BMC IPs and same-origin Redfish task monitors.
 
 Implemented foundations include tenant/project isolation, membership roles, token budgets, chained audit, Agent/Workflow APIs, connector approval, MCP streamable-HTTP runtime, Qdrant collection bootstrap and the three infrastructure Agent state machines. Metal3 physical acceptance runs end to end with `tools/metal3_release_run.py`, which executes every evidence stage, seals a fail-closed release manifest and blocks the release on any failure.
 

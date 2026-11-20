@@ -1148,6 +1148,52 @@ def _bmc_credential_for(machine, tenant, project):
     return {"username": username, "password": password}, trust_bundle_pem
 
 
+FIRMWARE_SUPPORTED_VENDORS = (
+    "HPE",
+    "Dell",
+    "Inspur",
+    "H3C",
+    "Lenovo",
+)
+FIRMWARE_VENDOR_UNSUPPORTED_DETAIL = (
+    "Firmware management supports HPE, Dell, Inspur, H3C and Lenovo BMCs only."
+)
+
+
+def _firmware_vendor_scope(machine):
+    """Return the canonical firmware vendor for a supported machine."""
+
+    values = " ".join(
+        str(value or "") for value in (machine.vendor, machine.product_name)
+    ).casefold()
+    if not values.strip():
+        return None
+    tokens = set(re.split(r"[^a-z0-9]+", values))
+    if "hewlett" in values or "hpe" in values or "hp" in tokens:
+        return "HPE"
+    if "dell" in values:
+        return "Dell"
+    if "inspur" in values or "浪潮" in values:
+        return "Inspur"
+    if "h3c" in values or "新华三" in values:
+        return "H3C"
+    if "lenovo" in values or "联想" in values:
+        return "Lenovo"
+    return None
+
+
+def _firmware_vendor_gate(machine):
+    if _firmware_vendor_scope(machine) is None:
+        return Response(
+            {
+                "detail": FIRMWARE_VENDOR_UNSUPPORTED_DETAIL,
+                "supported_vendors": list(FIRMWARE_SUPPORTED_VENDORS),
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    return None
+
+
 def _firmware_client(machine, credential, trust_bundle_pem):
     parsed = urlsplit(machine.bmc_endpoint)
     hostname = parsed.hostname or ""
@@ -1393,6 +1439,9 @@ class FleetMachineFirmwareView(APIView):
         ).first()
         if machine is None:
             return Response({"detail": "Machine not found."}, status=404)
+        vendor_gate = _firmware_vendor_gate(machine)
+        if vendor_gate is not None:
+            return vendor_gate
         jobs = machine.firmware_update_jobs.all()[:20]
         base = {
             "machine_id": str(machine.id),
@@ -1438,6 +1487,14 @@ class FleetMachineFirmwareUpgradeView(APIView):
                 {"detail": "Tenant or project administrator role is required."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        machine = AgentMachine.objects.filter(
+            pk=machine_id, tenant=tenant, project=project
+        ).first()
+        if machine is None:
+            return Response({"detail": "Machine not found."}, status=404)
+        vendor_gate = _firmware_vendor_gate(machine)
+        if vendor_gate is not None:
+            return vendor_gate
         allowed = {"image_url", "component", "apply_time", "targets", "confirm", "idempotency_key"}
         if set(request.data) - allowed:
             return Response(
