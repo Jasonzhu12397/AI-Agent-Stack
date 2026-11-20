@@ -50,8 +50,10 @@ for doc in "${split_dir}"/doc-*.yaml; do
   [ -s "${doc}" ] || continue
   kind="$(awk '/^kind:/ {print $2; exit}' "${doc}")"
   if [ "${kind}" = "CustomResourceDefinition" ]; then
+    if [ -s "${split_dir}/crds.yaml" ]; then echo "---" >> "${split_dir}/crds.yaml"; fi
     cat "${doc}" >> "${split_dir}/crds.yaml"
   else
+    if [ -s "${split_dir}/resources.yaml" ]; then echo "---" >> "${split_dir}/resources.yaml"; fi
     cat "${doc}" >> "${split_dir}/resources.yaml"
   fi
 done
