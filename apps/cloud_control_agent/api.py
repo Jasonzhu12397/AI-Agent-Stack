@@ -374,6 +374,12 @@ def _parse_uuid(value: Any, field: str) -> UUID:
         raise ControlApiError(f"{field}_INVALID") from exc
 
 
+def _loop_requests_another_iteration(result: Any) -> bool:
+    """Only an explicit boolean ``{"continue": true}`` advances a loop step."""
+
+    return isinstance(result, dict) and result.get("continue") is True
+
+
 def _task_max_attempts(payload: Any) -> int:
     """Read a step retry budget, defaulting to a single attempt."""
 
@@ -1662,9 +1668,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 INSERT INTO agent_control_tasks (
                                     task_id, project_id, workflow_run_id, step_id,
                                     step_type, join_policy, name, status,
-                                    required_role, payload, depends_on, idempotency_key
+                                    required_role, payload, depends_on,
+                                    idempotency_key, loop_max_iterations
                                 ) VALUES (
-                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                                 )
                                 """,
                                 (
@@ -1686,6 +1693,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                     ),
                                     Jsonb(step["depends_on"]),
                                     f"workflow:{run_id}:{step['id']}",
+                                    step.get("max_iterations", 1),
                                 ),
                             )
                     else:
@@ -1888,6 +1896,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     row = connection.execute(
                         """
                         SELECT t.task_id, t.project_id, t.workflow_run_id, t.step_id,
+                               t.step_type, t.iteration, t.loop_max_iterations,
                                t.name, t.priority, t.required_role, t.payload,
                                p.name AS project_name, r.workflow_id, r.status AS run_status,
                                w.name AS workflow_name
@@ -2008,7 +2017,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             lease_expires_at = NULL, updated_at = NOW()
                         WHERE task_id = %s AND assigned_agent_id = %s
                           AND status = 'leased' AND lease_token_hash = %s
-                        RETURNING task_id, workflow_run_id, step_id, status, result,
+                        RETURNING task_id, workflow_run_id, step_id, step_type,
+                                  iteration, loop_max_iterations, status, result,
                                   payload, attempts
                         """,
                         (
@@ -2023,6 +2033,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("TASK_RESULT_NOT_ACCEPTED")
                     run_id = task["workflow_run_id"]
                     retrying = False
+                    looping = False
                     if (
                         run_id is not None
                         and task["status"] == "failed"
@@ -2039,6 +2050,25 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             (task["task_id"],),
                         )
                         retrying = True
+                        run_status = "running"
+                    elif (
+                        run_id is not None
+                        and task["status"] == "succeeded"
+                        and task["step_type"] == "loop"
+                        and task["iteration"] < task["loop_max_iterations"]
+                        and _loop_requests_another_iteration(outcome["result"])
+                    ):
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'queued', iteration = iteration + 1,
+                                lease_token_hash = NULL, lease_expires_at = NULL,
+                                updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (task["task_id"],),
+                        )
+                        looping = True
                         run_status = "running"
                     elif run_id is not None and task["status"] == "failed":
                         connection.execute(
@@ -2078,10 +2108,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 {
                     "accepted": True,
                     "task_id": task["task_id"],
-                    "status": "queued" if retrying else task["status"],
+                    "status": "queued" if (retrying or looping) else task["status"],
                     "workflow_run_id": task["workflow_run_id"],
                     "workflow_run_status": run_status,
                     "retrying": retrying,
+                    "looping": looping,
+                    "iteration": task["iteration"] + 1 if looping else task["iteration"],
                 },
             )
 

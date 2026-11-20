@@ -39,7 +39,8 @@ PROJECT_STATUSES = frozenset({"active", "archived"})
 TASK_STATUSES = frozenset(
     {"blocked", "queued", "leased", "awaiting_approval", "succeeded", "failed", "cancelled"}
 )
-WORKFLOW_STEP_TYPES = frozenset({"task", "approval"})
+WORKFLOW_STEP_TYPES = frozenset({"task", "approval", "loop"})
+MAX_LOOP_ITERATIONS = 10
 WORKFLOW_JOIN_POLICIES = frozenset({"all", "any"})
 WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
 AGENT_ROLES = frozenset({"eph", "target"})
@@ -300,11 +301,31 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
         step_type = item.get("type", "task")
         if step_type not in WORKFLOW_STEP_TYPES:
             raise WorkspaceError(
-                f"definition.steps[{index}].type must be task or approval."
+                f"definition.steps[{index}].type must be task, approval or loop."
             )
         if step_type == "approval" and role not in (None, ""):
             raise WorkspaceError(
                 f"definition.steps[{index}].required_role must be empty for approval steps."
+            )
+        max_iterations = item.get("max_iterations", 1)
+        if (
+            not isinstance(max_iterations, int)
+            or isinstance(max_iterations, bool)
+            or not 1 <= max_iterations <= MAX_LOOP_ITERATIONS
+        ):
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_iterations must be an integer "
+                f"from 1 to {MAX_LOOP_ITERATIONS}."
+            )
+        if step_type == "loop" and max_iterations < 2:
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_iterations must be at least 2 "
+                "for loop steps."
+            )
+        if step_type != "loop" and max_iterations != 1:
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_iterations is only valid for "
+                "loop steps."
             )
         max_attempts = item.get("max_attempts", 1)
         if (
@@ -325,6 +346,7 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
                 "name": name,
                 "type": step_type,
                 "join": join_policy,
+                "max_iterations": max_iterations,
                 "required_role": role or None,
                 "payload": _bounded_json(
                     item.get("payload"),

@@ -234,7 +234,30 @@ as soon as one dependency succeeds, so parallel branches can merge on the first
 result while the remaining branches keep running. A failed dependency still
 fails the run, so `any` never lets a run succeed around a failure.
 
-A step `type` is `task` (default) or `approval`. An approval step must not set
+A step `type` is `task` (default), `approval` or `loop`. A loop step repeats the
+same agent task within a mandatory budget of 2–10 iterations:
+
+```json
+{
+  "id": "wait",
+  "name": "Wait for BMH",
+  "type": "loop",
+  "max_iterations": 5,
+  "required_role": "eph"
+}
+```
+
+Each claim exposes the current `iteration` and `loop_max_iterations`. The Agent
+requests another iteration by returning exactly:
+
+```json
+{"continue": true}
+```
+
+Any other successful result finishes the step, and reaching
+`loop_max_iterations` also finishes it even if `continue` is still `true`. A
+failed iteration follows the normal `max_attempts` retry rules; loops and retries
+are independent counters. `max_iterations` is rejected on non-loop steps. An approval step must not set
 `required_role` and must keep `max_attempts` at 1. It is never claimable by an
 Agent: when its dependencies succeed it moves to `awaiting_approval`, and the
 run stays `running` until a platform operator posts a decision:

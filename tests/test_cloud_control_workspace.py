@@ -365,3 +365,37 @@ def test_workflow_definition_rejects_invalid_join_policies():
                 ],
             }
         )
+
+
+def test_workflow_loop_steps_require_a_bounded_iteration_budget():
+    definition = normalize_workflow_definition(
+        {
+            "steps": [
+                {
+                    "id": "wait",
+                    "name": "Wait for BMH",
+                    "type": "loop",
+                    "max_iterations": 5,
+                    "required_role": "eph",
+                }
+            ]
+        }
+    )
+    assert definition["steps"][0]["max_iterations"] == 5
+
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [{"id": "wait", "name": "Wait", "type": "loop", "max_iterations": 1}],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [{"id": "wait", "name": "Wait", "type": "loop", "max_iterations": 99}],
+            }
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {"steps": [{"id": "task", "name": "Task", "max_iterations": 2}]}
+        )

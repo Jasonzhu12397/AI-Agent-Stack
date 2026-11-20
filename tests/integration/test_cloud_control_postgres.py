@@ -512,6 +512,104 @@ def test_workflow_approval_step_pauses_and_resumes_the_run(control_server, tls_m
         platform_client.close()
 
 
+def test_workflow_loop_step_requeues_until_its_iteration_budget(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "loop-workflow",
+                "definition": {
+                    "steps": [
+                        {
+                            "id": "wait",
+                            "name": "Wait for BMH",
+                            "type": "loop",
+                            "max_iterations": 2,
+                            "required_role": "eph",
+                        }
+                    ]
+                },
+            },
+        )
+        run_id = uuid4()
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {"host": "bmh-01"},
+                "idempotency_key": f"loop-run-{run_id}",
+            },
+        )
+        task = started["tasks"][0]
+        assert task["step_type"] == "loop"
+        assert task["iteration"] == 1
+        assert task["loop_max_iterations"] == 2
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            first = _claim(agent_client, identity)
+            assert first["task"]["step_id"] == "wait"
+            assert first["task"]["iteration"] == 1
+            first_result = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "succeeded",
+                    "result": {"continue": True, "ready": False},
+                },
+            )
+            assert first_result["looping"] is True
+            assert first_result["iteration"] == 2
+            assert first_result["workflow_run_status"] == "running"
+
+            midway = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+            task = midway["tasks"][0]
+            assert task["status"] == "queued"
+            assert task["iteration"] == 2
+            assert midway["run"]["status"] == "running"
+
+            second = _claim(agent_client, identity)
+            assert second["task"]["iteration"] == 2
+            second_result = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": second["task"]["task_id"],
+                    "lease_token": second["lease_token"],
+                    "status": "succeeded",
+                    "result": {"continue": True, "ready": True},
+                },
+            )
+            assert second_result["looping"] is False
+            assert second_result["status"] == "succeeded"
+            assert second_result["workflow_run_status"] == "succeeded"
+        finally:
+            agent_client.close()
+
+        finished = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert finished["run"]["status"] == "succeeded"
+        assert finished["run"]["output"]["wait"]["continue"] is True
+        assert finished["tasks"][0]["iteration"] == 2
+    finally:
+        platform_client.close()
+
+
 def test_workflow_any_join_releases_downstream_before_all_branches_finish(
     control_server, tls_material
 ):

@@ -316,7 +316,13 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
                 )
             ),
             step_type TEXT NOT NULL DEFAULT 'task' CHECK (
-                step_type IN ('task', 'approval')
+                step_type IN ('task', 'approval', 'loop')
+            ),
+            iteration INTEGER NOT NULL DEFAULT 1 CHECK (
+                iteration BETWEEN 1 AND 10
+            ),
+            loop_max_iterations INTEGER NOT NULL DEFAULT 1 CHECK (
+                loop_max_iterations BETWEEN 1 AND 10
             ),
             join_policy TEXT NOT NULL DEFAULT 'all' CHECK (
                 join_policy IN ('all', 'any')
@@ -357,6 +363,14 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     """)
     connection.execute("""
         ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS iteration INTEGER NOT NULL DEFAULT 1
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS loop_max_iterations INTEGER NOT NULL DEFAULT 1
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
         ADD COLUMN IF NOT EXISTS join_policy TEXT NOT NULL DEFAULT 'all'
     """)
     connection.execute("""
@@ -375,7 +389,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     connection.execute("""
         ALTER TABLE agent_control_tasks
         ADD CONSTRAINT agent_control_tasks_step_type_check
-        CHECK (step_type IN ('task', 'approval'))
+        CHECK (step_type IN ('task', 'approval', 'loop'))
     """)
     connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_tasks_claim_idx
