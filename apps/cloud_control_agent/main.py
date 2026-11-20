@@ -178,7 +178,9 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
                 ON DELETE CASCADE,
             kind TEXT NOT NULL CHECK (
-                kind IN ('deployment', 'maintenance', 'inspection', 'diagnostic')
+                kind IN (
+                    'deployment', 'maintenance', 'inspection', 'diagnostic', 'software'
+                )
             ),
             status TEXT NOT NULL DEFAULT 'queued' CHECK (
                 status IN ('queued', 'leased', 'succeeded', 'failed', 'cancelled')
@@ -196,6 +198,18 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             attempts INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_work_items
+        DROP CONSTRAINT IF EXISTS agent_control_work_items_kind_check
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_work_items
+        ADD CONSTRAINT agent_control_work_items_kind_check CHECK (
+            kind IN (
+                'deployment', 'maintenance', 'inspection', 'diagnostic', 'software'
+            )
         )
     """)
     connection.execute("""
