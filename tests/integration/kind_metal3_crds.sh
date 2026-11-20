@@ -158,3 +158,10 @@ PY
 "${KUBECTL}" apply --dry-run=server -f "${RENDERED_POLICY}"
 
 echo "Metal3 and SR-IOV CRDs are present and accept rendered manifests"
+
+echo "Server-side validation of every vendored control-stack manifest"
+for manifest in "${ROOT_DIR}"/deploy/offline/addons/control-stack/*.yaml; do
+  echo "  $(basename "${manifest}")"
+  "${KUBECTL}" apply --dry-run=server -f "${manifest}" >/dev/null
+done
+echo "All control-stack manifests are accepted by the API server"
