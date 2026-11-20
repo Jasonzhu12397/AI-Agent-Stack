@@ -235,3 +235,28 @@ npm run build
 Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Tenant and project authorization is enforced server-side, never by model intent or client-supplied tenant identifiers. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted.
 
 No production CAPI Pivot, BMH mutation, EPH cleanup or Worker provisioning is enabled until its adapter, approval boundary, compatibility matrix and physical acceptance evidence are complete.
+
+## Infrastructure network profile
+
+The SaaS UI (`InfrastructureAgentsView`) stores one network profile per project
+through `GET/PUT /api/v1/tenants/{tenant}/projects/{project}/infrastructure-networks/`.
+Each segment declares its role (`control`, `data`, `storage-internal`,
+`storage-external`, `sriov`, `provisioning`), VLAN, MTU, IPv4 CIDR, gateway,
+Metal3 IP pool, bond members and host-role bindings.
+
+On save the backend validates that control, data and storage CIDRs do not
+overlap, that interface/bond definitions are present, and that every host role
+is bound. It then generates:
+
+- role-specific Metal3 cloud-init `networkData` for `control_plane`, `worker`
+  and `storage` hosts (`bonds` + `ipv4` entries using `ipAddressFromIPPool`);
+- one `ipam.metal3.io/v1alpha1 IPPool` per addressed segment;
+- `SriovNetworkNodePolicy` manifests that bind `pciAddresses` to VF
+  `resourceName`s, including `numVfs`;
+- the Target Agent `network_spec` and, when Rook-Ceph is enabled, the
+  internal/external storage network mapping.
+
+The cluster deployment payload carries `infra_network_profile`. EPH applies the
+generated IPPools and SR-IOV policies together with the CAPI/Metal3 manifests,
+so BMH provisioning receives the OS network configuration before the host
+boots, while the Target Agent reuses the same control/data separation contract.

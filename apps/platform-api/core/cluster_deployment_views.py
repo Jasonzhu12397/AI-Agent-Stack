@@ -10,6 +10,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from packages.agent_contracts.infra_networks import (
+    InfraNetworkError,
+    derive_network_spec,
+    network_by_role,
+    plan_infra_networks,
+    render_ip_pools,
+    render_role_network_data,
+    render_sriov_node_policies,
+)
 from packages.agent_contracts.storage_addon import (
     StorageAddonError,
     plan_storage_addon as plan_storage_addon_contract,
@@ -124,6 +133,76 @@ def _validated_spec(request):
                 **worker_config,
                 "sriov_device_plugin": normalized,
             }
+    infra_profile = spec.get("infra_network_profile")
+    if infra_profile is not None:
+        try:
+            plan = plan_infra_networks(infra_profile)
+            spec["infra_network_profile"] = {
+                "networks": plan["networks"],
+                "dns_servers": plan["dns_servers"],
+            }
+            spec["network_spec"] = derive_network_spec(plan)
+            meta_data = {
+                "objectNames": [
+                    {"key": "machine_name", "object": "machine"},
+                    {"key": "bmh_name", "object": "baremetalhost"},
+                ]
+            }
+            role_data = {
+                role: {
+                    "meta_data": meta_data,
+                    "network_data": render_role_network_data(plan, role),
+                }
+                for role in ("control_plane", "worker", "storage")
+            }
+            spec["data_template"] = role_data["control_plane"]
+            spec["worker_data_template"] = role_data["worker"]
+            spec["storage_data_template"] = role_data["storage"]
+            spec["ip_pool_manifests"] = render_ip_pools(
+                plan,
+                cluster_name=cluster_name,
+                namespace=spec.get("namespace", "metal3"),
+            )
+            spec["sriov_node_policy_manifests"] = render_sriov_node_policies(plan)
+            storage_addon = spec.get("storage_addon")
+            if isinstance(storage_addon, dict) and storage_addon.get("enabled") is True:
+                storage_network = storage_addon.get("network")
+                if not isinstance(storage_network, dict):
+                    internal = network_by_role(plan, "storage-internal")
+                    external = network_by_role(plan, "storage-external")
+                    if internal is not None and external is not None:
+                        storage_addon = {
+                            **storage_addon,
+                            "network": {
+                                "internal": {
+                                    "name": internal["name"],
+                                    "interface": (
+                                        internal["bond"]["name"]
+                                        if internal["bond"]
+                                        else internal["interface"]
+                                    ),
+                                    "cidr": internal["cidr"],
+                                    "mtu": internal["mtu"],
+                                    "vlan": internal["vlan"],
+                                    "ipam": "whereabouts",
+                                },
+                                "external": {
+                                    "name": external["name"],
+                                    "interface": (
+                                        external["bond"]["name"]
+                                        if external["bond"]
+                                        else external["interface"]
+                                    ),
+                                    "cidr": external["cidr"],
+                                    "mtu": external["mtu"],
+                                    "vlan": external["vlan"],
+                                    "ipam": "whereabouts",
+                                },
+                            },
+                        }
+                        spec["storage_addon"] = storage_addon
+        except InfraNetworkError as exc:
+            return None, f"infra_network_profile: {exc}"
     storage_addon = spec.get("storage_addon")
     if storage_addon is not None:
         worker_contract = spec.get("worker_network_contract")

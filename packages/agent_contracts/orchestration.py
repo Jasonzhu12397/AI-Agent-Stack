@@ -312,17 +312,25 @@ def build_payload(
 
     for field_name in (
         "data_template",
+        "worker_data_template",
+        "storage_data_template",
         "worker_node_labels",
         "network_spec",
         "plugins",
         "manifests",
         "storage_addon",
+        "infra_network_profile",
     ):
         value = spec.get(field_name)
         if isinstance(value, dict):
             payload[field_name] = value
 
-    for field_name in ("hosts", "fleet"):
+    for field_name in (
+        "hosts",
+        "fleet",
+        "ip_pool_manifests",
+        "sriov_node_policy_manifests",
+    ):
         value = spec.get(field_name)
         if isinstance(value, list) and all(isinstance(item, dict) for item in value):
             payload[field_name] = value

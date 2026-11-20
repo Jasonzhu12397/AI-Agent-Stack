@@ -34,6 +34,7 @@ from core.agent_plugin_views import (
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
 )
+from core.infra_network_views import InfrastructureNetworkProfileView
 from core.agent_team_views import (
     AgentTeamDetailView,
     AgentTeamListCreateView,
@@ -191,6 +192,11 @@ urlpatterns = [
         "api/v1/plugin-connections/<uuid:connection_id>/status/",
         PluginConnectionStatusView.as_view(),
         name="plugin-connection-status",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/infrastructure-networks/",
+        InfrastructureNetworkProfileView.as_view(),
+        name="infrastructure-network-profile",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",

@@ -9,6 +9,8 @@ import {
   getAgentCommands,
   getAgentNodes,
   getClusterDeployments,
+  getInfraNetworkProfile,
+  saveInfraNetworkProfile,
   runClusterDeploymentPostflight,
   getProjects,
   getTenants,
@@ -16,6 +18,8 @@ import {
   type AgentCommand,
   type AgentNode,
   type ClusterDeployment,
+  type InfraNetwork,
+  type InfraNetworkProfile,
   type Project,
   type Tenant,
 } from "../services/api";
@@ -36,6 +40,39 @@ const buildKubernetesVersion = ref("");
 const buildControlPlaneReplicas = ref(3);
 const buildWorkerReplicas = ref(3);
 const buildNetworkProfile = ref("");
+const infraNetworkProfile = ref<InfraNetworkProfile>({ networks: [] });
+const infraNetworkStatus = ref("");
+const infraNetworkSaving = ref(false);
+const networkDraft = ref({
+  name: "",
+  role: "control" as InfraNetwork["role"],
+  vlan: "",
+  mtu: 1500,
+  cidr: "",
+  gateway: "",
+  poolStart: "",
+  poolEnd: "",
+  prefix: 24,
+  interface: "",
+  bondName: "",
+  bondInterfaces: "",
+  pciAddresses: "",
+  numVfs: 8,
+  hostRoles: ["control_plane", "worker"] as InfraNetwork["host_roles"],
+});
+const NETWORK_ROLES = [
+  { value: "control", label: "Control / management" },
+  { value: "data", label: "Data plane" },
+  { value: "storage-internal", label: "Ceph internal replication" },
+  { value: "storage-external", label: "Ceph external public" },
+  { value: "sriov", label: "SR-IOV / DPDK" },
+  { value: "provisioning", label: "Metal3 provisioning" },
+];
+const HOST_ROLES = [
+  { value: "control_plane", label: "Control plane" },
+  { value: "worker", label: "Worker" },
+  { value: "storage", label: "Storage" },
+];
 const buildStorageEnabled = ref(false);
 const buildRookVersion = ref("v1.17.4");
 const buildCephImage = ref("quay.io/ceph/ceph:v19.2.2");
@@ -183,6 +220,112 @@ async function loadNodes(): Promise<void> {
   }
 }
 
+async function loadInfraNetworks(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  try {
+    const response = await getInfraNetworkProfile(
+      selectedTenantId.value,
+      selectedProjectId.value,
+    );
+    const profile = response.profile;
+    if ("networks" in profile && Array.isArray(profile.networks)) {
+      infraNetworkProfile.value = {
+        networks: profile.networks,
+        dns_servers: profile.dns_servers ?? [],
+      };
+    } else {
+      infraNetworkProfile.value = { networks: [] };
+    }
+  } catch (cause) {
+    infraNetworkStatus.value =
+      cause instanceof Error ? cause.message : "Unable to load infrastructure networks.";
+  }
+}
+
+function addInfraNetwork(): void {
+  infraNetworkStatus.value = "";
+  const draft = networkDraft.value;
+  if (!draft.name.trim()) {
+    infraNetworkStatus.value = "Network name is required.";
+    return;
+  }
+  if (!draft.cidr.trim() && draft.role !== "sriov") {
+    infraNetworkStatus.value = "A CIDR is required for this network role.";
+    return;
+  }
+  if (!draft.interface.trim() && !draft.bondName.trim()) {
+    infraNetworkStatus.value = "Provide a NIC interface or a bond definition.";
+    return;
+  }
+  const network: InfraNetwork = {
+    name: draft.name.trim(),
+    role: draft.role,
+    enabled: true,
+    vlan: draft.vlan ? Number(draft.vlan) : null,
+    mtu: draft.mtu,
+    cidr: draft.cidr.trim() || null,
+    gateway_ipv4: draft.gateway.trim() || null,
+    host_roles: [...draft.hostRoles],
+    interface: draft.interface.trim() || null,
+    pci_addresses: draft.pciAddresses
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    num_vfs: draft.numVfs,
+    bond: draft.bondName.trim()
+      ? {
+          name: draft.bondName.trim(),
+          interfaces: draft.bondInterfaces
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean),
+          mode: "active-backup",
+        }
+      : null,
+  };
+  if (draft.poolStart.trim() && draft.poolEnd.trim()) {
+    network.ip_pools = [
+      {
+        start: draft.poolStart.trim(),
+        end: draft.poolEnd.trim(),
+        prefix: draft.prefix,
+      },
+    ];
+  }
+  infraNetworkProfile.value = {
+    ...infraNetworkProfile.value,
+    networks: [...infraNetworkProfile.value.networks, network],
+  };
+}
+
+function removeInfraNetwork(index: number): void {
+  infraNetworkProfile.value = {
+    ...infraNetworkProfile.value,
+    networks: infraNetworkProfile.value.networks.filter((_, itemIndex) => itemIndex !== index),
+  };
+}
+
+async function saveInfraNetworks(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  infraNetworkSaving.value = true;
+  infraNetworkStatus.value = "";
+  try {
+    const response = await saveInfraNetworkProfile(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      infraNetworkProfile.value,
+    );
+    infraNetworkProfile.value = response.profile;
+    infraNetworkStatus.value =
+      "Network profile validated. Metal3 networkData and IPPools were generated for control plane, workers and storage.";
+  } catch (cause) {
+    infraNetworkStatus.value =
+      cause instanceof Error ? cause.message : "Unable to save infrastructure networks.";
+  } finally {
+    infraNetworkSaving.value = false;
+  }
+}
+
 async function loadDeployments(): Promise<void> {
   if (!selectedTenantId.value || !selectedProjectId.value) {
     deployments.value = [];
@@ -270,6 +413,12 @@ async function generateClusterPlan(): Promise<void> {
       control_plane_replicas: buildControlPlaneReplicas.value,
       worker_replicas: buildWorkerReplicas.value,
     };
+    if (infraNetworkProfile.value.networks.length) {
+      clusterSpec.infra_network_profile = {
+        networks: infraNetworkProfile.value.networks,
+        dns_servers: infraNetworkProfile.value.dns_servers ?? [],
+      };
+    }
     if (buildStorageEnabled.value) {
       let storageNodes: unknown;
       try {
@@ -332,6 +481,7 @@ async function generateClusterPlan(): Promise<void> {
       deployment.status === "plan_ready"
         ? "Cluster plan completed. Review the missing prerequisites before provisioning."
         : "Cluster delivery workflow created. EPH preflight and plan commands are queued.";
+    await loadInfraNetworks();
     await loadDeployments();
     await loadCommands();
   } catch (cause) {
@@ -448,7 +598,10 @@ watch(nodeType, (value) => {
   nodeName.value = value === "eph_node" ? "eph-node-01" : "target-cluster-01";
 });
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
-watch(selectedProjectId, () => void loadNodes());
+watch(selectedProjectId, () => {
+  void loadNodes();
+  void loadInfraNetworks();
+});
 watch(selectedNodeId, () => {
   commandType.value = availableCommands.value[0] ?? "node.health";
   commandPayload.value = defaultPayload(commandType.value);
@@ -566,6 +719,109 @@ onUnmounted(() => {
           </button>
           <el-empty v-if="!loading && !nodes.length" description="No agents enrolled in this project" :image-size="72" />
         </div>
+      </section>
+
+      <section class="infra-panel">
+        <div class="infra-panel-heading">
+          <div><p class="eyebrow">INFRASTRUCTURE NETWORKS</p><h3>Network profile, cloud-init and Metal3 IP pools</h3></div>
+          <el-button type="primary" :loading="infraNetworkSaving" @click="saveInfraNetworks">
+            Validate and save profile
+          </el-button>
+        </div>
+        <p class="infra-description">
+          Define control, data, storage and SR-IOV segments once. The backend validates VLAN/CIDR/IP-pool isolation and generates
+          role-specific cloud-init networkData plus Metal3 IPPools for BMH provisioning. Bonds are passed to the OS by interface
+          and to the SR-IOV device plugin by PCI address.
+        </p>
+        <el-alert
+          v-if="infraNetworkStatus"
+          :title="infraNetworkStatus"
+          :type="infraNetworkStatus.startsWith('Network profile validated') ? 'success' : 'warning'"
+          show-icon
+          :closable="false"
+        />
+        <div class="infra-form">
+          <div class="replica-fields">
+            <label>Network name
+              <el-input v-model="networkDraft.name" placeholder="ccd-data" />
+            </label>
+            <label>Network role
+              <el-select v-model="networkDraft.role">
+                <el-option v-for="role in NETWORK_ROLES" :key="role.value" :label="role.label" :value="role.value" />
+              </el-select>
+            </label>
+            <label>VLAN
+              <el-input v-model="networkDraft.vlan" placeholder="optional, 1-4094" />
+            </label>
+            <label>MTU
+              <el-input-number v-model="networkDraft.mtu" :min="576" :max="9216" />
+            </label>
+          </div>
+          <div class="replica-fields">
+            <label>IPv4 CIDR
+              <el-input v-model="networkDraft.cidr" placeholder="10.0.61.0/24" />
+            </label>
+            <label>Gateway
+              <el-input v-model="networkDraft.gateway" placeholder="10.0.61.1" />
+            </label>
+            <label>IP pool start
+              <el-input v-model="networkDraft.poolStart" placeholder="10.0.61.10" />
+            </label>
+            <label>IP pool end
+              <el-input v-model="networkDraft.poolEnd" placeholder="10.0.61.250" />
+            </label>
+            <label>Prefix
+              <el-input-number v-model="networkDraft.prefix" :min="8" :max="32" />
+            </label>
+          </div>
+          <div class="replica-fields">
+            <label>NIC interface (when not bonded)
+              <el-input v-model="networkDraft.interface" placeholder="eno5" />
+            </label>
+            <label>Bond name
+              <el-input v-model="networkDraft.bondName" placeholder="bond_data" />
+            </label>
+            <label>Bond member NICs (comma separated)
+              <el-input v-model="networkDraft.bondInterfaces" placeholder="ens1f0,ens1f1" />
+            </label>
+            <label>SR-IOV PCI addresses (comma separated)
+              <el-input v-model="networkDraft.pciAddresses" placeholder="0000:af:00.1,0000:af:00.2" />
+            </label>
+            <label>SR-IOV VFs per PF
+              <el-input-number v-model="networkDraft.numVfs" :min="1" :max="128" />
+            </label>
+            <label>Host roles
+              <el-select v-model="networkDraft.hostRoles" multiple collapse-tags>
+                <el-option v-for="role in HOST_ROLES" :key="role.value" :label="role.label" :value="role.value" />
+              </el-select>
+            </label>
+          </div>
+          <el-button plain @click="addInfraNetwork">Add network to profile</el-button>
+        </div>
+        <el-table :data="infraNetworkProfile.networks" size="small" class="task-table">
+          <el-table-column prop="name" label="Network" min-width="140" />
+          <el-table-column prop="role" label="Role" min-width="150" />
+          <el-table-column label="VLAN" width="80">
+            <template #default="{ row }">{{ row.vlan ?? "untagged" }}</template>
+          </el-table-column>
+          <el-table-column prop="cidr" label="CIDR" min-width="140" />
+          <el-table-column label="Link" min-width="150">
+            <template #default="{ row }">{{ row.bond?.name || row.interface || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="Host roles" min-width="180">
+            <template #default="{ row }">{{ row.host_roles?.join(", ") }}</template>
+          </el-table-column>
+          <el-table-column label="" width="90">
+            <template #default="{ $index }">
+              <el-button size="small" text type="danger" @click="removeInfraNetwork($index)">Remove</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-if="!infraNetworkProfile.networks.length"
+          description="No infrastructure network profile saved for this project"
+          :image-size="72"
+        />
       </section>
 
       <section class="infra-panel">

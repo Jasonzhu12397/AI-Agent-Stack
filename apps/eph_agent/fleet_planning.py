@@ -222,18 +222,38 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 data_template = None
         worker_labels = payload.get("worker_node_labels")
+        worker_data_template = payload.get("worker_data_template")
+        ip_pool_manifests = payload.get("ip_pool_manifests")
+        sriov_policies = payload.get("sriov_node_policy_manifests")
         evidence["cluster_spec"] = cluster_spec(
             plan,
             control_plane_endpoint=control_plane_endpoint,
             image_url=image_url,
             k8s_version=payload.get("k8s_version", "v1.37.2"),
             data_template=data_template if isinstance(data_template, dict) else None,
+            worker_data_template=(
+                worker_data_template
+                if isinstance(worker_data_template, dict)
+                else None
+            ),
             worker_node_labels=(
                 worker_labels if isinstance(worker_labels, dict) else None
             ),
             registry_endpoint=(
                 payload.get("registry_endpoint")
                 if isinstance(payload.get("registry_endpoint"), str)
+                else None
+            ),
+            ip_pool_manifests=(
+                ip_pool_manifests
+                if isinstance(ip_pool_manifests, list)
+                and all(isinstance(item, dict) for item in ip_pool_manifests)
+                else None
+            ),
+            sriov_node_policy_manifests=(
+                sriov_policies
+                if isinstance(sriov_policies, list)
+                and all(isinstance(item, dict) for item in sriov_policies)
                 else None
             ),
         )
@@ -468,8 +488,11 @@ def cluster_spec(
     image_url: str,
     k8s_version: str = "v1.37.2",
     data_template: dict[str, Any] | None = None,
+    worker_data_template: dict[str, Any] | None = None,
     worker_node_labels: dict[str, list[str]] | None = None,
     registry_endpoint: str | None = None,
+    ip_pool_manifests: list[dict[str, Any]] | None = None,
+    sriov_node_policy_manifests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The spec :func:`capi_renderer.render_capi_metal3_manifests` expects."""
 
@@ -479,7 +502,7 @@ def cluster_spec(
             "name": pool_name,
             "count": len(members),
             "node_labels": labels_by_pool.get(pool_name, []),
-            "data_template": data_template,
+            "data_template": worker_data_template or data_template,
         }
         for pool_name, members in sorted(plan.worker_pools.items())
     ]
@@ -494,6 +517,12 @@ def cluster_spec(
         "worker_pools": pools,
         "control_plane_data_template": data_template,
         **({"registry_endpoint": registry_endpoint} if registry_endpoint else {}),
+        **({"ip_pool_manifests": ip_pool_manifests} if ip_pool_manifests else {}),
+        **(
+            {"sriov_node_policy_manifests": sriov_node_policy_manifests}
+            if sriov_node_policy_manifests
+            else {}
+        ),
     }
 
 

@@ -245,6 +245,25 @@ def render_capi_metal3_manifests(cluster_spec: Any) -> list[dict[str, Any]]:
     data_templates = [control_plane_data_template] + [
         pool["data_template"] for pool in normalized_pools
     ]
+    ip_pools = cluster.get("ip_pool_manifests")
+    if ip_pools is not None:
+        if not isinstance(ip_pools, list) or any(
+            not isinstance(item, dict)
+            or item.get("kind") != "IPPool"
+            or not isinstance(item.get("metadata"), dict)
+            for item in ip_pools
+        ):
+            raise Metal3SkillError("CAPI_IP_POOL_MANIFESTS_INVALID")
+        data_templates = [*ip_pools, *data_templates]
+    sriov_policies = cluster.get("sriov_node_policy_manifests")
+    if sriov_policies is not None:
+        if not isinstance(sriov_policies, list) or any(
+            not isinstance(item, dict)
+            or item.get("kind") != "SriovNetworkNodePolicy"
+            for item in sriov_policies
+        ):
+            raise Metal3SkillError("CAPI_SRIOV_POLICIES_INVALID")
+        data_templates = [*sriov_policies, *data_templates]
     cluster_documents = [item for item in documents if item["kind"] in {"Cluster", "Metal3Cluster"}]
     remaining_documents = [
         item for item in documents if item["kind"] not in {"Cluster", "Metal3Cluster"}

@@ -785,6 +785,40 @@ class AgentCommand(models.Model):
         ]
 
 
+class InfrastructureNetworkProfile(models.Model):
+    """Project-scoped infrastructure network plan used by Metal3 and agents."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="infrastructure_network_profiles",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="infrastructure_network_profiles",
+    )
+    profile = models.JSONField(default=dict)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="infrastructure_network_profiles",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "project"],
+                name="uniq_infra_network_profile_project",
+            )
+        ]
+
+
 class ClusterDeployment(models.Model):
     class Status(models.TextChoices):
         PREFLIGHT_QUEUED = "preflight_queued", "Preflight queued"

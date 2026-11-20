@@ -784,6 +784,58 @@ export function getClusterDeployments(
   );
 }
 
+export type InfraNetwork = {
+  name: string;
+  role: "control" | "data" | "storage-internal" | "storage-external" | "sriov" | "provisioning";
+  enabled?: boolean;
+  vlan?: number | null;
+  mtu?: number;
+  dhcp?: boolean;
+  cidr?: string | null;
+  gateway_ipv4?: string | null;
+  ip_pools?: Array<{ start: string; end: string; prefix: number }>;
+  interface?: string | null;
+  bond?: { name: string; interfaces: string[]; mode?: string } | null;
+  pci_addresses?: string[];
+  num_vfs?: number;
+  host_roles: Array<"control_plane" | "worker" | "storage">;
+};
+
+export type InfraNetworkProfile = {
+  networks: InfraNetwork[];
+  dns_servers?: string[];
+};
+
+export type InfraNetworkGenerated = {
+  networks: InfraNetwork[];
+  dns_servers: string[];
+  role_network_data: Record<string, Record<string, unknown>>;
+  ip_pools: Array<Record<string, unknown>>;
+};
+
+export function getInfraNetworkProfile(
+  tenantId: string,
+  projectId: string,
+): Promise<{ profile: InfraNetworkProfile | Record<string, never>; generated: InfraNetworkGenerated | null }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/infrastructure-networks/",
+  );
+}
+
+export function saveInfraNetworkProfile(
+  tenantId: string,
+  projectId: string,
+  profile: InfraNetworkProfile,
+): Promise<{ profile: InfraNetworkProfile; generated: InfraNetworkGenerated }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/infrastructure-networks/",
+    {
+      method: "PUT",
+      body: JSON.stringify({ profile }),
+    },
+  );
+}
+
 export function createClusterDeployment(
   tenantId: string,
   projectId: string,
