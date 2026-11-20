@@ -81,7 +81,9 @@ def test_plugin_requires_indirect_credential_reference():
         normalize_plugin(name="vault", version="2.0.0", kind="driver")
 
 
-@pytest.mark.parametrize("kind", ["deployment", "maintenance", "inspection", "diagnostic"])
+@pytest.mark.parametrize(
+    "kind", ["deployment", "maintenance", "inspection", "diagnostic", "software"]
+)
 def test_work_accepts_known_kinds(kind):
     work = normalize_work(
         kind=kind,

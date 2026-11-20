@@ -34,6 +34,12 @@ from apps.dev_agent.sandbox import SandboxViolation, run, validate_command
 from apps.dev_agent.scanner import call_chain, module_outline, scan_project
 from apps.dev_agent.security import parse_npm_audit, parse_pip_audit, scan_secrets
 from apps.dev_agent.testing import detect_test_plan, parse_pytest_output, repair_loop
+from apps.dev_agent.work import (
+    SoftwareWorkExecutor,
+    WorkPayloadError,
+    serve,
+    validate_payload,
+)
 
 
 @pytest.fixture
@@ -470,3 +476,81 @@ def test_profile_pytest_runs_the_fixture_suite(project):
     report = profile_pytest(project, top=3, timeout=120)
     assert report.returncode == 0
     assert report.hotspots
+
+
+def test_software_work_executor_reviews_and_journals(project):
+    executor = SoftwareWorkExecutor(project)
+    work = {
+        "work_id": "8f0d4c2e-1b2a-4c3d-9e8f-000000000001",
+        "kind": "software",
+        "payload": {"action": "review", "paths": ["pkg/core.py"]},
+    }
+    execution = executor.execute_work_item(work)
+    assert execution.status == "succeeded"
+    assert execution.result["count"] >= 0
+    record = executor.store.get(execution.task_id)
+    assert record.status == "succeeded"
+    assert record.phase == "review"
+    assert record.checkpoint["action"] == "review"
+
+
+def test_software_work_never_writes_without_approval(project):
+    executor = SoftwareWorkExecutor(project)
+    before = (project / "pkg" / "cli.py").read_text()
+    execution = executor.execute(
+        "8f0d4c2e-1b2a-4c3d-9e8f-000000000002",
+        {"action": "plan_comment", "top": 5},
+    )
+    assert execution.status == "succeeded"
+    assert execution.result["token"]
+    assert (project / "pkg" / "cli.py").read_text() == before
+
+
+def test_software_work_payload_validation():
+    with pytest.raises(WorkPayloadError):
+        validate_payload({"action": "apply_patch"})
+    with pytest.raises(WorkPayloadError):
+        validate_payload({"action": "review", "paths": ["../etc/passwd"]})
+    with pytest.raises(WorkPayloadError):
+        validate_payload({"action": "review", "unknown": True})
+    with pytest.raises(WorkPayloadError):
+        validate_payload({"action": "profile", "top": 0})
+    assert validate_payload({"action": "review"})["paths"] == []
+
+
+def test_software_work_rejects_other_kinds_and_actions(project):
+    executor = SoftwareWorkExecutor(project)
+    with pytest.raises(WorkPayloadError):
+        executor.execute("w-1", {"action": "capabilities"}, kind="deployment")
+    execution = executor.execute("w-2", {"action": "not_a_tool"})
+    assert execution.status == "failed"
+    assert "action must be one of" in execution.result["error"]
+
+
+def test_serve_claims_executes_and_reports(project):
+    class FakeClient:
+        def __init__(self, items):
+            self.items = list(items)
+            self.reported = []
+
+        def claim_work(self, kind=None):
+            assert kind == "software"
+            if not self.items:
+                return None
+            return {"work": self.items.pop(0), "lease_token": "t"}
+
+        def report_work_result(self, work, status, result):
+            self.reported.append((work["work_id"], status, result))
+            return {"accepted": True}
+
+    handling = {
+        "work_id": "serve-1",
+        "kind": "software",
+        "payload": {"action": "capabilities"},
+    }
+    unsupported = {"work_id": "serve-2", "kind": "inspection", "payload": {}}
+    client = FakeClient([handling, unsupported])
+    handled = serve(client, project, max_items=2)
+    assert len(handled) == 1
+    assert client.reported[0][1] == "succeeded"
+    assert "code_understanding" in client.reported[0][2]

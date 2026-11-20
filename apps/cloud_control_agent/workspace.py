@@ -28,7 +28,7 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")
 ACTION_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$")
 CONFIG_REF_PATTERN = re.compile(r"^(?:secret|vault|config)://[A-Za-z0-9._/-]{1,120}$")
-WORK_KINDS = frozenset({"deployment", "maintenance", "inspection", "diagnostic"})
+WORK_KINDS = frozenset({"deployment", "maintenance", "inspection", "diagnostic", "software"})
 PLUGIN_KINDS = frozenset({"connector", "tool", "runtime"})
 PROJECT_STATUSES = frozenset({"active", "archived"})
 TASK_STATUSES = frozenset(
@@ -193,7 +193,7 @@ def normalize_work(
 ) -> dict[str, Any]:
     if kind not in WORK_KINDS:
         raise WorkspaceError(
-            "work kind must be deployment, maintenance, inspection or diagnostic."
+            "work kind must be deployment, maintenance, inspection, diagnostic or software."
         )
     if required_role not in (None, "", *AGENT_ROLES):
         raise WorkspaceError("required_role must be eph, target or empty.")

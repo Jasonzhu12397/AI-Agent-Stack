@@ -312,3 +312,41 @@ def test_agent_client_returns_none_when_no_work_is_queued(tmp_path, monkeypatch)
         assert client.claim_work() is None
     finally:
         client.close()
+
+
+def test_agent_client_claim_work_filters_by_kind(tmp_path, monkeypatch):
+    import json
+
+    import httpx
+
+    from packages.agent_transport.client import AgentControlClient
+    from packages.agent_transport.config import AgentSettings
+
+    ca, cert, key = _write_cert_files(tmp_path)
+    values = {
+        "AGENT_CONTROL_URL": "https://control.example.test",
+        "AGENT_ID": str(uuid4()),
+        "AGENT_INSTALLATION_ID": str(uuid4()),
+        "AGENT_INSTANCE_ID": "software-agent-0",
+        "AGENT_ROLE": "eph",
+        "AGENT_TLS_CA_FILE": ca,
+        "AGENT_TLS_CERT_FILE": cert,
+        "AGENT_TLS_KEY_FILE": key,
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    settings = AgentSettings.from_environment("eph")
+    seen = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        seen.append(payload.get("kind"))
+        return httpx.Response(200, json={"work": None})
+
+    client = AgentControlClient(settings, transport=httpx.MockTransport(handler))
+    try:
+        assert client.claim_work(kind="software") is None
+        assert client.claim_work() is None
+        assert seen == ["software", None]
+    finally:
+        client.close()

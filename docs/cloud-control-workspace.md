@@ -15,7 +15,7 @@ credentials stay behind `config://`, `secret://` or `vault://` references.
 | `agent_control_projects` | one installation | Container for skills, plugins and work |
 | `agent_control_skills` | one project | Versioned manifest with an entrypoint and dotted actions |
 | `agent_control_plugins` | one project | Connector, tool or runtime registration with an indirect config reference |
-| `agent_control_work_items` | one project | Durable unit of work with priority, role affinity, lease and result |
+| `agent_control_work_items` | one project | Durable unit of work with priority, role affinity, lease and result; kinds are `deployment`, `maintenance`, `inspection`, `diagnostic` and `software` |
 | `agent_control_tasks` | one project | Standalone or workflow-step task with dependencies, lease and result |
 | `agent_control_workflows` | one project | Versioned workflow definition with a mutable latest version pointer |
 | `agent_control_workflow_versions` | one workflow | Immutable JSONB DAG snapshot per version |
@@ -120,7 +120,9 @@ POST /api/v1/agent-control/tasks/lease/renew
 POST /api/v1/agent-control/tasks/result
 ```
 
-`claim` selects queued work, or work whose lease expired, for any active project
+`claim` selects queued work, or work whose lease expired, for any active project.
+It accepts an optional `"kind"` field so a software executor asks only for
+`kind: "software"` and cannot lease deployment work.
 in the Agent's installation. It filters on `required_role` when set, orders by
 priority and age, and uses `FOR UPDATE SKIP LOCKED` so concurrent Agents cannot
 claim the same item. A successful claim returns:

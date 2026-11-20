@@ -39,6 +39,7 @@ schema-validated tool steps.
 | Rollback and recovery | `rollback_steps` always returns a human-reviewed plan; the agent never executes it | implemented as guidance |
 | Docs generation | `docs.render_readme`, `render_architecture` (Mermaid), `render_api_docs` | implemented |
 | Automatic comments | `docs.docstring_edits` proposes signature-block insertions, applied only through the approval token | implemented |
+| Control-plane execution | `work.validate_payload` and `SoftwareWorkExecutor` accept only read/analysis actions, journal `work-<id>` with a stable id and return a bounded result; `work.serve` claims `kind=software`, executes and reports | implemented |
 | Pull request automation | `.github/workflows/dev-agent-review.yml` runs `tools/dev_agent_pr_review.py`, which posts or updates one review comment on changed Python files | implemented |
 | Project memory | `.dev-agent/memory.json` plus a generated `AGENTS.md` | implemented |
 | Tool calling | `roles` are deterministic tools; `planner.OpenAICompatiblePlanner` turns a model reply into a bounded, validated tool plan that the caller executes | implemented |
@@ -48,6 +49,30 @@ schema-validated tool steps.
 | Permission control | Root containment, protected paths, one-time approval token bound to the exact diff | implemented |
 | Checkpoint and resume | `checkpoint.TaskStore` journal with phases and resume | implemented |
 | Human approval for push/deploy | No push or deploy command exists; sandbox rejects them | implemented as denial |
+
+## Control-plane work
+
+The Cloud Control plane schedules software work with `kind: "software"`. The
+executor never writes code: `plan_comment` returns a diff and an approval token,
+and no `apply_patch`, push or deploy action exists.
+
+```bash
+# Execute one already-claimed item locally
+python -m apps.dev_agent work execute --work-id <id> --payload payload.json
+
+# Claim, execute and report one software item over mTLS
+python -m apps.dev_agent work serve --role eph --max-items 1
+```
+
+Payload shape:
+
+```json
+{"action": "review", "paths": ["apps/dev_agent/work.py"], "top": 15}
+```
+
+Allowed actions: `capabilities`, `analyse`, `review`, `performance`, `profile`,
+`tests`, `test_plan`, `security`, `docs`, `plan_comment`, `git_status`,
+`commit_plan`, `plan`. Paths must stay inside the configured workspace.
 
 ## Usage
 
@@ -119,6 +144,7 @@ rejected.
 | `docs.py` | README, architecture, API documents |
 | `performance.py` | static performance rules |
 | `profiling.py` | cProfile run, persistence and hotspot report |
+| `work.py` | control-plane software work validation, execution and reporting |
 | `planner.py` | OpenAI-compatible planning adapter |
 | `collaboration.py` | concurrent role execution |
 | `deployment.py` | Dockerfile, Kubernetes, CI, pre-flight, rollback |
@@ -150,4 +176,6 @@ rejected.
   rejects cProfile used as a generic script runner.
 - Deployment generation produces drafts, not applied manifests. Pre-flight consumes
   reported node facts; it does not query a cluster itself.
+- Software work executes only on a host that already mounts the target repository;
+  the payload cannot choose a filesystem root.
 - Real hardware/BMC/Metal3 validation is out of scope for this package.

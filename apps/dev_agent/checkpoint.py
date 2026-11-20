@@ -71,6 +71,18 @@ class TaskStore:
         self._save(document)
         return record
 
+    def ensure(self, task_id: str, goal: str) -> TaskRecord:
+        """Create a task with a caller-provided stable id, or reuse it."""
+        if not task_id or len(task_id) > 128:
+            raise ValueError("task_id must be 1-128 characters")
+        document = self._load()
+        if task_id in document:
+            return TaskRecord(**document[task_id])
+        record = TaskRecord(task_id=task_id, goal=goal, created_at=_now(), updated_at=_now())
+        document[task_id] = record.as_dict()
+        self._save(document)
+        return record
+
     def get(self, task_id: str) -> TaskRecord:
         document = self._load()
         if task_id not in document:

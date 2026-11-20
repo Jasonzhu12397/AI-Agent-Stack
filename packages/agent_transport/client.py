@@ -78,11 +78,11 @@ class AgentControlClient:
             "instance_id": self.settings.instance_id,
         }
 
-    def claim_work(self) -> dict[str, Any] | None:
-        response = self._post("/api/v1/agent-control/work/claim", {
-            "schema_version": "v1",
-            **self._identity(),
-        })
+    def claim_work(self, kind: str | None = None) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"schema_version": "v1", **self._identity()}
+        if kind:
+            payload["kind"] = kind
+        response = self._post("/api/v1/agent-control/work/claim", payload)
         if response.get("work") is None:
             return None
         work = response["work"]

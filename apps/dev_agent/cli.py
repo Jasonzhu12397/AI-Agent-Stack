@@ -40,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("security", help="scan for credentials and dependency audit commands")
 
+    work = subparsers.add_parser("work", help="execute or serve Cloud Control work items")
+    work.add_argument("action", choices=["execute", "serve"])
+    work.add_argument("--work-id", help="work id for execute")
+    work.add_argument("--payload", help="JSON file or - for stdin (execute)")
+    work.add_argument("--role", choices=["eph", "target"], help="agent role for serve")
+    work.add_argument("--max-items", type=int, default=1)
+
     profile = subparsers.add_parser("profile", help="profile the test suite with cProfile")
     profile.add_argument("--top", type=int, default=15)
 
@@ -130,6 +137,34 @@ def main(argv: list[str] | None = None) -> int:
         _print(agent.security())
     elif arguments.command == "performance":
         _print(agent.performance(arguments.paths or None))
+    elif arguments.command == "work":
+        from .work import SoftwareWorkExecutor, serve
+
+        if arguments.action == "execute":
+            if not arguments.work_id or not arguments.payload:
+                raise SystemExit("work execute requires --work-id and --payload")
+            document = json.loads(
+                sys.stdin.read()
+                if arguments.payload == "-"
+                else Path(arguments.payload).read_text(encoding="utf-8")
+            )
+            work = (
+                document
+                if isinstance(document, dict) and "payload" in document
+                else {"work_id": arguments.work_id, "kind": "software", "payload": document}
+            )
+            _print(SoftwareWorkExecutor(root).execute_work_item(work).as_dict())
+        else:
+            if not arguments.role:
+                raise SystemExit("work serve requires --role")
+            from packages.agent_transport.client import AgentControlClient
+            from packages.agent_transport.config import AgentSettings
+
+            client = AgentControlClient(AgentSettings.from_environment(arguments.role))
+            try:
+                _print(serve(client, root, max_items=arguments.max_items))
+            finally:
+                client.close()
     elif arguments.command == "profile":
         _print(agent.profile(arguments.top).as_dict())
     elif arguments.command == "collaborate":

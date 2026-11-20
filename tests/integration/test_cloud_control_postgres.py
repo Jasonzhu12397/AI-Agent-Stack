@@ -452,6 +452,58 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
         platform_client.close()
 
 
+def test_work_claim_filters_by_kind_for_software_tasks(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        inspection_id = uuid4()
+        _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
+            "work_id": str(inspection_id),
+            "kind": "inspection",
+            "priority": 9,
+            "required_role": "eph",
+            "payload": {"cluster": "edge-01"},
+            "idempotency_key": f"inspection-{inspection_id}",
+        })
+        software_id = uuid4()
+        _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
+            "work_id": str(software_id),
+            "kind": "software",
+            "priority": 1,
+            "required_role": "eph",
+            "payload": {"action": "review", "paths": ["apps/dev_agent/work.py"]},
+            "idempotency_key": f"software-{software_id}",
+        })
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            claimed = _post(
+                agent_client,
+                "/api/v1/agent-control/work/claim",
+                {**identity, "kind": "software"},
+            )
+            assert claimed["work"]["work_id"] == str(software_id)
+            assert claimed["work"]["kind"] == "software"
+            _post(agent_client, "/api/v1/agent-control/work/result", {
+                **identity,
+                "work_id": str(software_id),
+                "status": "succeeded",
+                "result": {"count": 0},
+            })
+            remaining = _post(agent_client, "/api/v1/agent-control/work/claim", identity)
+            assert remaining["work"]["work_id"] == str(inspection_id)
+        finally:
+            agent_client.close()
+    finally:
+        platform_client.close()
+
+
 def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_server, tls_material):
     installation_id = uuid4()
     platform_client = _tls_client(control_server, tls_material, tls_material["platform"])

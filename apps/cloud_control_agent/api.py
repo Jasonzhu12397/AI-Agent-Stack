@@ -34,6 +34,7 @@ from .deployment_controller import (
     reconcile_deployments,
 )
 from .workspace import (
+    WORK_KINDS,
     WorkspaceError,
     normalize_name,
     normalize_plugin,
@@ -914,6 +915,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
 
         def _claim_work(self, document: dict[str, Any]) -> None:
             agent = self._authenticated_agent(document)
+            requested_kind = document.get("kind")
+            if requested_kind in (None, ""):
+                requested_kind = None
+            elif requested_kind not in WORK_KINDS:
+                raise ControlApiError("WORK_KIND_INVALID")
             lease_token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
             row = None
@@ -934,11 +940,16 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND (w.status = 'queued'
                                OR (w.status = 'leased' AND w.lease_expires_at < NOW()))
                           AND (w.required_role IS NULL OR w.required_role = %(role)s)
+                          AND (%(kind)s IS NULL OR w.kind = %(kind)s)
                         ORDER BY w.priority DESC, w.created_at
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
                         """,
-                        {"installation_id": agent["installation_id"], "role": agent["role"]},
+                        {
+                            "installation_id": agent["installation_id"],
+                            "role": agent["role"],
+                            "kind": requested_kind,
+                        },
                     ).fetchone()
                     if row is not None:
                         connection.execute(
