@@ -496,7 +496,7 @@ def test_deployment_gate_accepts_matching_sriov_pci(bridge_workspace, monkeypatc
     assert response.status_code == 202
     deployment = ClusterDeployment.objects.get(id=response.data["id"])
     policy = deployment.spec["sriov_node_policy_manifests"][0]
-    assert policy["spec"]["nicSelector"]["pciAddresses"] == ["0000:03:00.0"]
+    assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:03:00.0"]
 
 
 @pytest.mark.django_db

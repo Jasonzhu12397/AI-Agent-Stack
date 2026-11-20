@@ -251,7 +251,7 @@ is bound. It then generates:
 - role-specific Metal3 cloud-init `networkData` for `control_plane`, `worker`
   and `storage` hosts (`bonds` + `ipv4` entries using `ipAddressFromIPPool`);
 - one `ipam.metal3.io/v1alpha1 IPPool` per addressed segment;
-- `SriovNetworkNodePolicy` manifests that bind `pciAddresses` to VF
+- `SriovNetworkNodePolicy` manifests that bind `rootDevices` to VF
   `resourceName`s, including `numVfs`;
 - the Target Agent `network_spec` and, when Rook-Ceph is enabled, the
   internal/external storage network mapping.

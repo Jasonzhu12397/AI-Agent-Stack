@@ -399,7 +399,7 @@ def render_sriov_node_policies(plan: dict[str, Any]) -> list[dict[str, Any]]:
                         "feature.node.kubernetes.io/network-sriov.capable": "true"
                     },
                     "numVfs": network["num_vfs"],
-                    "nicSelector": {"pciAddresses": list(network["pci_addresses"]) },
+                    "nicSelector": {"rootDevices": list(network["pci_addresses"]) },
                     "deviceType": "netdevice",
                     "isRdma": False,
                     "resourceName": network["name"],

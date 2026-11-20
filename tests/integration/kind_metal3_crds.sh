@@ -82,7 +82,7 @@ spec:
     feature.node.kubernetes.io/network-sriov.capable: "true"
   numVfs: 8
   nicSelector:
-    pciAddresses:
+    rootDevices:
       - "0000:03:00.0"
   deviceType: netdevice
   isRdma: false

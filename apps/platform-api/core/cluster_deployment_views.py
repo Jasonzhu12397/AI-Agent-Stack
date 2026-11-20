@@ -197,7 +197,11 @@ def _network_readiness(project, spec):
                     if isinstance(policy_spec.get("nicSelector"), dict)
                     else {}
                 )
-                expected_pci = selector.get("pciAddresses") or []
+                expected_pci = (
+                    selector.get("rootDevices")
+                    or selector.get("pciAddresses")
+                    or []
+                )
                 num_vfs = policy_spec.get("numVfs")
                 policy_name = (
                     policy.get("metadata", {}).get("name")

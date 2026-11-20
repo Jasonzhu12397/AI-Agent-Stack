@@ -185,6 +185,6 @@ def test_sriov_policy_binds_pci_addresses_to_vf_resource() -> None:
     assert len(policies) == 1
     policy = policies[0]
     assert policy["kind"] == "SriovNetworkNodePolicy"
-    assert policy["spec"]["nicSelector"]["pciAddresses"] == ["0000:af:00.1"]
+    assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:af:00.1"]
     assert policy["spec"]["numVfs"] == 8
     assert policy["spec"]["resourceName"] == "sriov-data"
