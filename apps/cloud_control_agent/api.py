@@ -376,10 +376,11 @@ def _task_max_attempts(payload: Any) -> int:
 
     if not isinstance(payload, dict):
         return 1
-    step = payload.get("step")
-    if not isinstance(step, dict):
-        return 1
-    value = step.get("max_attempts", 1)
+    value = payload.get("max_attempts", 1)
+    if value == 1:
+        step = payload.get("step")
+        if isinstance(step, dict):
+            value = step.get("max_attempts", 1)
     if isinstance(value, bool) or not isinstance(value, int):
         return 1
     return max(1, min(value, 5))
@@ -1257,6 +1258,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                     Jsonb({
                                         "workflow_input": run["input"],
                                         "step": step["payload"],
+                                        "max_attempts": step.get("max_attempts", 1),
                                     }),
                                     Jsonb(step["depends_on"]),
                                     f"workflow:{run_id}:{step['id']}",
