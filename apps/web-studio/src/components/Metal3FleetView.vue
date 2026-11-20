@@ -63,6 +63,7 @@ const networkMachine = ref<FleetMachine | null>(null);
 const networkHostRole = ref<"control_plane" | "worker" | "storage">("worker");
 const networkVerification = ref<HostNetworkVerification | null>(null);
 const networkLoading = ref(false);
+const networkObserveMessage = ref("");
 const networkError = ref("");
 const firmwareDialogVisible = ref(false);
 const firmwareMachine = ref<FleetMachine | null>(null);
@@ -277,6 +278,7 @@ function networkMachineId(machine: FleetMachine): string {
 async function openNetworkPanel(machine: FleetMachine): Promise<void> {
   networkMachine.value = machine;
   networkVerification.value = null;
+  networkObserveMessage.value = "";
   networkError.value = "";
   networkHostRole.value = "worker";
   networkDialogVisible.value = true;
@@ -303,6 +305,19 @@ async function loadNetworkVerification(): Promise<void> {
     networkError.value = cause instanceof Error ? cause.message : "Unable to verify host network.";
   } finally {
     networkLoading.value = false;
+  }
+}
+
+async function requestNetworkObservation(): Promise<void> {
+  const machine = networkMachine.value;
+  if (!machine) return;
+  networkObserveMessage.value = "";
+  networkError.value = "";
+  try {
+    await createAgentCommand(machine.identity.agent_node_id, "host.network.observe", {});
+    networkObserveMessage.value = "Observation queued. Wait for the Agent to finish, then re-check.";
+  } catch (cause) {
+    networkError.value = cause instanceof Error ? cause.message : "Unable to queue network observation.";
   }
 }
 
@@ -694,7 +709,10 @@ onUnmounted(() => {
           <div v-if="networkMachine" class="firmware-panel">
             <div class="fleet-panel-heading">
               <h3>{{ networkMachine.name }} · Declared vs observed</h3>
-              <el-button size="small" :loading="networkLoading" @click="loadNetworkVerification">Re-check</el-button>
+              <div>
+                <el-button size="small" @click="requestNetworkObservation">Read OS network</el-button>
+                <el-button size="small" :loading="networkLoading" @click="loadNetworkVerification">Re-check</el-button>
+              </div>
             </div>
             <div class="fleet-version-control" style="margin-bottom: 12px">
               <el-select v-model="networkHostRole" size="small" style="width: 170px" @change="loadNetworkVerification">
@@ -706,6 +724,13 @@ onUnmounted(() => {
                 {{ networkVerification.status }}
               </el-tag>
             </div>
+            <el-alert
+              v-if="networkObserveMessage"
+              :title="networkObserveMessage"
+              type="success"
+              show-icon
+              :closable="false"
+            />
             <el-alert
               v-if="networkError"
               :title="networkError"

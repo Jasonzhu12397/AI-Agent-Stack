@@ -8,6 +8,7 @@ import re
 import secrets
 import ssl
 import uuid
+from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -37,6 +38,32 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+
+
+def _network_observation(inventory: Any, result: Any) -> dict[str, Any] | None:
+    """Return the OS network fields from a succeeded observation command."""
+
+    if not isinstance(inventory, dict) or not isinstance(result, dict):
+        return None
+    output = result.get("output")
+    if not isinstance(output, dict):
+        return None
+    nics = output.get("nics")
+    bonds = output.get("bonds")
+    if not isinstance(nics, list) or not isinstance(bonds, list):
+        return None
+    if not all(isinstance(item, dict) for item in nics + bonds):
+        return None
+    return {
+        **inventory,
+        "nics": nics,
+        "bonds": bonds,
+        "network_observation": {
+            "source": "host.network.observe",
+            "nics": len(nics),
+            "bonds": len(bonds),
+        },
+    }
 
 
 EPH_COMMANDS = {
@@ -2788,6 +2815,27 @@ class AgentRuntimeResultView(APIView):
                     "updated_at",
                 ]
             )
+            if (
+                command.command_type == "host.network.observe"
+                and outcome == "succeeded"
+            ):
+                machine = AgentMachine.objects.select_for_update().filter(
+                    agent_node=node,
+                ).first()
+                if machine is not None:
+                    merged = _network_observation(machine.hardware_inventory, result)
+                    if merged is not None:
+                        machine.hardware_inventory = merged
+                        machine.observed_at = timezone.now()
+                        machine.inventory_source = "host_network_observe"
+                        machine.save(
+                            update_fields=[
+                                "hardware_inventory",
+                                "observed_at",
+                                "inventory_source",
+                                "updated_at",
+                            ]
+                        )
         return Response(
             {
                 "id": str(command.id),
