@@ -16,6 +16,21 @@ for manifest in "${IPAM_MANIFEST}" "${SRIOV_MANIFEST}"; do
   fi
 done
 
+CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.3}"
+CERT_MANAGER_URL="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+
+for namespace in capm3-system sriov-network-operator; do
+  "${KUBECTL}" create namespace "${namespace}" --dry-run=client -o yaml \
+    | "${KUBECTL}" apply -f -
+done
+
+echo "Installing cert-manager ${CERT_MANAGER_VERSION} (IPAM webhook prerequisite)"
+"${KUBECTL}" apply -f "${CERT_MANAGER_URL}"
+"${KUBECTL}" wait --for condition=established --timeout=120s \
+  crd/certificates.cert-manager.io crd/issuers.cert-manager.io
+"${KUBECTL}" rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
+"${KUBECTL}" rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
+
 echo "Applying Metal3 IPAM manifests"
 "${KUBECTL}" apply -f "${IPAM_MANIFEST}"
 
@@ -30,9 +45,6 @@ for crd in \
   sriovnetworknodepolicies.sriovnetwork.openshift.io; do
   "${KUBECTL}" wait --for condition=established --timeout=120s "crd/${crd}"
 done
-
-"${KUBECTL}" create namespace sriov-network-operator --dry-run=client -o yaml \
-  | "${KUBECTL}" apply -f -
 
 echo "Server-side validation of a rendered policy shape"
 cat <<'YAML' | "${KUBECTL}" apply --dry-run=server -f -
