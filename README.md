@@ -178,7 +178,7 @@ The Cloud Control API uses PostgreSQL and mTLS. The cloud load balancer must pro
 
 ## Validation and production status
 
-Implemented foundations include tenant/project isolation, membership roles, token budgets, chained audit, Agent/Workflow APIs, connector approval, MCP streamable-HTTP runtime, Qdrant collection bootstrap and the three infrastructure Agent state machines. Metal3 physical acceptance evidence can be sealed into a fail-closed release manifest with `tools/metal3_release_evidence.py`.
+Implemented foundations include tenant/project isolation, membership roles, token budgets, chained audit, Agent/Workflow APIs, connector approval, MCP streamable-HTTP runtime, Qdrant collection bootstrap and the three infrastructure Agent state machines. Metal3 physical acceptance runs end to end with `tools/metal3_release_run.py`, which executes every evidence stage, seals a fail-closed release manifest and blocks the release on any failure.
 
 Not yet production-complete:
 

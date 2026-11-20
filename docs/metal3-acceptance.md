@@ -18,7 +18,29 @@ run proves only that the supplied checks passed on the supplied environment.
    `kube-proxy`.
 4. `verify` combines structural and cluster checks, optionally adding Redfish.
 
-## Commands
+## One-command release run
+
+`tools/metal3_release_run.py` is the automatic path. It executes preflight,
+Redfish, cluster and aggregate verification in order, writes each stage JSON and
+log, then seals `release-manifest.json`. No stage is run or merged by hand.
+
+```bash
+python tools/metal3_release_run.py \
+  --project <project-id> \
+  --kubeconfig /secure/eph.kubeconfig \
+  --target-kubeconfig /secure/target.kubeconfig \
+  --control-plane-replicas 3 --worker-replicas 4 \
+  --evidence-dir evidence \
+  --out evidence/release-manifest.json
+```
+
+If a stage exits non-zero, its evidence is still collected, but the manifest is
+forced to `fail`; the command exits `1`. `--skip-redfish` omits the BMC stage and
+removes it from the required kinds.
+
+## Individual stages
+
+These commands remain available for debugging only:
 
 ```bash
 python tools/metal3_acceptance.py preflight --project <project-id> \
@@ -45,8 +67,10 @@ contain machine names, MAC addresses and state, never BMC usernames or passwords
 
 ## Release gate
 
-`tools/metal3_release_evidence.py` turns the individual evidence files into a
-fail-closed release manifest. It requires `metal3-preflight`,
+`tools/metal3_release_run.py` calls the same release gate automatically.
+`tools/metal3_release_evidence.py` remains available to re-seal an existing
+evidence directory; it turns the individual files into a fail-closed release
+manifest. It requires `metal3-preflight`,
 `metal3-redfish-evidence` and `metal3-cluster-evidence` by default, rejects any
 evidence whose `status` is `fail` or whose checks contain a failure, and refuses
 to pass when a required kind is missing. The manifest records each file's
