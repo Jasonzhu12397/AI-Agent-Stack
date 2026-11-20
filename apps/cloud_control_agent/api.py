@@ -33,6 +33,12 @@ from .deployment_controller import (
     advance_for_agent,
     reconcile_deployments,
 )
+from .network_evidence import (
+    NetworkEvidenceError,
+    evidence_entries,
+    network_evidence_required,
+    require_current_network_evidence,
+)
 from .workflow_controller import reconcile_workflow_runs
 from .workspace import (
     MAX_WORKFLOW_STEPS,
@@ -374,6 +380,39 @@ def _parse_uuid(value: Any, field: str) -> UUID:
         return UUID(str(value))
     except (ValueError, TypeError, AttributeError) as exc:
         raise ControlApiError(f"{field}_INVALID") from exc
+
+
+def _network_machine_snapshot(
+    connection: psycopg.Connection[Any],
+    entries: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Load the current inventory revision of every bound machine."""
+
+    machine_ids = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            machine_ids.append(UUID(str(entry.get("machine_id"))))
+        except (TypeError, ValueError):
+            continue
+    if not machine_ids:
+        return {}
+    rows = connection.execute(
+        """
+        SELECT id, inventory_revision, observed_at
+        FROM core_agentmachine
+        WHERE id = ANY(%s)
+        """,
+        (machine_ids,),
+    ).fetchall()
+    return {
+        str(row["id"]): {
+            "inventory_revision": row["inventory_revision"],
+            "observed_at": row["observed_at"],
+        }
+        for row in rows
+    }
 
 
 def _lookup_field(document: Any, path: str) -> tuple[bool, Any]:
@@ -2541,7 +2580,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     (target_agent_id,),
                 ).fetchone()
                 deployment = connection.execute(
-                    "SELECT deployment_id, installation_id, cluster_id, phase "
+                    "SELECT deployment_id, installation_id, cluster_id, phase, spec "
                     "FROM agent_control_deployments WHERE deployment_id = %s",
                     (deployment_id,),
                 ).fetchone()
@@ -2553,6 +2592,24 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("AGENT_INSTALLATION_MISMATCH")
                 if role == "target" and agent["cluster_id"] != deployment["cluster_id"]:
                     raise ControlApiError("TARGET_AGENT_CLUSTER_MISMATCH")
+                if (
+                    role == "target"
+                    and action == "target.handoff.evaluate"
+                    and network_evidence_required(deployment["spec"])
+                ):
+                    # The handoff is the last control-plane owned checkpoint
+                    # before worker provisioning, so the fleet must still match
+                    # the inventory revision the network readiness gate signed.
+                    try:
+                        require_current_network_evidence(
+                            deployment["spec"],
+                            _network_machine_snapshot(
+                                connection,
+                                evidence_entries(deployment["spec"]) or [],
+                            ),
+                        )
+                    except NetworkEvidenceError as exc:
+                        raise ControlApiError(str(exc)) from exc
                 from_phase = deployment["phase"]
                 next_phase = None
                 if follow_plan:

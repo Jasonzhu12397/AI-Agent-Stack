@@ -631,6 +631,13 @@ class ClusterDeploymentListCreateView(APIView):
             deployment.plan_result = plan_result
             deployment.save(update_fields=["plan_result", "updated_at"])
 
+        if isinstance(control_spec, dict) and spec.get("network_evidence"):
+            # The control plane re-verifies these bindings before the Target
+            # handoff, so the dispatch payload must carry the exact evidence.
+            control_spec = {
+                **control_spec,
+                "network_evidence": spec["network_evidence"],
+            }
         try:
             result = dispatch_deployment(
                 deployment_id=deployment.id,

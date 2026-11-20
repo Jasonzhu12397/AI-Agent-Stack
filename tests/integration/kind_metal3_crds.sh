@@ -70,9 +70,10 @@ done
 
 "${KUBECTL}" apply -f "${split_dir}/resources.yaml"
 
-echo "Server-side validation of platform-rendered SriovNetworkNodePolicy"
+echo "Server-side validation of platform-rendered IPPool and SriovNetworkNodePolicy"
 RENDERED_POLICY="${split_dir}/rendered-sriov-policy.yaml"
-python3 - "${RENDERED_POLICY}" "${ROOT_DIR}" <<'PY'
+RENDERED_IPPOOL="${split_dir}/rendered-ippool.yaml"
+python3 - "${RENDERED_POLICY}" "${RENDERED_IPPOOL}" "${ROOT_DIR}" <<'PY'
 import importlib.util
 import sys
 from pathlib import Path
@@ -85,6 +86,7 @@ contract = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(contract)
 plan_infra_networks = contract.plan_infra_networks
 render_sriov_node_policies = contract.render_sriov_node_policies
+render_ip_pools = contract.render_ip_pools
 
 profile = {
     "networks": [
@@ -133,9 +135,18 @@ profile = {
         }
     ]
 }
-documents = render_sriov_node_policies(plan_infra_networks(profile))
-Path(sys.argv[1]).write_text(yaml.safe_dump_all(documents, sort_keys=False))
+plan = plan_infra_networks(profile)
+Path(sys.argv[1]).write_text(
+    yaml.safe_dump_all(render_sriov_node_policies(plan), sort_keys=False)
+)
+Path(sys.argv[2]).write_text(
+    yaml.safe_dump_all(
+        render_ip_pools(plan, cluster_name="ci-cluster"),
+        sort_keys=False,
+    )
+)
 PY
+"${KUBECTL}" apply --dry-run=server -f "${RENDERED_IPPOOL}"
 "${KUBECTL}" apply --dry-run=server -f "${RENDERED_POLICY}"
 
 echo "Metal3 and SR-IOV CRDs are present and accept rendered manifests"

@@ -192,6 +192,44 @@ def test_create_dispatches_to_cloud_control_idempotently(bridge_workspace, monke
 
 
 @pytest.mark.django_db
+def test_dispatched_spec_carries_bound_network_evidence(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    machines = [
+        _machine(tenant, project, node, index) for index in range(1, 6)
+    ]
+    evidence = [
+        {
+            "machine_id": str(machine.id),
+            "name": machine.agent_node.name,
+            "inventory_revision": machine.inventory_revision,
+            "observed_at": machine.observed_at.isoformat()
+            if machine.observed_at is not None
+            else None,
+        }
+        for machine in machines[:2]
+    ]
+    monkeypatch.setattr(
+        "core.cluster_deployment_views._network_readiness",
+        lambda project, spec: {"ready": True, "evidence": evidence},
+    )
+    calls = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        return {"created": True, "phase": "not_started", "sequence": 0}
+
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        fake_dispatch,
+    )
+    response = _post(client, tenant, project, node)
+    assert response.status_code == 202
+    assert calls[0]["spec"]["network_evidence"] == evidence
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    assert deployment.spec["network_evidence"] == evidence
+
+
+@pytest.mark.django_db
 def test_create_without_fleet_creates_no_deployment(bridge_workspace):
     user, tenant, project, node, client = bridge_workspace
     response = _post(client, tenant, project, node)

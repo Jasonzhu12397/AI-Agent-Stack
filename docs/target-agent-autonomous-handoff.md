@@ -45,6 +45,25 @@ A failure at any gate leaves EPH intact and reports a recoverable blocked state.
 
 Only Target Agent provisions Target Workers. Each worker's host preparation includes chronyd installation, configuration, enablement and synchronization verification, followed by CAPI Machine/Node readiness and network postflight.
 
+## Network evidence gate before the Target handoff
+
+The platform binds every deployment to the exact `AgentMachine` inventory revision
+its network readiness gate approved, as `spec.network_evidence`. The binding is
+re-verified inside the control plane when `target.handoff.evaluate` is enqueued,
+before any command row exists:
+
+- No bound evidence while a profile is present -> `NETWORK_EVIDENCE_MISSING`.
+- `inventory_revision` or `observed_at` changed on any bound machine ->
+  `NETWORK_EVIDENCE_DRIFT`. Re-collecting the fleet invalidates an in-flight plan
+  by design; create a new deployment after collection.
+- The dispatch payload always carries the same evidence the platform persisted,
+  so the Target Agent cannot hand off against an unverified fleet.
+
+The platform also exposes the same check as
+`POST /api/v1/cluster-deployments/<id>/network/evidence/verify/`, which returns
+`200 current`, `409 drift` or `409 missing` for automation outside the control
+plane.
+
 ## Implementation boundary
 
 The new `apps/target_agent/handoff.py` module enforces topology, phase ordering, stable BMH hardware-identity equality and Target ownership evidence. The new `apps/target_agent/ntp_policy.py` module enforces Worker chronyd source scope. These checks are policy and validation primitives; they do not claim to perform a live clusterctl move, delete EPH Pods, mutate BMH objects or install chronyd. Those external side effects remain behind versioned Kubernetes/CAPI/Metal3/host adapters and must be tested against the selected provider versions before production enablement.
