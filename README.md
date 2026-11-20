@@ -10,7 +10,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | --- | --- | --- |
 | Agent management | Agent definitions, versions, publishing and run records | Code baseline |
 | Multi-Agent teams | Team definitions, specialists, coordinator synthesis, parallel fan-out and router dispatch | Code baseline; sequential, coordinator, parallel and router strategies |
-| Multi-step orchestration | Workflow nodes: `start`, `llm`, `agent`, `condition`, `knowledge_search`, `tool`, `end` | Code baseline; parallel/loop/approval nodes pending |
+| Multi-step orchestration | Workflow nodes: `start`, `llm`, `agent`, `condition`, `knowledge_search`, `tool`, `approval`, `end` | Parallel any/all joins and single-approver approval resume implemented; bounded loop pending |
 | Model access | OpenAI-compatible model gateway, chat and embeddings | Code baseline; multi-provider routing/fallback pending |
 | Tools and integrations | HTTP, OpenAPI and MCP streamable-HTTP tools, review and permission grants | Code baseline; OAuth and stdio MCP pending |
 | Knowledge and RAG | Knowledge bases, Qdrant collections versioned per embedding model and dimension | Code baseline; real Qdrant chain pending validation |
@@ -185,7 +185,7 @@ Not yet production-complete:
 - Subscription billing and plan management.
 - MCP stdio transport, server mode and complete provider OAuth/token refresh.
 - Realtime WebSocket/SSE event streaming.
-- Loop Workflow nodes in the SaaS Platform editor. The Cloud Control workflow engine supports parallel branches (`join: "all" | "any"`), `condition` steps with `when`-guarded branches, bounded `loop` steps with `max_iterations`, human approval steps (`type: "approval"`), and per-run deadlines enforced by reconciliation, but the SaaS Platform workflow editor does not expose them yet.
+- Loop Workflow nodes in the SaaS Platform editor. The Cloud Control workflow engine supports parallel branches (`join: "all" | "any"`), `condition` steps with `when`-guarded branches, bounded `loop` steps with `max_iterations`, human approval steps (`type: "approval"`), and per-run deadlines enforced by reconciliation. The SaaS Workflow Studio now inserts `approval` nodes, accepts `condition`/`agent` nodes through the JSON definition editor, supports `any/all` joins and offers approve/reject actions; bounded loop and per-run deadlines remain Cloud Control only.
 - Multi-provider model routing and fallback chains.
 - Redis-backed cache/queue coordination; pgvector and S3-compatible object storage.
 - Real CAPI/Metal3/Ironic deployment, CAPI Pivot, BMH migration, EPH cleanup and physical Worker acceptance.

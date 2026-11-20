@@ -484,6 +484,19 @@ export function getWorkflowRuns(workflowId: string): Promise<WorkflowRun[]> {
   return request<WorkflowRun[]>("/api/v1/workflows/" + workflowId + "/runs/");
 }
 
+export function decideWorkflowStep(
+  runId: string,
+  nodeId: string,
+  decision: "approve" | "reject",
+  reason = "",
+): Promise<{ run_id: string; node_id: string; decision: string; task_status: string }> {
+  return request(
+    "/api/v1/workflow-runs/" + runId + "/steps/" + encodeURIComponent(nodeId) + "/" + decision + "/",
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
+
 export function createWorkflowRun(
   workflowId: string,
   input: Record<string, unknown>,

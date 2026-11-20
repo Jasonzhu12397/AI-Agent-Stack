@@ -37,7 +37,11 @@ from core.tool_approvals import (
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
-from core.workflow_engine import WorkflowValidationError, execute_workflow_run
+from core.workflow_engine import (
+    WorkflowApprovalPending,
+    WorkflowValidationError,
+    execute_workflow_run,
+)
 from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
@@ -1146,6 +1150,10 @@ def execute_task(task, worker_id):
                 worker_id,
                 renew_lease,
             )
+        except WorkflowApprovalPending as exc:
+            raise TaskSuspendedForApproval(
+                "Workflow run is waiting for a human approval decision"
+            ) from exc
         except WorkflowValidationError as exc:
             raise PermanentTaskError(str(exc)) from exc
     if task.task_type == "demo.echo":

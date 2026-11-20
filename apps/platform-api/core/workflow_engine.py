@@ -18,6 +18,7 @@ from core.models import (
     PluginConnection,
     PluginInstallation,
     PluginTool,
+    Task,
     WorkflowRun,
     WorkflowStepRun,
 )
@@ -76,6 +77,14 @@ def _workflow_output_budget(
     )
 
 
+class WorkflowApprovalPending(Exception):
+    """Raised when an approval node suspends the run for a human decision."""
+
+    def __init__(self, node_id):
+        super().__init__(node_id)
+        self.node_id = node_id
+
+
 def validate_workflow_definition(definition):
     if not isinstance(definition, dict):
         raise WorkflowValidationError("Workflow definition must be a JSON object.")
@@ -103,6 +112,7 @@ def validate_workflow_definition(definition):
             "knowledge_search",
             "tool",
             "agent",
+            "approval",
             "end",
         }:
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
@@ -240,7 +250,21 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Condition node {node_id} input_key must be a non-empty string."
                 )
-        if node_type in {"llm", "condition", "knowledge_search", "tool", "agent", "end"}:
+        if node_type == "approval":
+            instructions = config.get("instructions", "")
+            if not isinstance(instructions, str) or len(instructions) > 4000:
+                raise WorkflowValidationError(
+                    f"Approval node {node_id} instructions are invalid."
+                )
+        if node_type in {
+            "llm",
+            "condition",
+            "knowledge_search",
+            "tool",
+            "agent",
+            "approval",
+            "end",
+        }:
             source_node = (
                 config.get("input_from")
                 or config.get("source_node")
@@ -1072,6 +1096,46 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
     raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
 
 
+def _suspend_workflow_for_approval(workflow_run, node, state, task):
+    """Persist the approval checkpoint and release the task lease.
+
+    The run is resumed by the approval API, which marks the step succeeded and
+    requeues the originating task. Approval nodes are single-approver gates and
+    never dual-control.
+    """
+
+    now = timezone.now()
+    WorkflowStepRun.objects.update_or_create(
+        workflow_run=workflow_run,
+        node_id=node["id"],
+        defaults={
+            "node_type": node["type"],
+            "status": WorkflowStepRun.Status.AWAITING_APPROVAL,
+            "input_data": {"instructions": node["config"].get("instructions", "")},
+            "started_at": now,
+            "finished_at": None,
+            "error": None,
+        },
+    )
+    state["_pending_approval"] = node["id"]
+    workflow_run.state = state
+    workflow_run.save(update_fields=["state"])
+    task.status = Task.Status.WAITING_APPROVAL
+    task.lease_owner = None
+    task.lease_token = None
+    task.lease_expires_at = None
+    task.save(
+        update_fields=[
+            "status",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "updated_at",
+        ]
+    )
+    raise WorkflowApprovalPending(node["id"])
+
+
 def execute_workflow_run(task, worker_id, renew_lease):
     workflow_run = WorkflowRun.objects.select_related(
         "workflow_version",
@@ -1106,6 +1170,9 @@ def execute_workflow_run(task, worker_id, renew_lease):
         existing = step_records.get(node_id)
         if existing and existing.status == WorkflowStepRun.Status.SUCCEEDED:
             state[node_id] = existing.output_data
+            pending_approval = state.get("_pending_approval")
+            if pending_approval == node_id:
+                state.pop("_pending_approval", None)
             pending_llm = state.get("_pending_llm")
             if isinstance(pending_llm, dict):
                 pending_llm.pop(node_id, None)
@@ -1132,6 +1199,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
                     },
                 )
                 continue
+        if node["type"] == "approval":
+            _suspend_workflow_for_approval(workflow_run, node, state, task)
         if not renew_lease(task.id, task.lease_token, worker_id):
             raise RuntimeError("Workflow task cancellation requested or lease lost")
         now = timezone.now()

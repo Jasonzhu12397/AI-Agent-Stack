@@ -41,6 +41,8 @@ The model UUID is illustrative. A real enabled chat model belonging to the same 
 | `condition` | `equals`, optional `input_key` or `source_node` | Compares one input/state value and emits `matched` |
 | `knowledge_search` | `knowledge_base_ids` (1–8), optional `query_template`, `limit`, `input_from` | Retrieves tenant/project-scoped chunks from pinned Knowledge Bases and returns source IDs, scores and text as untrusted reference data |
 | `tool` | `tool_id`, optional `arguments` or `arguments_from` | Executes an installed project connector tool through the trusted ToolRouter |
+| `agent` | `agent_version_id`, optional `instructions`, `input_from` | Invokes a published agent version owned by the same tenant/project |
+| `approval` | optional `instructions` (≤4000 chars) | Suspends the run in `waiting_approval` until a tenant/project administrator approves or rejects the step |
 | `end` | optional `source_node` | Returns the referenced node output, or the accumulated state |
 
 All nodes except `start` accept the `join` field documented below.
@@ -77,6 +79,8 @@ All routes require an authenticated session and server-side tenant/project membe
 | POST | `/api/v1/workflows/{workflow_id}/publish/` | Validate and publish immutable version |
 | GET/POST | `/api/v1/workflows/{workflow_id}/runs/` | List runs / enqueue a run |
 | GET | `/api/v1/workflow-runs/{run_id}/` | Read run and step details |
+| POST | `/api/v1/workflow-runs/{run_id}/steps/{node_id}/approve/` | Approve a suspended approval node and requeue the run |
+| POST | `/api/v1/workflow-runs/{run_id}/steps/{node_id}/reject/` | Reject a suspended approval node and fail the run |
 
 Run creation requires `Idempotency-Key` and a JSON object in `input`. Reusing the same key and payload returns the existing run; reusing it with a different payload returns HTTP 409.
 
@@ -86,14 +90,15 @@ Run creation requires `Idempotency-Key` and a JSON object in `input`. Reusing th
 - Worker claims tasks atomically using row locking and a lease token.
 - Each node has a unique `WorkflowStepRun` row with status, attempt count, input reference, output and error summary.
 - Completed node outputs are written to the run state after each step. A subsequent attempt reuses successful steps and retries an interrupted/failed step.
+- An `approval` node persists `WorkflowStepRun.status = awaiting_approval`, moves the task to `waiting_approval` and releases its lease. The approval API marks the step succeeded and requeues the task, which resumes from the persisted step outputs; rejection marks the step and task failed and finishes the run. Approvals are single-approver gates; project/tenant administrators may decide them.
 - Tool nodes run through ToolRouter, but WorkflowStepRun does not yet provide a durable external-call receipt or exactly-once guarantee. A crash after a connector side effect but before the step is persisted as successful can cause a retry; connector handlers must be idempotent until a persisted execution ledger is added.
 - A lease expiry at the maximum attempt count marks the task and WorkflowRun terminal.
 - Cancellation is cooperative. It cannot roll back a model call already completed.
 
 ## Vue Studio
 
-The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search` and `tool` nodes, save, publish, enqueue runs, poll execution history and display step statuses. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
+The current Workflow Studio can create a draft, edit its JSON definition, insert `llm`, `knowledge_search`, `tool` and `approval` nodes, save, publish, enqueue runs, poll execution history, display step statuses and approve/reject suspended steps. The editor is a JSON editor, **not yet a drag-and-drop canvas**. The user can paste a valid definition or use the default Start → End graph.
 
 ## Not implemented in this milestone
 
-Loop/Iterator, Parallel/Join, standalone HTTP Request node, Code sandbox, Agent node, Human Approval, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. The `tool` node is available only through the trusted ToolRouter; high/critical-risk tools are blocked, and execution fails closed when no trusted handler is registered. This does not provide exactly-once delivery for external connector side effects.
+Loop/Iterator, standalone HTTP Request node, Code sandbox, Wait/Schedule, Webhook trigger, visual drag-and-drop canvas, live WebSocket run streaming, compensation handlers and workflow-level cost budgets are not implemented. The `tool` node is available only through the trusted ToolRouter; high/critical-risk tools are blocked, and execution fails closed when no trusted handler is registered. This does not provide exactly-once delivery for external connector side effects.

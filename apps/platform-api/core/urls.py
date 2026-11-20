@@ -93,6 +93,8 @@ from core.workflow_views import (
     WorkflowValidateView,
     WorkflowRunDetailView,
     WorkflowRunListCreateView,
+    WorkflowStepApproveView,
+    WorkflowStepRejectView,
 )
 
 
@@ -373,6 +375,16 @@ urlpatterns = [
         "api/v1/workflow-runs/<uuid:run_id>/",
         WorkflowRunDetailView.as_view(),
         name="workflow-run-detail",
+    ),
+    path(
+        "api/v1/workflow-runs/<uuid:run_id>/steps/<str:node_id>/approve/",
+        WorkflowStepApproveView.as_view(),
+        name="workflow-step-approve",
+    ),
+    path(
+        "api/v1/workflow-runs/<uuid:run_id>/steps/<str:node_id>/reject/",
+        WorkflowStepRejectView.as_view(),
+        name="workflow-step-reject",
     ),
     path(
         "api/v1/auth/csrf/",

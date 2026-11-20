@@ -521,6 +521,7 @@ class WorkflowRun(models.Model):
 class WorkflowStepRun(models.Model):
     class Status(models.TextChoices):
         RUNNING = "running", "Running"
+        AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
         SUCCEEDED = "succeeded", "Succeeded"
         FAILED = "failed", "Failed"
         SKIPPED = "skipped", "Skipped"
@@ -533,7 +534,7 @@ class WorkflowStepRun(models.Model):
     )
     node_id = models.CharField(max_length=120)
     node_type = models.CharField(max_length=32)
-    status = models.CharField(max_length=16, choices=Status.choices)
+    status = models.CharField(max_length=24, choices=Status.choices)
     input_data = models.JSONField(default=dict)
     output_data = models.JSONField(null=True, blank=True)
     error = models.JSONField(null=True, blank=True)

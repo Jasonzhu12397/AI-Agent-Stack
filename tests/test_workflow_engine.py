@@ -192,10 +192,13 @@ def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
     run = WorkflowRun.objects.select_related("task").get(pk=run_id)
     assert run.task.status == Task.Status.SUCCEEDED
     assert run.output_data["content"] == "workflow response"
-    assert WorkflowStepRun.objects.filter(
-        workflow_run=run,
-        status=WorkflowStepRun.Status.SUCCEEDED,
-    ).count() == 3
+    assert (
+        WorkflowStepRun.objects.filter(
+            workflow_run=run,
+            status=WorkflowStepRun.Status.SUCCEEDED,
+        ).count()
+        == 3
+    )
 
 
 @pytest.mark.django_db
@@ -331,10 +334,13 @@ def test_workflow_condition_executes_only_matching_branch(workflow_workspace):
     run = WorkflowRun.objects.get(pk=run_response.data["id"])
     assert run.task.status == Task.Status.SUCCEEDED
     assert run.output_data["content"] == "workflow response"
-    assert WorkflowStepRun.objects.get(
-        workflow_run=run,
-        node_id="slow_answer",
-    ).status == WorkflowStepRun.Status.SKIPPED
+    assert (
+        WorkflowStepRun.objects.get(
+            workflow_run=run,
+            node_id="slow_answer",
+        ).status
+        == WorkflowStepRun.Status.SKIPPED
+    )
 
 
 def test_workflow_validator_rejects_embedded_credentials():
@@ -540,7 +546,6 @@ def test_workflow_run_idempotency_and_request_shape(workflow_workspace):
     assert Task.objects.filter(task_type="workflow.run").count() == 1
 
 
-
 @pytest.mark.django_db
 def test_workflow_knowledge_search_node_retrieves_pinned_base(workflow_workspace):
     user, tenant, project, chat_model = workflow_workspace
@@ -663,7 +668,6 @@ def test_workflow_knowledge_search_node_retrieves_pinned_base(workflow_workspace
     assert retrieval.call_args.kwargs["metadata_filters"] == {
         "knowledge_base_id": str(knowledge_base.id)
     }
-
 
 
 @pytest.mark.django_db
@@ -1056,9 +1060,7 @@ def test_workflow_resumes_persisted_llm_result_after_lease_loss(workflow_workspa
                 lose_lease_after_llm,
             )
         persisted = WorkflowRun.objects.get(pk=run.pk)
-        assert persisted.state["_pending_llm"]["answer"]["content"] == (
-            "durable workflow answer"
-        )
+        assert persisted.state["_pending_llm"]["answer"]["content"] == ("durable workflow answer")
         result = execute_workflow_run(
             task,
             "workflow-recovery-worker",
@@ -1070,14 +1072,16 @@ def test_workflow_resumes_persisted_llm_result_after_lease_loss(workflow_workspa
 
 
 def test_workflow_output_budget_uses_conservative_input_ceiling():
-    assert _workflow_output_budget(
-        2048,
-        4096,
-        0,
-        0,
-        15000,
-    ) == 1000
-
+    assert (
+        _workflow_output_budget(
+            2048,
+            4096,
+            0,
+            0,
+            15000,
+        )
+        == 1000
+    )
 
 
 def test_workflow_gather_and_normalized_condition_validation():
@@ -1160,22 +1164,39 @@ def test_workflow_validator_accepts_join_all_on_a_parallel_merge():
     definition = {
         "nodes": [
             {"id": "start", "type": "start", "config": {}},
-            {"id": "left", "type": "llm", "config": {
-                "model_config_id": str(uuid4()),
-                "prompt_template": "left",
-            }},
-            {"id": "right", "type": "llm", "config": {
-                "model_config_id": str(uuid4()),
-                "prompt_template": "right",
-            }},
-            {"id": "merge", "type": "end", "config": {
-                "source_node": "merge_source", "join": "all",
-            }},
-            {"id": "merge_source", "type": "llm", "config": {
-                "model_config_id": str(uuid4()),
-                "prompt_template": "merge",
-                "join": "all",
-            }},
+            {
+                "id": "left",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(uuid4()),
+                    "prompt_template": "left",
+                },
+            },
+            {
+                "id": "right",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(uuid4()),
+                    "prompt_template": "right",
+                },
+            },
+            {
+                "id": "merge",
+                "type": "end",
+                "config": {
+                    "source_node": "merge_source",
+                    "join": "all",
+                },
+            },
+            {
+                "id": "merge_source",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(uuid4()),
+                    "prompt_template": "merge",
+                    "join": "all",
+                },
+            },
         ],
         "edges": [
             {"source": "start", "target": "left"},
@@ -1207,20 +1228,32 @@ def test_workflow_validator_rejects_conditional_edges_into_an_all_join():
     definition = {
         "nodes": [
             {"id": "start", "type": "start", "config": {}},
-            {"id": "left", "type": "llm", "config": {
-                "model_config_id": str(model_id),
-                "prompt_template": "left",
-            }},
+            {
+                "id": "left",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model_id),
+                    "prompt_template": "left",
+                },
+            },
             {"id": "branch", "type": "condition", "config": {"equals": "yes"}},
-            {"id": "fallback", "type": "llm", "config": {
-                "model_config_id": str(model_id),
-                "prompt_template": "fallback",
-            }},
-            {"id": "merge", "type": "llm", "config": {
-                "model_config_id": str(model_id),
-                "prompt_template": "merge",
-                "join": "all",
-            }},
+            {
+                "id": "fallback",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model_id),
+                    "prompt_template": "fallback",
+                },
+            },
+            {
+                "id": "merge",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model_id),
+                    "prompt_template": "merge",
+                    "join": "all",
+                },
+            },
             {"id": "end", "type": "end", "config": {"source_node": "merge"}},
         ],
         "edges": [
@@ -1248,13 +1281,15 @@ def test_active_incoming_honours_any_and_all_join_strategies():
     any_node = {"id": "merge", "type": "end", "config": {"join": "any"}}
     all_node = {"id": "merge", "type": "end", "config": {"join": "all"}}
 
-    assert [edge["source"] for edge in _active_incoming(
-        any_node, edges, {"start", "left"}, state, nodes
-    )] == ["left"]
+    assert [
+        edge["source"]
+        for edge in _active_incoming(any_node, edges, {"start", "left"}, state, nodes)
+    ] == ["left"]
     assert _active_incoming(all_node, edges, {"start", "left"}, state, nodes) == []
-    assert [edge["source"] for edge in _active_incoming(
-        all_node, edges, {"start", "left", "right"}, state, nodes
-    )] == ["left", "right"]
+    assert [
+        edge["source"]
+        for edge in _active_incoming(all_node, edges, {"start", "left", "right"}, state, nodes)
+    ] == ["left", "right"]
 
 
 def test_active_incoming_ignores_condition_branches_that_did_not_match():
@@ -1273,19 +1308,31 @@ def test_workflow_all_join_waits_for_both_parallel_branches(workflow_workspace):
     definition = {
         "nodes": [
             {"id": "start", "type": "start", "config": {}},
-            {"id": "left", "type": "llm", "config": {
-                "model_config_id": str(model.id),
-                "prompt_template": "Left: {{input}}",
-            }},
-            {"id": "right", "type": "llm", "config": {
-                "model_config_id": str(model.id),
-                "prompt_template": "Right: {{input}}",
-            }},
-            {"id": "merge", "type": "llm", "config": {
-                "model_config_id": str(model.id),
-                "prompt_template": "Merge",
-                "join": "all",
-            }},
+            {
+                "id": "left",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model.id),
+                    "prompt_template": "Left: {{input}}",
+                },
+            },
+            {
+                "id": "right",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model.id),
+                    "prompt_template": "Right: {{input}}",
+                },
+            },
+            {
+                "id": "merge",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model.id),
+                    "prompt_template": "Merge",
+                    "join": "all",
+                },
+            },
             {"id": "end", "type": "end", "config": {"source_node": "merge"}},
         ],
         "edges": [
@@ -1306,9 +1353,10 @@ def test_workflow_all_join_waits_for_both_parallel_branches(workflow_workspace):
     )
     client = APIClient()
     client.force_authenticate(user=user)
-    assert client.post(
-        f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json"
-    ).status_code == 201
+    assert (
+        client.post(f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json").status_code
+        == 201
+    )
     run_response = client.post(
         f"/api/v1/workflows/{workflow.id}/runs/",
         {"input": {"question": "fan in"}},
@@ -1323,3 +1371,165 @@ def test_workflow_all_join_waits_for_both_parallel_branches(workflow_workspace):
     merge_step = WorkflowStepRun.objects.get(workflow_run=run, node_id="merge")
     assert merge_step.status == WorkflowStepRun.Status.SUCCEEDED
     assert merge_step.input_data["active_predecessors"] == ["left", "right"]
+
+
+def _approval_definition(model_id):
+    return {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "gate",
+                "type": "approval",
+                "config": {"instructions": "Confirm the release window"},
+            },
+            {
+                "id": "answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": str(model_id),
+                    "prompt_template": "Answer this: {{input}}",
+                    "max_tokens": 256,
+                    "timeout_seconds": 20,
+                },
+            },
+            {"id": "end", "type": "end", "config": {"source_node": "answer"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "gate"},
+            {"source": "gate", "target": "answer"},
+            {"source": "answer", "target": "end"},
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_workflow_approval_node_suspends_and_resumes_the_run(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    admin = get_user_model().objects.create_user(
+        username="workflow-approver",
+        password="test-password",
+    )
+    ProjectMembership.objects.create(
+        project=project,
+        user=admin,
+        role=ProjectMembership.Role.ADMIN,
+    )
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Approval workflow",
+        slug="approval-workflow",
+        draft_definition=_approval_definition(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    assert (
+        client.post(f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json").status_code
+        == 201
+    )
+    started = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "approve me"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-approval-001",
+    )
+    assert started.status_code == 202
+    run = WorkflowRun.objects.select_related("task").get(pk=started.data["id"])
+
+    assert process_once("workflow-approval-worker") is True
+    assert Task.objects.get(pk=run.task_id).status == Task.Status.WAITING_APPROVAL
+    step = WorkflowStepRun.objects.get(workflow_run=run, node_id="gate")
+    assert step.status == WorkflowStepRun.Status.AWAITING_APPROVAL
+
+    unauthorized = client.post(
+        f"/api/v1/workflow-runs/{run.id}/steps/gate/approve/",
+        {"reason": "editor cannot approve"},
+        format="json",
+    )
+    assert unauthorized.status_code == 403
+
+    approver = APIClient()
+    approver.force_authenticate(user=admin)
+    decided = approver.post(
+        f"/api/v1/workflow-runs/{run.id}/steps/gate/approve/",
+        {"reason": "Release window confirmed"},
+        format="json",
+    )
+    assert decided.status_code == 200
+    assert decided.data["decision"] == "approved"
+    assert Task.objects.get(pk=run.task_id).status == Task.Status.QUEUED
+
+    assert process_once("workflow-approval-worker") is True
+    run.refresh_from_db()
+    assert Task.objects.get(pk=run.task_id).status == Task.Status.SUCCEEDED
+    assert (
+        WorkflowStepRun.objects.get(workflow_run=run, node_id="gate").status
+        == WorkflowStepRun.Status.SUCCEEDED
+    )
+    assert (
+        WorkflowStepRun.objects.get(workflow_run=run, node_id="answer").status
+        == WorkflowStepRun.Status.SUCCEEDED
+    )
+    assert run.output_data["content"] == "workflow response"
+
+
+@pytest.mark.django_db
+def test_workflow_approval_rejection_fails_the_run(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    admin = get_user_model().objects.create_user(
+        username="workflow-rejecter",
+        password="test-password",
+    )
+    ProjectMembership.objects.create(
+        project=project,
+        user=admin,
+        role=ProjectMembership.Role.ADMIN,
+    )
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Rejected workflow",
+        slug="rejected-workflow",
+        draft_definition=_approval_definition(model.id),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    assert (
+        client.post(f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json").status_code
+        == 201
+    )
+    started = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "reject me"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-rejection-001",
+    )
+    assert started.status_code == 202
+    run = WorkflowRun.objects.select_related("task").get(pk=started.data["id"])
+    assert process_once("workflow-rejection-worker") is True
+    assert Task.objects.get(pk=run.task_id).status == Task.Status.WAITING_APPROVAL
+
+    approver = APIClient()
+    approver.force_authenticate(user=admin)
+    rejected = approver.post(
+        f"/api/v1/workflow-runs/{run.id}/steps/gate/reject/",
+        {"reason": "Change window not approved"},
+        format="json",
+    )
+    assert rejected.status_code == 200
+    run.refresh_from_db()
+    task = Task.objects.get(pk=run.task_id)
+    assert task.status == Task.Status.FAILED
+    assert task.error["code"] == "WORKFLOW_APPROVAL_REJECTED"
+    assert run.finished_at is not None
+
+
+@pytest.mark.django_db
+def test_workflow_validator_rejects_oversized_approval_instructions(workflow_workspace):
+    _, _, _, model = workflow_workspace
+    definition = _approval_definition(model.id)
+    definition["nodes"][1]["config"]["instructions"] = "x" * 4001
+    with pytest.raises(WorkflowValidationError):
+        validate_workflow_definition(definition)

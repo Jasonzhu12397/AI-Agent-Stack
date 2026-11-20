@@ -1,6 +1,7 @@
 import json
 
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -17,6 +18,7 @@ from core.models import (
     TenantMembership,
     WorkflowDefinition,
     WorkflowRun,
+    WorkflowStepRun,
     WorkflowVersion,
 )
 from core.workflow_engine import (
@@ -395,3 +397,168 @@ class WorkflowRunDetailView(APIView):
         ).exists():
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(WorkflowRunSerializer(run).data)
+
+
+
+def _workflow_run_for_user(request, run_id):
+    queryset = WorkflowRun.objects.select_related(
+        "task",
+        "workflow_version",
+        "workflow_version__workflow",
+    ).filter(
+        Q(workflow_version__workflow__tenant__memberships__user=request.user)
+        | Q(workflow_version__workflow__project__memberships__user=request.user)
+    )
+    return get_object_or_404(queryset.distinct(), pk=run_id)
+
+
+def _can_decide_workflow_approval(request, workflow):
+    tenant_admin = TenantMembership.objects.filter(
+        tenant=workflow.tenant,
+        user=request.user,
+        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+    ).exists()
+    project_admin = ProjectMembership.objects.filter(
+        project=workflow.project,
+        user=request.user,
+        role=ProjectMembership.Role.ADMIN,
+    ).exists()
+    return tenant_admin or project_admin
+
+
+class WorkflowStepApprovalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    decision = None
+
+    def post(self, request, run_id, node_id):
+        reason = request.data.get("reason", "")
+        if not isinstance(reason, str) or len(reason) > 500:
+            return Response(
+                {"detail": "reason must be a string no longer than 500 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        run = _workflow_run_for_user(request, run_id)
+        workflow = run.workflow_version.workflow
+        if not _can_decide_workflow_approval(request, workflow):
+            return Response(
+                {"detail": "Project administrator permission required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        now = timezone.now()
+        with transaction.atomic():
+            task = Task.objects.select_for_update().get(pk=run.task_id)
+            step = get_object_or_404(
+                WorkflowStepRun.objects.select_for_update(),
+                workflow_run=run,
+                node_id=node_id,
+                node_type="approval",
+            )
+            if step.status != WorkflowStepRun.Status.AWAITING_APPROVAL:
+                return Response(
+                    {"detail": "Workflow step is not awaiting approval."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if task.status != Task.Status.WAITING_APPROVAL:
+                return Response(
+                    {"detail": "Workflow task is no longer waiting for approval."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            decision_payload = {
+                "decision": self.decision,
+                "decided_by_id": request.user.id,
+                "decided_at": now.isoformat(),
+                "reason": reason.strip(),
+            }
+            if self.decision == "approved":
+                step.status = WorkflowStepRun.Status.SUCCEEDED
+                step.output_data = decision_payload
+                step.finished_at = now
+                step.save(
+                    update_fields=["status", "output_data", "finished_at"]
+                )
+                task.status = Task.Status.QUEUED
+                task.available_at = now
+                task.attempts = 0
+                task.error = None
+                task.lease_owner = None
+                task.lease_token = None
+                task.lease_expires_at = None
+                task.save(
+                    update_fields=[
+                        "status",
+                        "available_at",
+                        "attempts",
+                        "error",
+                        "lease_owner",
+                        "lease_token",
+                        "lease_expires_at",
+                        "updated_at",
+                    ]
+                )
+            else:
+                step.status = WorkflowStepRun.Status.FAILED
+                step.error = {
+                    "code": "WORKFLOW_APPROVAL_REJECTED",
+                    "message": "A project administrator rejected this workflow step.",
+                }
+                step.output_data = decision_payload
+                step.finished_at = now
+                step.save(
+                    update_fields=["status", "error", "output_data", "finished_at"]
+                )
+                task.status = Task.Status.FAILED
+                task.error = {
+                    "code": "WORKFLOW_APPROVAL_REJECTED",
+                    "message": "A project administrator rejected this workflow step.",
+                    "retryable": False,
+                }
+                task.finished_at = now
+                task.lease_owner = None
+                task.lease_token = None
+                task.lease_expires_at = None
+                task.save(
+                    update_fields=[
+                        "status",
+                        "error",
+                        "finished_at",
+                        "lease_owner",
+                        "lease_token",
+                        "lease_expires_at",
+                        "updated_at",
+                    ]
+                )
+                run.finished_at = now
+                run.save(update_fields=["finished_at"])
+        record_audit_event(
+            request,
+            workflow.tenant,
+            f"workflow.approval.{self.decision}",
+            "workflow_step_run",
+            step.id,
+            project=workflow.project,
+            metadata={
+                "workflow_run_id": str(run.id),
+                "workflow_id": str(workflow.id),
+                "node_id": node_id,
+                "reason": reason.strip(),
+            },
+        )
+        return Response(
+            {
+                "run_id": str(run.id),
+                "node_id": node_id,
+                "decision": self.decision,
+                "task_status": Task.Status.QUEUED
+                if self.decision == "approved"
+                else Task.Status.FAILED,
+            }
+        )
+
+
+class WorkflowStepApproveView(WorkflowStepApprovalView):
+    decision = "approved"
+
+
+class WorkflowStepRejectView(WorkflowStepApprovalView):
+    decision = "rejected"

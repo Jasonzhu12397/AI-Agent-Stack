@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createWorkflow,
   createWorkflowRun,
+  decideWorkflowStep,
   getWorkflowRuns,
   getWorkflows,
   publishWorkflow,
@@ -28,6 +29,7 @@ const running = ref(false);
 const error = ref("");
 const notice = ref("");
 const validating = ref(false);
+const decidingNode = ref("");
 const validationResult = ref<{
   is_valid: boolean;
   errors: string[];
@@ -67,7 +69,7 @@ function edgeLabel(edge: Record<string, unknown>): string {
   return String(edge.source ?? "?") + " → " + String(edge.target ?? "?");
 }
 
-type InsertableNodeType = "llm" | "knowledge_search" | "tool";
+type InsertableNodeType = "llm" | "knowledge_search" | "tool" | "approval";
 
 function addWorkflowNode(type: InsertableNodeType): void {
   const definition = parseDefinition();
@@ -95,7 +97,9 @@ function addWorkflowNode(type: InsertableNodeType): void {
     ? { model_config_id: "", prompt_template: "{{input}}" }
     : type === "knowledge_search"
       ? { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 }
-      : { tool_id: "", arguments: {} };
+      : type === "approval"
+        ? { instructions: "Confirm this workflow step before it continues" }
+        : { tool_id: "", arguments: {} };
   const node = { id: nodeId, type, config };
   const edgeIndex = edges.indexOf(previousEdge);
   edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
@@ -107,6 +111,21 @@ function addWorkflowNode(type: InsertableNodeType): void {
   validationResult.value = null;
   notice.value = type.toUpperCase() + " node inserted. Configure its IDs and settings in the definition before validation.";
   error.value = "";
+}
+
+async function decideStep(runId: string, nodeId: string, decision: "approve" | "reject"): Promise<void> {
+  decidingNode.value = runId + ":" + nodeId;
+  error.value = "";
+  notice.value = "";
+  try {
+    await decideWorkflowStep(runId, nodeId, decision, "");
+    notice.value = "Workflow step " + nodeId + (decision === "approve" ? " approved." : " rejected.");
+    await loadRuns();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to decide the workflow step.";
+  } finally {
+    decidingNode.value = "";
+  }
 }
 
 async function validateDraft(): Promise<void> {
@@ -367,6 +386,7 @@ onUnmounted(() => {
           <el-button size="small" @click="addWorkflowNode('llm')">＋ LLM</el-button>
           <el-button size="small" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
           <el-button size="small" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
+          <el-button size="small" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-pipeline-row">
@@ -410,8 +430,8 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes: start, llm, knowledge_search, tool, condition and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
-            The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
+            Supported execution nodes: start, llm, knowledge_search, tool, condition, agent, approval and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
+            Approval nodes suspend the run in task status waiting_approval until a project administrator approves or rejects them from the execution history. The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
           </p>
           <div class="workflow-actions">
             <el-button :loading="saving" @click="saveDraft">Save draft</el-button>
@@ -442,7 +462,23 @@ onUnmounted(() => {
               </div>
               <pre class="workflow-run-output">{{ run.output_data === null ? "No output yet" : JSON.stringify(run.output_data, null, 2) }}</pre>
               <div class="workflow-step-list">
-                <span v-for="step in run.steps" :key="step.id">{{ step.node_id }} · {{ step.status }}</span>
+                <span v-for="step in run.steps" :key="step.id" class="workflow-step-entry">
+                  {{ step.node_id }} · {{ step.status }}
+                  <template v-if="step.status === 'awaiting_approval'">
+                    <el-button
+                      size="small"
+                      type="success"
+                      :loading="decidingNode === run.id + ':' + step.node_id"
+                      @click="decideStep(run.id, step.node_id, 'approve')"
+                    >Approve</el-button>
+                    <el-button
+                      size="small"
+                      type="danger"
+                      :loading="decidingNode === run.id + ':' + step.node_id"
+                      @click="decideStep(run.id, step.node_id, 'reject')"
+                    >Reject</el-button>
+                  </template>
+                </span>
               </div>
             </article>
           </div>

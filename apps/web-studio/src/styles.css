@@ -114,6 +114,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-run-output { overflow: auto; max-height: 180px; padding: 10px; color: #d6e4e4; background: #0b1321; border-radius: 7px; font: 11px/1.6 "DM Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workflow-step-list { display: flex; gap: 7px; flex-wrap: wrap; color: #91a3c0; font-size: 10px; }
 .workflow-step-list span { padding: 4px 7px; border: 1px solid #34435c; border-radius: 6px; }
+.workflow-step-list .workflow-step-entry { display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 900px) { .workflow-editor-grid { grid-template-columns: 1fr; } }
 
 
