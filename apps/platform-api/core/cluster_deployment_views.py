@@ -162,6 +162,75 @@ def _network_readiness(project, spec):
                     "roles": role_reports,
                 }
             )
+    policies = spec.get("sriov_node_policy_manifests") or []
+    sriov_ready = []
+    sriov_findings = []
+    if policies:
+        for machine in machines:
+            inventory = machine.hardware_inventory
+            nics = inventory.get("nics") if isinstance(inventory, dict) else None
+            if not isinstance(nics, list):
+                continue
+            pci_index = {}
+            for nic in nics:
+                if not isinstance(nic, dict):
+                    continue
+                pci = nic.get("pci_address") or nic.get("pci")
+                if isinstance(pci, str) and pci:
+                    pci_index[pci.lower()] = nic
+            machine_ok = True
+            for policy in policies:
+                if not isinstance(policy, dict):
+                    continue
+                policy_spec = policy.get("spec") if isinstance(policy.get("spec"), dict) else {}
+                selector = (
+                    policy_spec.get("nicSelector")
+                    if isinstance(policy_spec.get("nicSelector"), dict)
+                    else {}
+                )
+                expected_pci = selector.get("pciAddresses") or []
+                num_vfs = policy_spec.get("numVfs")
+                policy_name = (
+                    policy.get("metadata", {}).get("name")
+                    if isinstance(policy.get("metadata"), dict)
+                    else "sriov"
+                )
+                for pci in expected_pci:
+                    normalized = str(pci).lower()
+                    nic = pci_index.get(normalized)
+                    if nic is None:
+                        machine_ok = False
+                        sriov_findings.append(
+                            {
+                                "machine_id": str(machine.id),
+                                "name": machine.agent_node.name,
+                                "policy": policy_name,
+                                "code": "SRIOV_PCI_ADDRESS_MISSING",
+                                "pci_address": normalized,
+                            }
+                        )
+                        continue
+                    total_vfs = nic.get("sriov_totalvfs")
+                    if (
+                        isinstance(num_vfs, int)
+                        and isinstance(total_vfs, int)
+                        and not isinstance(total_vfs, bool)
+                        and total_vfs < num_vfs
+                    ):
+                        machine_ok = False
+                        sriov_findings.append(
+                            {
+                                "machine_id": str(machine.id),
+                                "name": machine.agent_node.name,
+                                "policy": policy_name,
+                                "code": "SRIOV_TOTALVFS_INSUFFICIENT",
+                                "pci_address": normalized,
+                                "expected": num_vfs,
+                                "observed": total_vfs,
+                            }
+                        )
+            if machine_ok:
+                sriov_ready.append(str(machine.id))
     report = {
         "required_control_plane": required_control,
         "required_worker": required_worker,
@@ -170,8 +239,13 @@ def _network_readiness(project, spec):
         "observed_machines": machines.count(),
         "blocked_machines": blocked,
         "machines_with_findings": with_findings,
+        "required_sriov_workers": required_worker if policies else 0,
+        "sriov_ready": len(sriov_ready) if policies else 0,
+        "sriov_findings": sriov_findings,
     }
     ready = len(control_ready) >= required_control and len(worker_ready) >= required_worker
+    if policies:
+        ready = ready and len(sriov_ready) >= required_worker
     report["ready"] = ready
     return report
 

@@ -432,3 +432,99 @@ def test_deployment_gate_reports_per_network_findings(bridge_workspace):
     ]
     assert any(finding["code"] == "HOST_VLAN_MISMATCH" for finding in worker_findings)
     assert any(finding["network"] == "data" for finding in worker_findings)
+
+
+def _sriov_profile():
+    profile = _network_profile()
+    profile["networks"].append(
+        {
+            "name": "dpdk",
+            "role": "sriov",
+            "vlan": 3400,
+            "mtu": 9000,
+            "cidr": None,
+            "interface": "ens3f0",
+            "pci_addresses": ["0000:03:00.0"],
+            "num_vfs": 8,
+            "host_roles": ["worker"],
+        }
+    )
+    return profile
+
+
+def _observed_sriov_inventory(total_vfs=16):
+    inventory = _observed_network_inventory()
+    inventory["nics"].append(
+        {
+            "name": "ens3f0",
+            "mtu": 9000,
+            "vlan": 3400,
+            "pci_address": "0000:03:00.0",
+            "sriov_totalvfs": total_vfs,
+            "sriov_numvfs": 8,
+            "sriov_capable": True,
+        }
+    )
+    return inventory
+
+
+@pytest.mark.django_db
+def test_deployment_gate_accepts_matching_sriov_pci(bridge_workspace, monkeypatch):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_sriov_inventory(),
+        }
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.save()
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_sriov_profile(),
+        updated_by=user,
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    response = _post(client, tenant, project, node, key="gate-sriov-pass")
+    assert response.status_code == 202
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    policy = deployment.spec["sriov_node_policy_manifests"][0]
+    assert policy["spec"]["nicSelector"]["pciAddresses"] == ["0000:03:00.0"]
+
+
+@pytest.mark.django_db
+def test_deployment_gate_reports_missing_sriov_pci(bridge_workspace):
+    from core.models import InfrastructureNetworkProfile
+
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        machine = _machine(tenant, project, node, index)
+        machine.hardware_inventory = {
+            **machine.hardware_inventory,
+            **_observed_sriov_inventory(total_vfs=4),
+        }
+        machine.hardware_inventory["nics"][-1]["pci_address"] = "0000:04:00.0"
+        machine.inventory_source = "host_network_observe"
+        machine.observed_at = timezone.now()
+        machine.save()
+    InfrastructureNetworkProfile.objects.create(
+        tenant=tenant,
+        project=project,
+        profile=_sriov_profile(),
+        updated_by=user,
+    )
+    response = _post(client, tenant, project, node, key="gate-sriov-missing")
+    assert response.status_code == 409
+    readiness = response.data["network_readiness"]
+    assert readiness["sriov_ready"] == 0
+    assert any(
+        finding["code"] == "SRIOV_PCI_ADDRESS_MISSING"
+        for finding in readiness["sriov_findings"]
+    )

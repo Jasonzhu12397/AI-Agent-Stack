@@ -658,7 +658,22 @@ onUnmounted(() => {
         <el-descriptions-item label="Observed machines">
           {{ networkReadiness.observed_machines }}
         </el-descriptions-item>
+        <el-descriptions-item
+          v-if="networkReadiness.required_sriov_workers"
+          label="SR-IOV workers"
+        >
+          {{ networkReadiness.sriov_ready }} / {{ networkReadiness.required_sriov_workers }}
+        </el-descriptions-item>
       </el-descriptions>
+      <ul v-if="networkReadiness.sriov_findings.length" class="readiness-blocked">
+        <li v-for="(finding, index) in networkReadiness.sriov_findings" :key="index">
+          {{ finding.name }} / {{ finding.policy }}:
+          {{ finding.code }} at PCI {{ finding.pci_address }}
+          <span v-if="finding.expected !== undefined">
+            (expected {{ finding.expected }}, observed {{ finding.observed }})
+          </span>
+        </li>
+      </ul>
       <ul v-if="networkReadiness.machines_with_findings.length" class="readiness-blocked">
         <li v-for="machine in networkReadiness.machines_with_findings" :key="machine.machine_id">
           <strong>{{ machine.name }}</strong>

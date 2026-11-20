@@ -864,6 +864,17 @@ export type NetworkReadinessReport = {
   worker_ready: number;
   observed_machines: number;
   ready: boolean;
+  required_sriov_workers: number;
+  sriov_ready: number;
+  sriov_findings: Array<{
+    machine_id: string;
+    name: string;
+    policy: string;
+    code: string;
+    pci_address: string;
+    expected?: unknown;
+    observed?: unknown;
+  }>;
   machines_with_findings: Array<{
     machine_id: string;
     name: string;
