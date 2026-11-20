@@ -176,7 +176,7 @@ jobs:
       - name: Select shard files
         id: shard
         run: |
-          files=$(ls tests/test_*.py | sort)
+          files=$(find tests -maxdepth 1 -name 'test_*.py' -print | sort)
           index=0
           selected=""
           for file in $files; do
