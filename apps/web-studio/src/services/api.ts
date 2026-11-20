@@ -588,7 +588,6 @@ export type HostNetworkVerification = {
   ok: boolean;
   checked_networks: string[];
   findings: HostNetworkFinding[];
-  switch_verified: boolean;
   observed_interfaces: string[];
 };
 

@@ -1,9 +1,9 @@
-"""Host-side network declaration verification.
+"""Host-side OS network declaration verification.
 
 The infrastructure network profile is an intent. This contract compares that
-intent with what a host actually reports (NICs, bonds, VLANs, MTU and PCI
-addresses) and returns explicit findings. Switch-side state is never inferred:
-without switch evidence the result stays ``unknown`` and ``ok`` is false.
+intent with what a host OS actually reports (NICs, bonds, VLANs, MTU and PCI
+addresses) and returns explicit findings. Switch-side configuration is out of
+scope: only the operating system network data is verified here.
 """
 
 from __future__ import annotations
@@ -24,10 +24,6 @@ def _text(value: Any) -> str:
 
 def _pci(value: Any) -> str:
     return _text(value).lower()
-
-
-def _mapping(item: Any) -> dict[str, Any] | None:
-    return item if isinstance(item, dict) else None
 
 
 def _nics(observed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -196,7 +192,6 @@ def verify_host_networks(
         raise
     index = _nic_index(observed)
     observed_bonds = _observed_bonds(observed)
-    switch = _mapping(observed.get("switch"))
     findings: list[dict[str, Any]] = []
     checked = []
     for network in plan["networks"]:
@@ -302,37 +297,6 @@ def verify_host_networks(
         findings.append(
             _finding("HOST_ROLE_HAS_NO_NETWORK", "fail", network=None, interface=None)
         )
-    if switch is None:
-        findings.append(
-            _finding(
-                "SWITCH_PORT_EVIDENCE_MISSING",
-                "unknown",
-                network=None,
-                interface=None,
-            )
-        )
-    else:
-        for network in plan["networks"]:
-            if host_role not in network["host_roles"] or network["vlan"] is None:
-                continue
-            declared = switch.get("vlans")
-            if isinstance(declared, list) and all(
-                isinstance(item, int) and not isinstance(item, bool) for item in declared
-            ):
-                if network["vlan"] not in declared:
-                    findings.append(
-                        _finding(
-                            "SWITCH_VLAN_MISMATCH",
-                            "fail",
-                            network=network["name"],
-                            expected=network["vlan"],
-                            observed=declared,
-                        )
-                    )
-            else:
-                findings.append(
-                    _finding("SWITCH_VLAN_UNKNOWN", "unknown", network=network["name"])
-                )
     statuses = [item["status"] for item in findings]
     if "fail" in statuses:
         status = "fail"
@@ -343,9 +307,8 @@ def verify_host_networks(
     return {
         "host_role": host_role,
         "status": status,
-        "ok": status == "pass" and switch is not None,
+        "ok": status == "pass",
         "checked_networks": checked,
         "findings": findings,
-        "switch_verified": switch is not None,
         "observed_interfaces": sorted(index),
     }

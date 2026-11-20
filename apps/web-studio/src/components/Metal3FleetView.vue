@@ -716,7 +716,7 @@ onUnmounted(() => {
             <template v-if="networkVerification">
               <p class="fleet-footnote">
                 Checked: {{ networkVerification.checked_networks.join(", ") || "none" }} ·
-                Switch evidence {{ networkVerification.switch_verified ? "present" : "missing (unknown)" }}
+                OS interfaces: {{ networkVerification.observed_interfaces.join(", ") || "none" }}
               </p>
               <el-table :data="networkVerification.findings" size="small" class="task-table">
                 <el-table-column prop="code" label="Finding" min-width="220" />

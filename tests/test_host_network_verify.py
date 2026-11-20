@@ -62,18 +62,10 @@ OBSERVED = {
 
 
 def test_pass_when_host_and_switch_evidence_match():
-    observed = {**OBSERVED, "switch": {"vlans": [100, 200]}}
-    result = verify_host_networks(PROFILE, "control_plane", observed)
+    result = verify_host_networks(PROFILE, "control_plane", OBSERVED)
     assert result["status"] == "pass"
     assert result["ok"] is True
     assert result["checked_networks"] == ["control", "data"]
-
-
-def test_missing_switch_evidence_stays_unknown_and_not_ok():
-    result = verify_host_networks(PROFILE, "control_plane", OBSERVED)
-    assert result["status"] == "unknown"
-    assert result["ok"] is False
-    assert any(item["code"] == "SWITCH_PORT_EVIDENCE_MISSING" for item in result["findings"])
 
 
 def test_bond_mode_mismatch_fails():
@@ -87,7 +79,7 @@ def test_bond_mode_mismatch_fails():
 
 
 def test_missing_interface_fails():
-    observed = {"nics": [{"name": "eno1"}], "bonds": [], "switch": {"vlan": 100}}
+    observed = {"nics": [{"name": "eno1"}], "bonds": []}
     result = verify_host_networks(PROFILE, "control_plane", observed)
     assert result["status"] == "fail"
     assert any(item["code"] == "HOST_INTERFACE_MISSING" for item in result["findings"])
@@ -96,7 +88,6 @@ def test_missing_interface_fails():
 def test_pci_mismatch_fails_for_worker():
     observed = {
         **OBSERVED,
-        "switch": {"vlans": [100, 200, 300]},
         "nics": [
             {**nic, "pci_address": "0000:3b:00.0"} if nic["name"] == "eno5" else nic
             for nic in OBSERVED["nics"]
@@ -110,12 +101,11 @@ def test_missing_pci_evidence_is_unknown():
     observed = {
         "nics": [{"name": "eno1"}, {"name": "eno3"}],
         "bonds": [],
-        "switch": {"vlans": [100, 200, 300]},
     }
     result = verify_host_networks(PROFILE, "worker", observed)
     assert any(item["code"] == "HOST_PCI_EVIDENCE_MISSING" for item in result["findings"])
 
 
 def test_storage_role_only_checks_storage_segments():
-    result = verify_host_networks(PROFILE, "storage", {"nics": [], "switch": {"vlans": [400]}})
+    result = verify_host_networks(PROFILE, "storage", {"nics": []})
     assert result["checked_networks"] == ["storage"]

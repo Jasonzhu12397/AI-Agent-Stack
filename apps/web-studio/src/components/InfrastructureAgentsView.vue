@@ -733,8 +733,8 @@ onUnmounted(() => {
           role-specific cloud-init networkData plus Metal3 IPPools for BMH provisioning. Bonds are passed to the OS by interface
           and to the SR-IOV device plugin by PCI address.
           The EPH control stack installs Metal3 IPAM automatically, and the Target Agent installs the SR-IOV Network Operator before
-          applying each SriovNetworkNodePolicy. VLAN, bond, switch port and PCI declarations still need a host-side re-check before
-          a machine is treated as network-ready.
+          applying each SriovNetworkNodePolicy. The host-side check compares this profile with the network data reported by the OS
+          (interfaces, bonds, MTU, VLAN and PCI); switch configuration is out of scope.
         </p>
         <el-alert
           v-if="infraNetworkStatus"
