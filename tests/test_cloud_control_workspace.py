@@ -501,3 +501,15 @@ def test_workflow_condition_contract_rejects_invalid_branches():
                 ],
             }
         )
+
+
+def test_workflow_run_deadline_defaults_and_bounds():
+    run = normalize_workflow_run(input={}, idempotency_key="run-default")
+    assert run["deadline_seconds"] == 86400
+    for value in (59, 604801, True, "3600"):
+        with pytest.raises(WorkspaceError):
+            normalize_workflow_run(
+                input={},
+                idempotency_key=f"run-{value}",
+                deadline_seconds=value,
+            )

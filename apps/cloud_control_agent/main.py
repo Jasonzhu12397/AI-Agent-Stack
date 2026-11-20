@@ -11,6 +11,7 @@ import psycopg
 
 from .api import serve
 from .deployment_controller import reconcile_deployments
+from .workflow_controller import reconcile_workflow_runs
 
 
 class CloudControlConfigurationError(ValueError):
@@ -295,10 +296,15 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             output JSONB,
             idempotency_key TEXT NOT NULL UNIQUE,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            deadline_at TIMESTAMPTZ,
             finished_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_workflow_runs
+        ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ
     """)
     connection.execute("""
         CREATE TABLE IF NOT EXISTS agent_control_tasks (
@@ -443,10 +449,12 @@ def main() -> int:
             with psycopg.connect(database_url, autocommit=True) as connection:
                 initialize_store(connection)
                 summary = reconcile_deployments(connection)
+                workflows = reconcile_workflow_runs(connection)
             print(json.dumps({
                 "service": "cloud-control-agent",
                 "action": "reconcile",
                 **summary,
+                "workflows": workflows,
             }), flush=True)
             return 0
         cert_file, key_file, client_ca_file = _tls_settings()

@@ -311,6 +311,13 @@ Creating a workflow publishes version 1. `POST /workflows/{id}/versions`
 appends a new immutable version and advances `latest_version`. Existing runs
 keep the version they started with; they are not retroactively edited.
 
+Each run carries an absolute deadline. `POST /workflows/{id}/runs` accepts
+`deadline_seconds` from 60 to 604800 and defaults to 86400. The response exposes
+`deadline_at`. `POST /api/v1/control/workflows/reconcile` (and the periodic
+`--reconcile-once` job) fails running runs whose deadline passed with
+`output.error = "WORKFLOW_DEADLINE_EXCEEDED"` and cancels every active task,
+including `awaiting_approval` steps.
+
 Starting a run materializes one task per step. Steps without dependencies are
 `queued` (or `awaiting_approval` for approval steps); steps with dependencies are
 `blocked`. When a step succeeds, blocked `all`-join tasks whose dependencies all

@@ -512,6 +512,48 @@ def test_workflow_approval_step_pauses_and_resumes_the_run(control_server, tls_m
         platform_client.close()
 
 
+def test_workflow_run_deadline_is_reconciled_into_a_failed_run(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = _create_workflow(platform_client, project_id)
+        run_id = uuid4()
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {"cluster": "edge-deadline"},
+                "idempotency_key": f"deadline-run-{run_id}",
+                "deadline_seconds": 60,
+            },
+        )
+        assert started["run"]["deadline_at"] is not None
+        assert started["run"]["status"] == "running"
+
+        database_url = os.environ["CLOUD_CONTROL_TEST_DATABASE_URL"]
+        with psycopg.connect(database_url) as connection:
+            connection.execute(
+                """
+                UPDATE agent_control_workflow_runs
+                SET deadline_at = NOW() - INTERVAL '1 second'
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+        reconciled = _post(platform_client, "/api/v1/control/workflows/reconcile", {"limit": 10})
+        assert reconciled["status"] == "ok"
+        assert reconciled["expired"] >= 1
+
+        finished = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert finished["run"]["status"] == "failed"
+        assert finished["run"]["output"]["error"] == "WORKFLOW_DEADLINE_EXCEEDED"
+        assert all(task["status"] == "cancelled" for task in finished["tasks"])
+    finally:
+        platform_client.close()
+
+
 def test_workflow_condition_routes_only_the_matching_branch(control_server, tls_material):
     installation_id = uuid4()
     platform_client = _tls_client(control_server, tls_material, tls_material["platform"])

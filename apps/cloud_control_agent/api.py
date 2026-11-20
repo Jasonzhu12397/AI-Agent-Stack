@@ -33,6 +33,7 @@ from .deployment_controller import (
     advance_for_agent,
     reconcile_deployments,
 )
+from .workflow_controller import reconcile_workflow_runs
 from .workspace import (
     MAX_WORKFLOW_STEPS,
     WORK_KINDS,
@@ -624,6 +625,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         self._reject_approval(approval_id, document)
                     else:
                         raise ControlApiError("APPROVAL_ACTION_INVALID")
+                    return
+                if self.path == "/api/v1/control/workflows/reconcile":
+                    self._reconcile_workflows(document)
                     return
                 if self.path.startswith("/api/v1/control/workflows/"):
                     parts = self.path.strip("/").split("/")
@@ -1764,6 +1768,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 run = normalize_workflow_run(
                     input=document.get("input"),
                     idempotency_key=document.get("idempotency_key"),
+                    deadline_seconds=document.get("deadline_seconds"),
                 )
             except WorkspaceError as exc:
                 raise ControlApiError(str(exc)) from exc
@@ -1803,8 +1808,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             """
                             INSERT INTO agent_control_workflow_runs (
                                 run_id, workflow_id, project_id, version,
-                                input, idempotency_key
-                            ) VALUES (%s, %s, %s, %s, %s, %s)
+                                input, idempotency_key, deadline_at
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s,
+                                NOW() + (%s * INTERVAL '1 second')
+                            )
                             ON CONFLICT (run_id) DO NOTHING
                             RETURNING run_id
                             """,
@@ -1815,6 +1823,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 version,
                                 Jsonb(run["input"]),
                                 run["idempotency_key"],
+                                run["deadline_seconds"],
                             ),
                         ).fetchone()
                     except psycopg.errors.UniqueViolation as exc:
@@ -1875,7 +1884,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     run_row = connection.execute(
                         """
                         SELECT run_id, workflow_id, project_id, version, status,
-                               input, output, idempotency_key, started_at, finished_at
+                               input, output, idempotency_key, started_at,
+                               deadline_at, finished_at
                         FROM agent_control_workflow_runs WHERE run_id = %s
                         """,
                         (run_id,),
@@ -1901,7 +1911,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     """
                     SELECT r.run_id, r.workflow_id, w.name AS workflow_name,
                            r.project_id, r.version, r.status, r.input, r.output,
-                           r.idempotency_key, r.started_at, r.finished_at
+                           r.idempotency_key, r.started_at, r.deadline_at,
+                           r.finished_at
                     FROM agent_control_workflow_runs r
                     JOIN agent_control_workflows w ON w.workflow_id = r.workflow_id
                     WHERE r.run_id = %s
@@ -2484,6 +2495,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             limit = document.get("limit", 100)
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 summary = reconcile_deployments(connection, limit)
+            if summary["status"] == "invalid_limit":
+                raise ControlApiError("RECONCILE_LIMIT_INVALID")
+            self._send(200, summary)
+
+        def _reconcile_workflows(self, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            limit = document.get("limit", 100)
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                summary = reconcile_workflow_runs(connection, limit)
             if summary["status"] == "invalid_limit":
                 raise ControlApiError("RECONCILE_LIMIT_INVALID")
             self._send(200, summary)

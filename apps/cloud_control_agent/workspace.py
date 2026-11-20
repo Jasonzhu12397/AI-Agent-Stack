@@ -23,6 +23,9 @@ MAX_WORKFLOW_STEPS = 32
 MAX_STEP_DEPENDENCIES = 8
 MAX_STEP_NAME_LENGTH = 128
 MAX_WORKFLOW_DESCRIPTION_LENGTH = 512
+DEFAULT_WORKFLOW_DEADLINE_SECONDS = 86400
+MIN_WORKFLOW_DEADLINE_SECONDS = 60
+MAX_WORKFLOW_DEADLINE_SECONDS = 604800
 MAX_APPROVAL_ACTION_LENGTH = 128
 MAX_APPROVER_LENGTH = 128
 MAX_DECISION_REASON_LENGTH = 512
@@ -487,7 +490,22 @@ def normalize_task(
     }
 
 
-def normalize_workflow_run(*, input: Any, idempotency_key: Any) -> dict[str, Any]:
+def normalize_workflow_run(
+    *, input: Any, idempotency_key: Any, deadline_seconds: Any = None
+) -> dict[str, Any]:
+    if deadline_seconds is None:
+        deadline_seconds = DEFAULT_WORKFLOW_DEADLINE_SECONDS
+    if (
+        not isinstance(deadline_seconds, int)
+        or isinstance(deadline_seconds, bool)
+        or not MIN_WORKFLOW_DEADLINE_SECONDS
+        <= deadline_seconds
+        <= MAX_WORKFLOW_DEADLINE_SECONDS
+    ):
+        raise WorkspaceError(
+            f"deadline_seconds must be an integer from "
+            f"{MIN_WORKFLOW_DEADLINE_SECONDS} to {MAX_WORKFLOW_DEADLINE_SECONDS}."
+        )
     return {
         "input": _bounded_json(input, "input", maximum=MAX_WORK_PAYLOAD_BYTES),
         "idempotency_key": _bounded_text(
@@ -495,6 +513,7 @@ def normalize_workflow_run(*, input: Any, idempotency_key: Any) -> dict[str, Any
             "idempotency_key",
             maximum=MAX_IDEMPOTENCY_KEY_LENGTH,
         ),
+        "deadline_seconds": deadline_seconds,
     }
 
 
