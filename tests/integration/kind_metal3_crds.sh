@@ -19,7 +19,7 @@ done
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.3}"
 CERT_MANAGER_URL="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 
-for namespace in capm3-system sriov-network-operator; do
+for namespace in capm3-system sriov-network-operator metal3; do
   "${KUBECTL}" create namespace "${namespace}" --dry-run=client -o yaml \
     | "${KUBECTL}" apply -f -
 done
