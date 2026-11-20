@@ -159,7 +159,7 @@ A workflow definition is a JSONB DAG with one to 32 steps:
 {
   "description": "Prepare then verify",
   "steps": [
-    {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
+    {"id": "prepare", "name": "Prepare hosts", "required_role": "eph", "max_attempts": 2},
     {
       "id": "verify",
       "name": "Verify hosts",
@@ -177,8 +177,11 @@ keep the version they started with; they are not retroactively edited.
 Starting a run materializes one task per step. Steps without dependencies are
 `queued`; steps with dependencies are `blocked`. When an Agent reports a task
 `succeeded`, blocked tasks whose dependencies all succeeded become `queued`. A
-failed task marks the run `failed` and cancels every remaining blocked, queued or
-leased task. When no active task remains, the run becomes `succeeded` and its
+failed task is retried while its `max_attempts` budget (1–5, default 1) is not
+exhausted: the control plane clears the result, returns it to `queued` and keeps
+the run `running`, reporting `"retrying": true`. Once the budget is exhausted the
+run becomes `failed` and every remaining blocked, queued or leased task is
+cancelled. When no active task remains, the run becomes `succeeded` and its
 output is the JSON object of `step_id -> task result`.
 
 Task claims follow the same rules as work claims: installation scope, active

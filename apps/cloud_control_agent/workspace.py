@@ -263,6 +263,15 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             )
         if step_id in dependencies:
             raise WorkspaceError(f"workflow step {step_id} cannot depend on itself.")
+        max_attempts = item.get("max_attempts", 1)
+        if (
+            not isinstance(max_attempts, int)
+            or isinstance(max_attempts, bool)
+            or not 1 <= max_attempts <= 5
+        ):
+            raise WorkspaceError(
+                f"definition.steps[{index}].max_attempts must be an integer from 1 to 5."
+            )
         normalized_steps.append({
             "id": step_id,
             "name": name,
@@ -273,6 +282,7 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
                 maximum=MAX_WORK_PAYLOAD_BYTES,
             ),
             "depends_on": list(dependencies),
+            "max_attempts": max_attempts,
         })
     step_ids = {step["id"] for step in normalized_steps}
     for step in normalized_steps:

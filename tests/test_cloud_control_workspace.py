@@ -205,3 +205,25 @@ def test_workspace_path_accepts_tasks_and_workflows():
     assert collection == "tasks"
     _, collection = normalize_workspace_path("/api/v1/control/projects/abc/workflows")
     assert collection == "workflows"
+
+
+def test_workflow_definition_defaults_and_validates_step_retries():
+    definition = normalize_workflow_definition({
+        "steps": [{"id": "prepare", "name": "Prepare hosts"}],
+    })
+    assert definition["steps"][0]["max_attempts"] == 1
+
+    definition = normalize_workflow_definition({
+        "steps": [
+            {"id": "prepare", "name": "Prepare hosts", "max_attempts": 3},
+        ],
+    })
+    assert definition["steps"][0]["max_attempts"] == 3
+
+    for value in (0, 6, True, "3", 2.5):
+        with pytest.raises(WorkspaceError, match="max_attempts"):
+            normalize_workflow_definition({
+                "steps": [
+                    {"id": "prepare", "name": "Prepare hosts", "max_attempts": value},
+                ],
+            })

@@ -371,6 +371,20 @@ def _parse_uuid(value: Any, field: str) -> UUID:
         raise ControlApiError(f"{field}_INVALID") from exc
 
 
+def _task_max_attempts(payload: Any) -> int:
+    """Read a step retry budget, defaulting to a single attempt."""
+
+    if not isinstance(payload, dict):
+        return 1
+    step = payload.get("step")
+    if not isinstance(step, dict):
+        return 1
+    value = step.get("max_attempts", 1)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 1
+    return max(1, min(value, 5))
+
+
 def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "CloudControlAgent/1"
@@ -1562,7 +1576,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             lease_expires_at = NULL, updated_at = NOW()
                         WHERE task_id = %s AND assigned_agent_id = %s
                           AND status = 'leased' AND lease_token_hash = %s
-                        RETURNING task_id, workflow_run_id, step_id, status, result
+                        RETURNING task_id, workflow_run_id, step_id, status, result,
+                                  payload, attempts
                         """,
                         (
                             outcome["status"], Jsonb(outcome["result"]), task_id,
@@ -1572,7 +1587,25 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     if task is None:
                         raise ControlApiError("TASK_RESULT_NOT_ACCEPTED")
                     run_id = task["workflow_run_id"]
-                    if run_id is not None and task["status"] == "failed":
+                    retrying = False
+                    if (
+                        run_id is not None
+                        and task["status"] == "failed"
+                        and task["attempts"] < _task_max_attempts(task["payload"])
+                    ):
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'queued', result = NULL,
+                                lease_token_hash = NULL, lease_expires_at = NULL,
+                                updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (task["task_id"],),
+                        )
+                        retrying = True
+                        run_status = "running"
+                    elif run_id is not None and task["status"] == "failed":
                         connection.execute(
                             """
                             UPDATE agent_control_workflow_runs
@@ -1653,6 +1686,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 "status": task["status"],
                 "workflow_run_id": task["workflow_run_id"],
                 "workflow_run_status": run_status,
+                "retrying": retrying,
             })
 
         def _register_agent(self, document: dict[str, Any]) -> None:
