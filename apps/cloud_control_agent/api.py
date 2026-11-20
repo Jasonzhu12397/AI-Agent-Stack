@@ -1417,13 +1417,29 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     END,
                     updated_at = NOW()
                 WHERE t.workflow_run_id = %s AND t.status = 'blocked'
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
-                      LEFT JOIN agent_control_tasks d
-                        ON d.workflow_run_id = t.workflow_run_id
-                       AND d.step_id = dep.value
-                      WHERE d.task_id IS NULL OR d.status <> 'succeeded'
+                  AND (
+                      (
+                          t.join_policy = 'all'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
+                              LEFT JOIN agent_control_tasks d
+                                ON d.workflow_run_id = t.workflow_run_id
+                               AND d.step_id = dep.value
+                              WHERE d.task_id IS NULL OR d.status <> 'succeeded'
+                          )
+                      )
+                      OR (
+                          t.join_policy = 'any'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM jsonb_array_elements_text(t.depends_on) AS dep(value)
+                              JOIN agent_control_tasks d
+                                ON d.workflow_run_id = t.workflow_run_id
+                               AND d.step_id = dep.value
+                              WHERE d.status = 'succeeded'
+                          )
+                      )
                   )
                 """,
                 (run_id,),
@@ -1645,9 +1661,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                 """
                                 INSERT INTO agent_control_tasks (
                                     task_id, project_id, workflow_run_id, step_id,
-                                    step_type, name, status, required_role, payload,
-                                    depends_on, idempotency_key
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    step_type, join_policy, name, status,
+                                    required_role, payload, depends_on, idempotency_key
+                                ) VALUES (
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                )
                                 """,
                                 (
                                     uuid4(),
@@ -1655,6 +1673,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                     run_id,
                                     step["id"],
                                     step.get("type", "task"),
+                                    step.get("join", "all"),
                                     step["name"],
                                     self._initial_step_status(step),
                                     step["required_role"],
@@ -1693,8 +1712,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     ).fetchone()
                     tasks = connection.execute(
                         """
-                        SELECT task_id, step_id, step_type, name, status, priority,
-                               required_role, payload, depends_on, result,
+                        SELECT task_id, step_id, step_type, join_policy, name,
+                               status, priority, required_role, payload, depends_on, result,
                                assigned_agent_id, attempts
                         FROM agent_control_tasks WHERE workflow_run_id = %s
                         ORDER BY created_at, step_id
@@ -1722,8 +1741,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     raise ControlApiError("WORKFLOW_RUN_NOT_FOUND")
                 tasks = connection.execute(
                     """
-                    SELECT task_id, step_id, step_type, name, status, priority,
-                           required_role, payload, depends_on, result,
+                    SELECT task_id, step_id, step_type, join_policy, name,
+                           status, priority, required_role, payload, depends_on, result,
                            assigned_agent_id, attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE workflow_run_id = %s
                     ORDER BY created_at, step_id
@@ -1825,9 +1844,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 rows = connection.execute(
                     """
-                    SELECT task_id, workflow_run_id, step_id, step_type, name, status,
-                           priority, required_role, payload, depends_on, result,
-                           assigned_agent_id, attempts, created_at, updated_at
+                    SELECT task_id, workflow_run_id, step_id, step_type,
+                           join_policy, name, status, priority, required_role,
+                           payload, depends_on, result, assigned_agent_id,
+                           attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE project_id = %s
                     ORDER BY created_at DESC
                     """,
@@ -1842,7 +1862,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT task_id, project_id, workflow_run_id, step_id, step_type,
-                           name, status, priority, required_role, payload, depends_on,
+                           join_policy, name, status, priority, required_role, payload, depends_on,
                            result,
                            assigned_agent_id, attempts, lease_expires_at,
                            created_at, updated_at

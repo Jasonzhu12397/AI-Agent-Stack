@@ -318,6 +318,9 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             step_type TEXT NOT NULL DEFAULT 'task' CHECK (
                 step_type IN ('task', 'approval')
             ),
+            join_policy TEXT NOT NULL DEFAULT 'all' CHECK (
+                join_policy IN ('all', 'any')
+            ),
             priority INTEGER NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 9),
             required_role TEXT CHECK (
                 required_role IS NULL OR required_role IN ('eph', 'target')
@@ -351,6 +354,19 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
                 'succeeded', 'failed', 'cancelled'
             )
         )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS join_policy TEXT NOT NULL DEFAULT 'all'
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        DROP CONSTRAINT IF EXISTS agent_control_tasks_join_policy_check
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD CONSTRAINT agent_control_tasks_join_policy_check
+        CHECK (join_policy IN ('all', 'any'))
     """)
     connection.execute("""
         ALTER TABLE agent_control_tasks

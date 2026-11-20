@@ -40,6 +40,7 @@ TASK_STATUSES = frozenset(
     {"blocked", "queued", "leased", "awaiting_approval", "succeeded", "failed", "cancelled"}
 )
 WORKFLOW_STEP_TYPES = frozenset({"task", "approval"})
+WORKFLOW_JOIN_POLICIES = frozenset({"all", "any"})
 WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
 AGENT_ROLES = frozenset({"eph", "target"})
 
@@ -281,6 +282,11 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
         role = item.get("required_role")
         if role not in (None, "", *AGENT_ROLES):
             raise WorkspaceError(f"definition.steps[{index}].required_role is invalid.")
+        join_policy = item.get("join", "all")
+        if join_policy not in WORKFLOW_JOIN_POLICIES:
+            raise WorkspaceError(
+                f"definition.steps[{index}].join must be all or any."
+            )
         dependencies = item.get("depends_on", [])
         if (
             not isinstance(dependencies, list)
@@ -318,6 +324,7 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
                 "id": step_id,
                 "name": name,
                 "type": step_type,
+                "join": join_policy,
                 "required_role": role or None,
                 "payload": _bounded_json(
                     item.get("payload"),

@@ -512,6 +512,105 @@ def test_workflow_approval_step_pauses_and_resumes_the_run(control_server, tls_m
         platform_client.close()
 
 
+def test_workflow_any_join_releases_downstream_before_all_branches_finish(
+    control_server, tls_material
+):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        workflow_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "parallel-any-join",
+                "definition": {
+                    "steps": [
+                        {"id": "left", "name": "Left", "required_role": "eph"},
+                        {"id": "right", "name": "Right", "required_role": "eph"},
+                        {
+                            "id": "merge",
+                            "name": "Merge",
+                            "depends_on": ["left", "right"],
+                            "join": "any",
+                        },
+                    ]
+                },
+            },
+        )
+        run_id = uuid4()
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {},
+                "idempotency_key": f"any-join-{run_id}",
+            },
+        )
+        by_step = {task["step_id"]: task for task in started["tasks"]}
+        assert by_step["left"]["status"] == "queued"
+        assert by_step["right"]["status"] == "queued"
+        assert by_step["merge"]["status"] == "blocked"
+        assert by_step["merge"]["join_policy"] == "any"
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        executed = []
+        try:
+            identity = _identity(agent_id, installation_id)
+            first = _claim(agent_client, identity)
+            assert first["task"]["step_id"] == "left"
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "succeeded",
+                    "result": {"branch": "left"},
+                },
+            )
+            executed.append("left")
+            partial = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+            by_step = {task["step_id"]: task for task in partial["tasks"]}
+            assert by_step["merge"]["status"] == "queued"
+            assert by_step["right"]["status"] == "queued"
+            assert partial["run"]["status"] == "running"
+
+            for _ in range(3):
+                claimed = _post(agent_client, "/api/v1/agent-control/tasks/claim", identity)
+                task = claimed.get("task")
+                if task is None:
+                    break
+                _post(
+                    agent_client,
+                    "/api/v1/agent-control/tasks/result",
+                    {
+                        **identity,
+                        "task_id": task["task_id"],
+                        "lease_token": claimed["lease_token"],
+                        "status": "succeeded",
+                        "result": {"branch": task["step_id"]},
+                    },
+                )
+                executed.append(task["step_id"])
+        finally:
+            agent_client.close()
+        assert set(executed) == {"left", "right", "merge"}
+        finished = _get(platform_client, f"/api/v1/control/workflow-runs/{run_id}")
+        assert finished["run"]["status"] == "succeeded"
+        assert finished["run"]["output"]["merge"] == {"branch": "merge"}
+    finally:
+        platform_client.close()
+
+
 def test_workflow_approval_rejection_fails_the_run(control_server, tls_material):
     installation_id = uuid4()
     platform_client = _tls_client(control_server, tls_material, tls_material["platform"])

@@ -333,3 +333,35 @@ def test_workflow_definition_rejects_invalid_approval_steps():
         normalize_workflow_definition(
             {"steps": [{"id": "review", "name": "Review", "type": "manual"}]}
         )
+
+
+def test_workflow_definition_supports_any_join_policies():
+    definition = normalize_workflow_definition(
+        {
+            "steps": [
+                {"id": "left", "name": "Left", "required_role": "eph"},
+                {"id": "right", "name": "Right", "required_role": "target"},
+                {
+                    "id": "merge",
+                    "name": "Merge",
+                    "depends_on": ["left", "right"],
+                    "join": "any",
+                },
+            ]
+        }
+    )
+    steps = {step["id"]: step for step in definition["steps"]}
+    assert steps["merge"]["join"] == "any"
+    assert steps["left"]["join"] == "all"
+
+
+def test_workflow_definition_rejects_invalid_join_policies():
+    with pytest.raises(WorkspaceError):
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {"id": "a", "name": "A"},
+                    {"id": "b", "name": "B", "depends_on": ["a"], "join": "race"},
+                ],
+            }
+        )

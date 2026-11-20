@@ -228,6 +228,12 @@ A workflow definition is a JSONB DAG with one to 32 steps:
 }
 ```
 
+Every step also accepts `join`: `all` (default) or `any`. With `all`, a blocked
+step runs only after every dependency succeeded. With `any`, it becomes runnable
+as soon as one dependency succeeds, so parallel branches can merge on the first
+result while the remaining branches keep running. A failed dependency still
+fails the run, so `any` never lets a run succeed around a failure.
+
 A step `type` is `task` (default) or `approval`. An approval step must not set
 `required_role` and must keep `max_attempts` at 1. It is never claimable by an
 Agent: when its dependencies succeed it moves to `awaiting_approval`, and the
@@ -250,8 +256,9 @@ keep the version they started with; they are not retroactively edited.
 
 Starting a run materializes one task per step. Steps without dependencies are
 `queued` (or `awaiting_approval` for approval steps); steps with dependencies are
-`blocked`. When a step succeeds, blocked tasks whose dependencies all succeeded
-become `queued`, while approval steps become `awaiting_approval`. A
+`blocked`. When a step succeeds, blocked `all`-join tasks whose dependencies all
+succeeded become `queued`, blocked `any`-join tasks with at least one succeeded
+dependency become `queued`, and approval steps become `awaiting_approval`. A
 failed task is retried while its `max_attempts` budget (1–5, default 1) is not
 exhausted: the control plane clears the result, returns it to `queued` and keeps
 the run `running`, reporting `"retrying": true`. Once the budget is exhausted the
