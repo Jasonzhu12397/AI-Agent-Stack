@@ -20,6 +20,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
 | Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
 | Control workspace | Installation-scoped projects with versioned skills, referenced plugins, tasks, DAG workflows and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
+| Software engineering agent | Static project understanding, approved multi-file patches, review, tests, debugging, git, security, OpenAPI, docs and deployment drafts | Code baseline; remote model planning adapter still pending |
 
 External subscription billing and plan management are **not implemented**. The platform currently provides the multi-tenant and usage-governance foundations above; it does not claim to be a production-complete commercial SaaS.
 
@@ -41,6 +42,7 @@ Platform Agents and Workflows execute in the Platform Worker. They are separate 
 
 ### 2. Infrastructure multi-Agent control system
 
+0. **Software engineering agent** — a CLI/library in `apps/dev_agent` that reads a repository, proposes and applies approved patches, runs tests, analyses crashes and prepares git/security/docs/deployment artefacts; see `docs/dev-agent.md`.
 1. **Cloud Control Agent** — runs in the cloud management environment. Owns durable command state, approvals, scheduling, dispatch, status aggregation and failure coordination. It also hosts installation-scoped project workspaces (projects, versioned skills, referenced plugins and leased work items); see `docs/cloud-control-workspace.md`.
 2. **EPH Agent** — runs in the temporary EPH Live OS / single-node Kubernetes cluster. Renders bootstrap configuration, applies CAPI/BMO/Ironic/CAPM3, creates BMH and target-CAPI resources, and records source-side identity evidence.
 3. **Target Agent** — runs as three replicas on the target Control Plane with Kubernetes Lease leader election. Owns Target takeover, CAPI Pivot (`clusterctl move`), BMH migration, EPH cleanup, worker provisioning, NTP attestation and data-plane readiness.
