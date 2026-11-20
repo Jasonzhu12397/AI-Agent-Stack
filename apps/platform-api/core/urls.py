@@ -9,6 +9,7 @@ from core.audit_views import (
 )
 
 from core.agent_node_views import (
+    FleetBmhInventoryView,
     FleetPxeBootView,
     AgentCommandApproveView,
     AgentNodeCommandListCreateView,
@@ -227,6 +228,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-nodes/",
         AgentNodeListCreateView.as_view(),
         name="agent-node-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/bmh-inventory/",
+        FleetBmhInventoryView.as_view(),
+        name="fleet-machines-bmh-inventory",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/machines/pxe-boot/",

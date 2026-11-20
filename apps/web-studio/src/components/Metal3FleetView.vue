@@ -6,6 +6,8 @@ import {
   getFleetMachines,
   collectFleetNetwork,
   pxeBootFleetMachines,
+  ingestFleetBmhInventory,
+  type BmhInventoryIngest,
   type PxeBootResult,
   getMachineFirmware,
   getFirmwareUpdateJob,
@@ -56,6 +58,11 @@ const collectMessage = ref("");
 const pxeBootBusy = ref(false);
 const pxeBootMessage = ref("");
 const pxeBootResults = ref<PxeBootResult | null>(null);
+const bmhDialogVisible = ref(false);
+const bmhDocumentText = ref("");
+const bmhIngestBusy = ref(false);
+const bmhIngestMessage = ref("");
+const bmhIngestResult = ref<BmhInventoryIngest | null>(null);
 const deployments = ref<ClusterDeployment[]>([]);
 const commands = ref<AgentCommand[]>([]);
 const commandCount = ref(0);
@@ -299,6 +306,38 @@ async function runPxeBoot(execution: boolean): Promise<void> {
       cause instanceof Error ? cause.message : "Unable to reach the BMC fleet.";
   } finally {
     pxeBootBusy.value = false;
+  }
+}
+
+async function ingestBmhInventory(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  bmhIngestMessage.value = "";
+  bmhIngestResult.value = null;
+  let document: unknown;
+  try {
+    document = JSON.parse(bmhDocumentText.value);
+  } catch {
+    bmhIngestMessage.value = "Inspection output must be valid JSON.";
+    return;
+  }
+  bmhIngestBusy.value = true;
+  try {
+    bmhIngestResult.value = await ingestFleetBmhInventory(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      document,
+    );
+    bmhIngestMessage.value =
+      bmhIngestResult.value.matched +
+      " of " +
+      bmhIngestResult.value.host_count +
+      " host(s) matched.";
+    await refreshData();
+  } catch (cause) {
+    bmhIngestMessage.value =
+      cause instanceof Error ? cause.message : "Unable to ingest inspection output.";
+  } finally {
+    bmhIngestBusy.value = false;
   }
 }
 
@@ -704,6 +743,9 @@ onUnmounted(() => {
           </el-button>
           <el-button size="small" type="warning" :loading="pxeBootBusy" @click="runPxeBoot(true)">
             Execute PXE boot
+          </el-button>
+          <el-button size="small" plain @click="bmhDialogVisible = true">
+            Ingest BMH inspection
           </el-button>
         </div>
         <p v-if="collectMessage" class="task-note">{{ collectMessage }}</p>
@@ -1130,6 +1172,34 @@ onUnmounted(() => {
     <template v-else-if="activeTab === 'operations'">
       <InfrastructureAgentsView />
     </template>
+
+    <el-dialog v-model="bmhDialogVisible" title="Ingest BMH inspection" width="720px">
+      <p class="task-note">
+        Paste the output of <code>kubectl get bmh -A -o json</code> from the EPH node, or the
+        <code>metal3.host.inspect</code> command output. Hosts match by BMC address, then BMH name,
+        then system UUID. PCI addresses are adopted only when the machine has no agent-observed NIC
+        inventory.
+      </p>
+      <el-input
+        v-model="bmhDocumentText"
+        type="textarea"
+        :rows="12"
+        placeholder='{"items": [...]}'
+      />
+      <p v-if="bmhIngestMessage" class="task-note">{{ bmhIngestMessage }}</p>
+      <ul v-if="bmhIngestResult" class="pxe-boot-results">
+        <li v-for="item in bmhIngestResult.updated" :key="item.machine_id">
+          {{ item.name }}: {{ item.pci_inventory_adopted ? "PCI adopted" : "BMH recorded" }}
+        </li>
+        <li v-for="name in bmhIngestResult.unmatched" :key="name">{{ name }}: unmatched</li>
+      </ul>
+      <template #footer>
+        <el-button size="small" @click="bmhDialogVisible = false">Close</el-button>
+        <el-button size="small" type="primary" :loading="bmhIngestBusy" @click="ingestBmhInventory">
+          Ingest
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 

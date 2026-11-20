@@ -192,6 +192,12 @@ kind cluster and server-side dry-runs the rendered CR.
 
 Each machine is isolated: a failure records its error code (`PXE_BOOT_*`) without aborting the batch. The resulting plan or execution evidence is stored under `AgentMachine.hardware_inventory["pxe_boot"]` so the fleet view can show what was requested and when; it does not change `observed_at` or `inventory_revision`, because a boot override is not an inventory observation.
 
+### Inspection ingestion
+
+`metal3.host.inspect` is an EPH action: it runs `kubectl get bmh -A -o json` (or `-n <bmh_namespace>` when the payload names one) and parses the result through `packages/agent_contracts/metal3_bmh_inventory.py`. The parser is fail-closed: non-list input, a host without a name, duplicate namespace/name pairs, more than 256 hosts or more than 64 NICs per host are rejected with a `BMH_*` code. A missing `kubectl` yields `blocked/METAL3_BMH_KUBECTL_UNAVAILABLE`, a non-zero exit yields `failed/METAL3_BMH_INSPECT_FAILED`.
+
+The EPH posts the resulting document to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
+
 The platform only performs the boot override. PXE itself belongs to the EPH Ironic deployment: the inspection image boots IPA, and `host.network.observe` (or `metal3.host.inspect`) refreshes `AgentMachine.hardware_inventory` with NIC names, addresses and SR-IOV PCI BDFs. Standard BMH `status.hardware` carries NIC names/MAC/model/speed only, so PCI addresses always come from the OS/IPA inventory, never from the Redfish plan.
 
 ## Recovery and idempotency

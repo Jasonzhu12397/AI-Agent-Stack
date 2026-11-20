@@ -624,6 +624,33 @@ export type PxeBootResult = {
   }>;
 };
 
+export type BmhInventoryIngest = {
+  host_count: number;
+  matched: number;
+  unmatched: string[];
+  warnings: string[];
+  updated: Array<{
+    machine_id: string;
+    name: string;
+    pci_addresses: string[];
+    pci_inventory_adopted: boolean;
+  }>;
+};
+
+export function ingestFleetBmhInventory(
+  tenantId: string,
+  projectId: string,
+  document: unknown,
+): Promise<BmhInventoryIngest> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/bmh-inventory/",
+    {
+      method: "POST",
+      body: JSON.stringify({ document }),
+    },
+  );
+}
+
 export function pxeBootFleetMachines(
   tenantId: string,
   projectId: string,

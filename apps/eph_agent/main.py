@@ -319,6 +319,59 @@ def execute(
             },
             "side_effects": True,
         }
+    if action == "metal3.host.inspect":
+        from packages.agent_contracts.metal3_bmh_inventory import (
+            BmhInventoryError,
+            inspect_bmh_document,
+        )
+
+        payload = command.get("payload", {})
+        namespace = ""
+        if isinstance(payload, dict):
+            for field_name in ("bmh_namespace", "baremetal_host_namespace", "namespace"):
+                value = payload.get(field_name)
+                if isinstance(value, str) and value.strip():
+                    namespace = value.strip()
+                    break
+        arguments = ["get", "bmh", "-o", "json"]
+        if namespace:
+            arguments = ["get", "bmh", "-n", namespace, "-o", "json"]
+        else:
+            arguments.insert(2, "-A")
+        observation = _run_kubectl(arguments, timeout=90)
+        if not observation.get("available"):
+            return {
+                "status": "blocked",
+                "error_code": "METAL3_BMH_KUBECTL_UNAVAILABLE",
+                "output": {"reason": observation.get("error")},
+                "side_effects": False,
+            }
+        if observation["returncode"] != 0:
+            return {
+                "status": "failed",
+                "error_code": "METAL3_BMH_INSPECT_FAILED",
+                "output": {"stderr": observation["stderr"]},
+                "side_effects": False,
+            }
+        try:
+            evidence = inspect_bmh_document(observation["stdout"])
+        except BmhInventoryError as exc:
+            return {
+                "status": "failed",
+                "error_code": exc.code,
+                "output": {"namespace": namespace},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": {
+                **evidence,
+                "namespace": namespace,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+            "side_effects": False,
+        }
     if action == "eph.bootstrap.render":
         payload = command.get("payload", {})
         try:

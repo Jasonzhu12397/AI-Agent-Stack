@@ -75,6 +75,7 @@ EPH_ACTIONS: frozenset[str] = frozenset(
     {
         "eph.preflight",
         "eph.network.configure",
+        "metal3.host.inspect",
         "eph.source.observe",
         "eph.bootstrap.render",
         "eph.controlstack.apply",
@@ -296,6 +297,7 @@ def build_payload(
         "worker_replicas",
         "control_plane_count",
         "baremetal_host_namespace",
+        "bmh_namespace",
         "machine_deployment_name",
         "image_url",
         "control_plane_endpoint",
