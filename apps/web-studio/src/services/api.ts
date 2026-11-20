@@ -920,6 +920,7 @@ export type ClusterDeployment = {
       eph_network_configured?: boolean;
     };
     eph_preflight?: EphPreflightRecord | null;
+    bmh_inventory_sync?: BmhInventorySyncRecord | null;
   } | null;
   error: Record<string, unknown> | null;
   created_at: string;
@@ -942,6 +943,32 @@ export type EphPreflightRecord = {
   command_id: string | null;
   synced_at: string;
 };
+
+export type BmhInventorySyncRecord = {
+  available: boolean;
+  reason: string | null;
+  status: string | null;
+  error_code: string | null;
+  command_id: string | null;
+  host_count: number;
+  matched: number;
+  unmatched: string[];
+  warnings: string[];
+  observed_at: string | null;
+  synced_at: string;
+};
+
+export function syncClusterDeploymentBmhInventory(
+  deploymentId: string,
+): Promise<{
+  bmh_inventory: BmhInventorySyncRecord;
+  updated?: Array<Record<string, unknown>>;
+}> {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/bmh-inventory/sync/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
 
 export function syncClusterDeploymentEphPreflight(
   deploymentId: string,

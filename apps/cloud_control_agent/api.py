@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import ssl
 from datetime import UTC, datetime, timedelta
@@ -578,6 +579,14 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     and self.path.endswith("/preflight")
                 ):
                     self._get_deployment_preflight(self.path.split("/")[-2])
+                    return
+                if (
+                    self.path.startswith("/api/v1/control/deployments/")
+                    and "/actions/" in self.path
+                    and self.path.endswith("/result")
+                ):
+                    segments = self.path.rstrip("/").split("/")
+                    self._get_deployment_action_result(segments[-4], segments[-2])
                     return
                 if self.path.startswith("/api/v1/control/deployments/"):
                     self._get_deployment(self.path.rsplit("/", 1)[-1])
@@ -2504,6 +2513,74 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "deployment_id": str(deployment_id),
                     "available": isinstance(output, dict),
                     "reason": None if isinstance(output, dict) else "EPH_PREFLIGHT_OUTPUT_INVALID",
+                    "phase": deployment["phase"],
+                    "sequence": deployment["sequence"],
+                    "command_id": str(row["command_id"]),
+                    "status": row["status"],
+                    "error_code": result.get("error_code"),
+                    "output": output if isinstance(output, dict) else {},
+                    "updated_at": row["updated_at"],
+                },
+            )
+
+        def _get_deployment_action_result(self, raw_id: str, action: str) -> None:
+            """Return the newest command result for one deployment action.
+
+            The EPH reports results through the command lease channel only. This
+            read path lets the platform mirror discovery evidence (for example
+            a ``metal3.host.inspect`` inventory) instead of requiring an out-of
+            band submission. Any action name is accepted only after a strict
+            pattern check, so a malformed path cannot widen the query.
+            """
+
+            self._require_platform_api()
+            deployment_id = _parse_uuid(raw_id, "DEPLOYMENT_ID")
+            if not isinstance(action, str) or not re.fullmatch(
+                r"[a-z][a-z0-9._-]{2,63}", action
+            ):
+                raise ControlApiError("ACTION_INVALID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                deployment = connection.execute(
+                    "SELECT deployment_id, phase, sequence FROM agent_control_deployments "
+                    "WHERE deployment_id = %s",
+                    (deployment_id,),
+                ).fetchone()
+                if deployment is None:
+                    raise ControlApiError("DEPLOYMENT_NOT_FOUND")
+                row = connection.execute(
+                    """
+                    SELECT command_id, status, result, updated_at
+                    FROM agent_control_commands
+                    WHERE deployment_id = %s AND action = %s
+                    ORDER BY updated_at DESC, command_id DESC
+                    LIMIT 1
+                    """,
+                    (deployment_id, action),
+                ).fetchone()
+            if row is None:
+                self._send(
+                    200,
+                    {
+                        "deployment_id": str(deployment_id),
+                        "action": action,
+                        "available": False,
+                        "reason": "DEPLOYMENT_ACTION_NOT_RUN",
+                    },
+                )
+                return
+            result = row["result"] if isinstance(row["result"], dict) else {}
+            output = result.get("output")
+            self._send(
+                200,
+                {
+                    "deployment_id": str(deployment_id),
+                    "action": action,
+                    "available": isinstance(output, dict),
+                    "reason": (
+                        None
+                        if isinstance(output, dict)
+                        else "DEPLOYMENT_ACTION_OUTPUT_INVALID"
+                    ),
                     "phase": deployment["phase"],
                     "sequence": deployment["sequence"],
                     "command_id": str(row["command_id"]),

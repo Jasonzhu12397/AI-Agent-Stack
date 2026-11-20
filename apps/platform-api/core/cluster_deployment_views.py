@@ -31,6 +31,11 @@ from apps.agent_contracts.sriov_device_plugin import (
 )
 from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
+from core.bmh_inventory import match_machines, merge_bmh_host
+from packages.agent_contracts.metal3_bmh_inventory import (
+    BmhInventoryError,
+    normalize_hosts,
+)
 from packages.agent_contracts.eph_network import (
     EphNetworkError,
     eph_network_state,
@@ -904,6 +909,127 @@ class ClusterDeploymentEphPreflightView(APIView):
         return Response(
             {"eph_preflight": record, "preflight_result": preflight}
         )
+
+
+class ClusterDeploymentBmhInventorySyncView(APIView):
+    """Pull the EPH BareMetalHost inspection result onto machine inventory.
+
+    The EPH already reports ``metal3.host.inspect`` through the command lease
+    channel; this endpoint mirrors that result so an operator does not have to
+    paste JSON. The result must be ``succeeded`` before any host is trusted,
+    and every host goes through the same validation and merge path as the
+    manual ingest endpoint.
+    """
+
+    permission_classes = [IsAuthenticated]
+    ACTION = "metal3.host.inspect"
+
+    def post(self, request, deployment_id):
+        deployment = get_object_or_404(
+            ClusterDeployment.objects.filter(tenant__memberships__user=request.user),
+            pk=deployment_id,
+        )
+        if not _can_edit_project(request.user, deployment.tenant, deployment.project):
+            if not ProjectMembership.objects.filter(
+                project=deployment.project,
+                user=request.user,
+            ).exists():
+                return Response({"detail": "Project membership required."}, status=403)
+        client = None
+        try:
+            client = build_cloud_control_client()
+            payload = client.get_deployment_action_result(deployment.id, self.ACTION)
+        except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
+            return Response(
+                {"detail": str(exc), "code": "bmh_inventory_unavailable"},
+                status=503,
+            )
+        except CloudControlDispatchError:
+            return Response(
+                {"detail": "Cloud Control request failed.", "code": "bmh_inventory_unavailable"},
+                status=502,
+            )
+        finally:
+            if client is not None:
+                client.close()
+        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+        record = {
+            "available": bool(payload.get("available")),
+            "reason": payload.get("reason"),
+            "status": payload.get("status"),
+            "error_code": payload.get("error_code"),
+            "command_id": payload.get("command_id"),
+            "host_count": 0,
+            "matched": 0,
+            "unmatched": [],
+            "warnings": [],
+            "observed_at": output.get("observed_at"),
+            "synced_at": timezone.now().isoformat(),
+        }
+        if not record["available"]:
+            self._store(deployment, record)
+            return Response({"bmh_inventory": record}, status=200)
+        if payload.get("status") != "succeeded":
+            record["reason"] = "BMH_INSPECT_NOT_SUCCEEDED"
+            self._store(deployment, record)
+            return Response(
+                {
+                    "detail": "The EPH inspection did not succeed.",
+                    "code": "bmh_inspect_not_succeeded",
+                    "bmh_inventory": record,
+                },
+                status=409,
+            )
+        try:
+            hosts = normalize_hosts(output.get("hosts"))
+        except BmhInventoryError as exc:
+            record["reason"] = exc.code
+            self._store(deployment, record)
+            return Response(
+                {"detail": f"bmh: {exc.code}", "error_code": exc.code},
+                status=400,
+            )
+        machines = list(
+            AgentMachine.objects.filter(
+                tenant=deployment.tenant, project=deployment.project
+            ).select_related("agent_node")
+        )
+        pairs, unmatched = match_machines(machines, hosts)
+        now = timezone.now()
+        updated: list[dict[str, Any]] = []
+        with transaction.atomic():
+            for host, machine in pairs:
+                adopted_pci = merge_bmh_host(machine, host, now)
+                updated.append(
+                    {
+                        "machine_id": str(machine.id),
+                        "name": host["bmh_name"],
+                        "pci_addresses": host.get("pci_addresses", []),
+                        "pci_inventory_adopted": adopted_pci,
+                    }
+                )
+        warnings = output.get("warnings")
+        record.update(
+            {
+                "host_count": len(hosts),
+                "matched": len(updated),
+                "unmatched": unmatched[:64],
+                "warnings": warnings[:32] if isinstance(warnings, list) else [],
+            }
+        )
+        self._store(deployment, record)
+        return Response({"bmh_inventory": record, "updated": updated}, status=200)
+
+    @staticmethod
+    def _store(deployment, record) -> None:
+        preflight = (
+            dict(deployment.preflight_result)
+            if isinstance(deployment.preflight_result, dict)
+            else {}
+        )
+        preflight["bmh_inventory_sync"] = record
+        deployment.preflight_result = preflight
+        deployment.save(update_fields=["preflight_result", "updated_at"])
 
 
 class ClusterDeploymentNetworkEvidenceView(APIView):

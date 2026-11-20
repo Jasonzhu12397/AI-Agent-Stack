@@ -20,6 +20,7 @@ import {
   getInfraNetworkProfile,
   saveInfraNetworkProfile,
   syncClusterDeploymentEphPreflight,
+  syncClusterDeploymentBmhInventory,
   runClusterDeploymentPostflight,
   getProjects,
   getTenants,
@@ -40,6 +41,8 @@ const commands = ref<AgentCommand[]>([]);
 const deployments = ref<ClusterDeployment[]>([]);
 const ephPreflightSyncing = ref<Record<string, boolean>>({});
 const ephPreflightErrors = ref<Record<string, string>>({});
+const bmhSyncBusy = ref<Record<string, boolean>>({});
+const bmhSyncErrors = ref<Record<string, string>>({});
 const ephNetworkAddresses = ref<Record<string, string>>({});
 const EPH_ADDRESS_ROLES = [
   "control",
@@ -421,6 +424,28 @@ const ephNetworkTemplatePreview = computed(() => {
 function ephNetworkDocument(deployment: ClusterDeployment): string {
   const document = (deployment.spec as Record<string, unknown>).eph_network;
   return document ? JSON.stringify(document, null, 2) : "";
+}
+
+async function syncBmhInventory(deployment: ClusterDeployment): Promise<void> {
+  bmhSyncBusy.value = { ...bmhSyncBusy.value, [deployment.id]: true };
+  bmhSyncErrors.value = { ...bmhSyncErrors.value, [deployment.id]: "" };
+  try {
+    const response = await syncClusterDeploymentBmhInventory(deployment.id);
+    deployment.preflight_result = {
+      ...(deployment.preflight_result ?? {}),
+      bmh_inventory_sync: response.bmh_inventory,
+    } as ClusterDeployment["preflight_result"];
+  } catch (cause) {
+    bmhSyncErrors.value = {
+      ...bmhSyncErrors.value,
+      [deployment.id]:
+        cause instanceof ApiError
+          ? cause.message
+          : "Unable to sync the BMH inspection result.",
+    };
+  } finally {
+    bmhSyncBusy.value = { ...bmhSyncBusy.value, [deployment.id]: false };
+  }
 }
 
 async function syncEphPreflight(deployment: ClusterDeployment): Promise<void> {
@@ -1282,6 +1307,44 @@ onUnmounted(() => {
                   <small v-else>Runtime EPH warnings are not synced yet.</small>
                   <small v-if="ephPreflightErrors[deployment.id]" class="readiness-blocked">
                     {{ ephPreflightErrors[deployment.id] }}
+                  </small>
+                </div>
+                <div class="eph-preflight">
+                  <div class="command-topline">
+                    <strong>BMH inventory</strong>
+                    <el-button
+                      size="small"
+                      :loading="bmhSyncBusy[deployment.id] === true"
+                      @click="syncBmhInventory(deployment)"
+                    >Sync BMH inspection</el-button>
+                  </div>
+                  <template v-if="deployment.preflight_result?.bmh_inventory_sync">
+                    <el-tag
+                      :type="deployment.preflight_result.bmh_inventory_sync.available ? 'success' : 'info'"
+                      size="small"
+                    >
+                      {{ deployment.preflight_result.bmh_inventory_sync.available ? deployment.preflight_result.bmh_inventory_sync.matched + " / " + deployment.preflight_result.bmh_inventory_sync.host_count + " host(s) matched" : "Inspection not run" }}
+                    </el-tag>
+                    <small>
+                      Observed {{ formatTime(deployment.preflight_result.bmh_inventory_sync.observed_at) }}
+                      · Synced {{ formatTime(deployment.preflight_result.bmh_inventory_sync.synced_at) }}
+                      <template v-if="deployment.preflight_result.bmh_inventory_sync.reason">
+                        · {{ deployment.preflight_result.bmh_inventory_sync.reason }}
+                      </template>
+                    </small>
+                    <ul
+                      v-if="deployment.preflight_result.bmh_inventory_sync.unmatched.length"
+                      class="readiness-blocked"
+                    >
+                      <li
+                        v-for="name in deployment.preflight_result.bmh_inventory_sync.unmatched"
+                        :key="'bmh-' + name"
+                      >BMH unmatched: {{ name }}</li>
+                    </ul>
+                  </template>
+                  <small v-else>BMH inspection is not synced yet.</small>
+                  <small v-if="bmhSyncErrors[deployment.id]" class="readiness-blocked">
+                    {{ bmhSyncErrors[deployment.id] }}
                   </small>
                 </div>
                 <ul v-if="missingRequirements(deployment).length">

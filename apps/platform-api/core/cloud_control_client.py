@@ -120,6 +120,16 @@ class CloudControlClient:
             f"/api/v1/control/deployments/{deployment_id}/preflight",
         )
 
+    def get_deployment_action_result(
+        self, deployment_id: UUID, action: str
+    ) -> dict[str, Any]:
+        """Return the newest command result the EPH reported for one action."""
+
+        return self._request(
+            "GET",
+            f"/api/v1/control/deployments/{deployment_id}/actions/{action}/result",
+        )
+
     def get_command(self, command_id: UUID) -> dict[str, Any]:
         return self._request(
             "GET",

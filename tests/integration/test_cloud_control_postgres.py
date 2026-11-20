@@ -1364,3 +1364,77 @@ def test_deployment_preflight_returns_the_latest_eph_result(control_server, tls_
         assert synced["output"]["eph_ready"] is False
     finally:
         platform_client.close()
+
+
+@pytest.mark.integration
+def test_deployment_action_result_returns_latest_inspection(control_server, tls_material):
+    platform_client = _tls_client(
+        control_server,
+        tls_material,
+        tls_material["platform"],
+    )
+    installation_id = uuid4()
+    agent_id = uuid4()
+    deployment_id = uuid4()
+    try:
+        _register_agent(platform_client, agent_id, installation_id)
+        _post(
+            platform_client,
+            "/api/v1/control/deployments",
+            {
+                "deployment_id": str(deployment_id),
+                "installation_id": str(installation_id),
+                "cluster_id": str(uuid4()),
+                "spec": {"cluster_name": "bmh-sync-lab"},
+            },
+        )
+        missing = _get(
+            platform_client,
+            f"/api/v1/control/deployments/{deployment_id}/actions/metal3.host.inspect/result",
+        )
+        assert missing["available"] is False
+        assert missing["reason"] == "DEPLOYMENT_ACTION_NOT_RUN"
+        with psycopg.connect(_database_url()) as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_control_commands (
+                    command_id, deployment_id, target_agent_id, required_role,
+                    action, idempotency_key, payload, status, result
+                )
+                VALUES (%s, %s, %s, 'eph', 'metal3.host.inspect', %s, '{}'::jsonb,
+                        'succeeded', %s)
+                """,
+                (
+                    uuid4(),
+                    deployment_id,
+                    agent_id,
+                    f"inspect-{uuid4()}",
+                    Jsonb(
+                        {
+                            "output": {
+                                "host_count": 1,
+                                "hosts": [
+                                    {
+                                        "bmh_name": "bmh-1",
+                                        "bmc_host": "10.0.0.11",
+                                        "pci_addresses": [],
+                                    }
+                                ],
+                                "warnings": ["BMH_PCI_ADDRESS_UNAVAILABLE"],
+                                "observed_at": "2026-11-21T01:02:03+00:00",
+                            }
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+        synced = _get(
+            platform_client,
+            f"/api/v1/control/deployments/{deployment_id}/actions/metal3.host.inspect/result",
+        )
+        assert synced["available"] is True
+        assert synced["status"] == "succeeded"
+        assert synced["output"]["host_count"] == 1
+        assert synced["output"]["warnings"] == ["BMH_PCI_ADDRESS_UNAVAILABLE"]
+    finally:
+        platform_client.close()

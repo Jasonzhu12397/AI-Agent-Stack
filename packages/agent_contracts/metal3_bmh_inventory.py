@@ -201,3 +201,30 @@ def inspect_bmh_document(document: Any) -> dict[str, Any]:
         "hosts": hosts,
         "warnings": warnings,
     }
+
+
+def normalize_hosts(hosts: Any) -> list[dict[str, Any]]:
+    """Validate an already parsed ``hosts`` list from a command result."""
+
+    if not isinstance(hosts, list):
+        raise BmhInventoryError("BMH_HOSTS_INVALID")
+    if len(hosts) > MAX_HOSTS:
+        raise BmhInventoryError("BMH_HOST_COUNT_EXCEEDED")
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for host in hosts:
+        if not isinstance(host, dict):
+            raise BmhInventoryError("BMH_ITEM_INVALID")
+        name = _text(host.get("bmh_name")).strip()
+        if not name:
+            raise BmhInventoryError("BMH_NAME_REQUIRED")
+        namespace = _text(host.get("namespace")).strip()
+        key = (namespace, name)
+        if key in seen:
+            raise BmhInventoryError("BMH_HOST_DUPLICATE")
+        seen.add(key)
+        nics = host.get("nics")
+        if nics is not None and not isinstance(nics, list):
+            raise BmhInventoryError("BMH_NIC_INVALID")
+        result.append(host)
+    return result

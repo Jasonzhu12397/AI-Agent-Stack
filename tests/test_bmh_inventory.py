@@ -268,3 +268,133 @@ def test_bmh_inventory_api_rejects_invalid_documents():
     )
     assert response.status_code == 400
     assert response.data["error_code"] == "BMH_DOCUMENT_INVALID"
+
+
+class _StubActionResultClient:
+    def __init__(self, payload=None):
+        self._payload = payload
+        self.calls = []
+        self.closed = False
+
+    def get_deployment_action_result(self, deployment_id, action):
+        self.calls.append((str(deployment_id), action))
+        return {**self._payload, "deployment_id": str(deployment_id), "action": action}
+
+    def close(self):
+        self.closed = True
+
+
+def _deployment(tenant, project, node, user):
+    from core.models import ClusterDeployment
+
+    return ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=node,
+        requested_by=user,
+        cluster_name="bmh-sync",
+        kubernetes_version="v1.37.2",
+        idempotency_key="bmh-sync-key",
+        preflight_result={"network_readiness": {"ready": False}},
+    )
+
+
+@pytest.mark.django_db
+def test_bmh_inventory_sync_pulls_succeeded_inspection(monkeypatch):
+    tenant, project, machine, client = _workspace()
+    deployment = _deployment(tenant, project, machine.agent_node, client.handler._force_user)
+    stub = _StubActionResultClient(
+        payload={
+            "available": True,
+            "reason": None,
+            "status": "succeeded",
+            "error_code": None,
+            "command_id": "7f1b3f9e-0000-0000-0000-000000000000",
+            "output": {
+                "hosts": [
+                    {
+                        "bmh_name": "bmh-1",
+                        "namespace": "baremetal-operator-system",
+                        "bmc_host": "10.0.0.11",
+                        "system_uuid": "uuid-1",
+                        "pci_addresses": ["0000:3b:00.0"],
+                        "nics": [
+                            {
+                                "name": "eno1",
+                                "pci_address": "0000:3b:00.0",
+                                "mac": "aa:bb:cc:dd:ee:01",
+                            }
+                        ],
+                    }
+                ],
+                "warnings": ["BMH_PCI_ADDRESS_UNAVAILABLE"],
+                "observed_at": "2026-11-21T01:02:03+00:00",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        lambda: stub,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/bmh-inventory/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert stub.calls == [(str(deployment.id), "metal3.host.inspect")]
+    record = response.data["bmh_inventory"]
+    assert record["matched"] == 1
+    assert record["host_count"] == 1
+    assert record["observed_at"] == "2026-11-21T01:02:03+00:00"
+    assert response.data["updated"][0]["pci_inventory_adopted"] is True
+    deployment.refresh_from_db()
+    assert deployment.preflight_result["bmh_inventory_sync"]["matched"] == 1
+    assert "network_readiness" in deployment.preflight_result
+    machine.refresh_from_db()
+    assert machine.hardware_inventory["bmh"]["bmh_name"] == "bmh-1"
+    assert machine.inventory_source == "bmh_inspect"
+    assert stub.closed is True
+
+
+@pytest.mark.django_db
+def test_bmh_inventory_sync_rejects_unsucceeded_and_missing_runs(monkeypatch):
+    tenant, project, machine, client = _workspace()
+    deployment = _deployment(tenant, project, machine.agent_node, client.handler._force_user)
+    blocked = _StubActionResultClient(
+        payload={
+            "available": True,
+            "status": "blocked",
+            "error_code": "METAL3_BMH_KUBECTL_UNAVAILABLE",
+            "output": {},
+        }
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        lambda: blocked,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/bmh-inventory/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 409
+    assert response.data["code"] == "bmh_inspect_not_succeeded"
+    machine.refresh_from_db()
+    assert "bmh" not in machine.hardware_inventory
+
+    missing = _StubActionResultClient(
+        payload={"available": False, "reason": "DEPLOYMENT_ACTION_NOT_RUN"}
+    )
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.build_cloud_control_client",
+        lambda: missing,
+    )
+    response = client.post(
+        f"/api/v1/cluster-deployments/{deployment.id}/bmh-inventory/sync/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert response.data["bmh_inventory"]["available"] is False
+    assert response.data["bmh_inventory"]["reason"] == "DEPLOYMENT_ACTION_NOT_RUN"
