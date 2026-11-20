@@ -34,6 +34,7 @@ class StackComponent:
     controller: str
     install_order: int
     version: str | None
+    custom_resource: dict[str, str] | None = None
 
     def readiness_probe(self) -> dict[str, str]:
         return {
@@ -41,6 +42,17 @@ class StackComponent:
             "name": self.controller,
             "namespace": self.namespace,
         }
+
+    def custom_resource_probe(self) -> dict[str, str] | None:
+        """Return the workload CR whose Ready condition gates this component.
+
+        A ready operator Deployment does not prove the workload it manages is
+        serving. Ironic is reconciled by the Ironic Standalone Operator, so the
+        EPH must observe the ``Ironic`` resource itself before it registers
+        BareMetalHosts against that endpoint.
+        """
+
+        return dict(self.custom_resource) if self.custom_resource else None
 
 
 #: Canonical install order on the bootstrap cluster. cert-manager must lead;
@@ -53,17 +65,28 @@ class StackComponent:
 #: Ironic Standalone Operator. A mismatch here is not cosmetic: the adapter
 #: observes these names via ``kubectl get deployment`` and would wait forever
 #: on a Deployment that does not exist.
-_COMPONENTS: tuple[tuple[str, str, str], ...] = (
-    ("cert-manager", "cert-manager", "cert-manager"),
-    ("ipam", "capm3-system", "ipam-controller-manager"),
-    ("capi-core", "capi-system", "capi-controller-manager"),
-    ("baremetal-operator", "baremetal-operator-system", "baremetal-operator-controller-manager"),
+_COMPONENTS: tuple[tuple[str, str, str, dict[str, str] | None], ...] = (
+    ("cert-manager", "cert-manager", "cert-manager", None),
+    ("ipam", "capm3-system", "ipam-controller-manager", None),
+    ("capi-core", "capi-system", "capi-controller-manager", None),
+    (
+        "baremetal-operator",
+        "baremetal-operator-system",
+        "baremetal-operator-controller-manager",
+        None,
+    ),
     (
         "ironic",
         "ironic-standalone-operator-system",
         "ironic-standalone-operator-controller-manager",
+        {
+            "api_version": "ironic.metal3.io/v1alpha1",
+            "kind": "Ironic",
+            "name": "ironic",
+            "namespace": "baremetal-operator-system",
+        },
     ),
-    ("capm3", "capm3-system", "capm3-controller-manager"),
+    ("capm3", "capm3-system", "capm3-controller-manager", None),
 )
 
 
@@ -101,7 +124,7 @@ def plan_control_stack(spec: Any) -> list[StackComponent]:
             raise Metal3SkillError("CONTROL_STACK_UNKNOWN_COMPONENT")
 
     planned: list[StackComponent] = []
-    for index, (name, namespace, controller) in enumerate(_COMPONENTS):
+    for index, (name, namespace, controller, custom_resource) in enumerate(_COMPONENTS):
         _valid_name(namespace, "CONTROL_STACK_NAMESPACE_INVALID")
         version = versions.get(name)
         normalized_version = _valid_version(version) if version is not None else None
@@ -112,6 +135,7 @@ def plan_control_stack(spec: Any) -> list[StackComponent]:
                 controller=controller,
                 install_order=index + 1,
                 version=normalized_version,
+                custom_resource=dict(custom_resource) if custom_resource else None,
             )
         )
     return planned

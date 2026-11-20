@@ -29,6 +29,30 @@ def _make_runner(existing: set[str], applied: list[str], ready: bool = True):
         calls.append(arguments)
         if arguments[0] == "get":
             controller = arguments[2]
+            if controller == "ironic":
+                # The Ironic CR is observed after its operator Deployment; the
+                # mock keeps it consistent with the operator's readiness.
+                operator = "ironic-standalone-operator-controller-manager"
+                if operator in existing:
+                    conditions = (
+                        [{"type": "Ready", "status": "True"}]
+                        if ready
+                        else [{"type": "Ready", "status": "False"}]
+                    )
+                    return {
+                        "available": True,
+                        "returncode": 0,
+                        "stdout": json.dumps(
+                            {"status": {"conditions": conditions}}
+                        ),
+                        "stderr": "",
+                    }
+                return {
+                    "available": True,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "NotFound: ironic",
+                }
             if controller in existing:
                 return {
                     "available": True,
@@ -141,3 +165,84 @@ def test_apply_rejects_non_monotonic_order():
     runner, _ = _make_runner(set(), [])
     with pytest.raises(ControlStackAdapterError, match="CONTROL_STACK_PLAN_ORDER_INVALID"):
         apply_control_stack(bad_plan, runner)
+
+
+def _component(name: str) -> StackComponent:
+    return {component.name: component for component in plan_control_stack({})}[name]
+
+
+def test_ironic_requires_the_workload_cr_not_just_the_operator():
+    plan = plan_control_stack({})
+    probes = {
+        component.name: component.custom_resource_probe() for component in plan
+    }
+    assert probes["ironic"] == {
+        "api_version": "ironic.metal3.io/v1alpha1",
+        "kind": "Ironic",
+        "name": "ironic",
+        "namespace": "baremetal-operator-system",
+    }
+    assert all(
+        probe is None for name, probe in probes.items() if name != "ironic"
+    )
+
+
+def test_ready_operator_with_missing_ironic_cr_is_not_ready():
+    from apps.eph_agent.control_stack_adapter import observe_component
+
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        calls.append(arguments)
+        if arguments[2] == "ironic-standalone-operator-controller-manager":
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(_deployment(arguments[2], True)),
+                "stderr": "",
+            }
+        return {"available": True, "returncode": 1, "stdout": "", "stderr": "NotFound"}
+
+    observed = observe_component(_component("ironic"), runner)
+    assert observed["ready"] is False
+    assert observed["custom_resource"]["reason"] == "NOT_FOUND"
+    assert observed["custom_resource"]["ready"] is False
+    # The Deployment itself was healthy; only the workload was missing.
+    assert observed["available_replicas"] == 1
+
+
+def test_ironic_cr_condition_false_blocks_readiness():
+    from apps.eph_agent.control_stack_adapter import observe_component
+
+    def runner(arguments: list[str], **_kwargs: object) -> dict[str, object]:
+        if arguments[2] == "ironic":
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "status": {
+                            "conditions": [
+                                {
+                                    "type": "Ready",
+                                    "status": "False",
+                                    "reason": "DependencyNotReady",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                "stderr": "",
+            }
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": json.dumps(_deployment(arguments[2], True)),
+            "stderr": "",
+        }
+
+    observed = observe_component(_component("ironic"), runner)
+    assert observed["ready"] is False
+    assert observed["custom_resource"]["ready"] is False
+    assert observed["custom_resource"]["reason"] == "CONDITION_NOT_READY"
+    assert observed["custom_resource"]["conditions"][0]["reason"] == "DependencyNotReady"

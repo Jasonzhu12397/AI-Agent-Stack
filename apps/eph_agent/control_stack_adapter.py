@@ -75,6 +75,69 @@ def _deployment_state(document: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ready_conditions(document: dict[str, Any]) -> list[dict[str, Any]]:
+    status = document.get("status")
+    if not isinstance(status, dict):
+        return []
+    conditions = status.get("conditions")
+    if not isinstance(conditions, list):
+        return []
+    return [item for item in conditions if isinstance(item, dict)]
+
+
+def _observe_custom_resource(
+    probe: dict[str, str],
+    runner: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    """Observe the workload CR behind an operator Deployment."""
+
+    observation = {
+        "api_version": probe["api_version"],
+        "kind": probe["kind"],
+        "name": probe["name"],
+        "namespace": probe["namespace"],
+        "ready": False,
+        "reason": "NOT_FOUND",
+    }
+    result = runner(
+        [
+            "get",
+            probe["kind"].lower(),
+            probe["name"],
+            "--namespace",
+            probe["namespace"],
+            "-o",
+            "json",
+        ],
+        timeout=30,
+        max_output_bytes=MAX_MANIFEST_BYTES,
+    )
+    if not isinstance(result, dict):
+        return {**observation, "reason": "API_UNAVAILABLE"}
+    if result.get("returncode") != 0:
+        error = str(result.get("stderr", "")).lower()
+        if "notfound" in error or "not found" in error:
+            return observation
+        return {**observation, "reason": "API_UNAVAILABLE"}
+    try:
+        document = yaml.safe_load(result.get("stdout", ""))
+    except (TypeError, ValueError, yaml.YAMLError):
+        return {**observation, "reason": "DOCUMENT_INVALID"}
+    if not isinstance(document, dict):
+        return {**observation, "reason": "DOCUMENT_INVALID"}
+    conditions = _ready_conditions(document)
+    ready = any(
+        str(condition.get("type")) == "Ready" and str(condition.get("status")) == "True"
+        for condition in conditions
+    )
+    return {
+        **observation,
+        "ready": ready,
+        "reason": None if ready else "CONDITION_NOT_READY",
+        "conditions": conditions[:8],
+    }
+
+
 def observe_component(
     component: StackComponent,
     runner: Callable[..., dict[str, Any]],
@@ -101,6 +164,13 @@ def observe_component(
     if not isinstance(document, dict):
         raise ControlStackAdapterError("CONTROL_STACK_DEPLOYMENT_JSON_INVALID")
     state = _deployment_state(document)
+    custom_resource = None
+    probe = component.custom_resource_probe()
+    if probe is not None:
+        # A ready operator must also have reconciled its workload, otherwise the
+        # service the rest of the bootstrap depends on is not actually up.
+        custom_resource = _observe_custom_resource(probe, runner)
+        state["ready"] = state["ready"] and custom_resource["ready"]
     return {
         "name": component.name,
         "controller": component.controller,
@@ -108,6 +178,7 @@ def observe_component(
         "install_order": component.install_order,
         "version": component.version,
         **state,
+        "custom_resource": custom_resource,
         "side_effects": False,
     }
 
