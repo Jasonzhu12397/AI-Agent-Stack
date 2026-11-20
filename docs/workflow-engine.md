@@ -43,7 +43,14 @@ The model UUID is illustrative. A real enabled chat model belonging to the same 
 | `tool` | `tool_id`, optional `arguments` or `arguments_from` | Executes an installed project connector tool through the trusted ToolRouter |
 | `end` | optional `source_node` | Returns the referenced node output, or the accumulated state |
 
-Edges from a condition node must declare boolean `when` values and include both `true` and `false` branches. The first implementation treats an incoming active predecessor as sufficient to activate a downstream node; it does not yet provide a configurable AND-join.
+All nodes except `start` accept the `join` field documented below.
+
+Edges from a condition node must declare boolean `when` values and include both `true` and `false` branches.
+
+Any node except `start` accepts a `join` strategy in its config:
+
+- `any` (default): the node runs as soon as one active predecessor is satisfied.
+- `all`: the node runs only after every incoming branch has completed, giving a deterministic AND-join. Conditional edges cannot feed an `all` join, because a condition only activates one branch and the join would never be satisfiable.
 
 ## Publish validation
 

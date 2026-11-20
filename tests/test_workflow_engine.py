@@ -21,6 +21,7 @@ from core.models import (
 )
 from core.workflow_engine import (
     WorkflowValidationError,
+    _active_incoming,
     _execute_node,
     _workflow_output_budget,
     execute_workflow_run,
@@ -1153,3 +1154,172 @@ def test_workflow_gather_and_normalized_condition_validation():
         None,
     )
     assert output == {"matched": True}
+
+
+def test_workflow_validator_accepts_join_all_on_a_parallel_merge():
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {"id": "left", "type": "llm", "config": {
+                "model_config_id": str(uuid4()),
+                "prompt_template": "left",
+            }},
+            {"id": "right", "type": "llm", "config": {
+                "model_config_id": str(uuid4()),
+                "prompt_template": "right",
+            }},
+            {"id": "merge", "type": "end", "config": {
+                "source_node": "merge_source", "join": "all",
+            }},
+            {"id": "merge_source", "type": "llm", "config": {
+                "model_config_id": str(uuid4()),
+                "prompt_template": "merge",
+                "join": "all",
+            }},
+        ],
+        "edges": [
+            {"source": "start", "target": "left"},
+            {"source": "start", "target": "right"},
+            {"source": "left", "target": "merge_source"},
+            {"source": "right", "target": "merge_source"},
+            {"source": "merge_source", "target": "merge"},
+        ],
+    }
+    definition["nodes"][3]["config"].pop("join")
+    graph = validate_workflow_definition(definition)
+    assert graph["nodes"]["merge_source"]["config"]["join"] == "all"
+
+
+def test_workflow_validator_rejects_unknown_and_start_join_values():
+    definition = linear_workflow(uuid4())
+    definition["nodes"][1]["config"]["join"] = "quorum"
+    with pytest.raises(WorkflowValidationError, match="join must be any or all"):
+        validate_workflow_definition(definition)
+
+    definition = linear_workflow(uuid4())
+    definition["nodes"][0]["config"]["join"] = "all"
+    with pytest.raises(WorkflowValidationError, match="Start node cannot"):
+        validate_workflow_definition(definition)
+
+
+def test_workflow_validator_rejects_conditional_edges_into_an_all_join():
+    model_id = uuid4()
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {"id": "left", "type": "llm", "config": {
+                "model_config_id": str(model_id),
+                "prompt_template": "left",
+            }},
+            {"id": "branch", "type": "condition", "config": {"equals": "yes"}},
+            {"id": "fallback", "type": "llm", "config": {
+                "model_config_id": str(model_id),
+                "prompt_template": "fallback",
+            }},
+            {"id": "merge", "type": "llm", "config": {
+                "model_config_id": str(model_id),
+                "prompt_template": "merge",
+                "join": "all",
+            }},
+            {"id": "end", "type": "end", "config": {"source_node": "merge"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "left"},
+            {"source": "start", "target": "branch"},
+            {"source": "left", "target": "merge"},
+            {"source": "branch", "target": "merge", "when": True},
+            {"source": "branch", "target": "fallback", "when": False},
+            {"source": "merge", "target": "end"},
+            {"source": "fallback", "target": "end"},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="join=all cannot consume"):
+        validate_workflow_definition(definition)
+
+
+def test_active_incoming_honours_any_and_all_join_strategies():
+    nodes = {
+        "start": {"type": "start"},
+        "left": {"type": "llm"},
+        "right": {"type": "llm"},
+    }
+    edges = [{"source": "left", "target": "merge"}, {"source": "right", "target": "merge"}]
+    state = {"start": {"input": "go"}}
+    any_node = {"id": "merge", "type": "end", "config": {"join": "any"}}
+    all_node = {"id": "merge", "type": "end", "config": {"join": "all"}}
+
+    assert [edge["source"] for edge in _active_incoming(
+        any_node, edges, {"start", "left"}, state, nodes
+    )] == ["left"]
+    assert _active_incoming(all_node, edges, {"start", "left"}, state, nodes) == []
+    assert [edge["source"] for edge in _active_incoming(
+        all_node, edges, {"start", "left", "right"}, state, nodes
+    )] == ["left", "right"]
+
+
+def test_active_incoming_ignores_condition_branches_that_did_not_match():
+    nodes = {"branch": {"type": "condition"}, "left": {"type": "llm"}, "right": {"type": "llm"}}
+    edges = [{"source": "branch", "target": "merge", "when": True}]
+    state = {"branch": {"matched": False}}
+    node = {"id": "merge", "type": "end", "config": {"join": "any"}}
+    assert _active_incoming(node, edges, {"branch"}, state, nodes) == []
+    state["branch"]["matched"] = True
+    assert len(_active_incoming(node, edges, {"branch"}, state, nodes)) == 1
+
+
+@pytest.mark.django_db
+def test_workflow_all_join_waits_for_both_parallel_branches(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {"id": "left", "type": "llm", "config": {
+                "model_config_id": str(model.id),
+                "prompt_template": "Left: {{input}}",
+            }},
+            {"id": "right", "type": "llm", "config": {
+                "model_config_id": str(model.id),
+                "prompt_template": "Right: {{input}}",
+            }},
+            {"id": "merge", "type": "llm", "config": {
+                "model_config_id": str(model.id),
+                "prompt_template": "Merge",
+                "join": "all",
+            }},
+            {"id": "end", "type": "end", "config": {"source_node": "merge"}},
+        ],
+        "edges": [
+            {"source": "start", "target": "left"},
+            {"source": "start", "target": "right"},
+            {"source": "left", "target": "merge"},
+            {"source": "right", "target": "merge"},
+            {"source": "merge", "target": "end"},
+        ],
+    }
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="All join workflow",
+        slug="all-join-workflow",
+        draft_definition=definition,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    assert client.post(
+        f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json"
+    ).status_code == 201
+    run_response = client.post(
+        f"/api/v1/workflows/{workflow.id}/runs/",
+        {"input": {"question": "fan in"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-all-join-001",
+    )
+    assert run_response.status_code == 202
+    assert process_once("workflow-all-join-worker") is True
+
+    run = WorkflowRun.objects.get(pk=run_response.data["id"])
+    assert run.task.status == Task.Status.SUCCEEDED
+    merge_step = WorkflowStepRun.objects.get(workflow_run=run, node_id="merge")
+    assert merge_step.status == WorkflowStepRun.Status.SUCCEEDED
+    assert merge_step.input_data["active_predecessors"] == ["left", "right"]

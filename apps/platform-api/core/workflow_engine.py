@@ -108,6 +108,13 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(f"Unsupported workflow node type: {node_type}")
         if not isinstance(config, dict):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
+        join = config.get("join", "any")
+        if join not in {"any", "all"}:
+            raise WorkflowValidationError(
+                f"Node {node_id} join must be any or all."
+            )
+        if node_type == "start" and join != "any":
+            raise WorkflowValidationError("Start node cannot declare a join strategy.")
 
         def contains_secret(value):
             if isinstance(value, dict):
@@ -279,6 +286,13 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError("Only condition nodes can have conditional edges.")
         incoming[target].append(edge)
         outgoing[source].append(edge)
+    for target, target_edges in incoming.items():
+        if node_map[target]["config"].get("join") != "all":
+            continue
+        if any("when" in edge for edge in target_edges):
+            raise WorkflowValidationError(
+                f"Node {target} join=all cannot consume conditional edges."
+            )
     start_id = starts[0]
     if incoming[start_id]:
         raise WorkflowValidationError("Start node cannot have incoming edges.")
@@ -501,6 +515,31 @@ def validate_model_references(graph, tenant, project):
             raise WorkflowValidationError("Workflow model provider is outside the tenant.")
         if "chat" not in model.capabilities:
             raise WorkflowValidationError("Workflow LLM node model must support chat.")
+
+
+def _active_incoming(node, incoming_edges, active_nodes, state, nodes):
+    """Return the predecessor edges that satisfy the node's join strategy.
+
+    ``any`` activates a node as soon as one predecessor produced output, which
+    is the historical behavior. ``all`` requires every incoming branch to have
+    completed before the node runs, giving a deterministic AND-join.
+    """
+
+    active = []
+    for edge in incoming_edges:
+        source_id = edge["source"]
+        if source_id not in active_nodes:
+            continue
+        source_node = nodes.get(source_id)
+        if source_node is not None and source_node.get("type") == "condition":
+            matched = bool((state.get(source_id) or {}).get("matched"))
+            if edge.get("when") != matched:
+                continue
+        active.append(edge)
+    if node["config"].get("join", "any") == "all":
+        if len(active) != len(incoming_edges):
+            return []
+    return active
 
 
 def _step_input(node, state):
@@ -1079,17 +1118,9 @@ def execute_workflow_run(task, worker_id, renew_lease):
         if node_id == graph["start_id"]:
             active_incoming = []
         else:
-            active_incoming = []
-            for edge in graph["incoming"][node_id]:
-                source_id = edge["source"]
-                if source_id not in active_nodes:
-                    continue
-                source_node = graph["nodes"][source_id]
-                if source_node["type"] == "condition":
-                    matched = bool(state[source_id].get("matched"))
-                    if edge["when"] != matched:
-                        continue
-                active_incoming.append(edge)
+            active_incoming = _active_incoming(
+                node, graph["incoming"][node_id], active_nodes, state, graph["nodes"]
+            )
             if not active_incoming:
                 WorkflowStepRun.objects.update_or_create(
                     workflow_run=workflow_run,
