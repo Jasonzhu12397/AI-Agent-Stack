@@ -320,6 +320,7 @@ def build_payload(
         "manifests",
         "storage_addon",
         "infra_network_profile",
+        "ironic",
     ):
         value = spec.get(field_name)
         if isinstance(value, dict):

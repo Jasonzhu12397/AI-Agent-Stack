@@ -748,3 +748,102 @@ def test_target_agent_rejects_unpinned_ntp_ip_during_worker_handoff(monkeypatch)
     assert result["status"] == "blocked"
     assert result["error_code"] == "IRONIC_INTERNAL_NTP_IP_CONFIGURATION_MISMATCH"
     assert result["side_effects"] is False
+
+
+def _fake_preflight_read_only(node_list):
+    def fake_read_only(command, timeout=20):
+        if command[:3] == ["kubectl", "get", "nodes"]:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps(node_list),
+                "stderr": "",
+            }
+        return {"available": True, "returncode": 0, "stdout": "{}", "stderr": ""}
+
+    return fake_read_only
+
+
+def _ironic_preflight_spec():
+    return {
+        "api_credentials_name": "ironic-auth",
+        "version": "37.0",
+        "images": {
+            "ironic": "registry.local/ironic:37.0",
+            "deploy_ramdisk_downloader": "registry.local/ipa-downloader:latest",
+            "keepalived": "registry.local/keepalived:2.2.4",
+        },
+        "networking": {"interface": "eno2", "ip_address": "10.130.60.84"},
+    }
+
+
+def test_eph_preflight_warns_when_the_ironic_cr_would_be_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("EPH_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
+    (tmp_path / "source.kubeconfig").write_text("test", encoding="utf-8")
+    node_list = {
+        "items": [{
+            "metadata": {"name": "eph-single-node"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+    monkeypatch.setattr(
+        eph_main,
+        "_run_read_only",
+        _fake_preflight_read_only(node_list),
+    )
+
+    result = execute_eph({"action": "eph.preflight"})
+
+    # Preflight stays successful; the missing CR is a warning that surfaces
+    # long before the expensive control-stack phase.
+    assert result["status"] == "succeeded"
+    assert result["output"]["warnings"] == ["IRONIC_WORKLOAD_CR_REQUIRED"]
+
+
+def test_eph_preflight_reports_an_incomplete_ironic_spec(monkeypatch, tmp_path):
+    monkeypatch.setenv("EPH_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
+    (tmp_path / "source.kubeconfig").write_text("test", encoding="utf-8")
+    node_list = {
+        "items": [{
+            "metadata": {"name": "eph-single-node"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+    monkeypatch.setattr(
+        eph_main,
+        "_run_read_only",
+        _fake_preflight_read_only(node_list),
+    )
+    incomplete = _ironic_preflight_spec()
+    del incomplete["images"]["keepalived"]
+
+    result = execute_eph({"action": "eph.preflight", "payload": {"ironic": incomplete}})
+
+    assert result["status"] == "succeeded"
+    assert result["output"]["warnings"] == ["IRONIC_IMAGE_REQUIRED"]
+
+
+def test_eph_preflight_accepts_a_complete_ironic_spec(monkeypatch, tmp_path):
+    monkeypatch.setenv("EPH_KUBECONFIG", str(tmp_path / "source.kubeconfig"))
+    (tmp_path / "source.kubeconfig").write_text("test", encoding="utf-8")
+    node_list = {
+        "items": [{
+            "metadata": {"name": "eph-single-node"},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }]
+    }
+    monkeypatch.setattr(
+        eph_main,
+        "_run_read_only",
+        _fake_preflight_read_only(node_list),
+    )
+
+    result = execute_eph(
+        {
+            "action": "eph.preflight",
+            "payload": {"ironic": _ironic_preflight_spec()},
+        }
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["output"]["warnings"] == []

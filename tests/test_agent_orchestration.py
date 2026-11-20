@@ -201,3 +201,37 @@ def test_network_apply_payload_carries_plugin_and_manifest_spec():
     assert payload["plugins"] == spec["plugins"]
     assert payload["manifests"] == spec["manifests"]
     assert payload["target_namespace"] == "metal3"
+
+
+def test_control_stack_payload_carries_the_ironic_workload_config():
+    ironic = {
+        "api_credentials_name": "ironic-auth",
+        "version": "37.0",
+        "images": {
+            "ironic": "registry.local/ironic:37.0",
+            "deploy_ramdisk_downloader": "registry.local/ipa-downloader:latest",
+            "keepalived": "registry.local/keepalived:2.2.4",
+        },
+        "networking": {"interface": "eno2", "ip_address": "10.130.60.84"},
+    }
+    spec = {
+        "cluster_name": "edge-01",
+        "ironic": ironic,
+        "manifests": {"ironic": [{"apiVersion": "v1", "kind": "List"}]},
+    }
+    payload = build_payload(
+        uuid4(),
+        "eph.controlstack.apply",
+        spec,
+    )
+    assert payload["ironic"] == ironic
+    assert payload["manifests"] == {"ironic": [{"apiVersion": "v1", "kind": "List"}]}
+
+
+def test_control_stack_payload_omits_a_non_mapping_ironic_block():
+    payload = build_payload(
+        uuid4(),
+        "eph.controlstack.apply",
+        {"cluster_name": "edge-01", "ironic": "registry.local/ironic:37.0"},
+    )
+    assert "ironic" not in payload

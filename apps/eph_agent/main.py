@@ -197,6 +197,14 @@ def execute(
             "kubectl": _run_read_only(["kubectl", "version", "--client"]),
             "observed_at": datetime.now(UTC).isoformat(),
         }
+        ironic_warnings: list[str] = []
+        ironic_config = payload.get("ironic") if isinstance(payload, dict) else None
+        try:
+            if render_ironic_cr({"ironic": ironic_config}) is None:
+                ironic_warnings.append("IRONIC_WORKLOAD_CR_REQUIRED")
+        except IronicRenderError as exc:
+            ironic_warnings.append(exc.code)
+        evidence["warnings"] = ironic_warnings
         ready = (
             evidence["source_kubeconfig_present"]
             and evidence["node_observation_available"]

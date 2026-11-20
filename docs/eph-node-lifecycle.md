@@ -88,6 +88,15 @@ each absent required key produces its own error code
 `IRONIC_IP_ADDRESS_REQUIRED`) and the action returns `status=failed` without
 touching the cluster.
 
+The platform validates the same contract at deployment creation: an invalid
+`cluster_spec.ironic` returns HTTP 400 with the renderer's error code
+(`ironic: IRONIC_IMAGE_REQUIRED`), before any fleet dispatch. The dispatch
+payload always re-injects `ironic` from the deployment spec, because a cached
+`plan_result.cloud_control.spec` may predate it. The orchestration contract
+forwards `ironic` as a mapping in the `eph.controlstack.apply` payload, and
+`eph.preflight` reports `IRONIC_WORKLOAD_CR_REQUIRED` or the renderer code in
+`output.warnings` so the gap surfaces before the node is bootstrapped.
+
 The CR is applied separately from the operator manifest, only after
 `kubectl wait --for condition=established crd/ironics.ironic.metal3.io`: a CR
 cannot share a single server-side apply with the CRD that introduces it. If the

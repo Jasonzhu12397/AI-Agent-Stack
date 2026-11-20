@@ -30,6 +30,7 @@ from apps.agent_contracts.sriov_device_plugin import (
 )
 from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
+from apps.eph_agent.ironic_cr import IronicRenderError, render_ironic_cr
 from core.cloud_control_bridge import (
     CloudControlBridgeError,
     CloudControlNotConfigured,
@@ -428,6 +429,12 @@ def _validated_spec(request, *, infra_profile=None):
                         spec["storage_addon"] = storage_addon
         except InfraNetworkError as exc:
             return None, f"infra_network_profile: {exc}"
+    ironic_config = spec.get("ironic")
+    if ironic_config is not None:
+        try:
+            render_ironic_cr({"ironic": ironic_config})
+        except IronicRenderError as exc:
+            return None, f"ironic: {exc.code}"
     storage_addon = spec.get("storage_addon")
     if storage_addon is not None:
         worker_contract = spec.get("worker_network_contract")
@@ -631,13 +638,18 @@ class ClusterDeploymentListCreateView(APIView):
             deployment.plan_result = plan_result
             deployment.save(update_fields=["plan_result", "updated_at"])
 
-        if isinstance(control_spec, dict) and spec.get("network_evidence"):
+        if isinstance(control_spec, dict):
             # The control plane re-verifies these bindings before the Target
-            # handoff, so the dispatch payload must carry the exact evidence.
-            control_spec = {
-                **control_spec,
-                "network_evidence": spec["network_evidence"],
+            # handoff, and the EPH renders the workload CR from ``ironic``.
+            # Both are injected explicitly because a cached plan result may
+            # predate either field.
+            forwarded = {
+                key: spec[key]
+                for key in ("network_evidence", "ironic")
+                if spec.get(key)
             }
+            if forwarded:
+                control_spec = {**control_spec, **forwarded}
         try:
             result = dispatch_deployment(
                 deployment_id=deployment.id,

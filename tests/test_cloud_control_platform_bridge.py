@@ -679,3 +679,85 @@ def test_network_evidence_verify_endpoint_reports_current(bridge_workspace, monk
     assert verified.status_code == 200
     assert verified.data["status"] == "current"
     assert verified.data["checked_machines"] == 5
+
+
+def _ironic_config():
+    return {
+        "api_credentials_name": "ironic-auth",
+        "version": "37.0",
+        "images": {
+            "ironic": "registry.local/ironic:37.0",
+            "deploy_ramdisk_downloader": "registry.local/ipa-downloader:latest",
+            "keepalived": "registry.local/keepalived:2.2.4",
+        },
+        "networking": {
+            "interface": "eno2",
+            "ip_address": "10.130.60.84",
+        },
+    }
+
+
+@pytest.mark.django_db
+def test_invalid_ironic_config_is_rejected_before_dispatch(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    calls = []
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    spec = _cluster_spec()
+    spec["ironic"] = _ironic_config()
+    del spec["ironic"]["images"]["keepalived"]
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/cluster-deployments/",
+        {"eph_node_id": str(node.id), "cluster_spec": spec},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="ironic-invalid",
+    )
+
+    assert response.status_code == 400
+    assert "IRONIC_IMAGE_REQUIRED" in str(response.data)
+    assert calls == []
+    assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
+
+
+@pytest.mark.django_db
+def test_dispatch_carries_the_ironic_workload_config(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    calls = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        return {"created": True, "phase": "not_started", "sequence": 0}
+
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        fake_dispatch,
+    )
+    spec = _cluster_spec()
+    spec["ironic"] = _ironic_config()
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/cluster-deployments/",
+        {"eph_node_id": str(node.id), "cluster_spec": spec},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="ironic-carry",
+    )
+
+    assert response.status_code == 202
+    assert calls[0]["spec"]["ironic"] == _ironic_config()
+    deployment = ClusterDeployment.objects.get(id=response.data["id"])
+    assert deployment.spec["ironic"] == _ironic_config()
+    # The cached plan result may predate the field; the dispatch payload must
+    # still carry it on a repeated submission.
+    repeated = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/cluster-deployments/",
+        {"eph_node_id": str(node.id), "cluster_spec": spec},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="ironic-carry",
+    )
+    assert repeated.status_code == 200
+    assert calls[-1]["spec"]["ironic"] == _ironic_config()
