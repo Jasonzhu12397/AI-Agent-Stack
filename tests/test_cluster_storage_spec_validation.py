@@ -1,7 +1,6 @@
 # ruff: noqa: I001
 from types import SimpleNamespace
 
-import pytest
 from core.cluster_deployment_views import _validated_spec
 
 
