@@ -271,6 +271,9 @@ jobs:
         run: |
           kubectl get crd || true
           kubectl get pods -A || true
+          kubectl -n capm3-system get deploy,po -o wide || true
+          kubectl -n capm3-system logs deploy/ipam-controller-manager --tail=200 || true
+          kubectl -n capm3-system describe pod -l app.kubernetes.io/name=ipam || true
       - name: Delete kind cluster
         if: always()
         run: kind delete cluster --name metal3-crds || true
