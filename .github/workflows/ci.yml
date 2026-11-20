@@ -262,7 +262,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build ${{ matrix.image }}
-        run: docker build -f ${{ matrix.dockerfile }} -t ai-agent-stack/${{ matrix.image }}:ci .
+        run: |
+          kubectl_version=$(jq -r '.binaries.kubectl.version' deploy/offline/images.json)
+          kubectl_sha256=$(jq -r '.binaries.kubectl.sha256' deploy/offline/images.json)
+          clusterctl_version=$(jq -r '.binaries.clusterctl.version' deploy/offline/images.json)
+          clusterctl_sha256=$(jq -r '.binaries.clusterctl.sha256' deploy/offline/images.json)
+          docker build -f ${{ matrix.dockerfile }} \
+            --build-arg "KUBECTL_VERSION=${kubectl_version}" \
+            --build-arg "KUBECTL_SHA256_AMD64=${kubectl_sha256}" \
+            --build-arg "CLUSTERCTL_VERSION=${clusterctl_version}" \
+            --build-arg "CLUSTERCTL_SHA256_AMD64=${clusterctl_sha256}" \
+            -t ai-agent-stack/${{ matrix.image }}:ci .
 
   compose-e2e:
     name: Compose full stack smoke

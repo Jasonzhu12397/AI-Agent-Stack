@@ -51,11 +51,13 @@
   "binaries": {
     "clusterctl": {
       "version": "v1.14.0",
-      "url": "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.0/clusterctl-linux-amd64"
+      "url": "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.0/clusterctl-linux-amd64",
+      "sha256": "919ec7acb93ebdec9cde46727a1ddb8810ce55dd9ceef2d416ab65b6783bb58a"
     },
     "kubectl": {
       "version": "v1.37.2",
-      "url": "https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl"
+      "url": "https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl",
+      "sha256": "c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4"
     }
   },
   "python_requirements": [
