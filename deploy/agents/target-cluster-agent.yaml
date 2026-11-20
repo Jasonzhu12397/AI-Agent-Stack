@@ -225,6 +225,38 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: software-workspace-init
+          image: REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import os, shutil
+              root = "/workspace/repo"
+              os.makedirs(root, exist_ok=True)
+              if not os.path.isdir(os.path.join(root, "apps")):
+                  shutil.copytree("/workspace/apps", os.path.join(root, "apps"))
+                  shutil.copytree("/workspace/packages", os.path.join(root, "packages"))
+                  shutil.copy("/workspace/pyproject.toml", os.path.join(root, "pyproject.toml"))
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: software-workspace
+              mountPath: /workspace/repo
+            - name: agent-tmp
+              mountPath: /tmp
       containers:
         - name: target-agent
           image: REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION
@@ -289,6 +321,8 @@ spec:
                 secretKeyRef:
                   name: target-agent-credentials
                   key: required-controller-deployments
+            - name: AGENT_SOFTWARE_WORKSPACE
+              value: /workspace/repo
             - name: TARGET_CAPI_NAMESPACE
               value: REPLACE_WITH_TARGET_CAPI_NAMESPACE
             - name: CAPI_PIVOT_SOURCE_KUBECONFIG
@@ -328,6 +362,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            - name: software-workspace
+              mountPath: /workspace/repo
             - name: agent-tmp
               mountPath: /tmp
             - name: source-cluster-operator
@@ -351,7 +387,72 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
             failureThreshold: 3
+        - name: dev-agent-worker
+          image: REPLACE_WITH_REGISTRY/ai-agent-target-agent:VERSION
+          imagePullPolicy: IfNotPresent
+          command:
+            ["python", "-m", "apps.dev_agent.worker", "--role", "target", "--root", "/workspace/repo"]
+          env:
+            - name: APP_ENV
+              value: production
+            - name: AGENT_ROLE
+              value: target
+            - name: AGENT_CONTROL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: control-url
+            - name: AGENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: agent-id
+            - name: AGENT_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: installation-id
+            - name: AGENT_CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: target-agent-credentials
+                  key: cluster-id
+            - name: AGENT_INSTANCE_ID
+              value: dev-agent-worker
+            - name: AGENT_POLL_SECONDS
+              value: "5"
+            - name: AGENT_SOFTWARE_WORKSPACE
+              value: /workspace/repo
+            - name: AGENT_TLS_CA_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/ca.crt
+            - name: AGENT_TLS_CERT_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.crt
+            - name: AGENT_TLS_KEY_FILE
+              value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: software-workspace
+              mountPath: /workspace/repo
+            - name: control-plane-tls
+              mountPath: /var/run/secrets/ai-agent/control-plane-tls
+              readOnly: true
+            - name: agent-tmp
+              mountPath: /tmp
       volumes:
+        - name: software-workspace
+          persistentVolumeClaim:
+            claimName: target-agent-software-workspace
         - name: agent-tmp
           emptyDir:
             sizeLimit: 16Mi
@@ -384,3 +485,18 @@ spec:
                   items:
                     - key: ca.crt
                       path: ca.crt
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: target-agent-software-workspace
+  namespace: ai-agent-system
+  labels:
+    app.kubernetes.io/name: target-cluster-agent
+    app.kubernetes.io/part-of: ai-agent-studio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: REPLACE_WITH_SOFTWARE_WORKSPACE_SIZE

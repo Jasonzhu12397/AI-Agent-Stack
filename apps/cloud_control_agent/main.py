@@ -213,6 +213,36 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
         )
     """)
     connection.execute("""
+        CREATE TABLE IF NOT EXISTS agent_control_approvals (
+            approval_id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES agent_control_projects(project_id)
+                ON DELETE CASCADE,
+            work_id UUID NOT NULL REFERENCES agent_control_work_items(work_id)
+                ON DELETE CASCADE,
+            action TEXT NOT NULL CHECK (char_length(action) BETWEEN 1 AND 128),
+            payload_digest TEXT NOT NULL CHECK (
+                payload_digest ~ '^[a-f0-9]{64}$'
+            ),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                status IN ('pending', 'approved', 'rejected', 'used', 'expired')
+            ),
+            requested_by TEXT NOT NULL CHECK (
+                char_length(requested_by) BETWEEN 1 AND 128
+            ),
+            approved_by TEXT,
+            reason TEXT,
+            expires_at TIMESTAMPTZ NOT NULL,
+            approved_at TIMESTAMPTZ,
+            used_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS agent_control_approvals_project_idx
+        ON agent_control_approvals (project_id, status, created_at DESC)
+    """)
+    connection.execute("""
         CREATE INDEX IF NOT EXISTS agent_control_work_claim_idx
         ON agent_control_work_items (status, priority DESC, created_at)
     """)

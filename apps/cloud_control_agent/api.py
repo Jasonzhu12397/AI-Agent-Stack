@@ -36,6 +36,7 @@ from .deployment_controller import (
 from .workspace import (
     WORK_KINDS,
     WorkspaceError,
+    normalize_approval,
     normalize_name,
     normalize_plugin,
     normalize_project,
@@ -54,6 +55,7 @@ LEASE_SECONDS = 90
 
 class ControlApiError(ValueError):
     pass
+
 
 #: Action allowlists are derived from the shared contract so the control plane
 #: and the Agents cannot drift. ``packages/agent_contracts`` is copied into the
@@ -169,7 +171,6 @@ def _validate_checkpoint_actor_transition(
         raise ControlApiError("TARGET_CHECKPOINT_TRANSITION_INVALID")
 
 
-
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
 
@@ -254,8 +255,7 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
         or not isinstance(output.get("source_cleanup_resource_count"), int)
         or isinstance(output.get("source_cleanup_resource_count"), bool)
         or output.get("source_cleanup_resource_count") < 7
-        or output.get("target_source_cluster_uid_annotation")
-        != output.get("source_cluster_uid")
+        or output.get("target_source_cluster_uid_annotation") != output.get("source_cluster_uid")
         or not isinstance(output.get("source_cluster_uid"), str)
         or not output.get("source_cluster_uid")
         or not isinstance(output.get("target_cluster_uid"), str)
@@ -276,8 +276,7 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
             name = item.get("name")
             hardware_identity = item.get("hardware_identity")
             if not all(
-                isinstance(value, str) and value
-                for value in (namespace, name, hardware_identity)
+                isinstance(value, str) and value for value in (namespace, name, hardware_identity)
             ):
                 return None
             identity_key = (namespace, name, hardware_identity)
@@ -285,11 +284,13 @@ def _validated_eph_pivot_attestation(output: Any) -> dict[str, Any] | None:
                 return None
             identity_keys.add(identity_key)
             hardware_ids.add(hardware_identity)
-            normalized.append({
-                "namespace": namespace,
-                "name": name,
-                "hardware_identity": hardware_identity,
-            })
+            normalized.append(
+                {
+                    "namespace": namespace,
+                    "name": name,
+                    "hardware_identity": hardware_identity,
+                }
+            )
         normalized.sort(
             key=lambda item: (
                 item["namespace"],
@@ -487,6 +488,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         self._list_work(project_id)
                     elif collection == "tasks":
                         self._list_tasks(project_id)
+                    elif collection == "approvals":
+                        self._list_approvals(project_id)
                     else:
                         self._list_workflows(project_id)
                     return
@@ -495,6 +498,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     return
                 if self.path.startswith("/api/v1/control/workflow-runs/"):
                     self._get_workflow_run(self.path.rsplit("/", 1)[-1])
+                    return
+                if self.path.startswith("/api/v1/control/approvals/"):
+                    self._get_approval(self.path.rsplit("/", 1)[-1])
                     return
                 if self.path.startswith("/api/v1/control/tasks/"):
                     self._get_task(self.path.rsplit("/", 1)[-1])
@@ -540,6 +546,9 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/v1/agent-control/work/result":
                     self._work_result(document)
                     return
+                if self.path == "/api/v1/agent-control/approvals/redeem":
+                    self._redeem_approval(document)
+                    return
                 if self.path == "/api/v1/agent-control/heartbeats":
                     self._heartbeat(document)
                     return
@@ -574,8 +583,22 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         self._create_task(project_id, document)
                     elif collection == "workflows":
                         self._create_workflow(project_id, document)
+                    elif collection == "approvals":
+                        self._create_approval(project_id, document)
                     else:
                         raise ControlApiError("PROJECT_COLLECTION_REQUIRED")
+                    return
+                if self.path.startswith("/api/v1/control/approvals/"):
+                    parts = self.path.strip("/").split("/")
+                    if len(parts) != 6 or parts[3] != "approvals":
+                        raise ControlApiError("APPROVAL_ACTION_INVALID")
+                    approval_id = _parse_uuid(parts[4], "APPROVAL_ID")
+                    if parts[5] == "approve":
+                        self._approve_approval(approval_id, document)
+                    elif parts[5] == "reject":
+                        self._reject_approval(approval_id, document)
+                    else:
+                        raise ControlApiError("APPROVAL_ACTION_INVALID")
                     return
                 if self.path.startswith("/api/v1/control/workflows/"):
                     parts = self.path.strip("/").split("/")
@@ -619,8 +642,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             except psycopg.Error:
                 self._send(503, {"error": "PERSISTENCE_UNAVAILABLE"})
 
-
-
         def _require_platform_api(self) -> None:
             if _certificate_common_name(self.connection.getpeercert()) != "platform-api":
                 raise ControlApiError("PLATFORM_API_CERTIFICATE_REQUIRED")
@@ -662,8 +683,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         ON CONFLICT (project_id) DO NOTHING
                         """,
                         (
-                            project_id, installation_id, project["name"],
-                            project["description"], project["status"],
+                            project_id,
+                            installation_id,
+                            project["name"],
+                            project["description"],
+                            project["status"],
                             Jsonb(project["metadata"]),
                         ),
                     )
@@ -728,8 +752,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         ) VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            skill_id, project_id, skill["name"], skill["version"],
-                            skill["description"], Jsonb(skill["manifest"]),
+                            skill_id,
+                            project_id,
+                            skill["name"],
+                            skill["version"],
+                            skill["description"],
+                            Jsonb(skill["manifest"]),
                         ),
                     )
                 except psycopg.errors.UniqueViolation as exc:
@@ -786,9 +814,14 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            plugin_id, project_id, plugin["name"], plugin["version"],
-                            plugin["kind"], plugin["description"],
-                            plugin["config_ref"], Jsonb(plugin["manifest"]),
+                            plugin_id,
+                            project_id,
+                            plugin["name"],
+                            plugin["version"],
+                            plugin["kind"],
+                            plugin["description"],
+                            plugin["config_ref"],
+                            Jsonb(plugin["manifest"]),
                         ),
                     )
                 except psycopg.errors.UniqueViolation as exc:
@@ -845,8 +878,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         ON CONFLICT (idempotency_key) DO NOTHING
                         """,
                         (
-                            work_id, project_id, work["kind"], work["priority"],
-                            work["required_role"], Jsonb(work["payload"]),
+                            work_id,
+                            project_id,
+                            work["kind"],
+                            work["priority"],
+                            work["required_role"],
+                            Jsonb(work["payload"]),
                             work["idempotency_key"],
                         ),
                     )
@@ -983,20 +1020,23 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 self._send(200, {"work": None})
                 return
-            self._send(200, {
-                "work": {
-                    "work_id": row["work_id"],
-                    "project_id": row["project_id"],
-                    "project_name": row["project_name"],
-                    "kind": row["kind"],
-                    "priority": row["priority"],
-                    "payload": row["payload"],
+            self._send(
+                200,
+                {
+                    "work": {
+                        "work_id": row["work_id"],
+                        "project_id": row["project_id"],
+                        "project_name": row["project_name"],
+                        "kind": row["kind"],
+                        "priority": row["priority"],
+                        "payload": row["payload"],
+                    },
+                    "skills": skills,
+                    "plugins": plugins,
+                    "lease_token": lease_token,
+                    "lease_seconds": LEASE_SECONDS,
                 },
-                "skills": skills,
-                "plugins": plugins,
-                "lease_token": lease_token,
-                "lease_seconds": LEASE_SECONDS,
-            })
+            )
 
         def _renew_work_lease(self, document: dict[str, Any]) -> None:
             agent = self._authenticated_agent(document)
@@ -1046,6 +1086,162 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 raise ControlApiError("WORK_RESULT_NOT_ACCEPTED")
             self._send(200, {"accepted": True, **row})
+
+        def _create_approval(self, project_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            approval_id = _parse_uuid(document.get("approval_id"), "APPROVAL_ID")
+            normalized = normalize_approval(
+                work_id=document.get("work_id"),
+                action=document.get("action"),
+                payload_digest=document.get("payload_digest"),
+                requested_by=document.get("requested_by"),
+                ttl_seconds=document.get("ttl_seconds", 3600),
+            )
+            work_id = _parse_uuid(normalized["work_id"], "WORK_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                work = connection.execute(
+                    """
+                    SELECT 1 FROM agent_control_work_items
+                    WHERE work_id = %s AND project_id = %s
+                    """,
+                    (work_id, project_id),
+                ).fetchone()
+                if work is None:
+                    raise ControlApiError("WORK_NOT_FOUND")
+                row = connection.execute(
+                    """
+                    INSERT INTO agent_control_approvals (
+                        approval_id, project_id, work_id, action, payload_digest,
+                        requested_by, expires_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, NOW() + (%s * INTERVAL '1 second')
+                    )
+                    ON CONFLICT (approval_id) DO NOTHING
+                    RETURNING approval_id, project_id, work_id, action,
+                              payload_digest, status, requested_by, expires_at, created_at
+                    """,
+                    (
+                        approval_id,
+                        project_id,
+                        work_id,
+                        normalized["action"],
+                        normalized["payload_digest"],
+                        normalized["requested_by"],
+                        normalized["ttl_seconds"],
+                    ),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("APPROVAL_EXISTS")
+            self._send(200, row)
+
+        def _list_approvals(self, project_id: UUID) -> None:
+            self._require_platform_api()
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT approval_id, project_id, work_id, action, payload_digest,
+                           status, requested_by, approved_by, reason, expires_at,
+                           approved_at, used_at, created_at, updated_at
+                    FROM agent_control_approvals
+                    WHERE project_id = %s ORDER BY created_at DESC
+                    """,
+                    (project_id,),
+                ).fetchall()
+            self._send(200, {"approvals": rows})
+
+        def _get_approval(self, raw_id: str) -> None:
+            self._require_platform_api()
+            approval_id = _parse_uuid(raw_id, "APPROVAL_ID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    SELECT approval_id, project_id, work_id, action, payload_digest,
+                           status, requested_by, approved_by, reason, expires_at,
+                           approved_at, used_at, created_at, updated_at
+                    FROM agent_control_approvals WHERE approval_id = %s
+                    """,
+                    (approval_id,),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("APPROVAL_NOT_FOUND")
+            self._send(200, row)
+
+        def _approve_approval(self, approval_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            approved_by = document.get("approved_by")
+            if not isinstance(approved_by, str) or not 1 <= len(approved_by.strip()) <= 128:
+                raise ControlApiError("APPROVED_BY_REQUIRED")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    UPDATE agent_control_approvals
+                    SET status = 'approved', approved_by = %s, approved_at = NOW(),
+                        updated_at = NOW()
+                    WHERE approval_id = %s AND status = 'pending'
+                      AND expires_at > NOW()
+                    RETURNING approval_id, work_id, action, payload_digest, status,
+                              approved_by, expires_at
+                    """,
+                    (approved_by.strip(), approval_id),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("APPROVAL_NOT_PENDING")
+            self._send(200, row)
+
+        def _reject_approval(self, approval_id: UUID, document: dict[str, Any]) -> None:
+            self._require_platform_api()
+            rejected_by = document.get("approved_by")
+            if not isinstance(rejected_by, str) or not 1 <= len(rejected_by.strip()) <= 128:
+                raise ControlApiError("APPROVED_BY_REQUIRED")
+            reason = document.get("reason", "")
+            if not isinstance(reason, str) or len(reason) > 512:
+                raise ControlApiError("REASON_INVALID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    UPDATE agent_control_approvals
+                    SET status = 'rejected', approved_by = %s, reason = %s,
+                        approved_at = NOW(), updated_at = NOW()
+                    WHERE approval_id = %s AND status = 'pending'
+                    RETURNING approval_id, status, approved_by, reason
+                    """,
+                    (rejected_by.strip(), reason, approval_id),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("APPROVAL_NOT_PENDING")
+            self._send(200, row)
+
+        def _redeem_approval(self, document: dict[str, Any]) -> None:
+            agent = self._authenticated_agent(document)
+            approval_id = _parse_uuid(document.get("approval_id"), "APPROVAL_ID")
+            work_id = _parse_uuid(document.get("work_id"), "WORK_ID")
+            action = document.get("action")
+            digest = document.get("payload_digest")
+            if not isinstance(action, str) or not action:
+                raise ControlApiError("ACTION_REQUIRED")
+            if not isinstance(digest, str) or len(digest) != 64:
+                raise ControlApiError("PAYLOAD_DIGEST_INVALID")
+            with psycopg.connect(database_url, row_factory=dict_row) as connection:
+                row = connection.execute(
+                    """
+                    UPDATE agent_control_approvals a
+                    SET status = 'used', used_at = NOW(), updated_at = NOW()
+                    WHERE a.approval_id = %s AND a.work_id = %s
+                      AND a.action = %s AND a.payload_digest = %s
+                      AND a.status = 'approved' AND a.expires_at > NOW()
+                      AND EXISTS (
+                          SELECT 1 FROM agent_control_work_items w
+                          WHERE w.work_id = a.work_id
+                            AND w.assigned_agent_id = %s
+                            AND w.status = 'leased'
+                      )
+                    RETURNING a.approval_id
+                    """,
+                    (approval_id, work_id, action, digest, agent["agent_id"]),
+                ).fetchone()
+            if row is None:
+                raise ControlApiError("APPROVAL_NOT_REDEEMABLE")
+            self._send(200, {"redeemed": True, "approval_id": str(row["approval_id"])})
 
         def _cancel_work(self, raw_id: str, document: dict[str, Any]) -> None:
             self._require_platform_api()
@@ -1183,12 +1379,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """,
                         (version, definition["description"], workflow_id),
                     )
-            self._send(200, {
-                "created": True,
-                "workflow_id": workflow_id,
-                "version": version,
-                "definition": definition,
-            })
+            self._send(
+                200,
+                {
+                    "created": True,
+                    "workflow_id": workflow_id,
+                    "version": version,
+                    "definition": definition,
+                },
+            )
 
         def _start_workflow_run(self, workflow_id: UUID, document: dict[str, Any]) -> None:
             self._require_platform_api()
@@ -1242,8 +1441,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             RETURNING run_id
                             """,
                             (
-                                run_id, workflow_id, workflow["project_id"], version,
-                                Jsonb(run["input"]), run["idempotency_key"],
+                                run_id,
+                                workflow_id,
+                                workflow["project_id"],
+                                version,
+                                Jsonb(run["input"]),
+                                run["idempotency_key"],
                             ),
                         ).fetchone()
                     except psycopg.errors.UniqueViolation as exc:
@@ -1266,11 +1469,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                     step["name"],
                                     "queued" if not step["depends_on"] else "blocked",
                                     step["required_role"],
-                                    Jsonb({
-                                        "workflow_input": run["input"],
-                                        "step": step["payload"],
-                                        "max_attempts": step.get("max_attempts", 1),
-                                    }),
+                                    Jsonb(
+                                        {
+                                            "workflow_input": run["input"],
+                                            "step": step["payload"],
+                                            "max_attempts": step.get("max_attempts", 1),
+                                        }
+                                    ),
                                     Jsonb(step["depends_on"]),
                                     f"workflow:{run_id}:{step['id']}",
                                 ),
@@ -1392,8 +1597,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         ON CONFLICT (idempotency_key) DO NOTHING
                         """,
                         (
-                            task_id, project_id, task["name"], task["priority"],
-                            task["required_role"], Jsonb(task["payload"]),
+                            task_id,
+                            project_id,
+                            task["name"],
+                            task["priority"],
+                            task["required_role"],
+                            Jsonb(task["payload"]),
                             task["idempotency_key"],
                         ),
                     )
@@ -1416,11 +1625,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """,
                         (task["idempotency_key"],),
                     ).fetchone()
-            if (
-                row is None
-                or row["project_id"] != project_id
-                or row["payload"] != task["payload"]
-            ):
+            if row is None or row["project_id"] != project_id or row["payload"] != task["payload"]:
                 raise ControlApiError("TASK_IDEMPOTENCY_CONFLICT")
             self._send(200, {"created": row["task_id"] == task_id, **row})
 
@@ -1523,24 +1728,27 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 self._send(200, {"task": None})
                 return
-            self._send(200, {
-                "task": {
-                    "task_id": row["task_id"],
-                    "project_id": row["project_id"],
-                    "project_name": row["project_name"],
-                    "workflow_run_id": row["workflow_run_id"],
-                    "workflow_id": row["workflow_id"],
-                    "workflow_name": row["workflow_name"],
-                    "step_id": row["step_id"],
-                    "name": row["name"],
-                    "priority": row["priority"],
-                    "payload": row["payload"],
+            self._send(
+                200,
+                {
+                    "task": {
+                        "task_id": row["task_id"],
+                        "project_id": row["project_id"],
+                        "project_name": row["project_name"],
+                        "workflow_run_id": row["workflow_run_id"],
+                        "workflow_id": row["workflow_id"],
+                        "workflow_name": row["workflow_name"],
+                        "step_id": row["step_id"],
+                        "name": row["name"],
+                        "priority": row["priority"],
+                        "payload": row["payload"],
+                    },
+                    "skills": skills,
+                    "plugins": plugins,
+                    "lease_token": lease_token,
+                    "lease_seconds": LEASE_SECONDS,
                 },
-                "skills": skills,
-                "plugins": plugins,
-                "lease_token": lease_token,
-                "lease_seconds": LEASE_SECONDS,
-            })
+            )
 
         def _renew_task_lease(self, document: dict[str, Any]) -> None:
             agent = self._authenticated_agent(document)
@@ -1593,8 +1801,11 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                   payload, attempts
                         """,
                         (
-                            outcome["status"], Jsonb(outcome["result"]), task_id,
-                            agent["agent_id"], token_hash,
+                            outcome["status"],
+                            Jsonb(outcome["result"]),
+                            task_id,
+                            agent["agent_id"],
+                            token_hash,
                         ),
                     ).fetchone()
                     if task is None:
@@ -1627,10 +1838,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             WHERE run_id = %s AND status = 'running'
                             """,
                             (
-                                Jsonb({
-                                    "failed_step": task["step_id"],
-                                    "error": outcome["result"],
-                                }),
+                                Jsonb(
+                                    {
+                                        "failed_step": task["step_id"],
+                                        "error": outcome["result"],
+                                    }
+                                ),
                                 run_id,
                             ),
                         )
@@ -1693,14 +1906,17 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             run_status = "succeeded"
                         else:
                             run_status = "running"
-            self._send(200, {
-                "accepted": True,
-                "task_id": task["task_id"],
-                "status": "queued" if retrying else task["status"],
-                "workflow_run_id": task["workflow_run_id"],
-                "workflow_run_status": run_status,
-                "retrying": retrying,
-            })
+            self._send(
+                200,
+                {
+                    "accepted": True,
+                    "task_id": task["task_id"],
+                    "status": "queued" if retrying else task["status"],
+                    "workflow_run_id": task["workflow_run_id"],
+                    "workflow_run_status": run_status,
+                    "retrying": retrying,
+                },
+            )
 
         def _register_agent(self, document: dict[str, Any]) -> None:
             self._require_platform_api()
@@ -1788,12 +2004,15 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("DEPLOYMENT_IDENTITY_CONFLICT")
                     if row["spec"] != spec:
                         raise ControlApiError("DEPLOYMENT_SPEC_CONFLICT")
-            self._send(200, {
-                "created": True,
-                "deployment_id": str(deployment_id),
-                "phase": row["phase"],
-                "sequence": row["sequence"],
-            })
+            self._send(
+                200,
+                {
+                    "created": True,
+                    "deployment_id": str(deployment_id),
+                    "phase": row["phase"],
+                    "sequence": row["sequence"],
+                },
+            )
 
         def _get_deployment(self, raw_id: str) -> None:
             self._require_platform_api()
@@ -1879,13 +2098,16 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 spec,
                 plan_evidence,
             )
-            self._send(200, {
-                "deployment_id": str(deployment_id),
-                "phase": deployment["phase"],
-                "sequence": deployment["sequence"],
-                "terminal": plan["terminal"],
-                "next_step": plan["next_step"],
-            })
+            self._send(
+                200,
+                {
+                    "deployment_id": str(deployment_id),
+                    "phase": deployment["phase"],
+                    "sequence": deployment["sequence"],
+                    "terminal": plan["terminal"],
+                    "next_step": plan["next_step"],
+                },
+            )
 
         def _reconcile_deployments(self, document: dict[str, Any]) -> None:
             self._require_platform_api()
@@ -1973,9 +2195,16 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     RETURNING command_id
                     """,
                     (
-                        command_id, deployment_id, target_agent_id, role, action,
-                        idempotency_key, Jsonb(payload), from_phase, next_phase,
-),
+                        command_id,
+                        deployment_id,
+                        target_agent_id,
+                        role,
+                        action,
+                        idempotency_key,
+                        Jsonb(payload),
+                        from_phase,
+                        next_phase,
+                    ),
                 ).fetchone()
                 if inserted is None:
                     existing = connection.execute(
@@ -2004,11 +2233,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             sequence = document.get("sequence")
             readiness = document.get("readiness")
             capabilities = document.get("capabilities", [])
-            if (
-                not isinstance(sequence, int)
-                or isinstance(sequence, bool)
-                or sequence < 1
-            ):
+            if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
                 raise ControlApiError("HEARTBEAT_SEQUENCE_INVALID")
             if readiness not in ("ready", "degraded", "not_ready"):
                 raise ControlApiError("HEARTBEAT_READINESS_INVALID")
@@ -2025,8 +2250,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     WHERE agent_id = %s AND heartbeat_sequence < %s
                     """,
                     (
-                        identity["instance_id"], sequence, readiness, Jsonb(capabilities),
-                        identity["agent_id"], sequence,
+                        identity["instance_id"],
+                        sequence,
+                        readiness,
+                        Jsonb(capabilities),
+                        identity["agent_id"],
+                        sequence,
                     ),
                 ).rowcount
                 if updated != 1:
@@ -2085,37 +2314,37 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row["payload"],
                 row["command_next_phase"],
             )
-            self._send(200, {
-                "command": {
-                    "schema_version": "v1",
-                    "command_id": str(row["command_id"]),
-                    "idempotency_key": row["idempotency_key"],
-                    "deployment_id": str(row["deployment_id"]),
-                    "target_agent_id": str(row["target_agent_id"]),
-                    "required_role": row["required_role"],
-                    "action": row["action"],
-                    "payload": command_payload,
-                    "deployment_checkpoint": {
-                        "phase": row["deployment_phase"],
-                        "sequence": row["checkpoint_sequence"],
-                        "state": row["checkpoint_state"],
-                    },
-                    "deployment_context": (
-                        row["trusted_context"] or {}
-                        if identity["role"] == "target"
-                        else {}
-                    ),
-                    "issued_at": now.isoformat(),
-                    "deadline": deadline.isoformat(),
-                    "lease": {
-                        "lease_id": str(lease_id),
-                        "token": lease_token,
+            self._send(
+                200,
+                {
+                    "command": {
+                        "schema_version": "v1",
+                        "command_id": str(row["command_id"]),
+                        "idempotency_key": row["idempotency_key"],
+                        "deployment_id": str(row["deployment_id"]),
+                        "target_agent_id": str(row["target_agent_id"]),
+                        "required_role": row["required_role"],
+                        "action": row["action"],
+                        "payload": command_payload,
+                        "deployment_checkpoint": {
+                            "phase": row["deployment_phase"],
+                            "sequence": row["checkpoint_sequence"],
+                            "state": row["checkpoint_state"],
+                        },
+                        "deployment_context": (
+                            row["trusted_context"] or {} if identity["role"] == "target" else {}
+                        ),
                         "issued_at": now.isoformat(),
-                        "expires_at": expires.isoformat(),
-                    },
-                }
-            })
-
+                        "deadline": deadline.isoformat(),
+                        "lease": {
+                            "lease_id": str(lease_id),
+                            "token": lease_token,
+                            "issued_at": now.isoformat(),
+                            "expires_at": expires.isoformat(),
+                        },
+                    }
+                },
+            )
 
         def _renew_lease(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
@@ -2148,7 +2377,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 raise ControlApiError("COMMAND_LEASE_NOT_RENEWABLE")
             self._send(200, {"renewed": True, "expires_at": row["lease_expires_at"].isoformat()})
-
 
         def _persist_checkpoint(self, document: dict[str, Any]) -> None:
             identity = self._authenticated_agent(document)
@@ -2288,20 +2516,26 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             and isinstance(current["state"], dict)
                             and current["state"].get("state_digest") == state_digest.lower()
                         ):
-                            self._send(200, {
-                                "persisted": True,
-                                "already_applied": True,
-                                "phase": current["phase"],
-                                "sequence": current["sequence"],
-                            })
+                            self._send(
+                                200,
+                                {
+                                    "persisted": True,
+                                    "already_applied": True,
+                                    "phase": current["phase"],
+                                    "sequence": current["sequence"],
+                                },
+                            )
                             return
                         raise ControlApiError("CHECKPOINT_COMPARE_AND_SWAP_FAILED")
-            self._send(200, {
-                "persisted": True,
-                "already_applied": False,
-                "phase": next_phase,
-                "sequence": expected_sequence + 1,
-            })
+            self._send(
+                200,
+                {
+                    "persisted": True,
+                    "already_applied": False,
+                    "phase": next_phase,
+                    "sequence": expected_sequence + 1,
+                },
+            )
 
         def _result(self, document: dict[str, Any]) -> None:
             agent_id = _parse_uuid(document.get("agent_id"), "AGENT_ID")
@@ -2335,11 +2569,13 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """,
                         (
                             status,
-                            Jsonb({
-                                key: value
-                                for key, value in document.items()
-                                if key != "lease_token"
-                            }),
+                            Jsonb(
+                                {
+                                    key: value
+                                    for key, value in document.items()
+                                    if key != "lease_token"
+                                }
+                            ),
                             command_id,
                             identity["agent_id"],
                             lease_id,

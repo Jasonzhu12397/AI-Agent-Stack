@@ -23,6 +23,10 @@ MAX_WORKFLOW_STEPS = 32
 MAX_STEP_DEPENDENCIES = 8
 MAX_STEP_NAME_LENGTH = 128
 MAX_WORKFLOW_DESCRIPTION_LENGTH = 512
+MAX_APPROVAL_ACTION_LENGTH = 128
+MAX_APPROVER_LENGTH = 128
+APPROVAL_STATUSES = frozenset({"pending", "approved", "rejected", "used", "expired"})
+DIGEST_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")
@@ -31,9 +35,7 @@ CONFIG_REF_PATTERN = re.compile(r"^(?:secret|vault|config)://[A-Za-z0-9._/-]{1,1
 WORK_KINDS = frozenset({"deployment", "maintenance", "inspection", "diagnostic", "software"})
 PLUGIN_KINDS = frozenset({"connector", "tool", "runtime"})
 PROJECT_STATUSES = frozenset({"active", "archived"})
-TASK_STATUSES = frozenset(
-    {"blocked", "queued", "leased", "succeeded", "failed", "cancelled"}
-)
+TASK_STATUSES = frozenset({"blocked", "queued", "leased", "succeeded", "failed", "cancelled"})
 WORKFLOW_RUN_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
 AGENT_ROLES = frozenset({"eph", "target"})
 
@@ -197,12 +199,7 @@ def normalize_work(
         )
     if required_role not in (None, "", *AGENT_ROLES):
         raise WorkspaceError("required_role must be eph, target or empty.")
-    if (
-        not isinstance(priority, int)
-        or isinstance(priority, bool)
-        or priority < 0
-        or priority > 9
-    ):
+    if not isinstance(priority, int) or isinstance(priority, bool) or priority < 0 or priority > 9:
         raise WorkspaceError("priority must be an integer from 0 to 9.")
     key = _bounded_text(
         idempotency_key,
@@ -215,6 +212,35 @@ def normalize_work(
         "required_role": required_role or None,
         "priority": priority,
         "idempotency_key": key,
+    }
+
+
+def normalize_approval(
+    *,
+    work_id: Any,
+    action: Any,
+    payload_digest: Any,
+    requested_by: Any,
+    ttl_seconds: Any = 3600,
+) -> dict[str, Any]:
+    work_uuid = _bounded_text(work_id, "work_id", maximum=64)
+    action_text = _bounded_text(action, "action", maximum=MAX_APPROVAL_ACTION_LENGTH)
+    digest = _bounded_text(payload_digest, "payload_digest", maximum=64)
+    if not DIGEST_PATTERN.fullmatch(digest):
+        raise WorkspaceError("payload_digest must be a lowercase sha256 hex digest.")
+    requester = _bounded_text(requested_by, "requested_by", maximum=MAX_APPROVER_LENGTH)
+    if (
+        not isinstance(ttl_seconds, int)
+        or isinstance(ttl_seconds, bool)
+        or not 60 <= ttl_seconds <= 86400
+    ):
+        raise WorkspaceError("ttl_seconds must be an integer from 60 to 86400.")
+    return {
+        "work_id": work_uuid,
+        "action": action_text,
+        "payload_digest": digest,
+        "requested_by": requester,
+        "ttl_seconds": ttl_seconds,
     }
 
 
@@ -258,9 +284,7 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             or any(not isinstance(dep, str) or not dep for dep in dependencies)
             or len(dependencies) != len(set(dependencies))
         ):
-            raise WorkspaceError(
-                f"definition.steps[{index}].depends_on must be unique step ids."
-            )
+            raise WorkspaceError(f"definition.steps[{index}].depends_on must be unique step ids.")
         if step_id in dependencies:
             raise WorkspaceError(f"workflow step {step_id} cannot depend on itself.")
         max_attempts = item.get("max_attempts", 1)
@@ -272,18 +296,20 @@ def normalize_workflow_definition(definition: Any) -> dict[str, Any]:
             raise WorkspaceError(
                 f"definition.steps[{index}].max_attempts must be an integer from 1 to 5."
             )
-        normalized_steps.append({
-            "id": step_id,
-            "name": name,
-            "required_role": role or None,
-            "payload": _bounded_json(
-                item.get("payload"),
-                f"definition.steps[{index}].payload",
-                maximum=MAX_WORK_PAYLOAD_BYTES,
-            ),
-            "depends_on": list(dependencies),
-            "max_attempts": max_attempts,
-        })
+        normalized_steps.append(
+            {
+                "id": step_id,
+                "name": name,
+                "required_role": role or None,
+                "payload": _bounded_json(
+                    item.get("payload"),
+                    f"definition.steps[{index}].payload",
+                    maximum=MAX_WORK_PAYLOAD_BYTES,
+                ),
+                "depends_on": list(dependencies),
+                "max_attempts": max_attempts,
+            }
+        )
     step_ids = {step["id"] for step in normalized_steps}
     for step in normalized_steps:
         missing = [dep for dep in step["depends_on"] if dep not in step_ids]
@@ -331,12 +357,7 @@ def normalize_task(
 ) -> dict[str, Any]:
     if required_role not in (None, "", *AGENT_ROLES):
         raise WorkspaceError("required_role must be eph, target or empty.")
-    if (
-        not isinstance(priority, int)
-        or isinstance(priority, bool)
-        or priority < 0
-        or priority > 9
-    ):
+    if not isinstance(priority, int) or isinstance(priority, bool) or priority < 0 or priority > 9:
         raise WorkspaceError("priority must be an integer from 0 to 9.")
     return {
         "name": _bounded_text(name, "name", maximum=MAX_STEP_NAME_LENGTH),
@@ -368,7 +389,7 @@ def normalize_workspace_path(raw: str) -> tuple[str, str | None]:
     prefix = "/api/v1/control/projects/"
     if not raw.startswith(prefix):
         raise WorkspaceError("not a project path")
-    remainder = raw[len(prefix):].strip("/")
+    remainder = raw[len(prefix) :].strip("/")
     if not remainder:
         raise WorkspaceError("project id is required")
     parts = remainder.split("/")
@@ -376,6 +397,14 @@ def normalize_workspace_path(raw: str) -> tuple[str, str | None]:
         raise WorkspaceError("project path is invalid")
     project_id = parts[0]
     collection = parts[1] if len(parts) == 2 else None
-    if collection not in (None, "skills", "plugins", "work", "tasks", "workflows"):
+    if collection not in (
+        None,
+        "skills",
+        "plugins",
+        "work",
+        "tasks",
+        "workflows",
+        "approvals",
+    ):
         raise WorkspaceError("project collection is invalid")
     return project_id, collection

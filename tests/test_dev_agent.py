@@ -37,6 +37,8 @@ from apps.dev_agent.testing import detect_test_plan, parse_pytest_output, repair
 from apps.dev_agent.work import (
     SoftwareWorkExecutor,
     WorkPayloadError,
+    canonical_digest,
+    granted_actions,
     serve,
     validate_payload,
 )
@@ -633,3 +635,59 @@ def test_manual_bugfix_requires_a_token(project):
     )
     assert execution.status == "failed"
     assert "approved token" in execution.result["error"]
+
+
+def test_project_skills_grant_only_listed_actions():
+    assert granted_actions([]) >= {"review", "bugfix"}
+    skills = [
+        {"name": "software", "manifest": {"actions": ["software.review", "software.analyse"]}}
+    ]
+    assert granted_actions(skills) == {"review", "analyse"}
+    assert "bugfix" not in granted_actions(skills)
+
+
+def test_executor_enforces_the_project_skill_catalog(project):
+    executor = SoftwareWorkExecutor(project)
+    allowed = {
+        "work-skill-1",
+        "kind",
+        "software",
+    }
+    result = executor.execute(
+        "work-skill-1",
+        {"action": "review"},
+        skills=[{"name": "software", "manifest": {"actions": ["software.review"]}}],
+    )
+    assert result.status == "succeeded"
+    denied = executor.execute(
+        "work-skill-2",
+        {"action": "performance"},
+        skills=[{"name": "software", "manifest": {"actions": ["software.review"]}}],
+    )
+    assert denied.status == "failed"
+    assert "not granted" in denied.result["error"]
+    assert allowed
+
+
+def test_control_plane_approval_redeems_before_apply(project):
+    calls = []
+
+    class FakeApprovalClient:
+        def redeem_approval(self, **kwargs):
+            calls.append(kwargs)
+            return {"redeemed": True}
+
+    executor = SoftwareWorkExecutor(project, approval_client=FakeApprovalClient())
+    edits = [{"path": "pkg/cli.py", "old": "return load('x')", "new": "return load('y')"}]
+    execution = executor.execute(
+        "work-approval-1",
+        {
+            "action": "apply_patch",
+            "approval_id": "00000000-0000-0000-0000-000000000009",
+            "edits": edits,
+        },
+    )
+    assert execution.status == "succeeded"
+    assert calls[0]["payload_digest"] == canonical_digest(edits)
+    assert calls[0]["approval_id"] == "00000000-0000-0000-0000-000000000009"
+    assert "return load('y')" in (project / "pkg" / "cli.py").read_text()

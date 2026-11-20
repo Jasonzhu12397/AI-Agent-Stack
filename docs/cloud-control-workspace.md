@@ -53,6 +53,12 @@ POST /api/v1/control/workflows/{workflow_id}/versions
 POST /api/v1/control/workflows/{workflow_id}/runs
 GET  /api/v1/control/workflow-runs/{run_id}
 POST /api/v1/control/workflow-runs/{run_id}/cancel
+
+GET  /api/v1/control/projects/{project_id}/approvals
+GET  /api/v1/control/approvals/{approval_id}
+POST /api/v1/control/projects/{project_id}/approvals
+POST /api/v1/control/approvals/{approval_id}/approve
+POST /api/v1/control/approvals/{approval_id}/reject
 ```
 
 Create a project:
@@ -107,6 +113,42 @@ Enqueue work:
 }
 ```
 
+## Patch approvals
+
+A patch approval binds one `work_id`, one action and one SHA-256 payload digest.
+There is exactly one approver: a `pending` request becomes `approved` when one
+operator posts `approved_by`. No second approver and no quorum rule exist.
+
+```json
+{
+  "approval_id": "00000000-0000-0000-0000-000000000006",
+  "work_id": "00000000-0000-0000-0000-000000000005",
+  "action": "apply-patch",
+  "payload_digest": "6f1e...64 hex characters...",
+  "requested_by": "alice",
+  "ttl_seconds": 600
+}
+```
+
+Approve or reject:
+
+```json
+{"approved_by": "bob"}
+```
+
+```json
+{"approved_by": "bob", "reason": "superseded by work-7"}
+```
+
+`payload_digest` is the lowercase SHA-256 of the canonical JSON form of the
+`edits` list (`sort_keys=True`, `separators=(",", ":")`). TTL is 60–86400
+seconds and defaults to 3600. Expired approvals cannot be approved or redeemed.
+
+Approvals gate **software patch work only**. EPH and Target agents remain
+autonomous: they install Kubernetes and repair their mounted repository without
+a control-plane approval, and the approval table is never consulted for their
+deployment work. See `docs/dev-agent.md` for their autonomy boundary.
+
 ## Agent API
 
 Agents use the same certificate-bound identity as heartbeats and commands:
@@ -118,6 +160,7 @@ POST /api/v1/agent-control/work/result
 POST /api/v1/agent-control/tasks/claim
 POST /api/v1/agent-control/tasks/lease/renew
 POST /api/v1/agent-control/tasks/result
+POST /api/v1/agent-control/approvals/redeem
 ```
 
 `claim` selects queued work, or work whose lease expired, for any active project.
@@ -152,6 +195,12 @@ terminal; expired leases become claimable again and increment `attempts`.
 The transport client exposes `claim_work()`, `renew_work_lease()`,
 `report_work_result()` and the matching `claim_task()`, `renew_task_lease()`,
 `report_task_result()` methods in `packages/agent_transport/client.py`.
+`redeem_approval()` posts to the redeem endpoint and requires `"redeemed": true`.
+
+Redemption is an atomic `UPDATE ... SET status = 'used'` guarded by the Agent
+mTLS identity, the work lease, the action and the payload digest. A stale,
+re-used or mismatched approval returns `APPROVAL_NOT_REDEEMABLE`, so a digest
+cannot be replayed for different edits or a different work item.
 
 ## Workflows
 

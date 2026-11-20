@@ -58,12 +58,31 @@ def _issue_certificate(
     csr = directory / f"{name}.csr"
     crt = directory / f"{name}.crt"
     _openssl(
-        "req", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
-        "-out", str(csr), "-subj", f"/CN={common_name}",
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(key),
+        "-out",
+        str(csr),
+        "-subj",
+        f"/CN={common_name}",
     )
     _openssl(
-        "x509", "-req", "-in", str(csr), "-CA", str(ca_crt), "-CAkey", str(ca_key),
-        "-CAcreateserial", "-out", str(crt), "-days", "1",
+        "x509",
+        "-req",
+        "-in",
+        str(csr),
+        "-CA",
+        str(ca_crt),
+        "-CAkey",
+        str(ca_key),
+        "-CAcreateserial",
+        "-out",
+        str(crt),
+        "-days",
+        "1",
     )
     return crt, key
 
@@ -74,8 +93,19 @@ def tls_material(tmp_path_factory):
     ca_key = directory / "ca.key"
     ca_crt = directory / "ca.crt"
     _openssl(
-        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(ca_key),
-        "-out", str(ca_crt), "-subj", "/CN=Cloud Control Test CA", "-days", "1",
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(ca_key),
+        "-out",
+        str(ca_crt),
+        "-subj",
+        "/CN=Cloud Control Test CA",
+        "-days",
+        "1",
     )
     server_key = directory / "server.key"
     server_csr = directory / "server.csr"
@@ -83,13 +113,33 @@ def tls_material(tmp_path_factory):
     extensions = directory / "server.ext"
     extensions.write_text("subjectAltName=IP:127.0.0.1,DNS:localhost\n", encoding="utf-8")
     _openssl(
-        "req", "-newkey", "rsa:2048", "-nodes", "-keyout", str(server_key),
-        "-out", str(server_csr), "-subj", "/CN=localhost",
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(server_key),
+        "-out",
+        str(server_csr),
+        "-subj",
+        "/CN=localhost",
     )
     _openssl(
-        "x509", "-req", "-in", str(server_csr), "-CA", str(ca_crt), "-CAkey",
-        str(ca_key), "-CAcreateserial", "-out", str(server_crt), "-days", "1",
-        "-extfile", str(extensions),
+        "x509",
+        "-req",
+        "-in",
+        str(server_csr),
+        "-CA",
+        str(ca_crt),
+        "-CAkey",
+        str(ca_key),
+        "-CAcreateserial",
+        "-out",
+        str(server_crt),
+        "-days",
+        "1",
+        "-extfile",
+        str(extensions),
     )
     platform = _issue_certificate(directory, "platform", "platform-api", ca_key, ca_crt)
     return {
@@ -175,65 +225,85 @@ def _register_agent(
     installation_id: UUID,
     role: str = "eph",
 ) -> None:
-    _post(platform_client, "/api/v1/control/agents/register", {
-        "agent_id": str(agent_id),
-        "installation_id": str(installation_id),
-        "role": role,
-        "cluster_id": str(uuid4()) if role == "target" else None,
-    })
+    _post(
+        platform_client,
+        "/api/v1/control/agents/register",
+        {
+            "agent_id": str(agent_id),
+            "installation_id": str(installation_id),
+            "role": role,
+            "cluster_id": str(uuid4()) if role == "target" else None,
+        },
+    )
 
 
 def _create_project(platform_client, installation_id: UUID) -> UUID:
     project_id = uuid4()
-    _post(platform_client, "/api/v1/control/projects", {
-        "project_id": str(project_id),
-        "installation_id": str(installation_id),
-        "name": f"lab-{project_id.hex[:8]}",
-        "description": "integration project",
-    })
+    _post(
+        platform_client,
+        "/api/v1/control/projects",
+        {
+            "project_id": str(project_id),
+            "installation_id": str(installation_id),
+            "name": f"lab-{project_id.hex[:8]}",
+            "description": "integration project",
+        },
+    )
     return project_id
 
 
 def _create_skill(platform_client, project_id: UUID) -> None:
-    _post(platform_client, f"/api/v1/control/projects/{project_id}/skills", {
-        "skill_id": str(uuid4()),
-        "name": "metal3-prep",
-        "version": "1.0.0",
-        "manifest": {
-            "entrypoint": "skills.metal3.prepare",
-            "actions": ["bmh.apply", "bmh.wait_ready"],
+    _post(
+        platform_client,
+        f"/api/v1/control/projects/{project_id}/skills",
+        {
+            "skill_id": str(uuid4()),
+            "name": "metal3-prep",
+            "version": "1.0.0",
+            "manifest": {
+                "entrypoint": "skills.metal3.prepare",
+                "actions": ["bmh.apply", "bmh.wait_ready"],
+            },
         },
-    })
+    )
 
 
 def _create_plugin(platform_client, project_id: UUID) -> None:
-    _post(platform_client, f"/api/v1/control/projects/{project_id}/plugins", {
-        "plugin_id": str(uuid4()),
-        "name": "vault",
-        "version": "2.0.0",
-        "kind": "connector",
-        "config_ref": "secret://tenants/lab/vault",
-    })
+    _post(
+        platform_client,
+        f"/api/v1/control/projects/{project_id}/plugins",
+        {
+            "plugin_id": str(uuid4()),
+            "name": "vault",
+            "version": "2.0.0",
+            "kind": "connector",
+            "config_ref": "secret://tenants/lab/vault",
+        },
+    )
 
 
 def _create_workflow(platform_client, project_id: UUID) -> UUID:
     workflow_id = uuid4()
-    _post(platform_client, f"/api/v1/control/projects/{project_id}/workflows", {
-        "workflow_id": str(workflow_id),
-        "name": "provision-lab",
-        "definition": {
-            "description": "Prepare then verify",
-            "steps": [
-                {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
-                {
-                    "id": "verify",
-                    "name": "Verify hosts",
-                    "depends_on": ["prepare"],
-                    "payload": {"checks": ["bmh", "k8s"]},
-                },
-            ],
+    _post(
+        platform_client,
+        f"/api/v1/control/projects/{project_id}/workflows",
+        {
+            "workflow_id": str(workflow_id),
+            "name": "provision-lab",
+            "definition": {
+                "description": "Prepare then verify",
+                "steps": [
+                    {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
+                    {
+                        "id": "verify",
+                        "name": "Verify hosts",
+                        "depends_on": ["prepare"],
+                        "payload": {"checks": ["bmh", "k8s"]},
+                    },
+                ],
+            },
         },
-    })
+    )
     return workflow_id
 
 
@@ -258,11 +328,15 @@ def test_project_workspace_and_workflow_run_against_postgres(control_server, tls
 
         workflow_id = _create_workflow(platform_client, project_id)
         run_id = uuid4()
-        started = _post(platform_client, f"/api/v1/control/workflows/{workflow_id}/runs", {
-            "run_id": str(run_id),
-            "input": {"cluster": "edge-01"},
-            "idempotency_key": f"run-{run_id}",
-        })
+        started = _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {"cluster": "edge-01"},
+                "idempotency_key": f"run-{run_id}",
+            },
+        )
         assert started["run"]["status"] == "running"
         by_step = {task["step_id"]: task for task in started["tasks"]}
         assert by_step["prepare"]["status"] == "queued"
@@ -280,24 +354,32 @@ def test_project_workspace_and_workflow_run_against_postgres(control_server, tls
             assert first["skills"][0]["name"] == "metal3-prep"
             assert first["plugins"][0]["config_ref"] == "secret://tenants/lab/vault"
 
-            result = _post(agent_client, "/api/v1/agent-control/tasks/result", {
-                **identity,
-                "task_id": first["task"]["task_id"],
-                "lease_token": first["lease_token"],
-                "status": "succeeded",
-                "result": {"hosts": 3},
-            })
+            result = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "succeeded",
+                    "result": {"hosts": 3},
+                },
+            )
             assert result["workflow_run_status"] == "running"
 
             second = _claim(agent_client, identity)
             assert second["task"]["step_id"] == "verify"
-            _post(agent_client, "/api/v1/agent-control/tasks/result", {
-                **identity,
-                "task_id": second["task"]["task_id"],
-                "lease_token": second["lease_token"],
-                "status": "succeeded",
-                "result": {"ready": True},
-            })
+            _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": second["task"]["task_id"],
+                    "lease_token": second["lease_token"],
+                    "status": "succeeded",
+                    "result": {"ready": True},
+                },
+            )
         finally:
             agent_client.close()
 
@@ -317,22 +399,30 @@ def test_concurrent_task_claims_do_not_overlap(control_server, tls_material):
     try:
         project_id = _create_project(platform_client, installation_id)
         workflow_id = uuid4()
-        _post(platform_client, f"/api/v1/control/projects/{project_id}/workflows", {
-            "workflow_id": str(workflow_id),
-            "name": "parallel-inspection",
-            "definition": {
-                "steps": [
-                    {"id": "node-a", "name": "Inspect A"},
-                    {"id": "node-b", "name": "Inspect B"},
-                ],
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "parallel-inspection",
+                "definition": {
+                    "steps": [
+                        {"id": "node-a", "name": "Inspect A"},
+                        {"id": "node-b", "name": "Inspect B"},
+                    ],
+                },
             },
-        })
+        )
         run_id = uuid4()
-        _post(platform_client, f"/api/v1/control/workflows/{workflow_id}/runs", {
-            "run_id": str(run_id),
-            "input": {},
-            "idempotency_key": f"run-{run_id}",
-        })
+        _post(
+            platform_client,
+            f"/api/v1/control/workflows/{workflow_id}/runs",
+            {
+                "run_id": str(run_id),
+                "input": {},
+                "idempotency_key": f"run-{run_id}",
+            },
+        )
 
         agents = [uuid4(), uuid4()]
         for agent_id in agents:
@@ -362,14 +452,18 @@ def test_task_lease_is_bound_to_the_claiming_agent(control_server, tls_material)
     try:
         project_id = _create_project(platform_client, installation_id)
         task_id = uuid4()
-        _post(platform_client, f"/api/v1/control/projects/{project_id}/tasks", {
-            "task_id": str(task_id),
-            "name": "NTP check",
-            "payload": {"hosts": ["10.0.0.1"]},
-            "required_role": "eph",
-            "priority": 4,
-            "idempotency_key": f"task-{task_id}",
-        })
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/tasks",
+            {
+                "task_id": str(task_id),
+                "name": "NTP check",
+                "payload": {"hosts": ["10.0.0.1"]},
+                "required_role": "eph",
+                "priority": 4,
+                "idempotency_key": f"task-{task_id}",
+            },
+        )
 
         first_agent, second_agent = uuid4(), uuid4()
         _register_agent(platform_client, first_agent, installation_id)
@@ -383,21 +477,28 @@ def test_task_lease_is_bound_to_the_claiming_agent(control_server, tls_material)
             identity = _identity(first_agent, installation_id)
             claimed = _claim(first_client, identity)
             assert claimed["task"]["task_id"] == str(task_id)
-            response = second_client.post("/api/v1/agent-control/tasks/result", json={
-                **_identity(second_agent, installation_id),
-                "task_id": str(task_id),
-                "lease_token": claimed["lease_token"],
-                "status": "succeeded",
-                "result": {},
-            })
+            response = second_client.post(
+                "/api/v1/agent-control/tasks/result",
+                json={
+                    **_identity(second_agent, installation_id),
+                    "task_id": str(task_id),
+                    "lease_token": claimed["lease_token"],
+                    "status": "succeeded",
+                    "result": {},
+                },
+            )
             assert response.status_code == 400
             assert response.json()["error"] == "AGENT_NOT_REGISTERED"
 
-            renewed = _post(first_client, "/api/v1/agent-control/tasks/lease/renew", {
-                **identity,
-                "task_id": str(task_id),
-                "lease_token": claimed["lease_token"],
-            })
+            renewed = _post(
+                first_client,
+                "/api/v1/agent-control/tasks/lease/renew",
+                {
+                    **identity,
+                    "task_id": str(task_id),
+                    "lease_token": claimed["lease_token"],
+                },
+            )
             assert renewed["renewed"] is True
         finally:
             first_client.close()
@@ -412,14 +513,18 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
     try:
         project_id = _create_project(platform_client, installation_id)
         work_id = uuid4()
-        created = _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
-            "work_id": str(work_id),
-            "kind": "inspection",
-            "priority": 4,
-            "required_role": "eph",
-            "payload": {"cluster": "edge-02"},
-            "idempotency_key": f"work-{work_id}",
-        })
+        created = _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/work",
+            {
+                "work_id": str(work_id),
+                "kind": "inspection",
+                "priority": 4,
+                "required_role": "eph",
+                "payload": {"cluster": "edge-02"},
+                "idempotency_key": f"work-{work_id}",
+            },
+        )
         assert created["status"] == "queued"
 
         agent_id = uuid4()
@@ -434,13 +539,17 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
             assert claimed["work"]["kind"] == "inspection"
             assert claimed["lease_seconds"] == 90
 
-            _post(agent_client, "/api/v1/agent-control/work/result", {
-                **identity,
-                "work_id": str(work_id),
-                "lease_token": claimed["lease_token"],
-                "status": "succeeded",
-                "result": {"findings": 2},
-            })
+            _post(
+                agent_client,
+                "/api/v1/agent-control/work/result",
+                {
+                    **identity,
+                    "work_id": str(work_id),
+                    "lease_token": claimed["lease_token"],
+                    "status": "succeeded",
+                    "result": {"findings": 2},
+                },
+            )
         finally:
             agent_client.close()
 
@@ -458,23 +567,31 @@ def test_work_claim_filters_by_kind_for_software_tasks(control_server, tls_mater
     try:
         project_id = _create_project(platform_client, installation_id)
         inspection_id = uuid4()
-        _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
-            "work_id": str(inspection_id),
-            "kind": "inspection",
-            "priority": 9,
-            "required_role": "eph",
-            "payload": {"cluster": "edge-01"},
-            "idempotency_key": f"inspection-{inspection_id}",
-        })
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/work",
+            {
+                "work_id": str(inspection_id),
+                "kind": "inspection",
+                "priority": 9,
+                "required_role": "eph",
+                "payload": {"cluster": "edge-01"},
+                "idempotency_key": f"inspection-{inspection_id}",
+            },
+        )
         software_id = uuid4()
-        _post(platform_client, f"/api/v1/control/projects/{project_id}/work", {
-            "work_id": str(software_id),
-            "kind": "software",
-            "priority": 1,
-            "required_role": "eph",
-            "payload": {"action": "review", "paths": ["apps/dev_agent/work.py"]},
-            "idempotency_key": f"software-{software_id}",
-        })
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/work",
+            {
+                "work_id": str(software_id),
+                "kind": "software",
+                "priority": 1,
+                "required_role": "eph",
+                "payload": {"action": "review", "paths": ["apps/dev_agent/work.py"]},
+                "idempotency_key": f"software-{software_id}",
+            },
+        )
 
         agent_id = uuid4()
         _register_agent(platform_client, agent_id, installation_id)
@@ -490,16 +607,99 @@ def test_work_claim_filters_by_kind_for_software_tasks(control_server, tls_mater
             )
             assert claimed["work"]["work_id"] == str(software_id)
             assert claimed["work"]["kind"] == "software"
-            _post(agent_client, "/api/v1/agent-control/work/result", {
-                **identity,
-                "work_id": str(software_id),
-                "status": "succeeded",
-                "result": {"count": 0},
-            })
+            _post(
+                agent_client,
+                "/api/v1/agent-control/work/result",
+                {
+                    **identity,
+                    "work_id": str(software_id),
+                    "status": "succeeded",
+                    "result": {"count": 0},
+                },
+            )
             remaining = _post(agent_client, "/api/v1/agent-control/work/claim", identity)
             assert remaining["work"]["work_id"] == str(inspection_id)
         finally:
             agent_client.close()
+    finally:
+        platform_client.close()
+
+
+def test_control_plane_approval_is_single_approver_and_redeemed_once(control_server, tls_material):
+    import hashlib
+    import json
+
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        work_id = uuid4()
+        edits = [{"path": "pkg/cli.py", "old": "a", "new": "b"}]
+        digest = hashlib.sha256(
+            json.dumps(edits, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/work",
+            {
+                "work_id": str(work_id),
+                "kind": "software",
+                "priority": 2,
+                "required_role": "eph",
+                "payload": {"action": "apply_patch", "edits": edits},
+                "idempotency_key": f"approval-work-{work_id}",
+            },
+        )
+        approval_id = uuid4()
+        created = _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/approvals",
+            {
+                "approval_id": str(approval_id),
+                "work_id": str(work_id),
+                "action": "apply-patch",
+                "payload_digest": digest,
+                "requested_by": "alice",
+                "ttl_seconds": 600,
+            },
+        )
+        assert created["status"] == "pending"
+        approved = _post(
+            platform_client,
+            f"/api/v1/control/approvals/{approval_id}/approve",
+            {"approved_by": "bob"},
+        )
+        assert approved["status"] == "approved"
+        assert approved["approved_by"] == "bob"
+
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            claimed = _post(
+                agent_client,
+                "/api/v1/agent-control/work/claim",
+                {**identity, "kind": "software"},
+            )
+            assert claimed["work"]["work_id"] == str(work_id)
+            redeem_body = {
+                **identity,
+                "work_id": str(work_id),
+                "approval_id": str(approval_id),
+                "action": "apply-patch",
+                "payload_digest": digest,
+            }
+            redeemed = _post(agent_client, "/api/v1/agent-control/approvals/redeem", redeem_body)
+            assert redeemed["redeemed"] is True
+            again = agent_client.post("/api/v1/agent-control/approvals/redeem", json=redeem_body)
+            assert again.status_code == 400
+        finally:
+            agent_client.close()
+        approval = _get(platform_client, f"/api/v1/control/approvals/{approval_id}")
+        assert approval["status"] == "used"
     finally:
         platform_client.close()
 
@@ -510,19 +710,25 @@ def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_serve
     try:
         project_id = _create_project(platform_client, installation_id)
         workflow_id = uuid4()
-        _post(platform_client, f"/api/v1/control/projects/{project_id}/workflows", {
-            "workflow_id": str(workflow_id),
-            "name": "retry-workflow",
-            "definition": {
-                "steps": [{
-                    "id": "prepare",
-                    "name": "Prepare hosts",
-                    "max_attempts": 2,
-                    "payload": {"cluster": "edge-03"},
-                }],
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/workflows",
+            {
+                "workflow_id": str(workflow_id),
+                "name": "retry-workflow",
+                "definition": {
+                    "steps": [
+                        {
+                            "id": "prepare",
+                            "name": "Prepare hosts",
+                            "max_attempts": 2,
+                            "payload": {"cluster": "edge-03"},
+                        }
+                    ],
+                },
+                "idempotency_key": f"workflow-{workflow_id}",
             },
-            "idempotency_key": f"workflow-{workflow_id}",
-        })
+        )
         run_id = uuid4()
         started = _post(
             platform_client,
@@ -539,26 +745,34 @@ def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_serve
         try:
             identity = _identity(agent_id, installation_id)
             first = _claim(agent_client, identity)
-            failed = _post(agent_client, "/api/v1/agent-control/tasks/result", {
-                **identity,
-                "task_id": first["task"]["task_id"],
-                "lease_token": first["lease_token"],
-                "status": "failed",
-                "result": {"error": "transient"},
-            })
+            failed = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": first["task"]["task_id"],
+                    "lease_token": first["lease_token"],
+                    "status": "failed",
+                    "result": {"error": "transient"},
+                },
+            )
             assert failed["retrying"] is True
             assert failed["status"] == "queued"
             assert failed["workflow_run_status"] == "running"
 
             second = _claim(agent_client, identity)
             assert second["task"]["task_id"] == first["task"]["task_id"]
-            done = _post(agent_client, "/api/v1/agent-control/tasks/result", {
-                **identity,
-                "task_id": second["task"]["task_id"],
-                "lease_token": second["lease_token"],
-                "status": "succeeded",
-                "result": {"prepared": True},
-            })
+            done = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": second["task"]["task_id"],
+                    "lease_token": second["lease_token"],
+                    "status": "succeeded",
+                    "result": {"prepared": True},
+                },
+            )
             assert done["workflow_run_status"] == "succeeded"
             assert done["retrying"] is False
         finally:

@@ -8,6 +8,7 @@ repository or pushes code.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import traceback
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ ACTIONS = frozenset(
         "plan",
     }
 )
-OPTIONS = frozenset({"action", "paths", "top", "output", "goal", "token", "edits"})
+OPTIONS = frozenset({"action", "paths", "top", "output", "goal", "token", "edits", "approval_id"})
 MAX_RESULT_BYTES = 240 * 1024
 PHASE_FOR_ACTION = {
     "capabilities": "analyse",
@@ -57,6 +58,32 @@ PHASE_FOR_ACTION = {
     "commit_plan": "commit",
     "plan": "analyse",
 }
+
+
+def canonical_digest(edits: list[dict]) -> str:
+    payload = json.dumps(edits, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def granted_actions(skills: list[dict] | None) -> set[str]:
+    """Intersect requested actions with the project's enabled skill manifests.
+
+    No skills means the project has not restricted the agent, so every built-in
+    action is available. A non-empty catalog is authoritative: only actions
+    listed as ``software.<action>`` are granted.
+    """
+    if not skills:
+        return set(ACTIONS)
+    granted: set[str] = set()
+    for skill in skills:
+        manifest = skill.get("manifest") if isinstance(skill, dict) else None
+        actions = manifest.get("actions") if isinstance(manifest, dict) else None
+        if not isinstance(actions, list):
+            continue
+        for item in actions:
+            if isinstance(item, str) and item.startswith("software."):
+                granted.add(item.split(".", 1)[1])
+    return granted & set(ACTIONS)
 
 
 class WorkPayloadError(ValueError):
@@ -114,6 +141,9 @@ def validate_payload(payload: Any) -> dict:
     token = payload.get("token", "")
     if not isinstance(token, str) or len(token) > 128:
         raise WorkPayloadError("token must be a string of at most 128 characters")
+    approval_id = payload.get("approval_id", "")
+    if not isinstance(approval_id, str) or len(approval_id) > 64:
+        raise WorkPayloadError("approval_id must be a string of at most 64 characters")
     edits = payload.get("edits", [])
     if not isinstance(edits, list) or len(edits) > 20:
         raise WorkPayloadError("edits must be a list of at most 20 entries")
@@ -130,8 +160,10 @@ def validate_payload(payload: Any) -> dict:
                 "new": edit["new"],
             }
         )
-    if action == "apply_patch" and (not token or not normalized_edits):
-        raise WorkPayloadError("apply_patch requires an approved token and edits")
+    if action == "apply_patch" and (not normalized_edits or not (token or approval_id)):
+        raise WorkPayloadError(
+            "apply_patch requires edits plus an approved token or control approval_id"
+        )
     if action == "bugfix" and not normalized_edits:
         raise WorkPayloadError("bugfix requires edits")
     return {
@@ -141,6 +173,7 @@ def validate_payload(payload: Any) -> dict:
         "output": normalized_output,
         "goal": goal,
         "token": token,
+        "approval_id": approval_id,
         "edits": normalized_edits,
     }
 
@@ -163,10 +196,25 @@ class SoftwareWorkExecutor:
         agent: SoftwareAgent | None = None,
         autonomous: bool = False,
         actor: str = "operator",
+        approval_client: Any | None = None,
     ) -> None:
         self.root = Path(root).resolve()
         self.agent = agent or SoftwareAgent(self.root, autonomous=autonomous, actor=actor)
         self.store = TaskStore(self.root)
+        self.approval_client = approval_client
+
+    def _redeem(self, request: dict, kind: str) -> None:
+        if not request["approval_id"]:
+            return
+        if self.approval_client is None:
+            raise WorkPayloadError("approval_id requires a control-plane client")
+        self.approval_client.redeem_approval(
+            work_id=request["work_id"],
+            approval_id=request["approval_id"],
+            action=request["action"],
+            payload_digest=canonical_digest(request["edits"]),
+            kind=kind,
+        )
 
     def _run(self, request: dict) -> Any:
         action = request["action"]
@@ -199,11 +247,20 @@ class SoftwareWorkExecutor:
             }
         if action == "apply_patch":
             edits = [TextEdit(**edit) for edit in request["edits"]]
-            return {"applied": self.agent.apply_change(edits, request["token"])}
+            self._redeem(request, "apply-patch")
+            token = request["token"]
+            if not token:
+                token = self.agent.plan_change(edits).token
+                self.agent.approvals.approve(token, "control-plane")
+            return {"applied": self.agent.apply_change(edits, token)}
         if action == "bugfix":
             edits = [TextEdit(**edit) for edit in request["edits"]]
+            self._redeem(request, "bugfix")
             if request["token"]:
                 token = request["token"]
+            elif request["approval_id"]:
+                token = self.agent.plan_change(edits).token
+                self.agent.approvals.approve(token, "control-plane")
             elif self.agent.autonomous:
                 token = self.agent.plan_change(edits).token
             else:
@@ -229,7 +286,14 @@ class SoftwareWorkExecutor:
             return self.agent.plan(request["goal"])
         raise WorkPayloadError(f"unhandled action: {action}")
 
-    def execute(self, work_id: str, payload: Any, kind: str = "software") -> WorkExecution:
+    def execute(
+        self,
+        work_id: str,
+        payload: Any,
+        kind: str = "software",
+        skills: list[dict] | None = None,
+        plugins: list[dict] | None = None,
+    ) -> WorkExecution:
         if kind != "software":
             raise WorkPayloadError(f"unsupported work kind: {kind}")
         if not isinstance(work_id, str) or not work_id.strip():
@@ -237,13 +301,28 @@ class SoftwareWorkExecutor:
         task_id = f"work-{work_id}"
         try:
             request = validate_payload(payload)
+            granted = granted_actions(skills)
+            if request["action"] not in granted:
+                raise WorkPayloadError(
+                    f"action {request['action']} is not granted by the project skills"
+                )
+            request["work_id"] = work_id
         except WorkPayloadError as error:
             self.store.ensure(task_id, "invalid control-plane payload")
             self.store.update(task_id, status="failed", checkpoint={"error": str(error)})
             return WorkExecution(task_id, "failed", {"error": str(error)})
         goal = request["goal"] or f"{request['action']} requested by the control plane"
         self.store.ensure(task_id, goal)
-        self.store.update(task_id, phase=PHASE_FOR_ACTION[request["action"]], status="running")
+        self.store.update(
+            task_id,
+            phase=PHASE_FOR_ACTION[request["action"]],
+            status="running",
+            checkpoint={
+                "action": request["action"],
+                "skills": [skill.get("name") for skill in (skills or [])],
+                "plugins": [plugin.get("name") for plugin in (plugins or [])],
+            },
+        )
         try:
             result = _bound(self._run(request))
         except Exception as error:  # noqa: BLE001 - a remote request must fail cleanly
@@ -261,11 +340,22 @@ class SoftwareWorkExecutor:
         )
         return WorkExecution(task_id, "succeeded", result)
 
-    def execute_work_item(self, work: dict) -> WorkExecution:
+    def execute_work_item(
+        self,
+        work: dict,
+        skills: list[dict] | None = None,
+        plugins: list[dict] | None = None,
+    ) -> WorkExecution:
         if not isinstance(work, dict):
             raise WorkPayloadError("work item must be an object")
         work_id = work.get("work_id")
-        return self.execute(str(work_id), work.get("payload"), work.get("kind", "software"))
+        return self.execute(
+            str(work_id),
+            work.get("payload"),
+            work.get("kind", "software"),
+            skills,
+            plugins,
+        )
 
 
 def serve(
@@ -277,7 +367,12 @@ def serve(
     actor: str = "software-agent",
 ) -> list[dict]:
     """Claim up to max_items software work items, execute them and report."""
-    executor = SoftwareWorkExecutor(root, autonomous=autonomous, actor=actor)
+    executor = SoftwareWorkExecutor(
+        root,
+        autonomous=autonomous,
+        actor=actor,
+        approval_client=client if hasattr(client, "redeem_approval") else None,
+    )
     handled: list[dict] = []
     for _ in range(max_items):
         claimed = client.claim_work(kind=kind)
@@ -286,7 +381,9 @@ def serve(
         work = claimed["work"]
         if not isinstance(work, dict) or work.get("kind") != kind:
             break
-        execution = executor.execute_work_item(work)
+        execution = executor.execute_work_item(
+            work, claimed.get("skills", []), claimed.get("plugins", [])
+        )
         client.report_work_result(work, execution.status, execution.result)
         handled.append({"work_id": work.get("work_id"), **execution.as_dict()})
     return handled

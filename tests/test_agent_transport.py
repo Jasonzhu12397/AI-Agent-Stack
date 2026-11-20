@@ -93,22 +93,25 @@ def test_agent_client_renews_lease_with_current_identity_and_token(tmp_path, mon
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     settings = AgentSettings.from_environment("target")
+
     def handler(request):
         assert request.url.path == "/api/v1/agent-control/commands/lease/renew"
         payload = json.loads(request.content)
         assert payload["agent_id"] == str(agent_id)
         assert payload["lease_token"] == "x" * 40
         return httpx.Response(200, json={"renewed": True, "expires_at": "2026-11-17T12:00:00Z"})
+
     client = AgentControlClient(settings, transport=httpx.MockTransport(handler))
     try:
-        result = client.renew_lease({
-            "command_id": str(uuid4()),
-            "lease": {"lease_id": str(uuid4()), "token": "x" * 40},
-        })
+        result = client.renew_lease(
+            {
+                "command_id": str(uuid4()),
+                "lease": {"lease_id": str(uuid4()), "token": "x" * 40},
+            }
+        )
         assert result["renewed"] is True
     finally:
         client.close()
-
 
 
 def test_agent_client_persists_checkpoint_with_active_lease(tmp_path, monkeypatch):
@@ -177,7 +180,6 @@ def test_agent_client_persists_checkpoint_with_active_lease(tmp_path, monkeypatc
         assert result["persisted"] is True
     finally:
         client.close()
-
 
 
 def test_eph_agent_client_persists_only_initial_bootstrap_checkpoint(tmp_path, monkeypatch):
@@ -268,13 +270,16 @@ def test_agent_client_claims_work_with_project_skills_and_plugins(tmp_path, monk
         payload = json.loads(request.content)
         assert payload["agent_id"] == str(agent_id)
         assert payload["installation_id"] == str(installation_id)
-        return httpx.Response(200, json={
-            "work": {"work_id": str(uuid4()), "kind": "inspection", "payload": {}},
-            "skills": [{"name": "metal3-prep", "version": "1.0.0"}],
-            "plugins": [{"name": "vault", "kind": "connector"}],
-            "lease_token": "w" * 40,
-            "lease_seconds": 90,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "work": {"work_id": str(uuid4()), "kind": "inspection", "payload": {}},
+                "skills": [{"name": "metal3-prep", "version": "1.0.0"}],
+                "plugins": [{"name": "vault", "kind": "connector"}],
+                "lease_token": "w" * 40,
+                "lease_seconds": 90,
+            },
+        )
 
     client = AgentControlClient(settings, transport=httpx.MockTransport(handler))
     try:
@@ -348,5 +353,50 @@ def test_agent_client_claim_work_filters_by_kind(tmp_path, monkeypatch):
         assert client.claim_work(kind="software") is None
         assert client.claim_work() is None
         assert seen == ["software", None]
+    finally:
+        client.close()
+
+
+def test_agent_client_redeems_a_control_plane_approval(tmp_path, monkeypatch):
+    import json
+
+    import httpx
+
+    from packages.agent_transport.client import AgentControlClient
+    from packages.agent_transport.config import AgentSettings
+
+    ca, cert, key = _write_cert_files(tmp_path)
+    agent_id = uuid4()
+    values = {
+        "AGENT_CONTROL_URL": "https://control.example.test",
+        "AGENT_ID": str(agent_id),
+        "AGENT_INSTALLATION_ID": str(uuid4()),
+        "AGENT_INSTANCE_ID": "software-agent-0",
+        "AGENT_ROLE": "eph",
+        "AGENT_TLS_CA_FILE": ca,
+        "AGENT_TLS_CERT_FILE": cert,
+        "AGENT_TLS_KEY_FILE": key,
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    settings = AgentSettings.from_environment("eph")
+
+    def handler(request):
+        assert request.url.path == "/api/v1/agent-control/approvals/redeem"
+        payload = json.loads(request.content)
+        assert payload["agent_id"] == str(agent_id)
+        assert payload["approval_id"] == "00000000-0000-0000-0000-000000000001"
+        assert payload["payload_digest"] == "a" * 64
+        return httpx.Response(200, json={"redeemed": True, "approval_id": payload["approval_id"]})
+
+    client = AgentControlClient(settings, transport=httpx.MockTransport(handler))
+    try:
+        result = client.redeem_approval(
+            work_id="00000000-0000-0000-0000-000000000002",
+            approval_id="00000000-0000-0000-0000-000000000001",
+            action="apply-patch",
+            payload_digest="a" * 64,
+        )
+        assert result["redeemed"] is True
     finally:
         client.close()

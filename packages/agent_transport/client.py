@@ -129,6 +129,29 @@ class AgentControlClient:
             raise AgentTransportError("Work result was not accepted")
         return response
 
+    def redeem_approval(
+        self,
+        work_id: str,
+        approval_id: str,
+        action: str,
+        payload_digest: str,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schema_version": "v1",
+            **self._identity(),
+            "work_id": work_id,
+            "approval_id": approval_id,
+            "action": action,
+            "payload_digest": payload_digest,
+        }
+        if kind:
+            payload["kind"] = kind
+        response = self._post("/api/v1/agent-control/approvals/redeem", payload)
+        if response.get("redeemed") is not True:
+            raise AgentTransportError("Control approval was not redeemed")
+        return response
+
     def claim_task(self) -> dict[str, Any] | None:
         response = self._post("/api/v1/agent-control/tasks/claim", {
             "schema_version": "v1",

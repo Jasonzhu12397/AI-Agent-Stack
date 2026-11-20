@@ -60,21 +60,39 @@ protected credential files, and every auto-approval records `approved_by`
 (`eph-agent` or `target-agent`) in `.dev-agent/approvals.json`.
 
 ```bash
-# Run inside an EPH or Target pod with the repository mounted at /workspace
-dev-agent-worker --role eph --root /workspace --once
-dev-agent-worker --role target --root /workspace
+# Run inside an EPH or Target pod with the repository mounted at /workspace/repo
+dev-agent-worker --role eph --root /workspace/repo --once
+dev-agent-worker --role target --root /workspace/repo
 ```
 
 The worker claims only `kind: "software"` work, performs `bugfix` (apply edits
 then run the suite) and reports the result. It uses the agent's existing mTLS
 identity, so no new credentials are needed. It does not consume deployment or
-inspection work.
+inspection work and it does not consult control-plane approvals.
+
+Both deployment manifests (`deploy/agents/eph-agent.yaml` and
+`deploy/agents/target-cluster-agent.yaml`) run this process as a default
+`dev-agent-worker` sidecar. A `software-workspace` PVC is mounted at
+`/workspace/repo` for both the main container and the sidecar, and
+`AGENT_SOFTWARE_WORKSPACE` points at it. The `software-workspace-init`
+initContainer seeds `apps/`, `packages/` and `pyproject.toml` from the image
+only when the volume is empty, so code edited inside the volume survives restarts
+while first boot still has a usable repository.
 
 ## Control-plane work
 
-The Cloud Control plane schedules software work with `kind: "software"`. The
-executor never writes code: `plan_comment` returns a diff and an approval token,
-and no `apply_patch`, push or deploy action exists.
+The Cloud Control plane schedules software work with `kind: "software"`. A
+claimed item carries the project's skills and plugin references. The executor
+derives a tool allow-list from the skills catalog: when the claim includes
+skills, only actions declared as `software.<action>` in `manifest.actions` are
+executable; when the project has no skill, the built-in action set is allowed.
+Plugins contribute names, versions and kinds only; credentials are never parsed
+or forwarded to the sandbox.
+
+`apply_patch` writes only after a local approval token or a control-plane
+`approval_id` has been redeemed. `bugfix` prefers a token, then an
+`approval_id`, and otherwise uses the autonomous path for EPH/Target workers.
+Push, deploy and credential access remain unavailable in every mode.
 
 ```bash
 # Execute one already-claimed item locally

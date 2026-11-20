@@ -6,6 +6,7 @@ This directory deploys the new three-Agent architecture. The legacy Node Agent d
 
 - **Cloud Control Agent**: cloud-side durable command coordinator and mTLS API. Deploy in the Alibaba Cloud or Tencent Cloud management environment.
 - **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight and reports readiness. Mutating CAPI Pivot remains blocked until its dedicated, approved adapter is implemented and tested.
+- **Software worker sidecar**: both `eph-agent` and `target-agent` Pods run `dev-agent-worker` by default. It claims only `kind: "software"` work and edits the repository mounted from the `software-workspace` PVC at `/workspace/repo`. `AGENT_SOFTWARE_WORKSPACE` points at the same path. No control-plane approval gates these pods; approval applies only to interactive software work outside the EPH/Target autonomy boundary.
 - **Target Agent**: three replicas, spread one per Target Control Plane master. Kubernetes Lease leader election ensures only the elected replica polls and executes commands. All replicas expose readiness and report their own pod identity.
 
 The Target Agent currently has live Kubernetes/CAPI/Metal3/Ironic observation, trusted Pivot ownership verification, a guarded EPH cleanup executor, a Control Plane chrony profile renderer restricted to approved external sources and Worker networks, a Worker NTP policy validator, and pre-kubeadm chrony command renderers for both roles. The EPH CAPI Pivot payload and approval requirements are specified in [CAPI Pivot contract](../../docs/capi-pivot-contract.md). The generated Control Plane command installs chrony, configures only approved external sources, allows the Worker networks and verifies external synchronization plus UDP/123 listening. Target Agent inspects the CAPI Machine/KubeadmConfig bootstrap records for all Ready Control Plane Machines and requires the chrony verification command to be present; it also sends an actual NTP request to the Ironic internal IP/VIP over UDP/123 and rejects an unsynchronized response. The generated Worker command replaces the Worker source list with exactly the Ironic internal IP/VIP and verifies that chronyd selected that endpoint. The commands are not yet injected automatically into CAPI bootstrap templates or executed on newly provisioned physical hosts, so Worker host synchronization remains unverified.
@@ -26,6 +27,7 @@ Target Agent image hosted in a different registry:
 - `EPH_AGENT_IMAGE`
 - `TARGET_AGENT_IMAGE`
 - `DEPLOYMENT_ID`: stable DNS-label identifier shared by the EPH and Target cleanup scope.
+- `SOFTWARE_WORKSPACE_SIZE`: size of the `eph-agent-software-workspace` and `target-agent-software-workspace` PVCs, default `1Gi`; the cluster must provide a default StorageClass (for example Rook-Ceph or another open-source provisioner).
 
 Run `deploy.sh` only after the secrets below have been provisioned by your secret manager. The script performs server-side dry-run validation before applying resources and waits for all three Deployments.
 

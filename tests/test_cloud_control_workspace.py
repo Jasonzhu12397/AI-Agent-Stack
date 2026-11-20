@@ -2,6 +2,7 @@ import pytest
 
 from apps.cloud_control_agent.workspace import (
     WorkspaceError,
+    normalize_approval,
     normalize_plugin,
     normalize_project,
     normalize_skill,
@@ -139,52 +140,64 @@ def test_workspace_path_splits_project_collections():
 
 
 def test_workflow_definition_accepts_a_dag():
-    definition = normalize_workflow_definition({
-        "description": "Prepare then inspect",
-        "steps": [
-            {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
-            {
-                "id": "inspect",
-                "name": "Inspect hosts",
-                "depends_on": ["prepare"],
-                "payload": {"selector": "all"},
-            },
-        ],
-    })
+    definition = normalize_workflow_definition(
+        {
+            "description": "Prepare then inspect",
+            "steps": [
+                {"id": "prepare", "name": "Prepare hosts", "required_role": "eph"},
+                {
+                    "id": "inspect",
+                    "name": "Inspect hosts",
+                    "depends_on": ["prepare"],
+                    "payload": {"selector": "all"},
+                },
+            ],
+        }
+    )
     assert [step["id"] for step in definition["steps"]] == ["prepare", "inspect"]
     assert definition["steps"][1]["depends_on"] == ["prepare"]
 
 
 def test_workflow_definition_rejects_cycles_and_unknown_dependencies():
     with pytest.raises(WorkspaceError):
-        normalize_workflow_definition({
-            "steps": [
-                {"id": "a", "name": "A", "depends_on": ["b"]},
-                {"id": "b", "name": "B", "depends_on": ["a"]},
-            ],
-        })
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {"id": "a", "name": "A", "depends_on": ["b"]},
+                    {"id": "b", "name": "B", "depends_on": ["a"]},
+                ],
+            }
+        )
     with pytest.raises(WorkspaceError):
-        normalize_workflow_definition({
-            "steps": [{"id": "a", "name": "A", "depends_on": ["missing"]}],
-        })
+        normalize_workflow_definition(
+            {
+                "steps": [{"id": "a", "name": "A", "depends_on": ["missing"]}],
+            }
+        )
     with pytest.raises(WorkspaceError):
-        normalize_workflow_definition({
-            "steps": [{"id": "a", "name": "A", "depends_on": ["a"]}],
-        })
+        normalize_workflow_definition(
+            {
+                "steps": [{"id": "a", "name": "A", "depends_on": ["a"]}],
+            }
+        )
 
 
 def test_workflow_definition_rejects_duplicate_ids_and_bad_roles():
     with pytest.raises(WorkspaceError):
-        normalize_workflow_definition({
-            "steps": [
-                {"id": "a", "name": "A"},
-                {"id": "a", "name": "Again"},
-            ],
-        })
+        normalize_workflow_definition(
+            {
+                "steps": [
+                    {"id": "a", "name": "A"},
+                    {"id": "a", "name": "Again"},
+                ],
+            }
+        )
     with pytest.raises(WorkspaceError):
-        normalize_workflow_definition({
-            "steps": [{"id": "a", "name": "A", "required_role": "cloud"}],
-        })
+        normalize_workflow_definition(
+            {
+                "steps": [{"id": "a", "name": "A", "required_role": "cloud"}],
+            }
+        )
 
 
 def test_task_normalization_and_workflow_run_input():
@@ -210,22 +223,54 @@ def test_workspace_path_accepts_tasks_and_workflows():
 
 
 def test_workflow_definition_defaults_and_validates_step_retries():
-    definition = normalize_workflow_definition({
-        "steps": [{"id": "prepare", "name": "Prepare hosts"}],
-    })
+    definition = normalize_workflow_definition(
+        {
+            "steps": [{"id": "prepare", "name": "Prepare hosts"}],
+        }
+    )
     assert definition["steps"][0]["max_attempts"] == 1
 
-    definition = normalize_workflow_definition({
-        "steps": [
-            {"id": "prepare", "name": "Prepare hosts", "max_attempts": 3},
-        ],
-    })
+    definition = normalize_workflow_definition(
+        {
+            "steps": [
+                {"id": "prepare", "name": "Prepare hosts", "max_attempts": 3},
+            ],
+        }
+    )
     assert definition["steps"][0]["max_attempts"] == 3
 
     for value in (0, 6, True, "3", 2.5):
         with pytest.raises(WorkspaceError, match="max_attempts"):
-            normalize_workflow_definition({
-                "steps": [
-                    {"id": "prepare", "name": "Prepare hosts", "max_attempts": value},
-                ],
-            })
+            normalize_workflow_definition(
+                {
+                    "steps": [
+                        {"id": "prepare", "name": "Prepare hosts", "max_attempts": value},
+                    ],
+                }
+            )
+
+
+def test_approval_contract_requires_sha256_digest_and_bounded_ttl():
+    approval = normalize_approval(
+        work_id="00000000-0000-0000-0000-000000000001",
+        action="apply-patch",
+        payload_digest="a" * 64,
+        requested_by="alice",
+        ttl_seconds=3600,
+    )
+    assert approval["action"] == "apply-patch"
+    with pytest.raises(WorkspaceError):
+        normalize_approval(
+            work_id="00000000-0000-0000-0000-000000000001",
+            action="apply-patch",
+            payload_digest="not-a-digest",
+            requested_by="alice",
+        )
+    with pytest.raises(WorkspaceError):
+        normalize_approval(
+            work_id="00000000-0000-0000-0000-000000000001",
+            action="apply-patch",
+            payload_digest="a" * 64,
+            requested_by="alice",
+            ttl_seconds=10,
+        )
