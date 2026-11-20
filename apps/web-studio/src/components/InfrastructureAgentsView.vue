@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { buildIronicWorkload, ironicWorkloadConfigured } from "../domain/ironicWorkload.ts";
 import {
   approveAgentCommand,
   cancelClusterDeployment,
@@ -75,6 +76,14 @@ const HOST_ROLES = [
   { value: "worker", label: "Worker" },
   { value: "storage", label: "Storage" },
 ];
+const buildIronicEnabled = ref(false);
+const buildIronicCredentialsName = ref("");
+const buildIronicVersion = ref("");
+const buildIronicImage = ref("");
+const buildIronicRamdiskDownloaderImage = ref("");
+const buildIronicKeepalivedImage = ref("");
+const buildIronicInterface = ref("");
+const buildIronicIpAddress = ref("");
 const buildStorageEnabled = ref(false);
 const buildRookVersion = ref("v1.17.4");
 const buildCephImage = ref("quay.io/ceph/ceph:v19.2.2");
@@ -466,6 +475,24 @@ async function generateClusterPlan(): Promise<void> {
         mgr: { count: 2 },
         storage_classes: { block: true, filesystem: true },
       };
+    }
+    const ironicWorkload = buildIronicWorkload({
+      enabled: buildIronicEnabled.value,
+      credentialsName: buildIronicCredentialsName.value,
+      version: buildIronicVersion.value,
+      ironicImage: buildIronicImage.value,
+      ramdiskDownloaderImage: buildIronicRamdiskDownloaderImage.value,
+      keepalivedImage: buildIronicKeepalivedImage.value,
+      interfaceName: buildIronicInterface.value,
+      ipAddress: buildIronicIpAddress.value,
+    });
+    if (ironicWorkload.missing.length) {
+      throw new Error(
+        "Ironic workload requires: " + ironicWorkload.missing.join(", ") + ".",
+      );
+    }
+    if (ironicWorkload.spec) {
+      clusterSpec.ironic = ironicWorkload.spec;
     }
     if (buildNetworkProfile.value.trim()) {
       const networkProfile: unknown = JSON.parse(buildNetworkProfile.value);
@@ -908,6 +935,40 @@ onUnmounted(() => {
             <label>Kubernetes version
               <el-input v-model="buildKubernetesVersion" placeholder="v1.x.y" />
             </label>
+            <el-divider content-position="left">Ironic workload CR</el-divider>
+            <p>
+              The Ironic Standalone Operator is installed offline, but its workload CR is
+              environment specific. Without it the EPH control stack cannot become ready;
+              the EPH preflight reports the missing contract as a warning.
+            </p>
+            <el-switch v-model="buildIronicEnabled" active-text="Configure the Ironic workload CR" />
+            <template v-if="buildIronicEnabled">
+              <div class="replica-fields">
+                <label>API credentials Secret name
+                  <el-input v-model="buildIronicCredentialsName" placeholder="ironic-auth" />
+                </label>
+                <label>Ironic version
+                  <el-input v-model="buildIronicVersion" placeholder="37.0" />
+                </label>
+              </div>
+              <label>Ironic image
+                <el-input v-model="buildIronicImage" placeholder="registry.local/ironic:37.0" />
+              </label>
+              <label>Deploy ramdisk downloader image
+                <el-input v-model="buildIronicRamdiskDownloaderImage" placeholder="registry.local/ipa-downloader:latest" />
+              </label>
+              <label>Keepalived image
+                <el-input v-model="buildIronicKeepalivedImage" placeholder="registry.local/keepalived:2.2.4" />
+              </label>
+              <div class="replica-fields">
+                <label>Provisioning interface
+                  <el-input v-model="buildIronicInterface" placeholder="eno2" />
+                </label>
+                <label>Provisioning IP address
+                  <el-input v-model="buildIronicIpAddress" placeholder="10.130.60.84" />
+                </label>
+              </div>
+            </template>
             <label>Network profile override (optional JSON)
               <el-input
                 v-model="buildNetworkProfile"
@@ -1010,6 +1071,12 @@ onUnmounted(() => {
               <div v-if="deployment.plan_result" class="plan-result">
                 <span>Plan hash: {{ deployment.plan_hash || "not generated" }}</span>
                 <p v-if="deployment.plan_result.network_profile">Dual-network profile passed input validation. Runtime dataplane connectivity remains a separate check.</p>
+                <el-tag
+                  :type="ironicWorkloadConfigured(deployment.spec) ? 'success' : 'warning'"
+                  size="small"
+                >
+                  {{ ironicWorkloadConfigured(deployment.spec) ? "Ironic CR configured" : "Ironic CR missing" }}
+                </el-tag>
                 <el-tag
                   :type="deployment.plan_result.adapter_enabled === true ? 'success' : 'warning'"
                   size="small"
