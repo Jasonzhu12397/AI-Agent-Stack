@@ -940,7 +940,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND (w.status = 'queued'
                                OR (w.status = 'leased' AND w.lease_expires_at < NOW()))
                           AND (w.required_role IS NULL OR w.required_role = %(role)s)
-                          AND (%(kind)s IS NULL OR w.kind = %(kind)s)
+                          AND (%(kind)s::text IS NULL OR w.kind = %(kind)s::text)
                         ORDER BY w.priority DESC, w.created_at
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
