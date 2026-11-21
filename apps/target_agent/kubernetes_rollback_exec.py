@@ -115,6 +115,50 @@ class RollbackExecutor:
         return result.get("available", True) and result.get("returncode") == 0
 
     # -- preflight -------------------------------------------------------
+    def assess(self, request: dict[str, str]) -> dict[str, Any]:
+        """Read-only: what a rollback of this cluster would be allowed to do.
+
+        The lab runner has a kubeconfig and no rights to stop a kubelet, so this
+        is the same evidence preflight with none of the mutations.
+        """
+
+        nodes = self._nodes()
+        control_planes = [
+            node for node in nodes if self._upgrade._is_control_plane(node)
+        ]
+        count = len(control_planes)
+        assessed: dict[str, Any] = {
+            "control_planes": count,
+            "control_plane": "",
+            "etcd_pod": "",
+            "checks": [
+                self._check(
+                    "cluster.control_plane.count",
+                    count == 1,
+                    f"{count} control plane(s); a rollback restores exactly one",
+                )
+            ],
+            "blocked": count != 1,
+            "refusal": (
+                ""
+                if count == 1
+                else "ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED"
+                if count > 1
+                else "ROLLBACK_CONTROL_PLANE_NOT_FOUND"
+            ),
+        }
+        if count != 1:
+            return assessed
+        control_plane = control_planes[0]
+        node_name = self._upgrade._node_name(control_plane)
+        assessed["control_plane"] = node_name
+        etcd_pod, _pods = self._etcd_pod_on(node_name)
+        assessed["etcd_pod"] = etcd_pod
+        preflight = self._preflight(request, control_plane, etcd_pod)
+        assessed["checks"] = [*assessed["checks"], *preflight["checks"]]
+        assessed["blocked"] = preflight["blocked"]
+        return assessed
+
     def _preflight(
         self,
         request: dict[str, str],
@@ -137,16 +181,6 @@ class RollbackExecutor:
                 "Ready=True" if ready else "node is not Ready",
             )
         )
-        exists = self._run(["sudo", "test", "-f", request["snapshot_path"]], timeout=60)
-        checks.append(
-            self._check(
-                "etcd.snapshot.exists",
-                self._ok(exists),
-                f"{request['snapshot_path']} is readable"
-                if self._ok(exists)
-                else f"{request['snapshot_path']} is missing",
-            )
-        )
         status_argv = [
             *self._upgrade._etcdctl_argv(etcd_pod),
             "snapshot",
@@ -156,7 +190,19 @@ class RollbackExecutor:
         ]
         verified = self._run(status_argv, timeout=60)
         body = (verified.get("stdout") or "").strip()
-        hashed = self._ok(verified) and body.startswith("{") and "hash" in body
+        readable = self._ok(verified)
+        hashed = readable and body.startswith("{") and "hash" in body
+        # One probe inside the etcd pod answers both questions: whether the file
+        # is visible where the restore will read it, and whether it verifies.
+        checks.append(
+            self._check(
+                "etcd.snapshot.readable",
+                readable,
+                f"{request['snapshot_path']} is readable from the etcd pod"
+                if readable
+                else f"{request['snapshot_path']} is missing or unreadable: {_output(verified)}",
+            )
+        )
         checks.append(
             self._check(
                 "etcd.snapshot.verified",
@@ -219,31 +265,24 @@ class RollbackExecutor:
         return False, detail
 
     def run(self, request: dict[str, str]) -> dict[str, Any]:
-        try:
-            nodes = self._nodes()
-        except RollbackExecutionError:
-            raise
-        control_planes = [node for node in nodes if self._upgrade._is_control_plane(node)]
-        if not control_planes:
-            raise RollbackExecutionError(
-                "ROLLBACK_CONTROL_PLANE_NOT_FOUND", "no control-plane node reported itself"
-            )
-        if len(control_planes) > 1:
+        assessment = self.assess(request)
+        if assessment["refusal"]:
             # Restoring one member of a stacked etcd would break the quorum.
-            raise RollbackExecutionError(
-                "ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED",
-                f"{len(control_planes)} control planes; every member must be restored together",
+            detail = (
+                f"{assessment['control_planes']} control planes; every member "
+                "must be restored together"
+                if assessment["control_planes"] > 1
+                else "no control-plane node reported itself"
             )
-        control_plane = control_planes[0]
-        node_name = self._upgrade._node_name(control_plane)
-        etcd_pod, _pods = self._etcd_pod_on(node_name)
+            raise RollbackExecutionError(assessment["refusal"], detail)
+        etcd_pod = assessment["etcd_pod"]
 
         self._restore_dir = restore_dir_for(request)
         self._member_backup = member_backup_for(self._restore_dir)
         steps = planned_steps(request, restore_dir=self._restore_dir)
         performed: list[str] = []
 
-        preflight = self._preflight(request, control_plane, etcd_pod)
+        preflight = {"checks": assessment["checks"], "blocked": assessment["blocked"]}
         steps[0]["status"] = "succeeded" if not preflight["blocked"] else "failed"
         steps[0]["detail"] = (
             f"{sum(1 for item in preflight['checks'] if item['ok'])}/"

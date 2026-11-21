@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -451,6 +453,82 @@ def write_evidence(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _kubectl_runner(kubeconfig: str):
+    """A runner that shells out to kubectl against the target cluster."""
+
+    def run(argv: list[str], timeout: int = 20, **_kwargs: Any) -> dict[str, Any]:
+        env = {**os.environ, "KUBECONFIG": kubeconfig}
+        try:
+            completed = subprocess.run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "available": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": str(exc),
+            }
+        return {
+            "available": True,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr[:2000],
+        }
+
+    return run
+
+
+def command_rollback(args) -> int:
+    """Read-only: prove this lab cluster could be rolled back at all."""
+
+    from target_agent.kubernetes_rollback_exec import (
+        RollbackExecutionError,
+        RollbackExecutor,
+    )
+
+    request = {
+        "cluster_name": args.cluster_name or "lab",
+        "snapshot_path": args.snapshot,
+        "execution_mode": "simulation",
+        "confirm_cluster_name": "",
+    }
+    try:
+        assessed = RollbackExecutor(_kubectl_runner(args.kubeconfig)).assess(request)
+    except RollbackExecutionError as exc:
+        print(json.dumps({"status": STATUS_FAIL, "code": exc.code, "detail": exc.detail}, indent=2))
+        return 1
+    checks = [
+        _check(
+            item["name"],
+            STATUS_PASS if item["ok"] else STATUS_FAIL,
+            item["detail"],
+        )
+        for item in assessed["checks"]
+    ]
+    payload = {
+        "kind": "metal3-rollback-readiness",
+        "version": ACCEPTANCE_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "snapshot": args.snapshot,
+        "control_planes": assessed["control_planes"],
+        "control_plane": assessed["control_plane"],
+        "etcd_pod": assessed["etcd_pod"],
+        "refusal": assessed["refusal"],
+        "checks": checks,
+        "status": overall_status(checks),
+    }
+    if args.out:
+        write_evidence(Path(args.out), payload)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["status"] == STATUS_PASS else 1
+
+
 def command_preflight(args) -> int:
     skipped: list[str] = []
     machines = load_platform_fleet(
@@ -608,6 +686,20 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--timeout", type=int, default=10)
     verify.add_argument("--out")
     verify.set_defaults(func=command_verify)
+
+    rollback = subparsers.add_parser(
+        "rollback",
+        help="Read-only: can this cluster be rolled back from a snapshot?",
+    )
+    rollback.add_argument("--kubeconfig", required=True)
+    rollback.add_argument(
+        "--snapshot",
+        required=True,
+        help="pre-upgrade .db path as the etcd pod sees it",
+    )
+    rollback.add_argument("--cluster-name", default="")
+    rollback.add_argument("--out")
+    rollback.set_defaults(func=command_rollback)
     return parser
 
 

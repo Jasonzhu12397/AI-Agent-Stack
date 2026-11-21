@@ -147,6 +147,9 @@ const recentCommands = computed(() =>
 const kubernetesUpgradeCommands = computed(() =>
   recentCommands.value.filter((command) => command.command_type === "cluster.kubernetes.version.upgrade"),
 );
+const kubernetesRollbackCommands = computed(() =>
+  recentCommands.value.filter((command) => command.command_type === "cluster.kubernetes.version.rollback"),
+);
 const latestActivity = computed(() => {
   const commandTimes = commands.value.map((item) => item.finished_at ?? item.started_at ?? item.created_at);
   const deploymentTimes = deployments.value.map((item) => item.updated_at);
@@ -834,6 +837,31 @@ function kubernetesUpgradeSteps(command: AgentCommand): Array<Record<string, unk
         Boolean(step) && typeof step === "object" && !Array.isArray(step),
       )
     : [];
+}
+
+function rollbackSteps(command: AgentCommand): Array<Record<string, unknown>> {
+  const steps = command.result?.steps;
+  return Array.isArray(steps)
+    ? steps.filter((step): step is Record<string, unknown> =>
+        Boolean(step) && typeof step === "object" && !Array.isArray(step),
+      )
+    : [];
+}
+
+function rollbackPreflight(command: AgentCommand) {
+  const preflight = command.result?.preflight;
+  if (!preflight || typeof preflight !== "object" || Array.isArray(preflight)) return null;
+  const checks = (preflight as Record<string, unknown>).checks;
+  return Array.isArray(checks)
+    ? (checks as Array<Record<string, unknown>>).filter(
+        (check) => Boolean(check) && typeof check === "object" && typeof check.name === "string",
+      )
+    : null;
+}
+
+function rollbackBlocked(command: AgentCommand): boolean {
+  const preflight = command.result?.preflight;
+  return Boolean(preflight) && typeof preflight === "object" && (preflight as Record<string, unknown>).blocked === true;
 }
 
 function upgradeStepDetail(step: Record<string, unknown>): string {
@@ -1664,6 +1692,62 @@ onUnmounted(() => {
           <el-button size="small" plain :disabled="commandOffset === 0 || refreshing" @click="changeCommandPage(-1)">Previous</el-button>
           <el-button size="small" plain :disabled="commandOffset + commandPageSize >= commandCount || refreshing" @click="changeCommandPage(1)">Next</el-button>
         </div>
+        <section v-if="kubernetesRollbackCommands.length" class="fleet-upgrade-plans">
+          <div class="fleet-panel-heading">
+            <h3>Kubernetes rollback plans</h3>
+            <span>{{ kubernetesRollbackCommands.length }} COMMANDS</span>
+          </div>
+          <article v-for="command in kubernetesRollbackCommands" :key="command.id" class="fleet-upgrade-plan">
+            <div class="fleet-upgrade-plan-heading">
+              <div>
+                <strong>{{ String(command.payload.cluster_name ?? "Target cluster") }}</strong>
+                <small>restore {{ String(command.payload.snapshot_path ?? "snapshot not set") }}</small>
+              </div>
+              <div class="fleet-upgrade-plan-tags">
+                <el-tag :type="command.result?.rolled_back ? 'success' : 'warning'" size="small" effect="plain">
+                  {{ command.result?.rolled_back ? "RESTORED" : "NOT RESTORED" }}
+                </el-tag>
+                <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+              </div>
+            </div>
+            <ol v-if="rollbackSteps(command).length" class="fleet-upgrade-steps">
+              <li v-for="step in rollbackSteps(command)" :key="String(step.sequence ?? step.name)">
+                <span class="fleet-upgrade-step-sequence">{{ step.sequence }}</span>
+                <div>
+                  <strong>{{ String(step.name ?? "Rollback step").replaceAll("_", " ") }}</strong>
+                  <small v-if="upgradeStepDetail(step)" class="fleet-upgrade-step-detail">{{ upgradeStepDetail(step) }}</small>
+                </div>
+                <el-tag :type="step.status === 'failed' ? 'danger' : step.status === 'succeeded' ? 'success' : 'info'" size="small">{{ upgradeStepStatus(step) }}</el-tag>
+              </li>
+            </ol>
+            <div v-if="rollbackPreflight(command)" class="fleet-preflight">
+              <div class="fleet-preflight-heading">
+                <span>Rollback preflight</span>
+                <el-tag :type="rollbackBlocked(command) ? 'danger' : 'success'" size="small">
+                  {{ rollbackBlocked(command) ? "BLOCKED" : "PASSED" }}
+                </el-tag>
+              </div>
+              <ul>
+                <li v-for="check in rollbackPreflight(command)" :key="String(check.name)" :class="{ failed: check.ok !== true }">
+                  <span class="fleet-preflight-mark">{{ check.ok === true ? "✓" : "✕" }}</span>
+                  <code>{{ check.name }}</code>
+                  <small>{{ String(check.detail ?? "") }}</small>
+                </li>
+              </ul>
+            </div>
+            <p v-if="command.result?.previous_member_dir" class="fleet-preflight-hint">
+              previous etcd data kept at {{ command.result.previous_member_dir }}
+            </p>
+            <p v-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
+              Rollback did not finish.
+              <span v-if="getKubernetesUpgradeFailure(command.error)">{{ getKubernetesUpgradeFailure(command.error) }}</span>
+              <span v-else>No structured failure detail was returned.</span>
+            </p>
+            <p v-else-if="command.status === 'waiting_approval'" class="fleet-upgrade-pending">
+              Awaiting independent approval; the kubelet has not been stopped.
+            </p>
+          </article>
+        </section>
         <section v-if="kubernetesUpgradeCommands.length" class="fleet-upgrade-plans">
           <div class="fleet-panel-heading">
             <h3>Kubernetes upgrade plans</h3>

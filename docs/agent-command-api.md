@@ -223,3 +223,9 @@ result names where the data is kept.
 
 Package downgrades are out of scope: kubeadm has no supported downgrade path, so
 the binaries stay where they are and only control-plane state is restored.
+
+Before anyone approves a rollback, `metal3_acceptance.py rollback` answers the
+same question read-only on a real cluster: one control plane, the node Ready, the
+snapshot readable from inside the etcd pod and its hash verifiable, etcd healthy.
+It shells `kubectl` only, never `sudo`, and the lab workflow runs it when
+`rollback_snapshot` is passed to the manual dispatch.

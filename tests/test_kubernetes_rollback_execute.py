@@ -146,14 +146,14 @@ def test_a_multi_control_plane_cluster_is_refused_before_anything_is_touched():
 
 
 def test_a_missing_snapshot_blocks_before_restore():
-    runner = RollbackRunner(fail_on=("test -f",))
+    runner = RollbackRunner(fail_on=("snapshot status",))
     result = RollbackExecutor(runner).run(REQUEST)
 
     assert result["failure_code"] == "ROLLBACK_PREFLIGHT_BLOCKED"
     assert result["rolled_back"] is False
     assert result["performed_steps"] == []
     assert any(
-        check["name"] == "etcd.snapshot.exists" and not check["ok"]
+        check["name"] == "etcd.snapshot.readable" and not check["ok"]
         for check in result["preflight"]["checks"]
     )
     assert not [call for call in runner.calls if "restore" in call]
@@ -202,3 +202,32 @@ def test_the_request_refuses_what_it_cannot_do_safely():
     with pytest.raises(KubernetesRollbackError) as raised:
         validate_request({**REQUEST, "execution_mode": "yolo"})
     assert raised.value.code == "ROLLBACK_EXECUTION_MODE_INVALID"
+
+
+def test_assessment_is_read_only_and_names_the_refusal():
+    runner = RollbackRunner(nodes=_nodes("v1.34.1"))
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    assert assessed["control_planes"] == 1
+    assert assessed["control_plane"] == "cp-0"
+    assert assessed["etcd_pod"] == "etcd-cp-0"
+    assert assessed["blocked"] is False
+    assert assessed["refusal"] == ""
+    assert [check["name"] for check in assessed["checks"]][:2] == [
+        "cluster.control_plane.count",
+        "node.ready/cp-0",
+    ]
+    assert not [call for call in runner.calls if call[:1] == ["sudo"]]
+    assert not [call for call in runner.calls if "restore" in call]
+
+
+def test_assessment_reports_three_control_planes_without_touching_them():
+    runner = RollbackRunner(nodes=_nodes("v1.34.1", "v1.34.1", "v1.34.1"))
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    assert assessed["control_planes"] == 3
+    assert assessed["refusal"] == "ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED"
+    assert assessed["blocked"] is True
+    assert [check["name"] for check in assessed["checks"]] == [
+        "cluster.control_plane.count"
+    ]

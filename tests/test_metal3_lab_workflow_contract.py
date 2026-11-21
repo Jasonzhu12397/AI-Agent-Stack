@@ -51,6 +51,13 @@ def test_the_workflow_only_runs_on_manual_dispatch():
                     "default": "4",
                     "type": "string",
                 },
+                "rollback_snapshot": {
+                    "description": "Pre-upgrade .db path as the etcd pod sees it; "
+                    "empty skips the rollback check",
+                    "required": False,
+                    "default": "",
+                    "type": "string",
+                },
             }
         }
     }

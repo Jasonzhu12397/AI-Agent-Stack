@@ -101,7 +101,6 @@ def planned_steps(
             "status": "not_started",
             "commands": [
                 "kubectl get nodes -o json",
-                f"sudo test -f {request['snapshot_path']}",
                 f"kubectl -n kube-system exec {etcd_pod} -- etcdctl snapshot status "
                 f"{request['snapshot_path']} --write-out=json",
             ],

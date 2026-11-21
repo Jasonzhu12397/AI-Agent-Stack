@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from tools import metal3_acceptance
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/metal3-lab-contract.yml"
 LAB_WORKFLOW = REPO_ROOT / ".github/workflows/metal3-lab-e2e.yml"
@@ -76,3 +78,35 @@ def test_physical_acceptance_still_requires_the_real_runner():
     acceptance = document["jobs"]["acceptance"]
     assert acceptance["runs-on"] == ["self-hosted", "metal3-lab", "physical"]
     assert acceptance["if"] == "needs.lab-readiness.outputs.ready == 'true'"
+
+
+def test_lab_workflow_offers_a_read_only_rollback_check():
+    """The only rollback proof that can run on the lab is the read-only one."""
+
+    document = yaml.safe_load(LAB_WORKFLOW.read_text(encoding="utf-8"))
+    trigger = document.get("on", document.get(True))["workflow_dispatch"]["inputs"]
+    assert "rollback_snapshot" in trigger
+    assert trigger["rollback_snapshot"]["default"] == ""
+
+    steps = document["jobs"]["acceptance"]["steps"]
+    rollback = [step for step in steps if step.get("name") == "Rollback readiness (read-only)"]
+    assert len(rollback) == 1
+    assert rollback[0]["if"] == "inputs.rollback_snapshot != ''"
+    run = rollback[0]["run"]
+    assert "metal3_acceptance.py rollback" in run
+    assert "--snapshot" in run
+    assert "systemctl" not in run
+    assert "sudo" not in run
+
+
+def test_the_acceptance_tool_exposes_the_rollback_probe():
+    parser = metal3_acceptance.build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if type(action).__name__ == "_SubParsersAction"
+    )
+    assert "rollback" in subparsers.choices
+    rollback = subparsers.choices["rollback"]
+    assert rollback.get_default("func") is metal3_acceptance.command_rollback
+    assert "--snapshot" in rollback._option_string_actions

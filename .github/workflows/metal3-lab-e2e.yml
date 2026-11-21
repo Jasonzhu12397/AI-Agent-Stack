@@ -20,6 +20,11 @@ on:
         required: true
         default: "4"
         type: string
+      rollback_snapshot:
+        description: Pre-upgrade .db path as the etcd pod sees it; empty skips the rollback check
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: metal3-lab-${{ inputs.project_id }}
@@ -158,6 +163,16 @@ jobs:
             --worker-replicas "${{ inputs.worker_replicas }}" \
             --redfish \
             --out evidence/acceptance.json
+
+      - name: Rollback readiness (read-only)
+        if: inputs.rollback_snapshot != ''
+        env:
+          TARGET_KUBECONFIG_PATH: ${{ runner.temp }}/target.kubeconfig
+        run: |
+          python tools/metal3_acceptance.py rollback \
+            --kubeconfig "${{ runner.temp }}/target.kubeconfig" \
+            --snapshot "${{ inputs.rollback_snapshot }}" \
+            --out evidence/rollback.json
 
       - name: Upload evidence
         if: always()

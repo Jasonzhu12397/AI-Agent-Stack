@@ -1,4 +1,6 @@
 
+import json
+
 from apps.eph_agent.fleet_planning import MachineSpec
 from tools import metal3_acceptance
 from tools.metal3_fleet_source import PlatformMachine
@@ -170,3 +172,50 @@ def test_verify_cluster_fails_unprovisioned_bmh_and_missing_proxy_state():
     assert statuses["cluster.control_plane_replicas"] == "fail"
     assert statuses["cluster.worker_replicas"] == "fail"
     assert metal3_acceptance.overall_status(checks) == "fail"
+
+
+def test_rollback_readiness_turns_executor_checks_into_evidence(monkeypatch, tmp_path):
+    from target_agent import kubernetes_rollback_exec
+
+    assessed = {
+        "control_planes": 1,
+        "control_plane": "cp-0",
+        "etcd_pod": "etcd-cp-0",
+        "refusal": "",
+        "blocked": False,
+        "checks": [
+            {"name": "cluster.control_plane.count", "ok": True, "detail": "1 control plane(s)"},
+            {
+                "name": "etcd.snapshot.verified",
+                "ok": True,
+                "detail": "snapshot status returned its hash",
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        kubernetes_rollback_exec.RollbackExecutor,
+        "assess",
+        lambda self, request: assessed,
+    )
+    out = tmp_path / "rollback.json"
+    code = metal3_acceptance.main(
+        [
+            "rollback",
+            "--kubeconfig",
+            str(tmp_path / "target.kubeconfig"),
+            "--snapshot",
+            "/var/lib/etcd/backups/snapshot-pre-v1.34.1.db",
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(out.read_text())
+    assert payload["kind"] == "metal3-rollback-readiness"
+    assert payload["status"] == "pass"
+    assert payload["control_plan\nes"] if False else payload["control_planes"] == 1
+    assert [check["name"] for check in payload["checks"]] == [
+        "cluster.control_plane.count",
+        "etcd.snapshot.verified",
+    ]
