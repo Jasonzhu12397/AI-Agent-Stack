@@ -178,7 +178,7 @@ for manifest in "${ROOT_DIR}"/deploy/offline/addons/control-stack/*.yaml; do
 done
 echo "All control-stack manifests are accepted by the API server"
 
-echo "Server-side validation of the platform-rendered Ironic CR"
+echo "CRD-schema validation of the platform-rendered Ironic CR"
 "${KUBECTL}" create namespace baremetal-operator-system --dry-run=client -o yaml \
   | "${KUBECTL}" apply -f - >/dev/null
 python3 - "${ROOT_DIR}" "${split_dir}/ironic-crd.yaml" <<'PY'
@@ -253,5 +253,23 @@ PY
 if grep -q "no matches for kind" "${split_dir}/ironic-cr-validation.log"; then
   cat "${split_dir}/ironic-cr-validation.log"
   echo "The Ironic CRD is not discoverable by kubectl; the CR cannot be validated" >&2
+  exit 1
+fi
+# Prove the gate is live: an object with a wrongly typed field must be rejected.
+# Without this check a kubectl that silently skips CR validation would pass every
+# manifest, which is the same as having no gate at all.
+python3 - "${split_dir}/rendered-ironic-cr.yaml" "${split_dir}/broken-ironic-cr.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+document = yaml.safe_load(Path(sys.argv[1]).read_text())
+document["spec"]["version"] = 37.0
+Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
+PY
+if "${KUBECTL}" apply --dry-run=client --validate=true \
+    -f "${split_dir}/broken-ironic-cr.yaml" >/dev/null 2>&1; then
+  echo "kubectl accepted a wrongly typed Ironic field; CRD schema validation is not active" >&2
   exit 1
 fi
