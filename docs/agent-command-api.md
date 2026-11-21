@@ -129,9 +129,27 @@ a configured value — and needs no approval. The deployment row shows a
 "Check upgrade readiness" action and renders `missing` names, so an operator sees
 the exact variable to set instead of a bare "not ready".
 
-`execute` refuses what one agent cannot do safely: more than one control-plane
-node (`UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED`) and workers without
-`KUBERNETES_UPGRADE_REMOTE_USER` (`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It
-stops at the first failed step and returns its exit code and output; there is no
-rollback. Both modes still need a platform approval, and the platform accepts
-execution evidence only when every stage ran to completion.
+### Rolling control-plane upgrades
+
+A multi control-plane cluster is upgraded the way kubeadm prescribes, inside the
+`control_plane` stage: exactly one `kubeadm upgrade apply` runs on the control
+plane this agent is deployed beside, and each remaining control plane then gets
+its packages, `kubeadm upgrade node` and a kubelet restart over ssh, in name
+order. The local control plane is identified by hostname or by
+`KUBERNETES_UPGRADE_LOCAL_NODE`; when neither matches a control-plane node the
+run answers `UPGRADE_LOCAL_NODE_UNKNOWN` and changes nothing, because running
+`kubeadm upgrade node` on the wrong host still upgrades that host. A peer with
+no InternalIP answers `UPGRADE_CONTROL_PLANE_PEER_ADDRESS_UNKNOWN`.
+
+Nodes already reporting the target minor are skipped with a
+`<node>: already on <version>, skipped` note, so a retry after a mid-run failure
+does not repeat `kubeadm upgrade apply` or re-ssh into nodes that are done.
+Peer failures keep the node in the detail: `UPGRADE_CONTROL_PLANE_PEER_PACKAGE_FAILED`,
+`UPGRADE_CONTROL_PLANE_PEER_FAILED`, `UPGRADE_CONTROL_PLANE_PEER_KUBELET_RESTART_FAILED`.
+
+`execute` refuses what one agent cannot do safely: workers or control-plane
+peers without `KUBERNETES_UPGRADE_REMOTE_USER`
+(`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It stops at the first failed step and
+returns its exit code and output; there is no rollback. Both modes still need a
+platform approval, and the platform accepts execution evidence only when every
+stage ran to completion.

@@ -61,10 +61,11 @@ class FakeRunner:
 
     """A cluster that reports the new kubelet version once kubeadm applied it."""
 
-    def __init__(self, *, nodes, fail_on=(), upgraded=None):
+    def __init__(self, *, nodes, fail_on=(), upgraded=None, peer_upgraded=None):
         self.calls = []
         self._nodes = nodes
         self._upgraded = upgraded or nodes
+        self._peer_upgraded = dict(peer_upgraded or {})
         self._fail_on = tuple(fail_on)
 
     def __call__(self, argv, timeout=20, **kwargs):
@@ -76,6 +77,10 @@ class FakeRunner:
                 return {"available": True, "returncode": 1, "stdout": "", "stderr": "boom"}
         if argv[:3] == ["kubeadm", "upgrade", "apply"]:
             self._nodes = self._upgraded
+        if argv[:1] == ["ssh"] and "kubeadm" in argv and "node" in argv:
+            address = argv[1].split("@")[-1]
+            if address in self._peer_upgraded:
+                self._nodes = self._peer_upgraded[address]
         return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
 
 
@@ -125,18 +130,119 @@ def test_workers_without_a_remote_executor_are_refused(monkeypatch):
     assert runner.calls == [["kubectl", "get", "nodes", "-o", "json"]]
 
 
-def test_multiple_control_planes_are_refused():
+SECOND_CONTROL = (
+    "cp-1",
+    {"node-role.kubernetes.io/control-plane": ""},
+    "10.0.0.11",
+    "v1.33.4",
+)
+
+
+def test_a_rolling_control_plane_upgrade_runs_upgrade_node_on_every_peer(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    target_nodes = _nodes(
+        UPGRADED_CONTROL,
+        ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.11", "v1.34.1"),
+        ("w-0", {}, "10.0.0.20", "v1.34.1"),
+    )
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, SECOND_CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(
+            UPGRADED_CONTROL,
+            SECOND_CONTROL,
+            ("w-0", {}, "10.0.0.20", "v1.33.4"),
+        ),
+        peer_upgraded={
+            "10.0.0.11": _nodes(
+                UPGRADED_CONTROL,
+                ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.11", "v1.34.1"),
+                ("w-0", {}, "10.0.0.20", "v1.33.4"),
+            ),
+            "10.0.0.20": target_nodes,
+        },
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] is None
+    # kubeadm prescribes exactly one `kubeadm upgrade apply`, on the local control plane.
+    assert [call for call in runner.calls if call[:3] == ["kubeadm", "upgrade", "apply"]] == [
+        ["kubeadm", "upgrade", "apply", "-y", "v1.34.1"]
+    ]
+    assert ["ssh", "metal@10.0.0.11", "kubeadm", "upgrade", "node"] in runner.calls
+    assert ["ssh", "metal@10.0.0.11", "sudo", "systemctl", "restart", "kubelet"] in runner.calls
+    assert ["ssh", "metal@10.0.0.20", "kubeadm", "upgrade", "node"] in runner.calls
+    assert [step["status"] for step in result["upgrade_steps"]] == [
+        "succeeded",
+        "succeeded",
+        "succeeded",
+        "succeeded",
+    ]
+    assert result["upgrade_performed"] is True
+    assert "control_plane:cp-1" in result["performed_steps"]
+
+
+def test_an_unidentified_local_control_plane_is_refused(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.delenv("KUBERNETES_UPGRADE_LOCAL_NODE", raising=False)
+    monkeypatch.setattr(
+        "target_agent.kubernetes_upgrade_exec.socket.gethostname", lambda: "build-box"
+    )
+    runner = FakeRunner(nodes=_nodes(CONTROL, SECOND_CONTROL))
+
+    with pytest.raises(UpgradeExecutionError) as excinfo:
+        UpgradeExecutor(runner).run(REQUEST)
+
+    assert excinfo.value.code == "UPGRADE_LOCAL_NODE_UNKNOWN"
+    assert "KUBERNETES_UPGRADE_LOCAL_NODE" in excinfo.value.detail
+    assert runner.calls == [["kubectl", "get", "nodes", "-o", "json"]]
+
+
+def test_a_control_plane_peer_without_an_address_is_refused(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
     runner = FakeRunner(
         nodes=_nodes(
             CONTROL,
-            ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.11", "v1.33.4"),
-        )
+            ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "", "v1.33.4"),
+        ),
     )
 
     with pytest.raises(UpgradeExecutionError) as excinfo:
         UpgradeExecutor(runner).run(REQUEST)
 
-    assert excinfo.value.code == "UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED"
+    assert excinfo.value.code == "UPGRADE_CONTROL_PLANE_PEER_ADDRESS_UNKNOWN"
+
+
+def test_a_peer_upgrade_failure_names_the_peer(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    runner = FakeRunner(nodes=_nodes(CONTROL, SECOND_CONTROL), fail_on=["ssh"])
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_CONTROL_PLANE_PEER_FAILED"
+    assert result["upgrade_steps"][1]["status"] == "failed"
+    assert result["upgrade_steps"][1]["detail"].startswith("cp-1:")
+
+
+def test_a_control_plane_peer_already_on_the_target_is_skipped(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    runner = FakeRunner(
+        nodes=_nodes(
+            CONTROL,
+            ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.11", "v1.34.1"),
+        ),
+        upgraded=_nodes(
+            UPGRADED_CONTROL,
+            ("cp-1", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.11", "v1.34.1"),
+        ),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] is None
+    assert not [call for call in runner.calls if call[:1] == ["ssh"]]
+    assert "cp-1: already on v1.34.1, skipped" in result["upgrade_steps"][1]["detail"]
 
 
 def test_a_failed_preflight_stops_the_run():

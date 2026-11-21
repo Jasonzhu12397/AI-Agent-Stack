@@ -9,8 +9,12 @@ it is deliberately narrow:
 * workers are upgraded through an explicitly configured remote executor
     (``KUBERNETES_UPGRADE_REMOTE_USER``); without it a cluster that has workers
     is refused instead of pretending workers were upgraded;
-* multi control-plane clusters are refused: a rolling control-plane upgrade
-    needs a coordination step no single agent can perform.
+* a multi control-plane cluster is upgraded the way kubeadm prescribes: one
+    ``kubeadm upgrade apply`` on the control plane this agent runs beside, then
+    ``kubeadm upgrade node`` on each remaining control plane over ssh, then the
+    workers. The local control plane is identified by hostname or by
+    ``KUBERNETES_UPGRADE_LOCAL_NODE``; when it cannot be identified the run is
+    refused instead of guessing and running ``upgrade node`` on the wrong host.
 
 There is no rollback. A failed step stops the run, records the exact command and
 its output, and leaves ``upgrade_performed`` true so the operator never reads a
@@ -23,11 +27,13 @@ import json
 import os
 import re
 import shlex
+import socket
 import time
 from collections.abc import Callable
 from typing import Any
 
 REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
+LOCAL_NODE_ENV = "KUBERNETES_UPGRADE_LOCAL_NODE"
 ETCD_SNAPSHOT_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT"
 ETCD_SNAPSHOT_MAX_AGE_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS"
 DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS = 24.0
@@ -115,6 +121,56 @@ class UpgradeExecutor:
     @staticmethod
     def _node_version(node: dict[str, Any]) -> str:
         return str(((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion") or "")
+
+    @staticmethod
+    def _on_target(version: str, target: str) -> bool:
+        """Whether a node already reports the target minor (retry-safe skip)."""
+
+        prefix = ".".join(target.split(".")[:2])
+        return bool(version) and version.startswith(prefix)
+
+    def _local_control_plane(self, names: list[str]) -> str:
+        """Which control plane this agent runs beside.
+
+        With a single control plane there is nothing to choose. With several,
+        the answer must not be a guess: running ``kubeadm upgrade node`` on the
+        wrong host still changes that host, so an unidentified host is refused.
+        """
+
+        if len(names) == 1:
+            return names[0]
+        wanted = os.environ.get(LOCAL_NODE_ENV, "").strip() or socket.gethostname().split(".")[0]
+        for name in names:
+            if name == wanted or name.split(".")[0] == wanted:
+                return name
+        raise UpgradeExecutionError(
+            "UPGRADE_LOCAL_NODE_UNKNOWN",
+            f"cannot tell which control plane host this agent runs on; set {LOCAL_NODE_ENV} "
+            "to one of: " + ", ".join(names),
+        )
+
+    def _rolling_targets(
+        self, control_planes: list[dict[str, Any]], workers: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Return the local control plane and the peers upgraded over ssh."""
+
+        local_name = self._local_control_plane(
+            [self._node_name(node) for node in control_planes]
+        )
+        local_node = next(
+            node for node in control_planes if self._node_name(node) == local_name
+        )
+        peers = sorted(
+            (node for node in control_planes if self._node_name(node) != local_name),
+            key=self._node_name,
+        )
+        if (peers or workers) and not self._remote_user:
+            raise UpgradeExecutionError(
+                "UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED",
+                f"set {REMOTE_USER_ENV} so the remaining nodes can be upgraded "
+                "from this host over ssh",
+            )
+        return local_node, peers
 
     def _package_commands(self, target: str) -> list[list[str]] | None:
         """Return the kubelet/kubeadm/kubectl install commands, or ``None``.
@@ -341,23 +397,58 @@ class UpgradeExecutor:
         workers = [node for node in nodes if not self._is_control_plane(node)]
         if not control_planes:
             raise UpgradeExecutionError("UPGRADE_CONTROL_PLANE_NOT_FOUND")
-        if len(control_planes) > 1:
-            raise UpgradeExecutionError(
-                "UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED",
-                "a rolling control-plane upgrade needs cluster-wide coordination",
-            )
-        if workers and not self._remote_user:
-            raise UpgradeExecutionError(
-                "UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED",
-                f"set {REMOTE_USER_ENV} to upgrade worker nodes from this host",
-            )
 
         package_commands = self._package_commands(target)
-        control_commands = [
-            *(shlex.join(command) for command in package_commands or []),
-            f"kubeadm upgrade apply -y {target}",
-            "sudo systemctl restart kubelet",
-        ]
+        local_node, peers = self._rolling_targets(control_planes, workers)
+        local_name = self._node_name(local_node)
+        local_upgrade_needed = not self._on_target(
+            self._node_version(local_node), target
+        )
+        control_commands = []
+        if local_upgrade_needed:
+            control_commands.extend(
+                shlex.join(command) for command in package_commands or []
+            )
+            control_commands.append(f"kubeadm upgrade apply -y {target}")
+            control_commands.append("sudo systemctl restart kubelet")
+        else:
+            control_commands.append(
+                f"# {local_name} already runs {target}; kubeadm upgrade apply is not repeated"
+            )
+        peer_commands: list[tuple[dict[str, Any], list[tuple[list[str], int, str]]]] = []
+        for peer in peers:
+            name = self._node_name(peer)
+            address = self._node_address(peer)
+            if not address:
+                raise UpgradeExecutionError(
+                    "UPGRADE_CONTROL_PLANE_PEER_ADDRESS_UNKNOWN",
+                    f"control plane {name} has no InternalIP to reach over ssh",
+                )
+            remote = f"{self._remote_user}@{address}"
+            if self._on_target(self._node_version(peer), target):
+                peer_commands.append((peer, []))
+                continue
+            argv_list = [
+                (["ssh", remote, shlex.join(command)], STEP_TIMEOUT_SECONDS,
+                 "UPGRADE_CONTROL_PLANE_PEER_PACKAGE_FAILED")
+                for command in package_commands or []
+            ]
+            argv_list.extend([
+                (["ssh", remote, "kubeadm", "upgrade", "node"], STEP_TIMEOUT_SECONDS,
+                 "UPGRADE_CONTROL_PLANE_PEER_FAILED"),
+                (["ssh", remote, "sudo", "systemctl", "restart", "kubelet"],
+                 STEP_TIMEOUT_SECONDS, "UPGRADE_CONTROL_PLANE_PEER_KUBELET_RESTART_FAILED"),
+            ])
+            peer_commands.append((peer, argv_list))
+        for peer, argv_list in peer_commands:
+            name = self._node_name(peer)
+            if not argv_list:
+                control_commands.append(f"# {name} already runs {target}; skipped")
+                continue
+            control_commands.extend(
+                shlex.join(argv) if argv[0] == "ssh" else " ".join(argv)
+                for argv, _timeout, _code in argv_list
+            )
         steps = [
             self._step(1, "preflight", [f"kubeadm upgrade plan {target}"]),
             self._step(2, "control_plane", control_commands),
@@ -379,20 +470,41 @@ class UpgradeExecutor:
             return self._result(request, steps, performed, "UPGRADE_PREFLIGHT_FAILED")
         performed.append("preflight")
 
-        for argv in package_commands or []:
-            if not self._execute_step(steps[1], argv, STEP_TIMEOUT_SECONDS):
-                steps[1]["detail"] = (
-                    "package upgrade failed; the control plane was not upgraded"
+        if local_upgrade_needed:
+            for argv in package_commands or []:
+                if not self._execute_step(steps[1], argv, STEP_TIMEOUT_SECONDS):
+                    steps[1]["detail"] = (
+                        "package upgrade failed; the control plane was not upgraded"
+                    )
+                    return self._result(request, steps, performed, "UPGRADE_PACKAGE_FAILED")
+            apply_argv = ["kubeadm", "upgrade", "apply", "-y", target]
+            if not self._execute_step(steps[1], apply_argv, STEP_TIMEOUT_SECONDS):
+                return self._result(
+                    request, steps, performed, "UPGRADE_CONTROL_PLANE_FAILED"
                 )
-                return self._result(request, steps, performed, "UPGRADE_PACKAGE_FAILED")
-        apply_argv = ["kubeadm", "upgrade", "apply", "-y", target]
-        if not self._execute_step(steps[1], apply_argv, STEP_TIMEOUT_SECONDS):
-            return self._result(request, steps, performed, "UPGRADE_CONTROL_PLANE_FAILED")
-        if not self._execute_step(
-            steps[1], ["sudo", "systemctl", "restart", "kubelet"], STEP_TIMEOUT_SECONDS
-        ):
-            return self._result(request, steps, performed, "UPGRADE_KUBELET_RESTART_FAILED")
-        performed.append("control_plane")
+            if not self._execute_step(
+                steps[1], ["sudo", "systemctl", "restart", "kubelet"], STEP_TIMEOUT_SECONDS
+            ):
+                return self._result(
+                    request, steps, performed, "UPGRADE_KUBELET_RESTART_FAILED"
+                )
+            performed.append("control_plane")
+        for peer, argv_list in peer_commands:
+            name = self._node_name(peer)
+            if not argv_list:
+                control_commands_note = f"{name}: already on {target}, skipped"
+                steps[1]["detail"] = "; ".join(
+                    part for part in (steps[1]["detail"], control_commands_note) if part
+                )
+                continue
+            for argv, timeout, code in argv_list:
+                step_probe = dict(steps[1])
+                if not self._execute_step(step_probe, argv, timeout):
+                    steps[1]["status"] = "failed"
+                    steps[1]["exit_code"] = step_probe["exit_code"]
+                    steps[1]["detail"] = f"{name}: {step_probe['detail']}"
+                    return self._result(request, steps, performed, code)
+            performed.append(f"control_plane:{name}")
 
         worker_step = steps[2]
         worker_step["status"] = "succeeded"
@@ -483,8 +595,12 @@ class UpgradeExecutor:
             "upgrade_simulated": False,
             # A preflight-only run changed nothing; only the control-plane stage
             # (or a worker stage) actually moves a node to the new version.
-            "upgrade_performed": "control_plane" in performed
-            or any(step.startswith("worker:") for step in performed),
+            "upgrade_performed": any(
+                step == "control_plane"
+                or step.startswith("control_plane:")
+                or step.startswith("worker:")
+                for step in performed
+            ),
             "requires_manual_execution": False,
             "resume_supported": False,
             "performed_steps": performed,
@@ -510,6 +626,7 @@ def _snapshot_max_age_hours() -> float:
 
 __all__ = [
     "ETCD_SNAPSHOT_ENV",
+    "LOCAL_NODE_ENV",
     "PACKAGE_MANAGER_ENV",
     "PACKAGE_VERSION_ENV",
     "REMOTE_USER_ENV",
