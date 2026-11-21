@@ -360,12 +360,57 @@ class UpgradeExecutor:
             )
         ]
 
-    def _preflight(self, request: dict[str, str], nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    def _ssh_reachability_checks(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Prove every remote node answers ssh before anything local changes.
+
+        The local control plane is upgraded first. If the next ssh hop then
+        fails, the cluster is left half upgraded, so reachability is a
+        preflight fact rather than an upgrade step.
+        """
+
+        if not nodes:
+            return []
+        checks = []
+        for node in nodes:
+            name = self._node_name(node) or "<unnamed>"
+            address = self._node_address(node)
+            if not address:
+                checks.append(
+                    self._check(f"ssh.reachable/{name}", False, "node has no InternalIP")
+                )
+                continue
+            argv = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                f"{self._remote_user}@{address}",
+                "true",
+            ]
+            result = self._runner(argv, timeout=30)
+            ok = result.get("available", True) and result.get("returncode") == 0
+            checks.append(
+                self._check(
+                    f"ssh.reachable/{name}",
+                    ok,
+                    "ssh accepted" if ok else _output(result) or "ssh was refused",
+                )
+            )
+        return checks
+
+    def _preflight(
+        self,
+        request: dict[str, str],
+        nodes: list[dict[str, Any]],
+        remote_nodes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         checks = [
             *self._handler_ready(nodes),
             *self._kubeadm_config_checks(request["current_version"]),
             *self._pod_disruption_checks(),
             *self._etcd_snapshot_checks(),
+            *self._ssh_reachability_checks(remote_nodes or []),
         ]
         failed = [check for check in checks if not check["ok"]]
         return {"checks": checks, "blocked": bool(failed)}
@@ -457,7 +502,15 @@ class UpgradeExecutor:
         ]
         performed: list[str] = []
 
-        preflight = self._preflight(request, nodes)
+        preflight = self._preflight(
+            request,
+            nodes,
+            [
+                node
+                for node in [*peers, *workers]
+                if not self._on_target(self._node_version(node), target)
+            ],
+        )
         self._last_preflight = preflight
         if preflight["blocked"]:
             steps[0]["status"] = "failed"

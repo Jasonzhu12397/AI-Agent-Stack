@@ -61,17 +61,22 @@ class FakeRunner:
 
     """A cluster that reports the new kubelet version once kubeadm applied it."""
 
-    def __init__(self, *, nodes, fail_on=(), upgraded=None, peer_upgraded=None):
+    def __init__(
+        self, *, nodes, fail_on=(), upgraded=None, peer_upgraded=None, fail_when=None
+    ):
         self.calls = []
         self._nodes = nodes
         self._upgraded = upgraded or nodes
         self._peer_upgraded = dict(peer_upgraded or {})
         self._fail_on = tuple(fail_on)
+        self._fail_when = fail_when
 
     def __call__(self, argv, timeout=20, **kwargs):
         self.calls.append(list(argv))
         if argv and argv[0] == "kubectl" and "get" in argv:
             return {"available": True, "returncode": 0, "stdout": self._answer(argv), "stderr": ""}
+        if self._fail_when is not None and self._fail_when(argv):
+            return {"available": True, "returncode": 255, "stdout": "", "stderr": "ssh: refused"}
         for marker in self._fail_on:
             if marker in argv:
                 return {"available": True, "returncode": 1, "stdout": "", "stderr": "boom"}
@@ -217,7 +222,12 @@ def test_a_control_plane_peer_without_an_address_is_refused(monkeypatch):
 def test_a_peer_upgrade_failure_names_the_peer(monkeypatch):
     monkeypatch.setenv(REMOTE_USER_ENV, "metal")
     monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
-    runner = FakeRunner(nodes=_nodes(CONTROL, SECOND_CONTROL), fail_on=["ssh"])
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, SECOND_CONTROL),
+        fail_when=lambda argv: "kubeadm" in argv
+        and "node" in argv
+        and "10.0.0.11" in " ".join(argv),
+    )
     result = UpgradeExecutor(runner).run(REQUEST)
 
     assert result["failure_code"] == "UPGRADE_CONTROL_PLANE_PEER_FAILED"
@@ -480,3 +490,34 @@ def test_a_pod_disruption_budget_at_zero_blocks_the_preflight():
 
     failed = {check["name"] for check in result["preflight"]["checks"] if not check["ok"]}
     assert "poddisruptionbudget.headroom" in failed
+
+
+def test_an_unreachable_peer_blocks_the_run_before_the_local_control_plane(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, SECOND_CONTROL),
+        fail_when=lambda argv: argv[:1] == ["ssh"]
+        and argv[-1] == "true"
+        and "10.0.0.11" in " ".join(argv),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "ssh.reachable/cp-1" in failed
+    assert result["upgrade_performed"] is False
+    assert not [call for call in runner.calls if call[:3] == ["kubeadm", "upgrade", "apply"]]
+
+
+def test_every_remote_node_gets_an_ssh_reachability_check(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(UPGRADED_CONTROL, ("w-0", {}, "10.0.0.20", "v1.34.1")),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    names = {check["name"] for check in result["preflight"]["checks"] if check["ok"]}
+    assert {"ssh.reachable/w-0", "node.ready/cp-0"} <= names
+    assert result["failure_code"] is None

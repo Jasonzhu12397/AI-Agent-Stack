@@ -141,6 +141,11 @@ run answers `UPGRADE_LOCAL_NODE_UNKNOWN` and changes nothing, because running
 `kubeadm upgrade node` on the wrong host still upgrades that host. A peer with
 no InternalIP answers `UPGRADE_CONTROL_PLANE_PEER_ADDRESS_UNKNOWN`.
 
+Every node that will be reached over ssh must first pass `ssh.reachable/<node>`:
+`ssh -o BatchMode=yes -o ConnectTimeout=5 <user>@<address> true` runs during the
+preflight, because the local control plane is upgraded before the first remote
+hop, and an ssh failure after that leaves the cluster half upgraded.
+
 Nodes already reporting the target minor are skipped with a
 `<node>: already on <version>, skipped` note, so a retry after a mid-run failure
 does not repeat `kubeadm upgrade apply` or re-ssh into nodes that are done.
