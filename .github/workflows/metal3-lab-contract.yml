@@ -1,0 +1,137 @@
+name: Metal3 Lab Contract
+
+permissions:
+  contents: read
+
+on:
+  push:
+    paths:
+      - ".github/workflows/metal3-lab-e2e.yml"
+      - ".github/workflows/metal3-lab-contract.yml"
+      - "tools/metal3_lab_readiness.py"
+      - "tools/metal3_acceptance.py"
+      - "tests/test_metal3_lab_workflow_contract.py"
+      - "tests/test_metal3_lab_contract_workflow.py"
+      - "pyproject.toml"
+  pull_request:
+    paths:
+      - ".github/workflows/metal3-lab-e2e.yml"
+      - ".github/workflows/metal3-lab-contract.yml"
+      - "tools/metal3_lab_readiness.py"
+      - "tools/metal3_acceptance.py"
+      - "tests/test_metal3_lab_workflow_contract.py"
+      - "tests/test_metal3_lab_contract_workflow.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: metal3-lab-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Lab workflow contract
+    # The physical acceptance itself needs the lab runner; this job proves the
+    # workflow stays valid and the readiness gate keeps its honest semantics on
+    # every change, so a broken YAML or a gate that silently turns green is
+    # caught without bare metal.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Workflow contract tests
+        run: |
+          python -m pytest -o addopts="" -q \
+            tests/test_metal3_lab_workflow_contract.py \
+            tests/test_metal3_lab_contract_workflow.py
+
+      - name: Readiness gate semantics
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          from uuid import uuid4
+
+          work = Path("evidence/contract")
+          work.mkdir(parents=True, exist_ok=True)
+
+          def run_readiness(name, eph, target):
+              output = work / f"{name}.json"
+              completed = subprocess.run(
+                  [
+                      "python",
+                      "tools/metal3_lab_readiness.py",
+                      "--project",
+                      str(uuid4()),
+                      "--control-plane-replicas",
+                      "3",
+                      "--worker-replicas",
+                      "4",
+                      "--eph-kubeconfig",
+                      str(eph),
+                      "--target-kubeconfig",
+                      str(target),
+                      "--out",
+                      str(output),
+                  ],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              assert completed.returncode == 0, completed.stderr
+              return json.loads(output.read_text(encoding="utf-8"))
+
+          empty = run_readiness("missing", work / "absent-eph", work / "absent-target")
+          assert empty["ready"] is False, empty
+          assert "eph.present" in empty["failed_checks"], empty["failed_checks"]
+          assert empty["skipped_stages"], empty
+
+          kubeconfig = "\n".join(
+              [
+                  "apiVersion: v1",
+                  "kind: Config",
+                  "clusters:",
+                  "- name: lab",
+                  "  cluster:",
+                  "    server: https://10.0.0.1:6443",
+                  "contexts:",
+                  "- name: lab",
+                  "  context: {cluster: lab, user: lab}",
+                  "users:",
+                  "- name: lab",
+                  "  user: {token: redacted}",
+                  "current-context: lab",
+                  "",
+              ]
+          )
+          for label in ("eph", "target"):
+              (work / f"{label}.kubeconfig").write_text(kubeconfig, encoding="utf-8")
+          ready = run_readiness(
+              "valid",
+              work / "eph.kubeconfig",
+              work / "target.kubeconfig",
+          )
+          assert ready["ready"] is True, ready
+          assert ready["failed_checks"] == [], ready["failed_checks"]
+          assert ready["skipped_stages"] == [], ready["skipped_stages"]
+          print("readiness gate semantics hold")
+          PY
+
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal3-lab-contract
+          path: evidence/contract/
+          retention-days: 14

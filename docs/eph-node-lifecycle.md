@@ -200,6 +200,10 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Lab workflow contract
+
+The physical acceptance workflow (`.github/workflows/metal3-lab-e2e.yml`) can only run on the `self-hosted, metal3-lab, physical` runner, so it stays manual and gated behind a readiness report. `.github/workflows/metal3-lab-contract.yml` runs on every change to the lab workflow, the readiness/acceptance tools or their tests, and proves two things on a GitHub-hosted runner: the workflow YAML still satisfies its contract, and the readiness gate keeps its honest semantics — missing kubeconfig secrets must report `ready=false` with the failed checks listed, a well-formed kubeconfig must report `ready=true`. A green contract run is not evidence of a bare-metal deployment; it only proves the pipeline cannot silently claim one.
+
 The platform only performs the boot override. PXE itself belongs to the EPH Ironic deployment: the inspection image boots IPA, and `host.network.observe` (or `metal3.host.inspect`) refreshes `AgentMachine.hardware_inventory` with NIC names, addresses and SR-IOV PCI BDFs. Standard BMH `status.hardware` carries NIC names/MAC/model/speed only, so PCI addresses always come from the OS/IPA inventory, never from the Redfish plan.
 
 ## Recovery and idempotency

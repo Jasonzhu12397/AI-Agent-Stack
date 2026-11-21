@@ -1,0 +1,73 @@
+{
+  "checks": [
+    {
+      "detail": "project id must be a UUID",
+      "name": "project_id",
+      "ok": true
+    },
+    {
+      "detail": "control-plane replica count must be a positive integer",
+      "name": "control_plane_replicas",
+      "ok": true
+    },
+    {
+      "detail": "worker replica count must be a positive integer",
+      "name": "worker_replicas",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one cluster",
+      "name": "eph.clusters",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one context",
+      "name": "eph.contexts",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one user",
+      "name": "eph.users",
+      "ok": true
+    },
+    {
+      "detail": "cluster entry must expose a server URL",
+      "name": "eph.server",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one cluster",
+      "name": "target.clusters",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one context",
+      "name": "target.contexts",
+      "ok": true
+    },
+    {
+      "detail": "kubeconfig must define at least one user",
+      "name": "target.users",
+      "ok": true
+    },
+    {
+      "detail": "cluster entry must expose a server URL",
+      "name": "target.server",
+      "ok": true
+    },
+    {
+      "detail": "acceptance tool must exist in the checkout",
+      "name": "acceptance_tool",
+      "ok": true
+    }
+  ],
+  "failed_checks": [],
+  "not_checked": [
+    "lab runner reachability (only provable on the self-hosted runner)",
+    "BMC reachability",
+    "cluster state"
+  ],
+  "note": "Readiness only. A green report means the workflow can attempt the acceptance; it is not evidence of a bare-metal deployment.",
+  "ready": true,
+  "skipped_stages": []
+}
