@@ -580,3 +580,81 @@ def test_every_remote_node_gets_an_ssh_reachability_check(monkeypatch):
     names = {check["name"] for check in result["preflight"]["checks"] if check["ok"]}
     assert {"ssh.reachable/w-0", "node.ready/cp-0"} <= names
     assert result["failure_code"] is None
+
+
+def _probe_counter(base, failing):
+    """Fail the given 1-based etcd health probes, pass the rest."""
+
+    seen = {"count": 0}
+
+    def runner(argv, timeout=20, **kwargs):
+        if "endpoint" in argv and "health" in argv:
+            seen["count"] += 1
+            if seen["count"] in failing:
+                return {
+                    "available": True,
+                    "returncode": 2,
+                    "stdout": "",
+                    "stderr": "context deadline exceeded",
+                }
+        return base(argv, timeout=timeout, **kwargs)
+
+    return runner
+
+
+def test_losing_etcd_health_after_the_local_apply_stops_before_any_peer(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    base = _nodes_with(_nodes(CONTROL, SECOND_CONTROL), etcd=True)
+    runner = _probe_counter(base, {2})
+    result = UpgradeExecutor(
+        runner, etcd_health_attempts=1, etcd_health_interval=0
+    ).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_ETCD_QUORUM_AT_RISK"
+    assert "cp-0" in result["upgrade_steps"][1]["detail"]
+    # Only the reachability probe is allowed to run; no peer is upgraded.
+    assert not [call for call in base.calls if "kubeadm" in call and call[:1] == ["ssh"]]
+    assert result["etcd_health"][-1]["name"] == "etcd.quorum/cp-0"
+
+
+def test_losing_etcd_health_after_a_peer_stops_before_the_next_peer(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    nodes = _nodes(CONTROL, SECOND_CONTROL)
+    base = _nodes_with(nodes, etcd=True)
+    runner = _probe_counter(base, {3})
+    result = UpgradeExecutor(
+        runner, etcd_health_attempts=1, etcd_health_interval=0
+    ).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_ETCD_QUORUM_AT_RISK"
+    assert result["etcd_health"][-1]["name"] == "etcd.quorum/cp-1"
+
+
+def test_a_transient_etcd_failure_is_waited_out(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    base = _nodes_with(_nodes(CONTROL, SECOND_CONTROL), etcd=True)
+    runner = _probe_counter(base, {2})
+    monkeypatch.setattr("target_agent.kubernetes_upgrade_exec.time.sleep", lambda _s: None)
+    result = UpgradeExecutor(
+        runner, etcd_health_attempts=2, etcd_health_interval=0
+    ).run(REQUEST)
+
+    assert result["failure_code"] is not None  # postflight still sees old versions
+    assert result["etcd_health"][0]["ok"] is True
+    assert "healthy after 2 probe(s)" in result["etcd_health"][0]["detail"]
+
+
+def test_an_unhealthy_cluster_is_refused_before_anything_runs():
+    base = _nodes_with(_nodes(CONTROL), etcd=True)
+    runner = _probe_counter(base, {1})
+    result = UpgradeExecutor(
+        runner, etcd_health_attempts=1, etcd_health_interval=0
+    ).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "etcd.quorum" in failed
+    assert result["upgrade_performed"] is False

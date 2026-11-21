@@ -149,6 +149,15 @@ run answers `UPGRADE_LOCAL_NODE_UNKNOWN` and changes nothing, because running
 `kubeadm upgrade node` on the wrong host still upgrades that host. A peer with
 no InternalIP answers `UPGRADE_CONTROL_PLANE_PEER_ADDRESS_UNKNOWN`.
 
+etcd quorum is guarded during the roll, not only before it: `etcd.quorum`
+requires the cluster to be healthy at the start, and after the local control
+plane and after every peer the agent waits up to
+`ETCD_HEALTH_ATTEMPTS`×`ETCD_HEALTH_INTERVAL_SECONDS` (20 × 5s) re-reading
+`etcdctl endpoint health --cluster`. If etcd does not come back healthy the run
+stops with `UPGRADE_ETCD_QUORUM_AT_RISK` before the next node is touched, and
+each probe is returned in `etcd_health`, so a stalled roll is visible as
+`etcd.quorum/<node>` failing rather than as a later, unexplained failure.
+
 Every node that will be reached over ssh must first pass `ssh.reachable/<node>`:
 `ssh -o BatchMode=yes -o ConnectTimeout=5 <user>@<address> true` runs during the
 preflight, because the local control plane is upgraded before the first remote

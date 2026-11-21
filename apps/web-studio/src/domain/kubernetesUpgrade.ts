@@ -12,15 +12,9 @@ export interface KubernetesUpgradePreflightCheck {
   detail: string;
 }
 
-export function getKubernetesUpgradePreflight(
-  result: Record<string, unknown> | null,
-): { checks: KubernetesUpgradePreflightCheck[]; blocked: boolean } | null {
-  const preflight = result?.preflight;
-  if (!preflight || typeof preflight !== "object" || Array.isArray(preflight)) return null;
-  const record = preflight as Record<string, unknown>;
-  const rawChecks = record.checks;
-  const checks: KubernetesUpgradePreflightCheck[] = Array.isArray(rawChecks)
-    ? rawChecks
+function toChecks(raw: unknown): KubernetesUpgradePreflightCheck[] {
+  return Array.isArray(raw)
+    ? raw
         .filter((check): check is Record<string, unknown> =>
           Boolean(check) && typeof check === "object" && !Array.isArray(check),
         )
@@ -31,5 +25,19 @@ export function getKubernetesUpgradePreflight(
         }))
         .filter((check) => check.name !== "")
     : [];
-  return { checks, blocked: record.blocked === true };
+}
+
+export function getKubernetesUpgradeEtcdHealth(
+  result: Record<string, unknown> | null,
+): KubernetesUpgradePreflightCheck[] {
+  return toChecks(result?.etcd_health);
+}
+
+export function getKubernetesUpgradePreflight(
+  result: Record<string, unknown> | null,
+): { checks: KubernetesUpgradePreflightCheck[]; blocked: boolean } | null {
+  const preflight = result?.preflight;
+  if (!preflight || typeof preflight !== "object" || Array.isArray(preflight)) return null;
+  const record = preflight as Record<string, unknown>;
+  return { checks: toChecks(record.checks), blocked: record.blocked === true };
 }

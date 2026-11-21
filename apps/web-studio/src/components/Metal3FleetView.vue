@@ -38,6 +38,7 @@ import {
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
 import SriovDevicePluginEditor from "./SriovDevicePluginEditor.vue";
 import {
+  getKubernetesUpgradeEtcdHealth,
   getKubernetesUpgradeFailure,
   getKubernetesUpgradePreflight,
 } from "../domain/kubernetesUpgrade";
@@ -853,6 +854,10 @@ function upgradePreflightFailedCount(command: AgentCommand): number {
   return preflight ? preflight.checks.filter((check) => !check.ok).length : 0;
 }
 
+function upgradeEtcdHealth(command: AgentCommand) {
+  return getKubernetesUpgradeEtcdHealth(command.result);
+}
+
 function upgradeStepStatus(step: Record<string, unknown>): string {
   const status = step.status;
   return typeof status === "string" ? status.replaceAll("_", " ") : "not reported";
@@ -1582,6 +1587,22 @@ onUnmounted(() => {
               <p v-if="upgradePreflight(command)?.blocked" class="fleet-preflight-hint">
                 {{ upgradePreflightFailedCount(command) }} check(s) failed · nothing was drained or upgraded
               </p>
+            </div>
+            <div v-if="upgradeEtcdHealth(command).length" class="fleet-preflight">
+              <div class="fleet-preflight-heading">
+                <span>etcd health during the roll</span>
+              </div>
+              <ul>
+                <li
+                  v-for="check in upgradeEtcdHealth(command)"
+                  :key="check.name"
+                  :class="{ failed: !check.ok }"
+                >
+                  <span class="fleet-preflight-mark">{{ check.ok ? "✓" : "✕" }}</span>
+                  <code>{{ check.name }}</code>
+                  <small>{{ check.detail }}</small>
+                </li>
+              </ul>
             </div>
             <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
               Upgrade simulation failed. Review the Agent error before taking further action.

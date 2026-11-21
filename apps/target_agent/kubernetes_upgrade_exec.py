@@ -46,6 +46,8 @@ PACKAGE_MANAGER_ENV = "KUBERNETES_UPGRADE_PACKAGE_MANAGER"
 PACKAGE_VERSION_ENV = "KUBERNETES_UPGRADE_PACKAGE_VERSION"
 PACKAGE_MANAGERS = ("apt", "dnf")
 _PACKAGE_VERSION = re.compile(r"^[0-9A-Za-z.+~:-]{1,64}$")
+ETCD_HEALTH_ATTEMPTS = 20
+ETCD_HEALTH_INTERVAL_SECONDS = 5.0
 STEP_TIMEOUT_SECONDS = 1800
 DRAIN_TIMEOUT_SECONDS = 900
 
@@ -71,7 +73,14 @@ def _output(result: dict[str, Any], limit: int = 2000) -> str:
 class UpgradeExecutor:
     """Run one upgrade request against the cluster this agent belongs to."""
 
-    def __init__(self, runner: RunCommand, *, remote_user: str | None = None) -> None:
+    def __init__(
+        self,
+        runner: RunCommand,
+        *,
+        remote_user: str | None = None,
+        etcd_health_attempts: int = ETCD_HEALTH_ATTEMPTS,
+        etcd_health_interval: float = ETCD_HEALTH_INTERVAL_SECONDS,
+    ) -> None:
         self._runner = runner
         self._remote_user = (remote_user if remote_user is not None else
                              os.environ.get(REMOTE_USER_ENV, "")).strip()
@@ -80,6 +89,10 @@ class UpgradeExecutor:
         )
         self._last_preflight: dict[str, Any] = {"checks": [], "blocked": False}
         self._last_snapshot: dict[str, Any] | None = None
+        self._etcd_pod = ""
+        self._etcd_health: list[dict[str, Any]] = []
+        self._etcd_health_attempts = max(1, int(etcd_health_attempts))
+        self._etcd_health_interval = max(0.0, float(etcd_health_interval))
 
     # -- cluster facts ---------------------------------------------------
     def _nodes(self) -> list[dict[str, Any]]:
@@ -348,7 +361,7 @@ class UpgradeExecutor:
 
     ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
 
-    def _snapshot_argv(self, pod: str) -> list[str]:
+    def _etcdctl_argv(self, pod: str) -> list[str]:
         return [
             "kubectl",
             "-n",
@@ -393,7 +406,7 @@ class UpgradeExecutor:
                 f"cannot create {directory}: " + (_output(mkdir) or "mkdir failed"),
             )
         save = self._runner(
-            [*self._snapshot_argv(pod), "snapshot", "save", path],
+            [*self._etcdctl_argv(pod), "snapshot", "save", path],
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not save.get("available", True) or save.get("returncode") != 0:
@@ -403,7 +416,7 @@ class UpgradeExecutor:
                 f"snapshot save failed on {local_node}: " + (_output(save) or "no output"),
             )
         status = self._runner(
-            [*self._snapshot_argv(pod), "snapshot", "status", path],
+            [*self._etcdctl_argv(pod), "snapshot", "status", path],
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not status.get("available", True) or status.get("returncode") != 0:
@@ -416,6 +429,66 @@ class UpgradeExecutor:
         return snapshot, self._check(
             "etcd.snapshot", True, f"took {path} and verified it"
         )
+
+    def _etcd_quorum_healthy(self, pod: str) -> tuple[bool, str]:
+        """One non-waiting read of cluster-wide etcd health."""
+
+        result = self._runner(
+            [*self._etcdctl_argv(pod), "endpoint", "health", "--cluster"],
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        ok = result.get("available", True) and result.get("returncode") == 0
+        return ok, _output(result) or ("healthy" if ok else "unhealthy")
+
+    def _wait_etcd_healthy(self, pod: str, stage: str) -> dict[str, Any]:
+        """Wait for etcd to be healthy again after a member was upgraded.
+
+        A rolling upgrade restarts etcd members one at a time. If the cluster
+        does not come back healthy within the window, continuing would push it
+        below quorum, so the run stops instead of upgrading the next node.
+        """
+
+        detail = ""
+        for attempt in range(self._etcd_health_attempts):
+            ok, detail = self._etcd_quorum_healthy(pod)
+            if ok:
+                return self._check(
+                    f"etcd.quorum/{stage}",
+                    True,
+                    f"healthy after {attempt + 1} probe(s)",
+                )
+            if attempt + 1 < self._etcd_health_attempts:
+                time.sleep(self._etcd_health_interval)
+        return self._check(
+            f"etcd.quorum/{stage}",
+            False,
+            f"etcd did not become healthy: {detail}",
+        )
+
+    def _guard_etcd(self, step: dict[str, Any], stage: str) -> str | None:
+        """Stop the rolling upgrade when etcd does not come back healthy."""
+
+        if not self._etcd_pod:
+            return None
+        check = self._wait_etcd_healthy(self._etcd_pod, stage)
+        self._etcd_health.append(check)
+        if check["ok"]:
+            return None
+        step["status"] = "failed"
+        step["detail"] = f"{stage}: {check['detail']}"
+        return "UPGRADE_ETCD_QUORUM_AT_RISK"
+
+    def _etcd_quorum_checks(self) -> list[dict[str, Any]]:
+        if not self._etcd_pod:
+            return []
+        ok, detail = self._etcd_quorum_healthy(self._etcd_pod)
+        return [
+            self._check(
+                "etcd.quorum",
+                ok,
+                detail if ok else f"etcd is not healthy before the upgrade: {detail}",
+            )
+        ]
 
     def _etcd_snapshot_checks(
         self, local_node: str, target: str
@@ -462,9 +535,10 @@ class UpgradeExecutor:
             return [
                 self._check("etcd.snapshot", False, "no etcd pod name to run etcdctl in")
             ]
+        self._etcd_pod = pod
         snapshot, check = self._take_etcd_snapshot(pod, local_node, target)
         self._last_snapshot = snapshot
-        return [check]
+        return [check, *self._etcd_quorum_checks()]
 
     def _ssh_reachability_checks(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Prove every remote node answers ssh before anything local changes.
@@ -649,6 +723,9 @@ class UpgradeExecutor:
                 return self._result(
                     request, steps, performed, "UPGRADE_KUBELET_RESTART_FAILED"
                 )
+            code = self._guard_etcd(steps[1], local_name)
+            if code:
+                return self._result(request, steps, performed, code)
             performed.append("control_plane")
         for peer, argv_list in peer_commands:
             name = self._node_name(peer)
@@ -665,6 +742,9 @@ class UpgradeExecutor:
                     steps[1]["exit_code"] = step_probe["exit_code"]
                     steps[1]["detail"] = f"{name}: {step_probe['detail']}"
                     return self._result(request, steps, performed, code)
+            code = self._guard_etcd(steps[1], name)
+            if code:
+                return self._result(request, steps, performed, code)
             performed.append(f"control_plane:{name}")
 
         worker_step = steps[2]
@@ -767,6 +847,7 @@ class UpgradeExecutor:
             "performed_steps": performed,
             "preflight": self._last_preflight,
             "etcd_snapshot": self._last_snapshot,
+            "etcd_health": self._etcd_health,
             "package_upgrade": (
                 "configured" if self._package_configured else "skipped_unconfigured"
             ),

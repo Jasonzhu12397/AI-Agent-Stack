@@ -50,3 +50,22 @@ test("a run without preflight evidence renders nothing", async () => {
   assert.equal(getKubernetesUpgradePreflight({ preflight: "blocked" }), null);
   assert.deepEqual(getKubernetesUpgradePreflight({ preflight: {} }), { blocked: false, checks: [] });
 });
+
+test("etcd health entries of a rolling upgrade are rendered from the result", async () => {
+  const { getKubernetesUpgradeEtcdHealth } = await import("../src/domain/kubernetesUpgrade.ts");
+
+  assert.deepEqual(
+    getKubernetesUpgradeEtcdHealth({
+      etcd_health: [
+        { name: "etcd.quorum/cp-0", ok: true, detail: "healthy after 1 probe(s)" },
+        { name: "etcd.quorum/cp-1", ok: false, detail: "context deadline exceeded" },
+      ],
+    }),
+    [
+      { name: "etcd.quorum/cp-0", ok: true, detail: "healthy after 1 probe(s)" },
+      { name: "etcd.quorum/cp-1", ok: false, detail: "context deadline exceeded" },
+    ],
+  );
+  assert.deepEqual(getKubernetesUpgradeEtcdHealth(null), []);
+  assert.deepEqual(getKubernetesUpgradeEtcdHealth({ etcd_health: "nope" }), []);
+});
