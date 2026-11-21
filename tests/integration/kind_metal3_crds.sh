@@ -240,8 +240,9 @@ document = module.render_ironic_cr(
 )
 Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
 PY
-# ``-o name`` keeps kubectl's table printer out of the path: the Ironic CRD
+# ``-o yaml`` keeps kubectl's column printer out of the path: the Ironic CRD
 # declares additional printer columns that read ``.status.conditions``, and the
-# printer fails intermittently on an object that has no status yet even though
-# the API server accepted it. The server-side validation itself is unchanged.
-"${KUBECTL}" apply --dry-run=server -o name -f "${split_dir}/rendered-ironic-cr.yaml"
+# table printer fails on an object that has no status yet even though the API
+# server accepted it. YAML output serializes the object directly, so the only
+# thing under test is the server-side validation.
+"${KUBECTL}" apply --dry-run=server -o yaml -f "${split_dir}/rendered-ironic-cr.yaml" >/dev/null
