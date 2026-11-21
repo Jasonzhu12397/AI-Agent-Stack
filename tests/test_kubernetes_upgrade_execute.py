@@ -28,6 +28,7 @@ def _nodes(*entries):
                     "status": {
                         "addresses": [{"type": "InternalIP", "address": address}],
                         "nodeInfo": {"kubeletVersion": version},
+                        "conditions": [{"type": "Ready", "status": "True"}],
                     },
                 }
                 for name, labels, address, version in entries
@@ -40,6 +41,24 @@ CONTROL = ("cp-0", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.10", "
 
 
 class FakeRunner:
+    """Answers the preflight reads the way a healthy single-node cluster would."""
+
+    def _answer(self, argv):
+        joined = " ".join(argv)
+        if "configmap" in argv:
+            return json.dumps(
+                {
+                    "data": {
+                        "ClusterConfiguration": "kubernetesVersion: v1.33.4\n"
+                    }
+                }
+            )
+        if "poddisruptionbudgets" in joined:
+            return json.dumps({"items": []})
+        if "component=etcd" in joined:
+            return json.dumps({"items": []})
+        return self._nodes
+
     """A cluster that reports the new kubelet version once kubeadm applied it."""
 
     def __init__(self, *, nodes, fail_on=(), upgraded=None):
@@ -50,9 +69,8 @@ class FakeRunner:
 
     def __call__(self, argv, timeout=20, **kwargs):
         self.calls.append(list(argv))
-        if argv[:2] == ["kubectl", "get"]:
-            nodes = self._nodes if argv[:3] == ["kubectl", "get", "nodes"] else self._nodes
-            return {"available": True, "returncode": 0, "stdout": nodes, "stderr": ""}
+        if argv and argv[0] == "kubectl" and "get" in argv:
+            return {"available": True, "returncode": 0, "stdout": self._answer(argv), "stderr": ""}
         for marker in self._fail_on:
             if marker in argv:
                 return {"available": True, "returncode": 1, "stdout": "", "stderr": "boom"}
@@ -222,3 +240,137 @@ def test_a_failed_package_install_stops_the_run(monkeypatch):
     assert result["failure_code"] == "UPGRADE_PACKAGE_FAILED"
     assert result["upgrade_performed"] is False
     assert runner.calls[-1][0] == "sudo"
+
+
+def _nodes_with(node_overrides, *, config_version="v1.33.4", pdb=None, etcd=False):
+    """Build raw kubectl answers so a single preflight fact can be made wrong."""
+
+    def runner(argv, timeout=20, **kwargs):
+        runner.calls.append(list(argv))
+        joined = " ".join(argv)
+        if argv and argv[0] == "kubectl" and "get" in argv:
+            if "configmap" in argv:
+                return {
+                    "available": True,
+                    "returncode": 0,
+                    "stdout": json.dumps(
+                        {
+                            "data": {
+                                "ClusterConfiguration": f"kubernetesVersion: {config_version}\n"
+                            }
+                        }
+                    ),
+                    "stderr": "",
+                }
+            if "poddisruptionbudgets" in joined:
+                return {
+                    "available": True,
+                    "returncode": 0,
+                    "stdout": json.dumps({"items": pdb or []}),
+                    "stderr": "",
+                }
+            if "component=etcd" in joined:
+                items = [{"metadata": {"name": "etcd-cp-0"}}] if etcd else []
+                return {
+                    "available": True,
+                    "returncode": 0,
+                    "stdout": json.dumps({"items": items}),
+                    "stderr": "",
+                }
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": node_overrides,
+                "stderr": "",
+            }
+        if argv[:3] == ["kubeadm", "upgrade", "apply"]:
+            return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+
+    runner.calls = []
+    return runner
+
+
+def _raw_nodes(name="cp-0", ready="True", unschedulable=False, version="v1.33.4"):
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "spec": {"unschedulable": unschedulable},
+                    "status": {
+                        "addresses": [{"type": "InternalIP", "address": "10.0.0.10"}],
+                        "nodeInfo": {"kubeletVersion": version},
+                        "conditions": [{"type": "Ready", "status": ready}],
+                    },
+                }
+            ]
+        }
+    )
+
+
+def test_a_not_ready_node_blocks_the_preflight():
+    runner = _nodes_with(_raw_nodes(ready="False"))
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "node.ready/cp-0" in failed
+    assert not any(call[:3] == ["kubeadm", "upgrade", "plan"] for call in runner.calls)
+
+
+def test_a_cordoned_node_blocks_the_preflight():
+    runner = _nodes_with(_raw_nodes(unschedulable=True))
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "node.schedulable/cp-0" in failed
+
+
+def test_a_kubeadm_config_on_another_minor_blocks_the_preflight():
+    runner = _nodes_with(_raw_nodes(), config_version="v1.32.4")
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "kubeadm-config.version" in failed
+
+
+def test_stacked_etcd_requires_a_recent_snapshot(monkeypatch, tmp_path):
+    monkeypatch.delenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", raising=False)
+    runner = _nodes_with(_raw_nodes(), etcd=True)
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "etcd.snapshot" in failed
+
+    snapshot = tmp_path / "etcd.db"
+    snapshot.write_bytes(b"snapshot")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(snapshot))
+    fresh = UpgradeExecutor(_nodes_with(_raw_nodes(), etcd=True)).run(REQUEST)
+    fresh_failed = {check["name"] for check in fresh["preflight"]["checks"] if not check["ok"]}
+    assert "etcd.snapshot" not in fresh_failed
+
+    import os
+    import time
+
+    old = time.time() - 72 * 3600
+    os.utime(snapshot, (old, old))
+    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS", "24")
+    stale = UpgradeExecutor(_nodes_with(_raw_nodes(), etcd=True)).run(REQUEST)
+    assert stale["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    stale_failed = {check["name"] for check in stale["preflight"]["checks"] if not check["ok"]}
+    assert "etcd.snapshot" in stale_failed
+
+
+def test_a_pod_disruption_budget_at_zero_blocks_the_preflight():
+    runner = _nodes_with(
+        _raw_nodes(),
+        pdb=[{"metadata": {"name": "database"}, "status": {"disruptionsAllowed": 0}}],
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    failed = {check["name"] for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "poddisruptionbudget.headroom" in failed

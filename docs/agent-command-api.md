@@ -97,6 +97,15 @@ with it and the Target Agent executes it with the same function.
   minor. It reports `upgrade_simulated=false`, `upgrade_performed=true`,
   `requires_manual_execution=false`, `side_effects=true` and per-step exit codes.
 
+Before `kubeadm upgrade plan`, the preflight stage checks the cluster facts an
+upgrade depends on and records each one in `preflight.checks`: every node
+`Ready=True`, no node cordoned, the `kube-system/kubeadm-config` version on the
+same minor the cluster reports, every PodDisruptionBudget has disruptions
+available, and — when stacked etcd is present — a snapshot newer than
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS` (default 24) at
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT`. Any failed check stops the run with
+`UPGRADE_PREFLIGHT_BLOCKED` and the failing detail, before anything is drained.
+
 Package upgrade is part of the same stages, not a manual preamble: set
 `KUBERNETES_UPGRADE_PACKAGE_MANAGER` (`apt` or `dnf`) and
 `KUBERNETES_UPGRADE_PACKAGE_VERSION` (the distribution package version, e.g.

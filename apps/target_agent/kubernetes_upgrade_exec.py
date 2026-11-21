@@ -23,10 +23,14 @@ import json
 import os
 import re
 import shlex
+import time
 from collections.abc import Callable
 from typing import Any
 
 REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
+ETCD_SNAPSHOT_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT"
+ETCD_SNAPSHOT_MAX_AGE_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS"
+DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS = 24.0
 PACKAGE_MANAGER_ENV = "KUBERNETES_UPGRADE_PACKAGE_MANAGER"
 PACKAGE_VERSION_ENV = "KUBERNETES_UPGRADE_PACKAGE_VERSION"
 PACKAGE_MANAGERS = ("apt", "dnf")
@@ -63,6 +67,7 @@ class UpgradeExecutor:
         self._package_configured = bool(
             os.environ.get(PACKAGE_MANAGER_ENV, "").strip()
         )
+        self._last_preflight: dict[str, Any] = {"checks": [], "blocked": False}
 
     # -- cluster facts ---------------------------------------------------
     def _nodes(self) -> list[dict[str, Any]]:
@@ -160,6 +165,155 @@ class UpgradeExecutor:
             f"kubectl-{version}",
         ]]
 
+    # -- preflight -------------------------------------------------------
+    def _check(self, name: str, ok: bool, detail: str) -> dict[str, Any]:
+        return {"name": name, "ok": bool(ok), "detail": detail}
+
+    def _handler_ready(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        checks = []
+        for node in nodes:
+            name = self._node_name(node) or "<unnamed>"
+            conditions = (node.get("status") or {}).get("conditions") or []
+            ready = any(
+                isinstance(condition, dict)
+                and condition.get("type") == "Ready"
+                and condition.get("status") == "True"
+                for condition in conditions
+            )
+            checks.append(
+                self._check(
+                    f"node.ready/{name}",
+                    ready,
+                    "Ready=True" if ready else "Ready is not True",
+                )
+            )
+            schedulable = not bool((node.get("spec") or {}).get("unschedulable"))
+            checks.append(
+                self._check(
+                    f"node.schedulable/{name}",
+                    schedulable,
+                    "schedulable" if schedulable else "cordoned; uncordon it before upgrading",
+                )
+            )
+        return checks
+
+    def _kubeadm_config_checks(self, current: str) -> list[dict[str, Any]]:
+        configmap_argv = [
+            "kubectl",
+            "-n",
+            "kube-system",
+            "get",
+            "configmap",
+            "kubeadm-config",
+            "-o",
+            "json",
+        ]
+        result = self._runner(configmap_argv, timeout=60)
+        if not result.get("available", True) or result.get("returncode") != 0:
+            return [self._check("kubeadm-config.present", False, _output(result))]
+        try:
+            document = json.loads(result.get("stdout") or "")
+        except ValueError:
+            return [self._check("kubeadm-config.present", False, "configmap is not JSON")]
+        raw = ((document.get("data") or {}) if isinstance(document, dict) else {}).get(
+            "ClusterConfiguration"
+        ) or ""
+        match = re.search(r"kubernetesVersion:\s*[\"']?(v[0-9.]+)", raw)
+        if not match:
+            return [
+                self._check(
+                    "kubeadm-config.version",
+                    False,
+                    "kubernetesVersion is not recorded",
+                )
+            ]
+        configured = match.group(1).rstrip(".")
+        current_minor = ".".join(current.split(".")[:2])
+        configured_minor = ".".join(configured.split(".")[:2])
+        return [
+            self._check(
+                "kubeadm-config.version",
+                configured_minor == current_minor,
+                f"configmap says {configured}, cluster reports {current}",
+            )
+        ]
+
+    def _pod_disruption_checks(self) -> list[dict[str, Any]]:
+        result = self._runner(
+            ["kubectl", "get", "poddisruptionbudgets", "--all-namespaces", "-o", "json"],
+            timeout=60,
+        )
+        if not result.get("available", True) or result.get("returncode") != 0:
+            # No PDB API access is reported as unknown, never as "nothing to see".
+            return [
+                self._check(
+                    "poddisruptionbudget.readable", False, _output(result) or "not readable"
+                )
+            ]
+        try:
+            document = json.loads(result.get("stdout") or "")
+        except ValueError:
+            return [self._check("poddisruptionbudget.readable", False, "list is not JSON")]
+        items = document.get("items") if isinstance(document, dict) else []
+        blocked = [
+            str((item.get("metadata") or {}).get("name"))
+            for item in items or []
+            if isinstance(item, dict)
+            and ((item.get("status") or {}).get("disruptionsAllowed") or 0) == 0
+        ]
+        return [
+            self._check(
+                "poddisruptionbudget.headroom",
+                not blocked,
+                "no budget at zero" if not blocked else "budgets at zero: " + ", ".join(blocked),
+            )
+        ]
+
+    def _etcd_snapshot_checks(self) -> list[dict[str, Any]]:
+        pods = self._runner(
+            ["kubectl", "-n", "kube-system", "get", "pods", "-l", "component=etcd", "-o", "json"],
+            timeout=60,
+        )
+        etcd_present = False
+        if pods.get("available", True) and pods.get("returncode") == 0:
+            try:
+                etcd_present = bool(json.loads(pods.get("stdout") or "").get("items"))
+            except ValueError:
+                etcd_present = False
+        if not etcd_present:
+            return [self._check("etcd.snapshot", True, "no stacked etcd on this cluster")]
+        path = os.environ.get(ETCD_SNAPSHOT_ENV, "").strip()
+        if not path:
+            return [
+                self._check(
+                    "etcd.snapshot",
+                    False,
+                    f"set {ETCD_SNAPSHOT_ENV} to a recent etcd snapshot before upgrading",
+                )
+            ]
+        try:
+            age_hours = (time.time() - os.stat(path).st_mtime) / 3600
+        except OSError:
+            return [self._check("etcd.snapshot", False, f"{path} is not readable")]
+        max_age = _snapshot_max_age_hours()
+        return [
+            self._check(
+                "etcd.snapshot",
+                age_hours <= max_age,
+                f"{path} is {age_hours:.1f}h old (limit {max_age}h)",
+            )
+        ]
+
+    def _preflight(self, request: dict[str, str], nodes: list[dict[str, Any]]) -> dict[str, Any]:
+        checks = [
+            *self._handler_ready(nodes),
+            *self._kubeadm_config_checks(request["current_version"]),
+            *self._pod_disruption_checks(),
+            *self._etcd_snapshot_checks(),
+        ]
+        failed = [check for check in checks if not check["ok"]]
+        return {"checks": checks, "blocked": bool(failed)}
+
     # -- steps -----------------------------------------------------------
     def _step(self, sequence: int, name: str, commands: list[str]) -> dict[str, Any]:
         return {
@@ -212,6 +366,14 @@ class UpgradeExecutor:
         ]
         performed: list[str] = []
 
+        preflight = self._preflight(request, nodes)
+        self._last_preflight = preflight
+        if preflight["blocked"]:
+            steps[0]["status"] = "failed"
+            steps[0]["detail"] = "; ".join(
+                check["detail"] for check in preflight["checks"] if not check["ok"]
+            )
+            return self._result(request, steps, performed, "UPGRADE_PREFLIGHT_BLOCKED")
         plan_argv = ["kubeadm", "upgrade", "plan", target]
         if not self._execute_step(steps[0], plan_argv, STEP_TIMEOUT_SECONDS):
             return self._result(request, steps, performed, "UPGRADE_PREFLIGHT_FAILED")
@@ -326,6 +488,7 @@ class UpgradeExecutor:
             "requires_manual_execution": False,
             "resume_supported": False,
             "performed_steps": performed,
+            "preflight": self._last_preflight,
             "package_upgrade": (
                 "configured" if self._package_configured else "skipped_unconfigured"
             ),
@@ -334,7 +497,19 @@ class UpgradeExecutor:
         }
 
 
+def _snapshot_max_age_hours() -> float:
+    raw = os.environ.get(ETCD_SNAPSHOT_MAX_AGE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS
+    return value if 0 < value <= 720 else DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS
+
+
 __all__ = [
+    "ETCD_SNAPSHOT_ENV",
     "PACKAGE_MANAGER_ENV",
     "PACKAGE_VERSION_ENV",
     "REMOTE_USER_ENV",
