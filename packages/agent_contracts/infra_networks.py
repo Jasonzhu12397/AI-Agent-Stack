@@ -18,8 +18,11 @@ import ipaddress
 import re
 from typing import Any
 
-_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
-_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
+#: Segment and bond names may carry underscores (``bond_control``,
+#: ``sdi_semc``); Kubernetes object names are derived from them by ``dns_name``.
+_NAME = re.compile(r"^[a-z0-9](?:[-_a-z0-9]*[a-z0-9])?$")
+#: Some hosts name NICs ``pci@0000:3b:00.0``; the kernel accepts that, so do we.
+_INTERFACE = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
 _PCI = re.compile(
     r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$"
 )
@@ -45,6 +48,26 @@ def _name(value: Any, code: str) -> str:
     if not isinstance(value, str) or len(value) > 63 or not _NAME.fullmatch(value):
         raise InfraNetworkError(code)
     return value
+
+
+def dns_name(name: str) -> str:
+    """Return the Kubernetes-safe name derived from a segment name.
+
+    IPPool names, ``ipAddressFromIPPool`` references and SR-IOV policy names all
+    have to be DNS-1123 names, while the operator writes segment names such as
+    ``sdi_semc``. The mapping is deterministic: lower case, underscores become
+    hyphens and anything else outside ``[a-z0-9-]`` is dropped.
+    """
+
+    text = re.sub(r"[^a-z0-9-]", "-", (name or "").strip().lower())
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    if not text:
+        raise InfraNetworkError("INFRA_NETWORK_NAME_INVALID")
+    if len(text) > 63:
+        text = text[:63].rstrip("-")
+    if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", text):
+        raise InfraNetworkError("INFRA_NETWORK_NAME_INVALID")
+    return text
 
 
 def _interface(value: Any, code: str) -> str:
@@ -105,10 +128,28 @@ def _ip_pools(value: Any, network: ipaddress.IPv4Network, code: str) -> list[dic
     return pools
 
 
-def vlan_base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
-    """Return the link a VLAN stacks on: its data bond, else the control link."""
+#: Roles that belong to the data fabric and stack on the data bond by default.
+_DATA_FABRIC_ROLES = frozenset(
+    {"data", "storage-internal", "storage-external", "sriov"}
+)
 
-    for role in ("data", "control"):
+
+def vlan_base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
+    """Return the link a VLAN stacks on, chosen by what the segment carries.
+
+    Control and provisioning ride the management path — the Live ISO, the
+    PXE/provisioning VLAN and the control planes all use it — so an undeclared
+    VLAN base there is the control link. Storage and SR-IOV segments belong to
+    the data fabric and stack on the data bond. A segment that declares its own
+    ``bond`` or ``interface`` always wins over this default.
+    """
+
+    preferred = (
+        ("data", "control")
+        if network["role"] in _DATA_FABRIC_ROLES
+        else ("control", "data")
+    )
+    for role in preferred:
         base = network_by_role(plan, role)
         if base is None or base is network or base.get("vlan") is not None:
             continue
@@ -407,13 +448,14 @@ def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, 
         if host_role not in network["host_roles"] or network["cidr"] is None:
             continue
         link = network_link_id(plan, network)
+        segment = dns_name(network["name"])
         if network["dhcp"]:
-            ipv4_dhcp.append({"id": network["name"], "link": link})
+            ipv4_dhcp.append({"id": segment, "link": link})
             continue
         address = {
-            "id": network["name"],
+            "id": segment,
             "link": link,
-            "ipAddressFromIPPool": network["name"],
+            "ipAddressFromIPPool": segment,
         }
         if network["gateway_ipv4"] is not None:
             # The OS needs explicit routes; Metal3 networkData does not infer
@@ -560,7 +602,10 @@ def render_sriov_node_policies(plan: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "apiVersion": "sriovnetwork.openshift.io/v1",
                 "kind": "SriovNetworkNodePolicy",
-                "metadata": {"name": network["name"], "namespace": "sriov-network-operator"},
+                "metadata": {
+                    "name": dns_name(network["name"]),
+                    "namespace": "sriov-network-operator",
+                },
                 "spec": {
                     "nodeSelector": {
                         "feature.node.kubernetes.io/network-sriov.capable": "true"
@@ -569,7 +614,7 @@ def render_sriov_node_policies(plan: dict[str, Any]) -> list[dict[str, Any]]:
                     "nicSelector": {"rootDevices": list(network["pci_addresses"]) },
                     "deviceType": "netdevice",
                     "isRdma": False,
-                    "resourceName": network["name"],
+                    "resourceName": dns_name(network["name"]),
                 },
             }
         )
@@ -592,10 +637,10 @@ def render_ip_pools(
         document = {
             "apiVersion": "ipam.metal3.io/v1alpha1",
             "kind": "IPPool",
-            "metadata": {"name": network["name"], "namespace": namespace},
+            "metadata": {"name": dns_name(network["name"]), "namespace": namespace},
             "spec": {
                 "clusterName": cluster_name,
-                "namePrefix": f"{network['name']}-",
+                "namePrefix": f"{dns_name(network['name'])}-",
                 "pools": [
                     {
                         "start": item["start"],

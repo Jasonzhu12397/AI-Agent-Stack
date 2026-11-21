@@ -64,7 +64,9 @@ PROVIDER_REPLICASETS: tuple[tuple[str, str, str, int], ...] = (
     ("cluster.x-k8s.io/provider", "ipam-metal3", "metal3-ipam-system", 1),
 )
 
-# All EPH infrastructure services are Pods; only network links remain host-side.
+#: Legacy bridge names of the libvirt lab. A physical EPH carries the control
+#: bond and its VLAN sub-interfaces instead, so the check is driven by whatever
+#: links the caller declares.
 REQUIRED_BRIDGES: tuple[str, ...] = ("provisioning", "external")
 
 Runner = Callable[..., dict[str, Any]]
@@ -181,7 +183,18 @@ def check_replicasets(runner: Runner, kubeconfig: str | None = None) -> list[Fin
     return findings
 
 
-def check_bridges(host_runner: Runner) -> list[Finding]:
+def check_links(
+    host_runner: Runner,
+    required_links: tuple[str, ...],
+) -> list[Finding]:
+    """Verify that every declared host link exists on the provisioning host.
+
+    On a physical EPH these are the bond and its VLAN sub-interfaces (for
+    example ``bond_control`` and ``bond_control.70``), not bridges.
+    """
+
+    if not required_links:
+        return []
     result = host_runner(["ip", "-j", "link", "show"], 30)
     if not result.get("available") or result.get("returncode") != 0:
         return [Finding("host link inventory", False, "ip link failed")]
@@ -192,11 +205,11 @@ def check_bridges(host_runner: Runner) -> list[Finding]:
     names = {item.get("ifname") for item in links if isinstance(item, dict)}
     return [
         Finding(
-            f"bridge {name}",
+            f"link {name}",
             name in names,
             "" if name in names else "missing on the provisioning host",
         )
-        for name in REQUIRED_BRIDGES
+        for name in required_links
     ]
 
 
@@ -228,6 +241,7 @@ def verify_management_cluster(
     http_probe: Callable[[str], int | None] | None = None,
     ironic_url: str | None = None,
     emulated_bmc: bool = False,
+    required_links: tuple[str, ...] = (),
 ) -> list[Finding]:
     """Collect every management-cluster judgement in one pass."""
 
@@ -235,8 +249,8 @@ def verify_management_cluster(
     findings.extend(check_crds(runner, kubeconfig))
     findings.extend(check_deployments(runner, kubeconfig, emulated_bmc=emulated_bmc))
     findings.extend(check_replicasets(runner, kubeconfig))
-    if host_runner is not None:
-        findings.extend(check_bridges(host_runner))
+    if host_runner is not None and required_links:
+        findings.extend(check_links(host_runner, required_links))
     if http_probe is not None and ironic_url:
         findings.extend(check_ironic_auth(http_probe, ironic_url))
     return findings

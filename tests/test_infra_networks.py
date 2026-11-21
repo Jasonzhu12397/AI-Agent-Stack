@@ -194,3 +194,102 @@ def test_sriov_policy_binds_pci_addresses_to_vf_resource() -> None:
     assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:af:00.1"]
     assert policy["spec"]["numVfs"] == 8
     assert policy["spec"]["resourceName"] == "sriov-data"
+
+
+def _pxe_profile() -> dict:
+    """The lab shape: PXE/provisioning VLAN on bond_control, data on bond_data."""
+    return {
+        "networks": [
+            {
+                "name": "ctrl",
+                "role": "control",
+                "mtu": 1500,
+                "cidr": "172.18.0.0/24",
+                "gateway_ipv4": "172.18.0.1",
+                "ip_pools": [{"start": "172.18.0.10", "end": "172.18.0.50"}],
+                "bond": {
+                    "name": "bond_control",
+                    "interfaces": [
+                        "pci@0000:18:00.0",
+                        "pci@0000:18:00.1",
+                    ],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                # The PXE/provisioning VLAN is declared without a base on
+                # purpose: it must stack on the control bond, not the data one.
+                "name": "sdi_semc",
+                "role": "provisioning",
+                "vlan": 70,
+                "cidr": "172.18.37.0/24",
+                "gateway_ipv4": "172.18.37.1",
+                "ip_pools": [{"start": "172.18.37.10", "end": "172.18.37.50"}],
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                "name": "data_net",
+                "role": "data",
+                "mtu": 9000,
+                "cidr": "10.0.200.0/24",
+                "ip_pools": [{"start": "10.0.200.10", "end": "10.0.200.50"}],
+                "bond": {
+                    "name": "bond_data",
+                    "interfaces": [
+                        "pci@0000:3b:00.0",
+                        "pci@0000:3b:00.1",
+                    ],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["worker", "storage"],
+            },
+            {
+                "name": "ccd_int",
+                "role": "storage-internal",
+                "vlan": 3220,
+                "mtu": 9000,
+                "cidr": "10.0.10.0/24",
+                "ip_pools": [{"start": "10.0.10.10", "end": "10.0.10.50"}],
+                "host_roles": ["worker", "storage"],
+            },
+        ]
+    }
+
+
+def test_the_pxe_provisioning_vlan_stacks_on_the_control_bond():
+    plan = plan_infra_networks(_pxe_profile())
+    data = render_role_network_data(plan, "worker")
+
+    vlans = {item["id"]: item for item in data["links"]["vlans"]}
+    assert vlans["bond_control.70"]["links"] == ["bond_control"]
+    assert vlans["bond_control.70"]["vlanId"] == 70
+    # Storage stays on the data fabric.
+    assert vlans["bond_data.3220"]["links"] == ["bond_data"]
+
+    addresses = {item["id"]: item for item in data["networks"]["ipv4"]}
+    assert addresses["sdi-semc"]["link"] == "bond_control.70"
+
+
+def test_pci_style_port_names_and_underscored_bonds_are_accepted():
+    plan = plan_infra_networks(_pxe_profile())
+
+    control = plan["networks"][0]
+    assert control["bond"]["name"] == "bond_control"
+    assert control["bond"]["interfaces"] == [
+        "pci@0000:18:00.0",
+        "pci@0000:18:00.1",
+    ]
+    assert plan["networks"][1]["name"] == "sdi_semc"
+
+
+def test_underscored_segment_names_map_to_dns_safe_object_names():
+    from packages.agent_contracts.infra_networks import dns_name
+
+    assert dns_name("sdi_semc") == "sdi-semc"
+    assert dns_name("ccd_int") == "ccd-int"
+
+    plan = plan_infra_networks(_pxe_profile())
+    pools = {item["metadata"]["name"] for item in render_ip_pools(plan, cluster_name="target")}
+    assert "sdi-semc" in pools
+    assert "sdi_semc" not in pools

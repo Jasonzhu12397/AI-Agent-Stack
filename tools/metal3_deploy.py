@@ -394,6 +394,7 @@ def command_verify(args: argparse.Namespace) -> int:
             http_probe=None if args.no_host_checks else http_status_probe,
             ironic_url=args.ironic_url,
             emulated_bmc=args.emulated_bmc,
+            required_links=tuple(args.required_link),
         )
         for finding in findings:
             print(finding.render())
@@ -779,7 +780,15 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--no-host-checks",
         action="store_true",
-        help="skip the provisioning-host bridges and Ironic probe",
+        help="skip the provisioning-host link checks and Ironic probe",
+    )
+    verify.add_argument(
+        "--required-link",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="host link the EPH must carry (repeatable, e.g. bond_control, "
+        "bond_control.70); a physical host has bonds and VLANs, not bridges",
     )
     verify.add_argument(
         "--emulated-bmc",

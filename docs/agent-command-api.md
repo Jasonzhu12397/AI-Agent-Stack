@@ -255,3 +255,22 @@ router on that segment, so writing it into `networking.ipAddress` would put the
 router's IP on the EPH NIC. If a static segment has no free host left, the
 template reports `IRONIC_TEMPLATE_ADDRESS_UNAVAILABLE` and the deployment is
 rejected until the operator supplies the address.
+
+## VLAN bases follow what the segment carries
+
+A VLAN segment that declares neither `bond` nor `interface` inherits a base by
+role: `provisioning` and `control` stack on the **control** link (the reference
+lab shape puts the PXE/provisioning VLAN 70 on `bond_control`), while `data`,
+`storage-internal`, `storage-external` and `sriov` stack on the **data** bond.
+A declared base always wins. Both the nmstate document and the Metal3
+`networkData` use the same rule, so the Live ISO, the provisioning VLAN and the
+control planes share one link stack.
+
+Host link names may be `pci@0000:3b:00.0` and segment/bond names may carry
+underscores (`bond_control`, `sdi_semc`). Kubernetes object names are derived
+with `dns_name` (`sdi_semc` → `sdi-semc`) and that derived name is used
+consistently for the IPPool, `ipAddressFromIPPool` and SR-IOV policy names.
+
+A physical EPH has bonds and VLAN sub-interfaces, not bridges, so the host check
+verifies declared links: `metal3_deploy.py verify --required-link bond_control
+--required-link bond_control.70`.

@@ -89,16 +89,32 @@ def test_replica_set_count_and_readiness_are_both_checked():
     assert replicas and all(item.ok for item in replicas)
 
 
-def test_bridges_are_read_from_json_not_grep():
-    payload = [{"ifname": "provisioning"}, {"ifname": "eth0"}]
+def test_declared_host_links_are_read_from_json_not_grep():
+    payload = [
+        {"ifname": "bond_control"},
+        {"ifname": "bond_control.70"},
+        {"ifname": "bond_data"},
+    ]
 
     def host(args, timeout=30, **_):
         return {"available": True, "returncode": 0, "stdout": json.dumps(payload)}
 
-    findings = readiness.check_bridges(host)
+    findings = readiness.check_links(host, ("bond_control", "bond_control.70"))
+    assert all(item.ok for item in findings)
+    assert {item.name for item in findings} == {
+        "link bond_control",
+        "link bond_control.70",
+    }
+
+    findings = readiness.check_links(host, ("bond_control", "bond_data.3220"))
     by_name = {item.name: item for item in findings}
-    assert by_name["bridge provisioning"].ok
-    assert not by_name["bridge external"].ok
+    assert by_name["link bond_control"].ok
+    assert not by_name["link bond_data.3220"].ok
+
+
+def test_a_link_check_is_skipped_when_nothing_is_declared():
+    findings = readiness.check_links(lambda *a, **k: {"available": False}, ())
+    assert findings == []
 
 
 def test_all_eph_infrastructure_is_checked_as_kubernetes_deployments():
@@ -155,7 +171,9 @@ def test_verify_management_cluster_collects_every_layer():
             return {
                 "available": True,
                 "returncode": 0,
-                "stdout": json.dumps([{"ifname": "provisioning"}, {"ifname": "external"}]),
+                "stdout": json.dumps(
+                    [{"ifname": "bond_control"}, {"ifname": "bond_control.70"}]
+                ),
             }
         return {"available": True, "returncode": 0, "stdout": "httpd-infra\nregistry\n"}
 
@@ -164,11 +182,12 @@ def test_verify_management_cluster_collects_every_layer():
         host_runner=host,
         http_probe=lambda url: 401,
         ironic_url="https://10.0.0.5:6385/v1",
+        required_links=("bond_control", "bond_control.70"),
     )
     assert findings and all(item.ok for item in findings)
     assert any(item.name.startswith("CRD ") for item in findings)
     assert any(item.name.startswith("deployment ") for item in findings)
-    assert any(item.name.startswith("bridge ") for item in findings)
+    assert any(item.name.startswith("link ") for item in findings)
     assert any("Ironic" in item.name for item in findings)
 
 
