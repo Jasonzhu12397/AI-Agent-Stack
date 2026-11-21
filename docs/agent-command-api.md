@@ -196,7 +196,30 @@ stacked etcd member, and the snapshots already written to
 it cannot read fail closed with `RECOVERY_NODES_UNREADABLE`; an unreadable etcd
 or snapshot directory is reported as a warning instead of being guessed at.
 
-The product still has no automatic rollback. Restoring a snapshot and re-running
-`kubeadm init` is a destructive, cluster-specific operation that needs its own
-approval contract, so the report gives an operator the facts to act on and the
-runbook stays manual.
+## Rollback restores the snapshot and keeps the old data
+
+`cluster.kubernetes.version.rollback` is the only automatic undo, and its scope is
+narrow on purpose. It takes `cluster_name`, an absolute `snapshot_path` ending in
+`.db` (no traversal), `execution_mode` and, for `execute`, `confirm_cluster_name`
+that must equal `cluster_name`. Refusals are explicit:
+`ROLLBACK_CONFIRMATION_MISMATCH`, `ROLLBACK_SNAPSHOT_PATH_INVALID`,
+`ROLLBACK_CLUSTER_NAME_MISMATCH`, `ROLLBACK_EXECUTION_MODE_INVALID`.
+
+The executor refuses `ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED`: restoring a single
+member of a stacked etcd breaks the quorum, and this agent does not coordinate the
+all-member restore a three-control-plane cluster needs. It runs only on a cluster
+with exactly one control plane.
+
+`execute` is approval-gated like the upgrade, and it proceeds only when its
+preflight passes: the node is Ready, the snapshot file exists, `etcdctl snapshot
+status` returned its hash, and etcd is healthy (`ROLLBACK_PREFLIGHT_BLOCKED`
+otherwise, with nothing touched). The steps are `etcd_restore` (restore into
+`/var/lib/etcd/rollback-<utc>`), `data_swap` (stop the kubelet, move the live
+member directory to `/var/lib/etcd/member.pre-rollback-<utc>`, move the restored
+member in), `kubelet_restart` (start the kubelet and wait for the apiserver),
+then `postflight` (nodes readable and etcd healthy). The previous data directory
+is never deleted; if the swap fails the executor tries to move it back and the
+result names where the data is kept.
+
+Package downgrades are out of scope: kubeadm has no supported downgrade path, so
+the binaries stay where they are and only control-plane state is restored.

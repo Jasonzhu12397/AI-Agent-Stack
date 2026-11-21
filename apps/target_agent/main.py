@@ -16,6 +16,18 @@ from uuid import UUID
 
 from packages.agent_contracts.host_network_observe import HostNetworkObserveError
 from packages.agent_contracts.host_network_probe import collect_local_host_networks
+from packages.agent_contracts.kubernetes_rollback import (
+    ACTION as ROLLBACK_ACTION,
+)
+from packages.agent_contracts.kubernetes_rollback import (
+    KubernetesRollbackError,
+)
+from packages.agent_contracts.kubernetes_rollback import (
+    simulation_plan as rollback_simulation_plan,
+)
+from packages.agent_contracts.kubernetes_rollback import (
+    validate_request as validate_kubernetes_rollback,
+)
 from packages.agent_contracts.kubernetes_upgrade import (
     READINESS_ACTION,
     RECOVERY_ACTION,
@@ -54,6 +66,7 @@ from .ironic_client import (
     get_ironic_node,
     ironic_api_configured,
 )
+from .kubernetes_rollback_exec import RollbackExecutionError, RollbackExecutor
 from .kubernetes_upgrade_exec import UpgradeExecutionError, UpgradeExecutor
 from .leader_election import (
     KubernetesLeaseElector,
@@ -1584,6 +1597,48 @@ def execute(
             "status": "succeeded",
             "error_code": None,
             "output": readiness_report(),
+            "side_effects": False,
+        }
+    if action == ROLLBACK_ACTION:
+        try:
+            rollback = validate_kubernetes_rollback(
+                command.get("payload", {}),
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+        except KubernetesRollbackError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        if rollback["execution_mode"] == "execute":
+            try:
+                rollback_result = RollbackExecutor(_run_read_only).run(rollback)
+            except RollbackExecutionError as exc:
+                return {
+                    "status": "blocked",
+                    "error_code": exc.code,
+                    "output": {"detail": exc.detail},
+                    "side_effects": False,
+                }
+            if rollback_result["failure_code"]:
+                return {
+                    "status": "failed",
+                    "error_code": rollback_result["failure_code"],
+                    "output": rollback_result,
+                    "side_effects": True,
+                }
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": rollback_result,
+                "side_effects": True,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": rollback_simulation_plan(rollback),
             "side_effects": False,
         }
     if action == RECOVERY_ACTION:

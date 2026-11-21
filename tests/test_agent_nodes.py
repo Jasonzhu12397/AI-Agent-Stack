@@ -1,5 +1,8 @@
 # ruff: noqa: I001
-from core.agent_node_views import _validate_kubernetes_upgrade_result
+from core.agent_node_views import (
+    _validate_kubernetes_rollback_result,
+    _validate_kubernetes_upgrade_result,
+)
 import datetime
 import hashlib
 
@@ -2640,3 +2643,77 @@ def test_upgrade_readiness_is_a_target_only_command(node_workspace):
     assert accepted.status_code == 202
     assert accepted.data["status"] == AgentCommand.Status.QUEUED
     assert refused.status_code == 400
+
+
+def _rollback_command(mode="execute"):
+    return type("Command", (), {
+        "command_type": "cluster.kubernetes.version.rollback",
+        "payload": {
+            "cluster_name": "edge-lab",
+            "snapshot_path": "/var/lib/etcd/backups/snapshot-pre-v1.34.1.db",
+            "execution_mode": mode,
+            "confirm_cluster_name": "edge-lab" if mode == "execute" else "",
+        },
+    })()
+
+
+def _rollback_result(mode="execute"):
+    status = "succeeded" if mode == "execute" else "not_started"
+    return {
+        "cluster_name": "edge-lab",
+        "snapshot_path": "/var/lib/etcd/backups/snapshot-pre-v1.34.1.db",
+        "execution_mode": mode,
+        "approval_required": True,
+        "rollback_simulated": mode != "execute",
+        "rolled_back": mode == "execute",
+        "restore_dir": "/var/lib/etcd/rollback-20261121T004500Z",
+        "previous_member_dir": "/var/lib/etcd/member.pre-rollback-20261121T004500Z",
+        "performed_steps": (
+            ["etcd_restore", "data_swap", "kubelet_restart", "postflight"]
+            if mode == "execute" else []
+        ),
+        "steps": [
+            {"sequence": index + 1, "name": name, "status": status}
+            for index, name in enumerate(
+                ("preflight", "etcd_restore", "data_swap", "kubelet_restart", "postflight")
+            )
+        ],
+        "preflight": (
+            {"checks": [{"name": "etcd.snapshot.exists", "ok": True, "detail": "readable"}],
+             "blocked": False}
+            if mode == "execute" else {"checks": [], "blocked": None}
+        ),
+        "failure_code": None,
+    }
+
+
+def test_kubernetes_rollback_result_contract():
+    command = _rollback_command()
+
+    assert _validate_kubernetes_rollback_result(command, _rollback_result()) is None
+
+    sim_command = _rollback_command("simulation")
+    assert _validate_kubernetes_rollback_result(sim_command, _rollback_result("simulation")) is None
+
+    claimed = _rollback_result()
+    claimed["rolled_back"] = False
+    assert "restored" in _validate_kubernetes_rollback_result(command, claimed)
+
+    partial = _rollback_result()
+    partial["performed_steps"] = ["etcd_restore"]
+    assert "every stage" in _validate_kubernetes_rollback_result(command, partial)
+
+    lost_data = _rollback_result()
+    lost_data["previous_member_dir"] = "/tmp/member"
+    assert "previous etcd data" in _validate_kubernetes_rollback_result(command, lost_data)
+
+    no_preflight = _rollback_result()
+    no_preflight["preflight"] = {"checks": [], "blocked": False}
+    assert "preflight checks" in _validate_kubernetes_rollback_result(command, no_preflight)
+
+    wrong_snapshot = _rollback_result()
+    wrong_snapshot["snapshot_path"] = "/var/lib/etcd/backups/other.db"
+    assert "approved command" in _validate_kubernetes_rollback_result(command, wrong_snapshot)
+
+    other_type = type("Command", (), {"command_type": "node.health", "payload": {}})()
+    assert _validate_kubernetes_rollback_result(other_type, {"anything": True}) is None

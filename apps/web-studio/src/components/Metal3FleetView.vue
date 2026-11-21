@@ -91,6 +91,9 @@ const readinessBusy = ref<string | null>(null);
 const readinessMessages = ref<Record<string, string>>({});
 const recoveryBusy = ref<string | null>(null);
 const recoveryMessages = ref<Record<string, string>>({});
+const rollbackSnapshots = ref<Record<string, string>>({});
+const rollbackBusy = ref<string | null>(null);
+const rollbackMessages = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
@@ -907,6 +910,41 @@ async function requestRecoveryReport(deployment: ClusterDeployment): Promise<voi
   }
 }
 
+async function requestRollback(deployment: ClusterDeployment): Promise<void> {
+  const snapshot = (rollbackSnapshots.value[deployment.id] ?? "").trim();
+  if (!deployment.target_node_id) {
+    rollbackMessages.value[deployment.id] = "A Target Agent must be assigned first.";
+    return;
+  }
+  if (!snapshot.startsWith("/") || !snapshot.endsWith(".db")) {
+    rollbackMessages.value[deployment.id] = "Enter the absolute .db snapshot path written before the upgrade.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    rollbackMessages.value[deployment.id] = "The Target Agent must be online to restore a snapshot.";
+    return;
+  }
+  rollbackBusy.value = deployment.id;
+  rollbackMessages.value[deployment.id] = "";
+  try {
+    const command = await createAgentCommand(targetAgent.id, "cluster.kubernetes.version.rollback", {
+      cluster_name: deployment.cluster_name,
+      snapshot_path: snapshot,
+      execution_mode: "execute",
+      confirm_cluster_name: deployment.cluster_name,
+    });
+    rollbackMessages.value[deployment.id] =
+      "Rollback request " + command.status + "; approval is required. It stops the kubelet, restores the snapshot and keeps the old etcd data on disk.";
+    await refreshData();
+  } catch (cause) {
+    rollbackMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to request a rollback.";
+  } finally {
+    rollbackBusy.value = null;
+  }
+}
+
 function upgradeEtcdHealth(command: AgentCommand) {
   return getKubernetesUpgradeEtcdHealth(command.result);
 }
@@ -1514,6 +1552,25 @@ onUnmounted(() => {
               </div>
               <small v-if="readinessMessages[scope.row.id]" class="fleet-version-message">{{ readinessMessages[scope.row.id] }}</small>
               <small v-if="recoveryMessages[scope.row.id]" class="fleet-version-message">{{ recoveryMessages[scope.row.id] }}</small>
+              <div class="fleet-version-control">
+                <el-input
+                  v-model="rollbackSnapshots[scope.row.id]"
+                  size="small"
+                  placeholder="/var/lib/etcd/backups/snapshot-pre-*.db"
+                  style="width: min(300px, 100%)"
+                />
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="rollbackBusy === scope.row.id"
+                  @click="requestRollback(scope.row)"
+                >Rollback</el-button>
+              </div>
+              <small class="readiness-blocked">
+                Rollback restores the pre-upgrade etcd snapshot. Single control-plane only; approval required.
+              </small>
+              <small v-if="rollbackMessages[scope.row.id]" class="fleet-version-message">{{ rollbackMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">

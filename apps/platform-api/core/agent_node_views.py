@@ -102,9 +102,11 @@ MUTATING_COMMANDS = {
     "target.worker.provision",
     "target.eph.cleanup",
     "cluster.kubernetes.version.upgrade",
+    "cluster.kubernetes.version.rollback",
 }
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
+    "cluster.kubernetes.version.rollback",
 }
 
 
@@ -320,6 +322,79 @@ def _validate_executed_upgrade(command, result):
         return "A completed Kubernetes upgrade must list the preflight checks it ran."
     if preflight.get("blocked") is not False:
         return "A Kubernetes upgrade cannot complete while its preflight is blocked."
+    return None
+
+
+_ROLLBACK_STEP_NAMES = (
+    "preflight",
+    "etcd_restore",
+    "data_swap",
+    "kubelet_restart",
+    "postflight",
+)
+_ROLLBACK_REQUIRED_STEPS = ("etcd_restore", "data_swap", "kubelet_restart", "postflight")
+
+
+def _validate_kubernetes_rollback_result(command, result):
+    if command.command_type != "cluster.kubernetes.version.rollback":
+        return None
+    if not isinstance(result, dict):
+        return "Kubernetes rollback result must be an object."
+    expected_identity = {
+        "cluster_name": command.payload.get("cluster_name"),
+        "snapshot_path": command.payload.get("snapshot_path"),
+        "execution_mode": command.payload.get("execution_mode"),
+    }
+    if any(result.get(key) != value for key, value in expected_identity.items()):
+        return "Kubernetes rollback result does not match the approved command."
+    steps = result.get("steps")
+    if not isinstance(steps, list) or len(steps) != len(_ROLLBACK_STEP_NAMES):
+        return "A Kubernetes rollback must report the five ordered stages."
+    for index, name in enumerate(_ROLLBACK_STEP_NAMES):
+        step = steps[index]
+        if not isinstance(step, dict) or step.get("sequence") != index + 1:
+            return "A Kubernetes rollback must report the five ordered stages."
+        if step.get("name") != name:
+            return "A Kubernetes rollback must report the five ordered stages."
+        if result.get("execution_mode") == "simulation" and step.get("status") != "not_started":
+            return "A simulated rollback must not claim any stage ran."
+    if result.get("execution_mode") == "simulation":
+        if (
+            result.get("approval_required") is not True
+            or result.get("rollback_simulated") is not True
+            or result.get("rolled_back") is not False
+            or result.get("performed_steps") != []
+        ):
+            return "A simulated rollback must not claim the cluster was restored."
+        return None
+    if (
+        result.get("approval_required") is not True
+        or result.get("rollback_simulated") is not False
+        or result.get("rolled_back") is not True
+    ):
+        return "An executed rollback must report that the cluster was restored."
+    performed = result.get("performed_steps")
+    if not isinstance(performed, list) or not set(_ROLLBACK_REQUIRED_STEPS) <= set(performed):
+        return "An executed rollback must report every stage it performed."
+    for step in steps:
+        if step.get("status") not in _EXECUTED_STEP_STATUSES or step.get("status") in (
+            "not_started",
+            "failed",
+        ):
+            return "Kubernetes rollback stages must all have run to completion."
+    preflight = result.get("preflight")
+    if not isinstance(preflight, dict):
+        return "A completed rollback must report its preflight evidence."
+    checks = preflight.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return "A completed rollback must list the preflight checks it ran."
+    if preflight.get("blocked") is not False:
+        return "A rollback cannot complete while its preflight is blocked."
+    previous = result.get("previous_member_dir")
+    if not isinstance(previous, str) or not previous.startswith(
+        "/var/lib/etcd/member.pre-rollback-"
+    ):
+        return "A rollback must keep the previous etcd data directory on disk."
     return None
 
 
@@ -2945,7 +3020,9 @@ class AgentRuntimeResultView(APIView):
                      "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
                     status=409,
                 )
-            result_error = _validate_kubernetes_upgrade_result(command, result)
+            result_error = _validate_kubernetes_upgrade_result(command, result) or (
+                _validate_kubernetes_rollback_result(command, result)
+            )
             if outcome == "succeeded" and result_error:
                 return Response({"detail": result_error}, status=409)
             command.status = (

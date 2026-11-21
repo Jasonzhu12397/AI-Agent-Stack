@@ -47,6 +47,7 @@ TARGET_DIRECT_COMMANDS: Final[frozenset[str]] = frozenset(
         "cluster.postflight",
         "cluster.manifest.validate",
         "cluster.kubernetes.version.upgrade",
+        "cluster.kubernetes.version.rollback",
         "cluster.kubernetes.upgrade.readiness",
         "cluster.kubernetes.recovery.report",
         "k8s.resource.read",
