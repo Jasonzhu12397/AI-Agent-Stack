@@ -9,6 +9,7 @@
 
 export type BmhInventorySnapshot = {
   available: boolean;
+  warnings?: unknown;
   reason?: string | null;
   status?: string | null;
   error_code?: string | null;
@@ -16,6 +17,29 @@ export type BmhInventorySnapshot = {
   matched?: number;
   unmatched?: string[];
 };
+
+/**
+ * Read a snapshot's warning list without trusting its shape.
+ *
+ * Snapshots are stored as JSON and older rows may carry no `warnings` field at
+ * all, so a template that reads `.warnings.length` crashes on them. Anything
+ * that is not a list of non-empty strings is reported as an empty list rather
+ * than rendered as a broken badge.
+ */
+export function snapshotWarnings(
+  snapshot: { warnings?: unknown } | null | undefined,
+): string[] {
+  const value = snapshot?.warnings;
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item): item is string => typeof item === "string" && item.trim() !== "",
+    );
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    return [value];
+  }
+  return [];
+}
 
 export type BmhInventoryVerdict = {
   tone: "success" | "warning" | "info";
@@ -53,6 +77,7 @@ export function bmhInventoryVerdict(
 
 export type EphPreflightSnapshot = {
   available: boolean;
+  warnings?: unknown;
   reason?: string | null;
   status?: string | null;
   error_code?: string | null;

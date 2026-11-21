@@ -8,6 +8,7 @@ import {
 import {
   bmhInventoryVerdict,
   ephPreflightVerdict,
+  snapshotWarnings,
 } from "../domain/preflightSnapshots.ts";
 import {
   approveAgentCommand,
@@ -1384,11 +1385,11 @@ onUnmounted(() => {
                       </template>
                     </small>
                     <ul
-                      v-if="deployment.preflight_result.eph_preflight.warnings.length"
+                      v-if="snapshotWarnings(deployment.preflight_result.eph_preflight).length"
                       class="readiness-blocked"
                     >
                       <li
-                        v-for="warning in deployment.preflight_result.eph_preflight.warnings"
+                        v-for="warning in snapshotWarnings(deployment.preflight_result.eph_preflight)"
                         :key="'eph-' + warning"
                       >EPH preflight: {{ warning }}</li>
                     </ul>

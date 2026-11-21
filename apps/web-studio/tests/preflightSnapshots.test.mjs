@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   bmhInventoryVerdict,
   ephPreflightVerdict,
+  snapshotWarnings,
 } from "../src/domain/preflightSnapshots.ts";
 
 test("an inspection that never ran is informational", () => {
@@ -95,4 +96,19 @@ test("an unreachable EPH preflight is informational", () => {
     label: "EPH preflight unavailable",
     detail: "",
   });
+});
+
+test("snapshot warnings survive a missing or malformed field", () => {
+  // Older rows were stored before warnings were persisted; reading
+  // `.warnings.length` on them would throw inside the template.
+  assert.deepEqual(snapshotWarnings({ available: true }), []);
+  assert.deepEqual(snapshotWarnings(null), []);
+  assert.deepEqual(snapshotWarnings({ available: true, warnings: null }), []);
+  assert.deepEqual(
+    snapshotWarnings({ available: true, warnings: ["control link missing", "", 7] }),
+    ["control link missing"],
+  );
+  assert.deepEqual(snapshotWarnings({ available: true, warnings: "pxe port down" }), [
+    "pxe port down",
+  ]);
 });
