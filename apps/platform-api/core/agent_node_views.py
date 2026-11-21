@@ -35,6 +35,12 @@ from packages.agent_contracts.agent_commands import (
 )
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
+from packages.agent_contracts.kubernetes_rollback import (
+    KubernetesRollbackError,
+)
+from packages.agent_contracts.kubernetes_rollback import (
+    validate_request as validate_kubernetes_rollback,
+)
 from packages.agent_contracts.kubernetes_upgrade import (
     KubernetesUpgradeError,
 )
@@ -2496,6 +2502,19 @@ class AgentNodeCommandListCreateView(APIView):
             try:
                 validate_kubernetes_upgrade(payload, cluster_name=node.cluster_name)
             except KubernetesUpgradeError as exc:
+                return Response(
+                    {"detail": exc.detail, "code": exc.code},
+                    status=400,
+                )
+        if command_type == "cluster.kubernetes.version.rollback":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return Response(
+                    {"detail": "Kubernetes rollbacks require a Target Cluster Agent."},
+                    status=400,
+                )
+            try:
+                validate_kubernetes_rollback(payload, cluster_name=node.cluster_name)
+            except KubernetesRollbackError as exc:
                 return Response(
                     {"detail": exc.detail, "code": exc.code},
                     status=400,

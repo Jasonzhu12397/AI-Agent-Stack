@@ -2717,3 +2717,41 @@ def test_kubernetes_rollback_result_contract():
 
     other_type = type("Command", (), {"command_type": "node.health", "payload": {}})()
     assert _validate_kubernetes_rollback_result(other_type, {"anything": True}) is None
+
+
+@pytest.mark.django_db
+def test_kubernetes_rollback_is_rejected_before_queueing_when_the_request_is_unsafe(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "rollback-guard", "node_type": "target_cluster"},
+        format="json",
+    )
+    node_id = enrolled.data["id"]
+    good = {
+        "cluster_name": "edge-lab",
+        "snapshot_path": "/var/lib/etcd/backups/snapshot-pre-v1.34.1.db",
+        "execution_mode": "execute",
+        "confirm_cluster_name": "edge-lab",
+    }
+    traversal = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "cluster.kubernetes.version.rollback",
+         "payload": {**good, "snapshot_path": "/var/lib/etcd/../../etc/shadow.db"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="rollback-traversal",
+    )
+    assert traversal.status_code == 400
+    assert traversal.data["code"] == "ROLLBACK_SNAPSHOT_PATH_INVALID"
+
+    unconfirmed = client.post(
+        f"/api/v1/agent-nodes/{node_id}/commands/",
+        {"command_type": "cluster.kubernetes.version.rollback",
+         "payload": {**good, "confirm_cluster_name": ""}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="rollback-unconfirmed",
+    )
+    assert unconfirmed.status_code == 400
+    assert unconfirmed.data["code"] == "ROLLBACK_CONFIRMATION_MISMATCH"
+    queued = AgentCommand.objects.filter(command_type="cluster.kubernetes.version.rollback")
+    assert not queued.exists()
