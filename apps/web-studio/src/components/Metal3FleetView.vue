@@ -998,6 +998,9 @@ onUnmounted(() => {
               <el-tag size="small" type="info">{{ scope.row.lifecycle_state || "n/a" }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column prop="bmh_name" label="BMH" min-width="120">
+            <template #default="scope">{{ scope.row.bmh_name || "—" }}</template>
+          </el-table-column>
           <el-table-column prop="agent_version" label="Agent Version" min-width="130" />
           <el-table-column label="Inventory Observed" min-width="170">
             <template #default="scope">{{ formatTime(scope.row.observed_at) }}</template>
