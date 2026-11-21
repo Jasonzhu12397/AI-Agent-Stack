@@ -423,3 +423,67 @@ def test_fleet_request_renders_the_template_from_the_declared_profile():
     assert [item["id"] for item in links["vlans"]] == ["bond0.100"]
     networks = template["network_data"]["networks"]["ipv4"]
     assert networks[0]["link"] == "bond0.100"
+
+def test_fleet_request_judges_bmc_reachability_on_the_control_network():
+    # BMCs, PXE, the IPA ramdisk and the Live ISO share one control segment; a
+    # BMC outside it cannot be powered from the EPH without an extra route.
+    profile = {
+        "networks": [
+            {
+                "name": "ctrl",
+                "role": "control",
+                "vlan": 70,
+                "cidr": "172.18.37.0/24",
+                "ip_pools": [{"start": "172.18.37.10", "end": "172.18.37.50"}],
+                "bond": {
+                    "name": "bond_control",
+                    "interfaces": ["pci@0000:18:00.0", "pci@0000:18:00.1"],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                "name": "data",
+                "role": "data",
+                "cidr": "10.0.200.0/24",
+                "ip_pools": [{"start": "10.0.200.10", "end": "10.0.200.50"}],
+                "bond": {
+                    "name": "bond_data",
+                    "interfaces": ["pci@0000:3b:00.0", "pci@0000:3b:00.1"],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["control_plane", "worker", "storage"],
+            },
+        ],
+    }
+    on_network = fp.plan_fleet_request(
+        {
+            "cluster_name": "target",
+            "control_plane_count": 1,
+            "infra_network_profile": profile,
+            "fleet": [
+                _request_machine(
+                    "cp",
+                    bmc_address="redfish+https://172.18.37.21/redfish/v1/Systems/1",
+                ),
+            ],
+        }
+    )
+    assert on_network["bmc_network"]["ok"] is True
+    assert on_network["bmc_network"]["subnets"] == ["172.18.37.0/24"]
+
+    off_network = fp.plan_fleet_request(
+        {
+            "cluster_name": "target",
+            "control_plane_count": 1,
+            "infra_network_profile": profile,
+            "fleet": [
+                _request_machine(
+                    "cp",
+                    bmc_address="redfish+https://192.168.9.21/redfish/v1/Systems/1",
+                ),
+            ],
+        }
+    )
+    assert off_network["bmc_network"]["ok"] is False
+    assert off_network["bmc_network"]["warnings"] == ["cp: BMC_OFF_CONTROL_NETWORK"]

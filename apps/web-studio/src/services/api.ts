@@ -994,6 +994,17 @@ export type ClusterDeployment = {
       >;
       warnings: string[];
       eph_network_configured?: boolean;
+      bmc_network?: {
+        subnets: string[];
+        ok: boolean;
+        warnings: string[];
+        machines: Array<{
+          name: string;
+          bmc_host: string;
+          code: string;
+          detail: string;
+        }>;
+      };
     };
     eph_preflight?: EphPreflightRecord | null;
     bmh_inventory_sync?: BmhInventorySyncRecord | null;

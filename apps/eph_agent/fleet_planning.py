@@ -20,7 +20,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.agent_contracts.infra_networks import InfraNetworkError
+from packages.agent_contracts.bmc_network import bmc_network_findings
+from packages.agent_contracts.infra_networks import (
+    InfraNetworkError,
+    plan_infra_networks,
+)
 
 from .data_template import (
     DataTemplateError,
@@ -212,6 +216,20 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
         "control_plane_count": plan.control_plane_count,
         "worker_replicas": len(workers),
     }
+    profile = payload.get("infra_network_profile")
+    if isinstance(profile, dict):
+        # One segment carries every BMC, the PXE hand-out and the Live ISO, so
+        # the plan reports a BMC that would not be reachable from it.
+        try:
+            network_plan = plan_infra_networks(profile)
+        except InfraNetworkError as exc:
+            raise PlanningError(str(exc)) from exc
+        evidence["bmc_network"] = bmc_network_findings(
+            payload.get("fleet"),
+            network_plan,
+            emulated_bmc=payload.get("emulated_bmc") is True,
+            node_ip=payload.get("node_ip") if isinstance(payload.get("node_ip"), str) else None,
+        )
     image_url = payload.get("image_url")
     control_plane_endpoint = payload.get("control_plane_endpoint")
     if isinstance(image_url, str) and image_url and isinstance(

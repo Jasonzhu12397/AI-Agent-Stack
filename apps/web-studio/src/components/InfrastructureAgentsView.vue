@@ -1327,6 +1327,23 @@ onUnmounted(() => {
                   {{ Object.keys(deployment.preflight_result.network_defaults.sriov_pci_sources).join(", ") || "none" }}
                 </small>
                 <small
+                  v-if="deployment.preflight_result?.network_defaults?.bmc_network"
+                  :class="
+                    deployment.preflight_result.network_defaults.bmc_network.ok
+                      ? ''
+                      : 'readiness-blocked'
+                  "
+                >
+                  BMC fabric:
+                  {{
+                    deployment.preflight_result.network_defaults.bmc_network.subnets.join(", ") ||
+                    "no control subnet declared"
+                  }}
+                  ·
+                  {{ deployment.preflight_result.network_defaults.bmc_network.machines.length }}
+                  BMC(s) checked
+                </small>
+                <small
                   v-for="warning in deployment.preflight_result?.network_defaults?.warnings || []"
                   :key="'net-' + warning"
                   class="readiness-blocked"

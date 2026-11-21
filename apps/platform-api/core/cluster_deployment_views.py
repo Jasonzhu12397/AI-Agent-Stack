@@ -23,6 +23,7 @@ from packages.agent_contracts.infra_networks import (
     render_sriov_node_policies,
     network_spec_migration,
 )
+from packages.agent_contracts.bmc_network import bmc_network_findings
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.storage_addon import (
     StorageAddonError,
@@ -348,6 +349,14 @@ def _network_evidence_drift(project, spec):
     return drift
 
 
+def _declares_emulated_bmc(spec: dict[str, Any]) -> bool:
+    """True when the bootstrap declares the vbmc/sushy emulator pair."""
+
+    registry = spec.get("local_registry")
+    services = registry.get("services") if isinstance(registry, dict) else None
+    return isinstance(services, dict) and "vbmc" in services
+
+
 def _validated_spec(request, *, infra_profile=None, project=None):
     spec = request.data.get("cluster_spec")
     if not isinstance(spec, dict):
@@ -492,6 +501,15 @@ def _validated_spec(request, *, infra_profile=None, project=None):
             return None, f"infra_network_profile: {exc}"
         except EphNetworkError as exc:
             return None, f"eph_network: {exc}"
+    fleet = spec.get("fleet")
+    if plan is not None and isinstance(fleet, list) and fleet:
+        bmc_network = bmc_network_findings(
+            fleet,
+            plan,
+            emulated_bmc=_declares_emulated_bmc(spec),
+        )
+        network_defaults["bmc_network"] = bmc_network
+        network_defaults["warnings"].extend(bmc_network["warnings"])
     spec["network_defaults"] = network_defaults
     ironic_config = spec.get("ironic")
     if ironic_config is not None:
