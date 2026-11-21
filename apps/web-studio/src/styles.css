@@ -418,6 +418,61 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   word-break: break-word;
 }
 
+/* Preflight evidence: a blocked run must show which fact stopped it, not only
+   a one-line failure. */
+.fleet-preflight {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.fleet-preflight-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.fleet-preflight ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-preflight li {
+  display: grid;
+  grid-template-columns: 16px minmax(120px, 200px) 1fr;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.fleet-preflight li.failed {
+  color: #b91c1c;
+}
+
+.fleet-preflight li code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.fleet-preflight li small {
+  color: #6b7280;
+  word-break: break-word;
+}
+
+.fleet-preflight-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
 .fleet-upgrade-safety.fleet-upgrade-live {
   color: #b91c1c;
 }

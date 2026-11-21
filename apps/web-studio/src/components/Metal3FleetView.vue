@@ -37,7 +37,10 @@ import {
 } from "../services/api";
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
 import SriovDevicePluginEditor from "./SriovDevicePluginEditor.vue";
-import { getKubernetesUpgradeFailure } from "../domain/kubernetesUpgrade";
+import {
+  getKubernetesUpgradeFailure,
+  getKubernetesUpgradePreflight,
+} from "../domain/kubernetesUpgrade";
 
 type FleetTab = "dashboard" | "fleet" | "eph" | "clusters" | "terminal" | "operations";
 
@@ -841,6 +844,15 @@ function upgradeCommandMode(command: AgentCommand): "simulation" | "execute" {
   return command.payload.execution_mode === "execute" ? "execute" : "simulation";
 }
 
+function upgradePreflight(command: AgentCommand) {
+  return getKubernetesUpgradePreflight(command.result);
+}
+
+function upgradePreflightFailedCount(command: AgentCommand): number {
+  const preflight = upgradePreflight(command);
+  return preflight ? preflight.checks.filter((check) => !check.ok).length : 0;
+}
+
 function upgradeStepStatus(step: Record<string, unknown>): string {
   const status = step.status;
   return typeof status === "string" ? status.replaceAll("_", " ") : "not reported";
@@ -1548,6 +1560,29 @@ onUnmounted(() => {
                 <el-tag :type="step.status === 'failed' ? 'danger' : step.status === 'succeeded' ? 'success' : 'info'" size="small">{{ upgradeStepStatus(step) }}</el-tag>
               </li>
             </ol>
+            <div v-if="upgradePreflight(command)" class="fleet-preflight">
+              <div class="fleet-preflight-heading">
+                <span>Preflight checks</span>
+                <el-tag :type="upgradePreflight(command)?.blocked ? 'danger' : 'success'" size="small">
+                  {{ upgradePreflight(command)?.blocked ? "BLOCKED" : "PASSED" }}
+                </el-tag>
+              </div>
+              <ul v-if="upgradePreflight(command)?.checks.length">
+                <li
+                  v-for="check in upgradePreflight(command)?.checks"
+                  :key="check.name"
+                  :class="{ failed: !check.ok }"
+                >
+                  <span class="fleet-preflight-mark">{{ check.ok ? "✓" : "✕" }}</span>
+                  <code>{{ check.name }}</code>
+                  <small>{{ check.detail }}</small>
+                </li>
+              </ul>
+              <p v-else class="fleet-preflight-hint">The Agent reported a preflight without any checks.</p>
+              <p v-if="upgradePreflight(command)?.blocked" class="fleet-preflight-hint">
+                {{ upgradePreflightFailedCount(command) }} check(s) failed · nothing was drained or upgraded
+              </p>
+            </div>
             <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
               Upgrade simulation failed. Review the Agent error before taking further action.
               <span v-if="getKubernetesUpgradeFailure(command.error)">{{ getKubernetesUpgradeFailure(command.error) }}</span>
