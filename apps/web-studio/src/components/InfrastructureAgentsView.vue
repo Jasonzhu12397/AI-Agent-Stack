@@ -4,7 +4,6 @@ import {
   buildIronicWorkload,
   ironicWorkloadConfigured,
   ironicWorkloadTemplate,
-  provisioningNetworkDefaults,
 } from "../domain/ironicWorkload.ts";
 import {
   approveAgentCommand,
@@ -19,6 +18,7 @@ import {
   getClusterDeployments,
   getInfraNetworkProfile,
   saveInfraNetworkProfile,
+  previewIronicTemplate,
   syncClusterDeploymentEphPreflight,
   syncClusterDeploymentBmhInventory,
   runClusterDeploymentPostflight,
@@ -30,6 +30,7 @@ import {
   type ClusterDeployment,
   type InfraNetwork,
   type InfraNetworkProfile,
+  type IronicTemplatePreview,
   type Project,
   type Tenant,
 } from "../services/api";
@@ -103,7 +104,13 @@ const buildIronicRamdiskDownloaderImage = ref("");
 const buildIronicKeepalivedImage = ref("");
 const buildIronicInterface = ref("");
 const buildIronicIpAddress = ref("");
-const provisioningDefaults = computed(() => provisioningNetworkDefaults(infraNetworkProfile.value));
+// The platform renders this template; the UI must not re-derive it locally.
+const ironicPreview = ref<IronicTemplatePreview | null>(null);
+const ironicPreviewError = ref("");
+const provisioningDefaults = computed(() => ({
+  interfaceName: ironicPreview.value?.configuration.networking.interface ?? "",
+  ipAddress: ironicPreview.value?.configuration.networking.ip_address ?? "",
+}));
 const ironicTemplate = computed(() =>
   ironicWorkloadTemplate({
     enabled: buildIronicEnabled.value,
@@ -116,6 +123,24 @@ const ironicTemplate = computed(() =>
     ipAddress: buildIronicIpAddress.value,
   }),
 );
+
+async function refreshIronicPreview(): Promise<void> {
+  ironicPreview.value = null;
+  ironicPreviewError.value = "";
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  if (!infraNetworkProfile.value.networks.length) return;
+  try {
+    ironicPreview.value = await previewIronicTemplate(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      infraNetworkProfile.value,
+      ephNetworkAddresses.value,
+    );
+  } catch (cause) {
+    ironicPreviewError.value =
+      cause instanceof Error ? cause.message : "Unable to render the Ironic template.";
+  }
+}
 
 function fillIronicFromProvisioning(): void {
   buildIronicEnabled.value = true;
@@ -290,6 +315,7 @@ async function loadInfraNetworks(): Promise<void> {
     } else {
       infraNetworkProfile.value = { networks: [] };
     }
+    void refreshIronicPreview();
   } catch (cause) {
     infraNetworkStatus.value =
       cause instanceof Error ? cause.message : "Unable to load infrastructure networks.";
@@ -787,6 +813,16 @@ watch(selectedNodeId, () => {
 watch(commandType, (value) => {
   commandPayload.value = defaultPayload(value);
 });
+watch(
+  () => infraNetworkProfile.value,
+  () => void refreshIronicPreview(),
+  { deep: true },
+);
+watch(
+  () => ephNetworkAddresses.value,
+  () => void refreshIronicPreview(),
+  { deep: true },
+);
 
 onMounted(() => {
   void loadTenants();
@@ -1147,6 +1183,23 @@ onUnmounted(() => {
               </div>
               <p>Payload template sent to the platform (it normalised and forwards it to the EPH):</p>
               <pre class="ironic-template">{{ ironicTemplate }}</pre>
+              <div class="ironic-prefill-note">
+                <strong>Platform-rendered Ironic template</strong>
+                <small v-if="ironicPreview?.provisioning_network">
+                  Provisioning network {{ ironicPreview.provisioning_network }} · defaults:
+                  {{ ironicPreview.defaults_sources.join(", ") || "none" }}
+                </small>
+                <small v-if="ironicPreview">
+                  Operator-owned fields: {{ ironicPreview.manual_fields.join(", ") }}
+                </small>
+                <small
+                  v-for="warning in ironicPreview?.warnings || []"
+                  :key="'ironic-template-' + warning"
+                  class="readiness-blocked"
+                >{{ warning }}</small>
+                <small v-if="ironicPreviewError" class="readiness-blocked">{{ ironicPreviewError }}</small>
+                <pre v-if="ironicPreview" class="ironic-template">{{ JSON.stringify({ ironic: ironicPreview.configuration }, null, 2) }}</pre>
+              </div>
             </template>
             <label>Network profile override (optional JSON)
               <el-input

@@ -149,30 +149,6 @@ def normalize_ironic_config(ironic: Any) -> dict[str, Any]:
     }
 
 
-def provisioning_defaults(network: Any) -> dict[str, str]:
-    """Return the Ironic networking values implied by a provisioning network.
-
-    Only values the profile actually declares are returned: the link is the
-    bond when present, and the address is the network's declared gateway. The
-    gateway is a prefill default (an EPH host usually owns it on the
-    provisioning segment) and stays editable; the caller must not treat it as
-    authoritative when the profile leaves it unset.
-    """
-
-    if not isinstance(network, dict):
-        return {}
-    defaults: dict[str, str] = {}
-    bond = network.get("bond")
-    if isinstance(bond, dict) and isinstance(bond.get("name"), str) and bond["name"].strip():
-        defaults["interface"] = bond["name"].strip()
-    elif isinstance(network.get("interface"), str) and network["interface"].strip():
-        defaults["interface"] = network["interface"].strip()
-    gateway = network.get("gateway_ipv4")
-    if isinstance(gateway, str) and gateway.strip():
-        defaults["ip_address"] = gateway.strip()
-    return defaults
-
-
 def apply_provisioning_defaults(
     ironic: Any,
     defaults: dict[str, str],

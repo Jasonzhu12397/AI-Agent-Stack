@@ -1088,6 +1088,42 @@ export function saveInfraNetworkProfile(
   );
 }
 
+export type IronicTemplatePreview = {
+  configuration: {
+    namespace: string;
+    api_credentials_name: string;
+    version: string;
+    images: {
+      ironic: string;
+      deploy_ramdisk_downloader: string;
+      keepalived: string;
+    };
+    networking: { interface?: string; ip_address?: string };
+  };
+  provisioning_network: string | null;
+  defaults_sources: string[];
+  manual_fields: string[];
+  warnings: string[];
+};
+
+export function previewIronicTemplate(
+  tenantId: string,
+  projectId: string,
+  profile: InfraNetworkProfile | null,
+  ephNetworkAddresses?: Record<string, string>,
+): Promise<IronicTemplatePreview> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cluster-deployments/ironic-template/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...(profile ? { infra_network_profile: profile } : {}),
+        ...(ephNetworkAddresses ? { eph_network_addresses: ephNetworkAddresses } : {}),
+      }),
+    },
+  );
+}
+
 export function createClusterDeployment(
   tenantId: string,
   projectId: string,

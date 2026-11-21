@@ -87,8 +87,10 @@ def test_provisioning_network_fills_interface_and_address():
     spec, error = _validate(_cluster_spec(), _profile())
 
     assert error is None
+    # The provisioning network is a VLAN on eno4, so the address lives on the
+    # sub-interface the nmstate renderer and networkData also name.
     assert spec["ironic"]["networking"] == {
-        "interface": "eno4",
+        "interface": "eno4.400",
         "ip_address": "10.40.0.1",
     }
     assert spec["ironic_defaults_sources"] == ["interface", "ip_address"]
@@ -124,7 +126,8 @@ def test_bond_name_is_the_provisioning_link():
     spec, error = _validate(_cluster_spec(), profile)
 
     assert error is None
-    assert spec["ironic"]["networking"]["interface"] == "bond-prov"
+    # A VLAN on the bond is a sub-interface; the bare bond carries no address.
+    assert spec["ironic"]["networking"]["interface"] == "bond-prov.400"
 
 
 def test_absent_gateway_still_requires_an_explicit_address():

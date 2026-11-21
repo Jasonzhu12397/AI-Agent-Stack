@@ -45,7 +45,11 @@ from packages.agent_contracts.ironic_spec import (
     IronicSpecError,
     apply_provisioning_defaults,
     normalize_ironic_config,
-    provisioning_defaults,
+)
+from packages.agent_contracts.ironic_template import (
+    ironic_template_for_profile,
+    provisioning_network,
+    provisioning_networking,
 )
 from core.cloud_control_client import CloudControlDispatchError
 from core.cloud_control_bridge import (
@@ -395,6 +399,7 @@ def _validated_spec(request, *, infra_profile=None, project=None):
         spec["infra_network_profile"] = infra_profile
         network_defaults["sriov_pci_sources"] = sources
         network_defaults["warnings"] = warnings
+    plan: dict[str, Any] | None = None
     if infra_profile is not None:
         try:
             plan = plan_infra_networks(infra_profile)
@@ -475,25 +480,23 @@ def _validated_spec(request, *, infra_profile=None, project=None):
     if ironic_config is not None:
         if not isinstance(ironic_config, dict):
             return None, "ironic: IRONIC_SPEC_INVALID"
-        networks = (spec.get("infra_network_profile") or {}).get("networks")
-        provisioning = next(
-            (
-                network
-                for network in (networks or [])
-                if isinstance(network, dict)
-                and network.get("role") == "provisioning"
-                and network.get("enabled", True)
-            ),
-            None,
-        )
-        if provisioning is not None:
-            defaults = provisioning_defaults(provisioning)
-            addresses = spec.get("eph_network_addresses")
-            if isinstance(addresses, dict):
-                owned = addresses.get("provisioning") or addresses.get("control")
-                if isinstance(owned, str) and owned.strip():
-                    # The EPH-owned address beats the network gateway guess.
-                    defaults["ip_address"] = owned.split("/", 1)[0].strip()
+        addresses = spec.get("eph_network_addresses")
+        eph_address = None
+        if isinstance(addresses, dict):
+            owned = addresses.get("provisioning") or addresses.get("control")
+            if isinstance(owned, str) and owned.strip():
+                # The EPH-owned address beats the network gateway guess.
+                eph_address = owned.strip()
+        defaults: dict[str, str] = {}
+        if plan is not None:
+            defaults, sources, template_warnings = provisioning_networking(
+                plan,
+                provisioning_network(plan),
+                eph_address=eph_address,
+            )
+            network_defaults["warnings"].extend(template_warnings)
+            network_defaults["ironic_template_sources"] = sources
+        if defaults:
             ironic_config, filled = apply_provisioning_defaults(
                 ironic_config,
                 defaults,
@@ -1030,6 +1033,42 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
         preflight["bmh_inventory_sync"] = record
         deployment.preflight_result = preflight
         deployment.save(update_fields=["preflight_result", "updated_at"])
+
+
+class ClusterDeploymentIronicTemplateView(APIView):
+    """Render the Ironic configuration a provisioning network implies.
+
+    The UI used to derive this itself in TypeScript, which meant two
+    implementations of the same mapping. It now previews exactly the template
+    the deployment validator would fill, including the fields that stay
+    operator-owned (image URLs, credentials name, version).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, project_id):
+        tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        if not _can_edit_project(request.user, tenant, project):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        profile = request.data.get("infra_network_profile")
+        if profile is None:
+            stored = InfrastructureNetworkProfile.objects.filter(project=project).first()
+            if stored is not None:
+                profile = stored.profile
+        addresses = request.data.get("eph_network_addresses")
+        eph_address = None
+        if isinstance(addresses, dict):
+            owned = addresses.get("provisioning") or addresses.get("control")
+            if isinstance(owned, str) and owned.strip():
+                eph_address = owned.strip()
+        try:
+            template = ironic_template_for_profile(profile, eph_address=eph_address)
+        except InfraNetworkError as exc:
+            return Response(
+                {"detail": str(exc), "code": "ironic_template_profile_invalid"},
+                status=400,
+            )
+        return Response(template)
 
 
 class ClusterDeploymentNetworkEvidenceView(APIView):

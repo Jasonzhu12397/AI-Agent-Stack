@@ -58,6 +58,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
     ClusterDeploymentBmhInventorySyncView,
     ClusterDeploymentEphPreflightView,
+    ClusterDeploymentIronicTemplateView,
     ClusterDeploymentNetworkEvidenceView,
     ClusterDeploymentListCreateView,
 )
@@ -209,6 +210,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
         ClusterDeploymentListCreateView.as_view(),
         name="cluster-deployment-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/ironic-template/",
+        ClusterDeploymentIronicTemplateView.as_view(),
+        name="cluster-deployment-ironic-template",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/",

@@ -230,6 +230,30 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Ironic template is rendered by the platform
+
+`packages/agent_contracts/ironic_template.py` is the only place that answers
+"what does this provisioning network imply for Ironic". It returns the
+configuration skeleton, the keys it filled (`defaults_sources`), the fields the
+operator still owns (`manual_fields`: credentials name, version and the three
+image URLs) and blocking warnings
+(`IRONIC_TEMPLATE_PROVISIONING_NETWORK_MISSING`, `_INTERFACE_UNAVAILABLE`,
+`_ADDRESS_UNAVAILABLE`).
+
+- Image URLs are never defaulted: registry and tag choices belong to the
+  operator, so the template leaves them empty and names them instead of
+  inventing a mirror.
+- The networking link goes through `network_link_id`, so a VLAN provisioning
+  network binds `bond-prov.400` / `eno4.400` — the same sub-interface the
+  nmstate renderer and Metal3 `networkData` name — instead of the bare bond.
+- An EPH-owned address beats the profile gateway as the Ironic address.
+- `POST /api/v1/tenants/<tenant>/projects/<project>/cluster-deployments/ironic-template/`
+  exposes the same renderer, and the UI previews it instead of re-deriving the
+  mapping in TypeScript (`provisioningNetworkDefaults` was removed).
+- The deployment validator uses the same `provisioning_networking` call, and
+  appends its warnings to `preflight_result.network_defaults.warnings`, so the
+  detail page shows the same gaps the template reports.
+
 ### Single topology resolver and command registry
 
 Two classes of duplication used to let the same decision live in two places:
