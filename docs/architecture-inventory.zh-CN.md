@@ -30,7 +30,7 @@
 | 用户入口 | Web UI / Chat / Workflow / Agent 管理 / 插件市场 / 运维控制台 | `apps/web-studio/src/components/`、`src/services/api.ts` | 【基础】页面与 API 接线已存在；逐交互验收待核对（见 §6） |
 | 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/` | 【基础】大部分模块有实现；实时推送、模型路由降级、MCP stdio 传输等待开发（见 §3） |
 | 基础设施 Agent 控制面 | Cloud Control / EPH / Target 三 Agent | `apps/cloud_control_agent/`、`apps/eph_agent/`、`apps/target_agent/` | 【基础】三 Agent 独立入口、协议与状态机已存在；真实裸金属链路待验证（见 §4） |
-| Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/`、`apps/agent_contracts/` | 【基础】契约与传输已实现（见 §7） |
+| Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/` | 【基础】契约与传输已实现（见 §7） |
 | 执行层 | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | 由三 Agent 内 skill / adapter 模块调用 `kubectl` / `clusterctl` / Ironic HTTP 客户端 | 【待验证】执行适配器以只读观察 + fail-closed 校验为主；真实安装/迁移/数据面转发待验收（见 §5） |
 | 物理裸金属 | 服务器 / BMC·IPMI·Redfish / 管理网 / 控制面网 / 数据面网 | `apps/platform-api/core/bmc_credentials.py`、fleet 库存视图；BMC 配置持久化 | 【基础】凭据与库存模型存在；真实 BMC/Ironic 通电验收待开发 |
 
@@ -104,7 +104,7 @@
 | 面 | 目标组件 | 代码现状 | 三态 |
 |---|---|---|---|
 | Control Plane（普通 NIC） | API Server / etcd / 管理接口 / Ironic 内部服务 | 部署规划与 NTP 源策略区分控制面/数据面 | 【基础】 |
-| Data Plane（SR-IOV/DPDK） | Pod 数据流量、VF、多网卡 | SR-IOV Device Plugin 配置校验契约（`apps/agent_contracts/sriov_device_plugin.py`）、视图持久化、postflight 资源名核对；Calico/Multus/DPDK 以兼容性判定字段出现（只读校验） | SR-IOV 配置【基础/待验证】；OVS/Calico/Multus/DPDK 真实安装、升级、回滚与真实数据面流量验证【待开发】 |
+| Data Plane（SR-IOV/DPDK） | Pod 数据流量、VF、多网卡 | SR-IOV Device Plugin 配置校验契约（`packages/agent_contracts/sriov_device_plugin.py`）、视图持久化、postflight 资源名核对；Calico/Multus/DPDK 以兼容性判定字段出现（只读校验） | SR-IOV 配置【基础/待验证】；OVS/Calico/Multus/DPDK 真实安装、升级、回滚与真实数据面流量验证【待开发】 |
 
 ### 5.3 NTP 规则
 
@@ -148,7 +148,7 @@
 | Cloud Control Agent | `apps/cloud_control_agent` | 云端部署控制面（协议校验/状态汇总） | 【基础】；真实云编排【待开发】 |
 | EPH Agent | `apps/eph_agent` | Bootstrap 集群操作与源侧观察 | 【基础/待验证】 |
 | Target Agent | `apps/target_agent` | 目标集群接管、Pivot、清理、Worker 部署 | 【基础/待验证】 |
-| Agent Contracts | `packages/agent_contracts`、`apps/agent_contracts` | Agent 身份/命令/租约/心跳/checkpoint 契约；SR-IOV 配置校验契约 | 【基础】 |
+| Agent Contracts | `packages/agent_contracts` | Agent 身份/命令/租约/心跳/checkpoint 契约；SR-IOV 配置校验契约 | 【基础】 |
 | Agent Transport | `packages/agent_transport` | mTLS 通信、租约续约、传输客户端 | 【基础】 |
 
 注：`worker_app/capi_pivot.py` 为未被 `tasks.py` / `main.py` / 测试引用的预留残留模块，当前不参与执行链路；正式 Pivot 适配器位于 `apps/target_agent/capi_pivot.py`。

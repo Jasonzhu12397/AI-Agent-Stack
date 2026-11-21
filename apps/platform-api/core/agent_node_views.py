@@ -35,6 +35,13 @@ from packages.agent_contracts.agent_commands import (
 )
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
+from packages.agent_contracts.machine_lifecycle import (
+    REASON_MAX_LENGTH,
+    allowed_targets,
+    REASON_MIN_LENGTH,
+    normalize_reason,
+    transition_allowed,
+)
 from core.audit import record_audit_event
 from core.fleet_inspection import sync_fleet_inspections_quietly
 from core.models import (
@@ -557,6 +564,20 @@ class FleetMachineInventoryView(APIView):
                 machine.identity_conflicts if machine else []
             )
             data["observed_at"] = machine.observed_at if machine else node.last_seen_at
+            # Machine-level actions (BMC registration, lifecycle review) address
+            # the AgentMachine, so the list has to expose its id and the two
+            # states those actions read and change.
+            data["machine_id"] = str(machine.id) if machine else None
+            data["lifecycle_state"] = machine.lifecycle_state if machine else None
+            data["lifecycle_targets"] = list(
+                allowed_targets(machine.lifecycle_state) if machine else ()
+            )
+            data["bmc_configured"] = bool(
+                machine and machine.bmc_endpoint and machine.bmc_credential_ref
+            )
+            data["bmc_host"] = _bmc_host_display(machine) if machine else None
+            data["bmh_name"] = machine.bmh_name if machine else ""
+            data["inventory_revision"] = machine.inventory_revision if machine else 0
             results.append(data)
 
         return Response(
@@ -571,6 +592,21 @@ class FleetMachineInventoryView(APIView):
                 },
             }
         )
+
+
+def _bmc_host_display(machine):
+    """Return the BMC host without credentials or ports.
+
+    The list only needs enough for an operator to recognise the machine; the
+    credential reference and any path are deliberately never echoed.
+    """
+
+    if not machine or not machine.bmc_endpoint:
+        return None
+    try:
+        return urlsplit(machine.bmc_endpoint).hostname
+    except ValueError:
+        return None
 
 
 def _identity_value(value):
@@ -1737,16 +1773,16 @@ class FleetMachineLifecycleReviewView(APIView):
                 {"detail": "expected_state and target_state are required strings."},
                 status=400,
             )
-        if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 500:
+        reason_text = normalize_reason(reason)
+        if not reason_text:
             return Response(
-                {"detail": "reason must contain 10 to 500 characters."},
+                {
+                    "detail": "reason must contain "
+                    f"{REASON_MIN_LENGTH} to {REASON_MAX_LENGTH} characters."
+                },
                 status=400,
             )
-        transitions = {
-            "discovered": {"identity_review"},
-            "identity_review": {"discovered"},
-        }
-        if target_state not in transitions.get(expected_state, set()):
+        if not transition_allowed(expected_state, target_state):
             return Response(
                 {
                     "detail": "This lifecycle transition is not enabled.",
@@ -1783,7 +1819,7 @@ class FleetMachineLifecycleReviewView(APIView):
                     "agent_node_id": str(machine.agent_node_id),
                     "from_state": expected_state,
                     "to_state": target_state,
-                    "reason": reason.strip(),
+                    "reason": reason_text,
                 },
             )
         return Response(

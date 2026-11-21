@@ -30,7 +30,7 @@ Target form: **a general-purpose AI Agent platform + three infrastructure deploy
 | User entry | Web UI / Chat / Workflow / Agent management / plugin marketplace / operations console | `apps/web-studio/src/components/`, `src/services/api.ts` | 【Baseline】 Pages and API wiring exist; per-interaction acceptance still to be checked (see §6) |
 | Platform backend | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`, `apps/worker/worker_app/` | 【Baseline】 Most modules implemented; realtime push, model routing/fallback, and the MCP stdio transport remain to be developed (see §3) |
 | Infrastructure Agent control plane | Cloud Control / EPH / Target Agents | `apps/cloud_control_agent/`, `apps/eph_agent/`, `apps/target_agent/` | 【Baseline】 Independent entrypoints, protocols, and state machines exist for all three; the real bare-metal chain awaits validation (see §4) |
-| Agent contracts & transport | Identity / command / lease / heartbeat / checkpoint / mTLS | `packages/agent_contracts/`, `packages/agent_transport/`, `apps/agent_contracts/` | 【Baseline】 Contracts and transport implemented (see §7) |
+| Agent contracts & transport | Identity / command / lease / heartbeat / checkpoint / mTLS | `packages/agent_contracts/`, `packages/agent_transport/` | 【Baseline】 Contracts and transport implemented (see §7) |
 | Execution layer | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | Skill/adapter modules inside the three Agents call `kubectl` / `clusterctl` / the Ironic HTTP client | 【Pending validation】 Execution adapters are mostly read-only observation plus fail-closed validation; real install/migration/data-plane forwarding awaits acceptance (see §5) |
 | Physical bare metal | Servers / BMC·IPMI·Redfish / management network / control-plane network / data-plane network | `apps/platform-api/core/bmc_credentials.py`, fleet inventory views; BMC config persistence | 【Baseline】 Credential and inventory models exist; real BMC/Ironic power-on acceptance to be developed |
 
@@ -104,7 +104,7 @@ Implementation: the platform creates a Cloud Control deployment and dispatches i
 | Plane | Target components | Code state | State |
 |---|---|---|---|
 | Control Plane (standard NIC) | API Server / etcd / management interface / Ironic internal services | Deployment planning and NTP source policy distinguish control plane / data plane | 【Baseline】 |
-| Data Plane (SR-IOV/DPDK) | Pod data traffic, VFs, multi-NIC | SR-IOV Device Plugin config validation contract (`apps/agent_contracts/sriov_device_plugin.py`), view persistence, postflight resource-name check; Calico/Multus/DPDK appear as compatibility-determination fields (read-only validation) | SR-IOV config 【Baseline/Pending validation】; real install/upgrade/rollback of OVS/Calico/Multus/DPDK and real data-plane traffic validation 【To develop】 |
+| Data Plane (SR-IOV/DPDK) | Pod data traffic, VFs, multi-NIC | SR-IOV Device Plugin config validation contract (`packages/agent_contracts/sriov_device_plugin.py`), view persistence, postflight resource-name check; Calico/Multus/DPDK appear as compatibility-determination fields (read-only validation) | SR-IOV config 【Baseline/Pending validation】; real install/upgrade/rollback of OVS/Calico/Multus/DPDK and real data-plane traffic validation 【To develop】 |
 
 ### 5.3 NTP rules
 
@@ -148,7 +148,7 @@ Acceptance bar: every button connects to a real API, can persist data, execute t
 | Cloud Control Agent | `apps/cloud_control_agent` | Cloud deployment control plane (protocol validation / status aggregation) | 【Baseline】; real cloud orchestration 【To develop】 |
 | EPH Agent | `apps/eph_agent` | Bootstrap cluster operations and source-side observation | 【Baseline/Pending validation】 |
 | Target Agent | `apps/target_agent` | Target cluster takeover, pivot, cleanup, worker deployment | 【Baseline/Pending validation】 |
-| Agent Contracts | `packages/agent_contracts`, `apps/agent_contracts` | Agent identity/command/lease/heartbeat/checkpoint contracts; SR-IOV config validation contract | 【Baseline】 |
+| Agent Contracts | `packages/agent_contracts` | Agent identity/command/lease/heartbeat/checkpoint contracts; SR-IOV config validation contract | 【Baseline】 |
 | Agent Transport | `packages/agent_transport` | mTLS communication, lease renewal, transport client | 【Baseline】 |
 
 Note: `worker_app/capi_pivot.py` is a reserved/leftover module not referenced by `tasks.py` / `main.py` / tests and does not participate in the execution chain; the production pivot adapter is `apps/target_agent/capi_pivot.py`.

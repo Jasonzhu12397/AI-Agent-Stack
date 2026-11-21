@@ -377,3 +377,36 @@ The Target Agent persists validated handoff checkpoints through the Cloud Contro
 
 
 **Identity note:** Kubernetes object UIDs are scoped to an API server and may change when an object is recreated or migrated to another cluster. They must not be the cross-cluster hardware identity key. Reconciliation compares namespace/name and stable hardware identity fields (boot MAC, BMC address, serial number and/or system UUID); Kubernetes UIDs are retained only as per-cluster diagnostics.
+
+## Machine registration and lifecycle in the UI
+
+Every machine-level action addresses an `AgentMachine`, so the fleet inventory row
+carries `machine_id`, `bmc_configured`, `bmc_host` (hostname of the Redfish
+endpoint only, never the credential or trust references), `bmh_name`,
+`inventory_revision`, `lifecycle_state` and `lifecycle_targets`.
+
+- **BMC registration** (`PUT .../fleet/machines/<machine_id>/bmc-config/`) is the
+  first step for a machine that has never been inspected. Without an endpoint and
+  a credential reference the platform cannot read Redfish, so PXE boot, discovery
+  and firmware management all fail closed. The endpoint must be private-network
+  `https`. The dialog in Fleet Inventory sends only `endpoint`,
+  `credential_ref` and an optional `trust_bundle_ref`; the credential value itself
+  is resolved at dispatch time and is never stored by the platform.
+- **Lifecycle** is a contract, not a view detail:
+  `packages/agent_contracts/machine_lifecycle.py` defines
+  `discovered → identity_review`, `identity_review → commissioned | discovered`,
+  `commissioned → retired`, `retired → discovered`. The review endpoint rejects
+  anything the contract does not allow with `LIFECYCLE_TRANSITION_NOT_ENABLED`,
+  and the API returns `lifecycle_targets` so the UI never duplicates the table.
+  Reviews require a 10–500 character reason and are audited as
+  `fleet.machine.lifecycle_reviewed`.
+
+## Package layout
+
+`agent_contracts` lives only in `packages/agent_contracts`. It previously existed
+twice (`apps/agent_contracts` held the SR-IOV device-plugin contract), so a plain
+`import agent_contracts` resolved to a different module depending on `sys.path`
+ordering — tests and containers could load different contract code. The SR-IOV
+module now lives in `packages/agent_contracts/sriov_device_plugin.py`, the
+duplicate package and its `COPY apps/agent_contracts` Dockerfile lines are
+removed, and importers use the canonical package name.

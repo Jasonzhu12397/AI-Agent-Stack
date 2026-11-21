@@ -540,6 +540,13 @@ export type AgentNode = {
 
 export type FleetMachine = AgentNode & {
   observed_status: "offline" | "online" | "revoked" | "stale";
+  machine_id: string | null;
+  lifecycle_state: string | null;
+  lifecycle_targets: string[];
+  bmc_configured: boolean;
+  bmc_host: string | null;
+  bmh_name: string;
+  inventory_revision: number;
   identity: {
     agent_node_id: string;
     name: string;
@@ -558,6 +565,32 @@ export type FleetMachine = AgentNode & {
   inventory_source: string;
   observed_at: string | null;
 };
+
+export function configureFleetMachineBmc(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+  body: { endpoint: string; credential_ref: string; trust_bundle_ref?: string },
+): Promise<{ machine_id: string; bmc_configured: boolean; endpoint: string }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId +
+      "/fleet/machines/" + machineId + "/bmc-config/",
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+}
+
+export function reviewFleetMachineLifecycle(
+  tenantId: string,
+  projectId: string,
+  machineId: string,
+  body: { expected_state: string; target_state: string; reason: string },
+): Promise<{ machine_id: string; lifecycle_state: string }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId +
+      "/fleet/machines/" + machineId + "/lifecycle-review/",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
 
 export function getFleetMachines(
   tenantId: string,

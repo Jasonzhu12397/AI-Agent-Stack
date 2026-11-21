@@ -12,7 +12,6 @@ COPY packages/__init__.py ./packages/__init__.py
 COPY packages/agent_contracts ./packages/agent_contracts
 COPY packages/agent_transport ./packages/agent_transport
 COPY apps/__init__.py ./apps/__init__.py
-COPY apps/agent_contracts ./apps/agent_contracts
 COPY apps/target_agent ./apps/target_agent
 COPY apps/dev_agent ./apps/dev_agent
 USER 10001:10001

@@ -25,7 +25,7 @@ from packages.agent_contracts.storage_addon import (
     StorageAddonError,
     plan_storage_addon as plan_storage_addon_contract,
 )
-from apps.agent_contracts.sriov_device_plugin import (
+from agent_contracts.sriov_device_plugin import (
     SriovDevicePluginConfigError,
     validate_sriov_device_plugin_config,
 )

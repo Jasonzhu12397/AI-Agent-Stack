@@ -20,6 +20,8 @@ import {
   getProjects,
   getTenants,
   getLabWorkflow,
+  configureFleetMachineBmc,
+  reviewFleetMachineLifecycle,
   type LabWorkflowReport,
   updateClusterSriovDevicePlugin,
   SUPPORTED_KUBERNETES_VERSIONS,
@@ -166,6 +168,91 @@ async function loadProjects(tenantId: string): Promise<void> {
     selectedProjectId.value = projects.value[0]?.id ?? "";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load project scope.";
+  }
+}
+
+const bmcDialogVisible = ref(false);
+const bmcDialogMachine = ref<FleetMachine | null>(null);
+const bmcEndpoint = ref("");
+const bmcCredentialRef = ref("");
+const bmcTrustBundleRef = ref("");
+const bmcBusy = ref(false);
+const bmcMessage = ref("");
+const lifecycleBusy = ref<string | null>(null);
+const lifecycleMessage = ref("");
+
+function openBmcDialog(machine: FleetMachine): void {
+  bmcDialogMachine.value = machine;
+  bmcEndpoint.value = "";
+  bmcCredentialRef.value = "";
+  bmcTrustBundleRef.value = "";
+  bmcMessage.value = "";
+  bmcDialogVisible.value = true;
+}
+
+async function saveBmcConfig(): Promise<void> {
+  const machine = bmcDialogMachine.value;
+  if (!machine || !machine.machine_id || !selectedTenantId.value || !selectedProjectId.value) return;
+  const endpoint = bmcEndpoint.value.trim();
+  const credentialRef = bmcCredentialRef.value.trim();
+  if (!endpoint || !credentialRef) {
+    bmcMessage.value = "BMC endpoint and credential reference are both required.";
+    return;
+  }
+  bmcBusy.value = true;
+  bmcMessage.value = "";
+  try {
+    await configureFleetMachineBmc(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machine.machine_id,
+      {
+        endpoint,
+        credential_ref: credentialRef,
+        ...(bmcTrustBundleRef.value.trim() ? { trust_bundle_ref: bmcTrustBundleRef.value.trim() } : {}),
+      },
+    );
+    bmcMessage.value = "BMC configuration saved.";
+    bmcDialogVisible.value = false;
+    await refreshData();
+  } catch (cause) {
+    bmcMessage.value =
+      cause instanceof Error ? cause.message : "Unable to save the BMC configuration.";
+  } finally {
+    bmcBusy.value = false;
+  }
+}
+
+async function moveMachineLifecycle(machine: FleetMachine, target: string): Promise<void> {
+  if (!machine.machine_id || !selectedTenantId.value || !selectedProjectId.value) return;
+  const reason = window.prompt(
+    "Why is this machine moving to " + target + "? (10-500 characters)",
+  );
+  if (reason === null) return;
+  if (reason.trim().length < 10) {
+    lifecycleMessage.value = "A review reason of at least 10 characters is required.";
+    return;
+  }
+  lifecycleBusy.value = machine.machine_id;
+  lifecycleMessage.value = "";
+  try {
+    await reviewFleetMachineLifecycle(
+      selectedTenantId.value,
+      selectedProjectId.value,
+      machine.machine_id,
+      {
+        expected_state: machine.lifecycle_state || "discovered",
+        target_state: target,
+        reason: reason.trim(),
+      },
+    );
+    lifecycleMessage.value = "Lifecycle moved to " + target + ".";
+    await refreshData();
+  } catch (cause) {
+    lifecycleMessage.value =
+      cause instanceof Error ? cause.message : "Unable to review the machine lifecycle.";
+  } finally {
+    lifecycleBusy.value = null;
   }
 }
 
@@ -866,6 +953,7 @@ onUnmounted(() => {
           </ul>
         </div>
         <p v-if="pxeBootMessage" class="task-note">{{ pxeBootMessage }}</p>
+        <p v-if="lifecycleMessage" class="task-note">{{ lifecycleMessage }}</p>
         <div v-if="pxeBootResults" class="pxe-boot-results">
           <small>PXE boot ({{ pxeBootResults.execution ? "executed" : "planned" }})</small>
           <ul>
@@ -896,6 +984,18 @@ onUnmounted(() => {
               <small v-if="scope.row.identity.identity_conflicts.length" class="identity-conflict-count">
                 {{ scope.row.identity.identity_conflicts.length }} conflict(s)
               </small>
+            </template>
+          </el-table-column>
+          <el-table-column label="BMC" min-width="150">
+            <template #default="scope">
+              <el-tag :type="scope.row.bmc_configured ? 'success' : 'warning'" size="small">
+                {{ scope.row.bmc_configured ? (scope.row.bmc_host || "configured") : "not configured" }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Lifecycle" min-width="130">
+            <template #default="scope">
+              <el-tag size="small" type="info">{{ scope.row.lifecycle_state || "n/a" }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="agent_version" label="Agent Version" min-width="130" />
@@ -929,6 +1029,30 @@ onUnmounted(() => {
                 :disabled="!scope.row.identity.machine_id"
                 @click="openNetworkPanel(scope.row)"
               >Network</el-button>
+              <el-button
+                size="small"
+                plain
+                :disabled="!scope.row.machine_id"
+                @click="openBmcDialog(scope.row)"
+              >BMC</el-button>
+              <el-dropdown
+                v-if="scope.row.lifecycle_targets.length"
+                trigger="click"
+                @command="(target: string) => moveMachineLifecycle(scope.row, target)"
+              >
+                <el-button size="small" plain :loading="lifecycleBusy === scope.row.machine_id">
+                  Lifecycle
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="target in scope.row.lifecycle_targets"
+                      :key="target"
+                      :command="target"
+                    >Move to {{ target }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
           </el-table-column>
         </el-table>
@@ -1007,6 +1131,28 @@ onUnmounted(() => {
               <p v-if="!networkVerification.findings.length" class="fleet-footnote">No findings.</p>
             </template>
           </div>
+        </el-dialog>
+
+        <el-dialog v-model="bmcDialogVisible" title="BMC Registration" width="560px">
+          <p class="task-note">
+            Redfish endpoint and the credential reference the platform resolves at dispatch time.
+            The credential itself is never stored here or echoed back.
+          </p>
+          <label>BMC endpoint
+            <el-input v-model="bmcEndpoint" placeholder="https://10.0.0.11" />
+          </label>
+          <label>Credential reference
+            <el-input v-model="bmcCredentialRef" placeholder="vault/bmc/master-0" />
+          </label>
+          <label>Trust bundle reference (optional)
+            <el-input v-model="bmcTrustBundleRef" placeholder="vault/ca/lab" />
+          </label>
+          <p class="task-note">Machine: {{ bmcDialogMachine?.name }} · {{ bmcDialogMachine?.machine_id }}</p>
+        <p v-if="bmcMessage" class="task-note">{{ bmcMessage }}</p>
+          <template #footer>
+            <el-button @click="bmcDialogVisible = false">Cancel</el-button>
+            <el-button type="primary" :loading="bmcBusy" @click="saveBmcConfig">Save BMC configuration</el-button>
+          </template>
         </el-dialog>
 
         <el-dialog v-model="firmwareDialogVisible" title="BMC Firmware Management" width="880px">
