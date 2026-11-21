@@ -85,3 +85,9 @@ def test_the_simulated_plan_never_claims_execution():
 
 def test_minor_of_keeps_the_leading_v():
     assert minor_of("v1.34.7") == "v1.34"
+
+
+def test_execute_mode_is_a_valid_request_mode():
+    request = validate_request(_payload(execution_mode="execute"))
+
+    assert request["execution_mode"] == "execute"

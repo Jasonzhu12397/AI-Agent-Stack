@@ -30,6 +30,9 @@ _ROLES = frozenset(
 _HOST_ROLES = frozenset({"control_plane", "worker", "storage"})
 _MAX_NETWORKS = 64
 _MAX_IP_POOLS = 8
+#: Bumped when the derived network spec changes shape. Specs without the marker
+#: predate VLAN sub-interfaces and name the physical interface only.
+NETWORK_SPEC_VERSION = 2
 
 
 class InfraNetworkError(ValueError):
@@ -468,7 +471,82 @@ def derive_network_spec(plan: dict[str, Any]) -> dict[str, Any]:
     }
     if plan["dns_servers"]:
         spec["dns_servers"] = list(plan["dns_servers"])
+    spec["network_spec_version"] = NETWORK_SPEC_VERSION
     return spec
+
+
+def network_spec_version(spec: Any) -> int:
+    """Return the speculation version stamped on a spec (1 when unstamped)."""
+
+    if not isinstance(spec, dict):
+        return 0
+    version = spec.get("network_spec_version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= 1:
+        return version
+    return 1
+
+
+_VLAN_LINK = re.compile(r"^([A-Za-z][A-Za-z0-9_-]{0,15})\.\d{1,5}$")
+
+
+def normalize_link_names(value: Any) -> Any:
+    """Collapse VLAN sub-interface names back to their physical interface.
+
+    Specs written before VLAN sub-interfaces were modelled record the physical
+    interface ("eno1"); specs derived today record the sub-interface
+    ("eno1.100"). Both describe the same cabling, so a comparison that wants to
+    decide "is this the same plan" has to reduce them to the same key.
+    """
+
+    if isinstance(value, dict):
+        return {key: normalize_link_names(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_link_names(item) for item in value]
+    if isinstance(value, str):
+        match = _VLAN_LINK.fullmatch(value)
+        if match:
+            return match.group(1)
+    return value
+
+
+def comparable_spec(spec: Any) -> Any:
+    """A representation-independent view of a deployment spec.
+
+    Derived artifacts (network spec, cloud-init templates, IP pools) are
+    functions of the profile, so comparing them after normalizing link names is
+    equivalent to comparing the inputs. Version markers are dropped: they
+    describe how the spec was written, not what it says.
+    """
+
+    if not isinstance(spec, dict):
+        return spec
+    normalized = normalize_link_names(spec)
+    return {
+        key: item
+        for key, item in normalized.items()
+        if key != "network_spec_version"
+    }
+
+
+def network_spec_migration(spec: Any) -> dict[str, Any] | None:
+    """Describe a legacy network spec that predates VLAN sub-interface support."""
+
+    if not isinstance(spec, dict):
+        return None
+    version = network_spec_version(spec.get("network_spec") or spec)
+    if version >= NETWORK_SPEC_VERSION:
+        return None
+    return {
+        "code": "NETWORK_SPEC_LEGACY",
+        "version": version,
+        "current_version": NETWORK_SPEC_VERSION,
+        "detail": (
+            "This deployment was planned before VLAN sub-interfaces were "
+            "modelled. Its network spec still names the physical interface, "
+            "which is not what a re-plan would produce. Re-plan the cluster "
+            "from the current profile before re-running installation."
+        ),
+    }
 
 
 def render_sriov_node_policies(plan: dict[str, Any]) -> list[dict[str, Any]]:

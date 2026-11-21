@@ -264,6 +264,45 @@ def _command_data(command):
     }
 
 
+_UPGRADE_STEP_NAMES = ("preflight", "control_plane", "workers", "postflight")
+_EXECUTED_STEP_STATUSES = frozenset({"succeeded", "skipped", "failed", "not_started"})
+
+
+def _validate_executed_upgrade(command, result):
+    """Validate the evidence of a real upgrade run.
+
+    A real run is only accepted when it proves the whole sequence was carried out
+    on the cluster: simulation flags off, side effects acknowledged, and every
+    stage either succeeded or was explicitly skipped.
+    """
+
+    if (
+        result.get("execution_mode") != "execute"
+        or result.get("approval_required") is not True
+        or result.get("upgrade_simulated") is not False
+        or result.get("upgrade_performed") is not True
+        or result.get("requires_manual_execution") is not False
+        or result.get("resume_supported") is not False
+        or result.get("side_effects") is not True
+    ):
+        return "Kubernetes upgrade result violates the execution safety contract."
+    steps = result.get("upgrade_steps")
+    if not isinstance(steps, list) or len(steps) != len(_UPGRADE_STEP_NAMES):
+        return "Kubernetes upgrade execution must report the four ordered stages."
+    for index, name in enumerate(_UPGRADE_STEP_NAMES):
+        step = steps[index]
+        if (
+            not isinstance(step, dict)
+            or step.get("sequence") != index + 1
+            or step.get("name") != name
+            or step.get("status") not in _EXECUTED_STEP_STATUSES
+            or step.get("status") == "not_started"
+            or step.get("status") == "failed"
+        ):
+            return "Kubernetes upgrade stages must all have run to completion."
+    return None
+
+
 def _validate_kubernetes_upgrade_result(command, result):
     if command.command_type != "cluster.kubernetes.version.upgrade":
         return None
@@ -276,6 +315,8 @@ def _validate_kubernetes_upgrade_result(command, result):
     }
     if any(result.get(key) != value for key, value in expected_identity.items()):
         return "Kubernetes upgrade result does not match the approved command."
+    if command.payload.get("execution_mode") == "execute":
+        return _validate_executed_upgrade(command, result)
     if (
         result.get("approval_required") is not True
         or result.get("upgrade_simulated") is not True

@@ -340,10 +340,13 @@ acceptance job's `runs-on` labels (`self-hosted`, `metal3-lab`, `physical`), its
 the secret names the workflow consumes. The Fleet Inventory panel renders it as
 a tag plus the individual checks.
 
-- `secret_presence` is always `not_observable`: the platform cannot read
-  GitHub repository secrets, so the tag must not turn green in a way that
-  implies a lab run happened. Presence is decided by the Lab readiness job, whose
-  report also lands in the workflow artifacts.
+- `secret_presence` is `not_observable` unless the platform holds a GitHub
+  token: without it the tag must not turn green in a way that implies a lab run
+  happened. Set `LAB_WORKFLOW_REPOSITORY` (`owner/repo`) and
+  `LAB_WORKFLOW_TOKEN` and the endpoint reads the last workflow run from the
+  GitHub API: the report then carries `last_run` (`conclusion`, `run_number`,
+  `html_url`) and `secret_presence: observed`, and the UI shows that run next to
+  the shape checks. The token is only read; it never dispatches a run.
 - The tag appears both on the Fleet Inventory panel and on the Overview
   deployment pipeline, so the lab precondition is visible before a deployment
   is planned.
@@ -417,3 +420,19 @@ ordering — tests and containers could load different contract code. The SR-IOV
 module now lives in `packages/agent_contracts/sriov_device_plugin.py`, the
 duplicate package and its `COPY apps/agent_contracts` Dockerfile lines are
 removed, and importers use the canonical package name.
+
+## Network specs carry a version
+
+`packages/agent_contracts/infra_networks.py` stamps every derived network spec with
+`network_spec_version` (currently `2`). Specs written before VLAN sub-interfaces
+were modelled have no marker and name the physical interface (`eno1`) where a
+current spec names the sub-interface (`eno1.100`).
+
+* `network_spec_migration` reports `NETWORK_SPEC_LEGACY` for those deployments and
+  the cluster detail page shows "Network spec v1 · re-plan required".
+* Retrying a deployment with the same `Idempotency-Key` compares specs after
+  `comparable_spec`, which collapses VLAN link names to the physical interface. A
+  legacy spec and a freshly derived one therefore describe the same plan instead of
+  answering `409` for a representation change.
+* New installs should re-plan from the current profile so cloud-init templates and
+  the Target worker contract use the sub-interface names the hosts actually use.

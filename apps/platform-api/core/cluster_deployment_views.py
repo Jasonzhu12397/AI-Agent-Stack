@@ -12,13 +12,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from packages.agent_contracts.infra_networks import (
+    NETWORK_SPEC_VERSION,
     InfraNetworkError,
+    comparable_spec,
     derive_network_spec,
     network_by_role,
     plan_infra_networks,
     render_ip_pools,
     render_role_network_data,
     render_sriov_node_policies,
+    network_spec_migration,
 )
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.storage_addon import (
@@ -91,6 +94,15 @@ def _deployment_data(deployment):
         ),
         "status": deployment.status,
         "spec": deployment.spec,
+        "network_spec_status": {
+            "version": (
+                deployment.spec.get("network_spec", {}) or {}
+            ).get("network_spec_version", 1)
+            if isinstance(deployment.spec, dict)
+            else 1,
+            "current_version": NETWORK_SPEC_VERSION,
+            "migration": network_spec_migration(deployment.spec),
+        },
         "plan_result": deployment.plan_result,
         "preflight_result": deployment.preflight_result,
         "cloud_control": plan_result.get("cloud_control"),
@@ -659,7 +671,12 @@ class ClusterDeploymentListCreateView(APIView):
         def _spec_signature(value):
             if not isinstance(value, dict):
                 return value
-            return {key: item for key, item in value.items() if key != "network_evidence"}
+            value = {key: item for key, item in value.items() if key != "network_evidence"}
+            # Specs written before VLAN sub-interfaces name the physical
+            # interface; specs derived now name the sub-interface. A retry with
+            # the same idempotency key must not look like a different plan just
+            # because the representation improved.
+            return comparable_spec(value)
 
         if (
             deployment.project_id != project.id

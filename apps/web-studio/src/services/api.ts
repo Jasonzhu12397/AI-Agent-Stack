@@ -952,6 +952,17 @@ export function approveAgentCommand(
 }
 
 
+export type NetworkSpecStatus = {
+  version: number;
+  current_version: number;
+  migration: {
+    code: string;
+    version: number;
+    current_version: number;
+    detail: string;
+  } | null;
+};
+
 export type ClusterDeployment = {
   id: string;
   tenant_id: string;
@@ -962,6 +973,7 @@ export type ClusterDeployment = {
   target_node_id: string | null;
   status: string;
   spec: Record<string, unknown>;
+  network_spec_status?: NetworkSpecStatus;
   plan_hash: string;
   plan_result: Record<string, unknown> | null;
   preflight_result?: {
@@ -1190,6 +1202,16 @@ export function previewIronicTemplate(
 
 export type LabWorkflowCheck = { name: string; ok: boolean; detail: string };
 
+export type LabWorkflowRun = {
+  status: string | null;
+  conclusion: string | null;
+  run_number: number | null;
+  event: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  html_url: string | null;
+};
+
 export type LabWorkflowReport = {
   available: boolean;
   workflow: string;
@@ -1198,8 +1220,9 @@ export type LabWorkflowReport = {
   secrets_referenced: string[];
   environment: string | null;
   ready: boolean;
-  // The platform cannot read GitHub repository secrets; it says so explicitly.
-  secret_presence: "not_observable";
+  // "observed" only when a GitHub token proved the workflow actually ran.
+  secret_presence: "not_observable" | "observed";
+  last_run: LabWorkflowRun | null;
   reason: string | null;
   workflow_url: string | null;
   readiness_job?: { name: string | null; runs_on: string[]; environment: string | null; outputs: string[] };

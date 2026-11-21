@@ -50,6 +50,7 @@ from .ironic_client import (
     get_ironic_node,
     ironic_api_configured,
 )
+from .kubernetes_upgrade_exec import UpgradeExecutionError, UpgradeExecutor
 from .leader_election import (
     KubernetesLeaseElector,
     LeaderLeaseGuard,
@@ -1584,6 +1585,29 @@ def execute(
                 "error_code": exc.code,
                 "output": {"detail": exc.detail},
                 "side_effects": False,
+            }
+        if request["execution_mode"] == "execute":
+            try:
+                result = UpgradeExecutor(_run_read_only).run(request)
+            except UpgradeExecutionError as exc:
+                return {
+                    "status": "blocked",
+                    "error_code": exc.code,
+                    "output": {"detail": exc.detail},
+                    "side_effects": False,
+                }
+            if result["failure_code"]:
+                return {
+                    "status": "failed",
+                    "error_code": result["failure_code"],
+                    "output": result,
+                    "side_effects": True,
+                }
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": result,
+                "side_effects": True,
             }
         return {
             "status": "succeeded",

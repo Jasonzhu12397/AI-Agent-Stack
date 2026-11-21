@@ -12,6 +12,9 @@ import re
 from typing import Any
 
 SUPPORTED_MINORS: tuple[str, ...] = ("v1.33", "v1.34", "v1.35", "v1.36")
+#: ``simulation`` only describes the plan; ``execute`` runs it on the cluster the
+#: Target Agent belongs to. The platform requires an approval either way.
+EXECUTION_MODES: tuple[str, ...] = ("simulation", "execute")
 
 PAYLOAD_KEYS = frozenset(
     {"cluster_name", "current_version", "target_version", "execution_mode"}
@@ -45,9 +48,8 @@ def validate_request(
 ) -> dict[str, str]:
     """Validate an upgrade request and return its normalized form.
 
-    Only an adjacent minor upgrade is supported, and only the simulation
-    execution mode is implemented: a real upgrade needs an operator-approved
-    adapter that does not exist yet.
+    Only an adjacent minor upgrade is supported. Both execution modes are
+    accepted here; what each one is allowed to do is decided by the caller.
     """
 
     if not isinstance(payload, dict):
@@ -85,16 +87,17 @@ def validate_request(
             "VERSION_STEP_INVALID",
             "only an upgrade to the next minor version is supported",
         )
-    if payload.get("execution_mode") != "simulation":
+    mode = payload.get("execution_mode")
+    if mode not in EXECUTION_MODES:
         raise KubernetesUpgradeError(
             "EXECUTION_MODE_UNSUPPORTED",
-            "only execution_mode=simulation is implemented",
+            "execution_mode must be one of " + ", ".join(EXECUTION_MODES),
         )
     return {
         "cluster_name": name,
         "current_version": current,
         "target_version": target,
-        "execution_mode": "simulation",
+        "execution_mode": mode,
     }
 
 

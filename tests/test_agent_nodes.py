@@ -2496,3 +2496,50 @@ def test_kubernetes_upgrade_result_enforces_simulation_only_contract():
 def test_non_upgrade_command_result_skips_upgrade_contract():
     command = type("Command", (), {"command_type": "node.health", "payload": {}})()
     assert _validate_kubernetes_upgrade_result(command, {"ok": True}) is None
+
+
+def test_kubernetes_upgrade_result_accepts_a_proven_execution():
+    command = type("Command", (), {
+        "command_type": "cluster.kubernetes.version.upgrade",
+        "payload": {
+            "cluster_name": "edge-lab",
+            "current_version": "v1.33.2",
+            "target_version": "v1.34.1",
+            "execution_mode": "execute",
+        },
+    })()
+    result = {
+        "cluster_name": "edge-lab",
+        "current_version": "v1.33.2",
+        "target_version": "v1.34.1",
+        "execution_mode": "execute",
+        "approval_required": True,
+        "upgrade_simulated": False,
+        "upgrade_performed": True,
+        "requires_manual_execution": False,
+        "resume_supported": False,
+        "side_effects": True,
+        "upgrade_steps": [
+            {"sequence": 1, "name": "preflight", "status": "succeeded"},
+            {"sequence": 2, "name": "control_plane", "status": "succeeded"},
+            {"sequence": 3, "name": "workers", "status": "skipped"},
+            {"sequence": 4, "name": "postflight", "status": "succeeded"},
+        ],
+    }
+    assert _validate_kubernetes_upgrade_result(command, result) is None
+
+    unfinished = dict(result, upgrade_steps=[
+        dict(result["upgrade_steps"][0]),
+        dict(result["upgrade_steps"][1], status="not_started"),
+        *result["upgrade_steps"][2:],
+    ])
+    assert "run to completion" in _validate_kubernetes_upgrade_result(command, unfinished)
+
+    simulated_flags = dict(result, upgrade_simulated=True)
+    assert "execution safety" in _validate_kubernetes_upgrade_result(command, simulated_flags)
+
+    manual = dict(result, requires_manual_execution=True)
+    assert "execution safety" in _validate_kubernetes_upgrade_result(command, manual)
+
+    no_side_effects = dict(result, side_effects=False)
+    assert "execution safety" in _validate_kubernetes_upgrade_result(command, no_side_effects)

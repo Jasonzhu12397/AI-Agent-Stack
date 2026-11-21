@@ -6,15 +6,21 @@ runner labels that decide whether a real lab machine is reached, the readiness
 gate in front of the acceptance job, the declared dispatch inputs, and the
 secrets the workflow will consume by name.
 
-This module only parses the workflow file; it never calls GitHub. The UI shows
-the result as a tag plus an explicit "secret presence is verified in the CI
-readiness report, not here" note.
+The fetch is split in two: parsing the file is always available, while reading
+the last real run needs a GitHub token the operator installs in the platform
+environment. Without that token the report says so explicitly
+(``secret_presence: not_observable``) instead of rendering a green tag that
+would imply a lab run had succeeded.
 """
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 
@@ -22,6 +28,10 @@ WORKFLOW_PATH = ".github/workflows/metal3-lab-e2e.yml"
 REQUIRED_ACCEPTANCE_LABELS = ("self-hosted", "metal3-lab", "physical")
 ACCEPTANCE_JOB_NAMES = ("acceptance", "lab-acceptance")
 KUBECONFIG_SECRETS = ("EPH_KUBECONFIG", "TARGET_KUBECONFIG")
+LAST_RUN_TOKEN_ENV = "LAB_WORKFLOW_TOKEN"
+LAST_RUN_REPOSITORY_ENV = "LAB_WORKFLOW_REPOSITORY"
+LAST_RUN_TIMEOUT_SECONDS = 5.0
+GITHUB_API = "https://api.github.com"
 
 
 def _check(name: str, ok: bool, detail: str) -> dict[str, Any]:
@@ -191,12 +201,77 @@ def inspect_lab_workflow(path: Path) -> dict[str, Any]:
     return result
 
 
-def lab_workflow_report(repo_root: Path) -> dict[str, Any]:
-    return inspect_lab_workflow(repo_root / WORKFLOW_PATH)
+def fetch_last_run(
+    repository: str,
+    token: str,
+    *,
+    workflow_path: str = WORKFLOW_PATH,
+    timeout: float = LAST_RUN_TIMEOUT_SECONDS,
+) -> dict[str, Any] | None:
+    """Return the last completed workflow run, or ``None`` when unreadable.
+
+    Only the fields the UI renders are kept. A failure (no token, no network,
+    rate limit) is reported as ``None`` and never as a green run.
+    """
+
+    if not repository or "/" not in repository or not token:
+        return None
+    url = (
+        f"{GITHUB_API}/repos/{repository}/actions/workflows/"
+        f"{quote(workflow_path, safe='')}/runs?per_page=1"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "ai-agent-stack-platform",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list) or not runs:
+        return None
+    run = runs[0]
+    if not isinstance(run, dict):
+        return None
+    return {
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "run_number": run.get("run_number"),
+        "event": run.get("event"),
+        "created_at": run.get("created_at"),
+        "updated_at": run.get("updated_at"),
+        "html_url": run.get("html_url"),
+    }
+
+
+def lab_workflow_report(
+    repo_root: Path,
+    *,
+    repository: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    report = inspect_lab_workflow(repo_root / WORKFLOW_PATH)
+    run = None
+    if repository and token:
+        run = fetch_last_run(repository, token)
+    report["last_run"] = run
+    if run is not None:
+        # The token worked, so the report can now say presence is observed.
+        report["secret_presence"] = "observed"
+    return report
 
 
 __all__ = [
     "ACCEPTANCE_JOB_NAMES",
+    "LAST_RUN_REPOSITORY_ENV",
+    "LAST_RUN_TOKEN_ENV",
+    "fetch_last_run",
     "KUBECONFIG_SECRETS",
     "REQUIRED_ACCEPTANCE_LABELS",
     "WORKFLOW_PATH",

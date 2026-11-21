@@ -79,15 +79,27 @@ mutate (`target.capi.pivot`, `target.worker.provision`, `target.eph.cleanup`) pl
 `cluster.kubernetes.version.upgrade`, so an uncertain lease expiry is treated as an
 unknown mutating outcome instead of a retryable read.
 
-## Kubernetes minor upgrade is simulated end to end
+## Kubernetes minor upgrade has a simulation mode and an execution mode
 
 `packages/agent_contracts/kubernetes_upgrade.py` owns the request rules (exact
 payload keys, adjacent minor only, target minor inside the supported list, and
-`execution_mode=simulation` only). The platform validates the request with it and
-the Target Agent executes it with the same function, returning the four ordered,
-unexecuted stages — `preflight`, `control_plane`, `workers`, `postflight` — plus
-`upgrade_simulated=true`, `upgrade_performed=false`, `requires_manual_execution=true`
-and `resume_supported=false`. The platform's result validator accepts exactly that
-shape, so a queued upgrade now produces evidence instead of
-`ACTION_NOT_IMPLEMENTED`. A real upgrade still requires an operator: no adapter
-performs the drain/apply/uncordon sequence.
+`execution_mode` in `simulation` or `execute`). The platform validates the request
+with it and the Target Agent executes it with the same function.
+
+* `simulation` returns the four ordered, unexecuted stages — `preflight`,
+  `control_plane`, `workers`, `postflight` — plus `upgrade_simulated=true`,
+  `upgrade_performed=false`, `requires_manual_execution=true`,
+  `resume_supported=false` and `side_effects=false`.
+* `execute` runs the sequence through `apps/target_agent/kubernetes_upgrade_exec.py`:
+  `kubeadm upgrade plan`, `kubeadm upgrade apply -y`, then per worker
+  `kubectl drain` → `ssh <KUBERNETES_UPGRADE_REMOTE_USER>@<InternalIP> kubeadm upgrade node`
+  → `kubectl uncordon`, then a postflight that rejects any node still on the old
+  minor. It reports `upgrade_simulated=false`, `upgrade_performed=true`,
+  `requires_manual_execution=false`, `side_effects=true` and per-step exit codes.
+
+`execute` refuses what one agent cannot do safely: more than one control-plane
+node (`UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED`) and workers without
+`KUBERNETES_UPGRADE_REMOTE_USER` (`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It
+stops at the first failed step and returns its exit code and output; there is no
+rollback. Both modes still need a platform approval, and the platform accepts
+execution evidence only when every stage ran to completion.

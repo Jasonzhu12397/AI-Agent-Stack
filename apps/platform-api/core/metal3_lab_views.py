@@ -9,7 +9,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.lab_workflow import lab_workflow_report
+from core.lab_workflow import (
+    LAST_RUN_REPOSITORY_ENV,
+    LAST_RUN_TOKEN_ENV,
+    lab_workflow_report,
+)
 
 
 class Metal3LabWorkflowView(APIView):
@@ -24,7 +28,11 @@ class Metal3LabWorkflowView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        report = lab_workflow_report(settings.BASE_DIR)
+        report = lab_workflow_report(
+            settings.BASE_DIR,
+            repository=os.environ.get(LAST_RUN_REPOSITORY_ENV, "").strip() or None,
+            token=os.environ.get(LAST_RUN_TOKEN_ENV, "").strip() or None,
+        )
         workflow_url = os.environ.get("METAL3_LAB_WORKFLOW_URL", "").strip()
         report["workflow_url"] = workflow_url or None
         return Response(report)

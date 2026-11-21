@@ -866,6 +866,10 @@ onUnmounted(() => {
               <strong>{{ deployment.cluster_name }}</strong>
               <small>{{ deployment.kubernetes_version }} · {{ formatTime(deployment.updated_at) }}</small>
               <small>{{ deploymentPhaseLabel(deployment) }}</small>
+              <small v-if="deployment.network_spec_status?.migration" class="readiness-blocked">
+                Network spec v{{ deployment.network_spec_status.migration.version }} ·
+                re-plan required (v{{ deployment.network_spec_status.migration.current_version }} available)
+              </small>
             </div>
             <el-tag
               :type="deploymentDualAgent(deployment).pivot_simulated === true ? 'info' : statusType(deployment.status)"
@@ -892,19 +896,35 @@ onUnmounted(() => {
             Metal3 lab e2e ·
             {{ labWorkflow ? (labWorkflow.ready ? "workflow ready" : labWorkflow.available ? "workflow incomplete" : "workflow not deployed") : "probe unavailable" }}
           </el-tag>
+          <el-tag
+            v-if="labWorkflow?.last_run"
+            :type="labWorkflow.last_run.conclusion === 'success' ? 'success' : labWorkflow.last_run.conclusion === 'failure' ? 'danger' : 'warning'"
+            size="small"
+            effect="dark"
+          >
+            Last run #{{ labWorkflow.last_run.run_number }} ·
+            {{ labWorkflow.last_run.conclusion || labWorkflow.last_run.status }}
+          </el-tag>
           <el-link
             v-if="labWorkflow?.workflow_url"
             :href="labWorkflow.workflow_url"
             target="_blank"
             :underline="false"
           >Open workflow</el-link>
+          <el-link
+            v-if="labWorkflow?.last_run?.html_url"
+            :href="labWorkflow.last_run.html_url"
+            target="_blank"
+            :underline="false"
+          >Open last run</el-link>
           <small v-if="labWorkflow">
             Runner labels {{ labWorkflow.acceptance_job?.runs_on.join(", ") || "not declared" }} ·
             secrets referenced {{ labWorkflow.secrets_referenced.join(", ") || "none" }}
           </small>
           <small class="lab-workflow-note">
-            Secret values are not visible to the platform; run the Lab readiness job to learn
-            whether EPH_KUBECONFIG / TARGET_KUBECONFIG are actually configured.
+            {{ labWorkflow?.secret_presence === "observed"
+              ? "A GitHub token is configured, so the last run above is the real lab result."
+              : "Secret values are not visible to the platform; set LAB_WORKFLOW_REPOSITORY and LAB_WORKFLOW_TOKEN to show the last real run." }}
           </small>
           <small
             v-for="check in labWorkflow?.checks || []"
