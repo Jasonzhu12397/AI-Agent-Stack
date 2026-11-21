@@ -239,3 +239,29 @@ def test_agent_build_and_deploy_never_use_an_external_registry():
     assert "type=docker,dest=" in build
     assert "TARGET_AGENT_IMAGE_MUST_USE_EPH_LOCAL_REGISTRY" in deploy
     assert "CLOUD_CONTROL_IMAGE_MUST_USE_EPH_LOCAL_REGISTRY" in deploy
+
+def test_a_bmc_port_that_is_not_published_on_the_node_is_refused():
+    # A virtual BMC has to answer on the control address before any host boots;
+    # a port that only exists in the pod network cannot be reached from there.
+    spec = _spec()
+    spec["registry"]["services"]["vbmc"]["container"]["ports"] = [
+        {"containerPort": 6240}
+    ]
+    with pytest.raises(Metal3SkillError) as error:
+        local_registry.render_local_registry(
+            spec["registry"], node_ip="10.0.0.10", agent_image=spec["agent"]["image"]
+        )
+    assert str(error.value) == "EPH_LOCAL_BMC_SERVICE_PORT_NOT_PUBLISHED"
+
+
+def test_the_host_network_counts_as_a_published_port():
+    spec = _spec()
+    spec["registry"]["services"]["vbmc"]["pod"] = {"hostNetwork": True}
+    del spec["registry"]["services"]["vbmc"]["container"]["ports"]
+    rendered = local_registry.render_local_registry(
+        spec["registry"], node_ip="10.0.0.10", agent_image=spec["agent"]["image"]
+    )
+    vbmc = next(
+        item for item in rendered["service_documents"] if item["metadata"]["name"] == "vbmc"
+    )
+    assert vbmc["spec"]["template"]["spec"]["hostNetwork"] is True

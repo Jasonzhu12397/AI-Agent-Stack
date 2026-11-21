@@ -77,6 +77,33 @@ def target_registry_config(endpoint: Any, pause_image: str | None = None) -> dic
     }
 
 
+def _require_reachable_ports(name: str, container: dict[str, Any], pod: dict[str, Any]) -> None:
+    """Every service port must answer on the node's control address.
+
+    Bare metal hosts reach the boot-artifact server and the BMC emulators over
+    the control L2, not through the cluster CNI. A port that only exists inside
+    the pod network is unreachable from a machine that is still waiting for
+    DHCP, so the port has to be published on the node (host network or an equal
+    hostPort).
+    """
+
+    if pod.get("hostNetwork") is True:
+        return
+    ports = container.get("ports")
+    if ports is None:
+        return
+    if not isinstance(ports, list):
+        raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_PORTS_INVALID")
+    for port in ports:
+        if not isinstance(port, dict):
+            raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_PORTS_INVALID")
+        container_port = port.get("containerPort")
+        if isinstance(container_port, bool) or not isinstance(container_port, int):
+            raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_PORTS_INVALID")
+        if port.get("hostPort") != container_port:
+            raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_PORT_NOT_PUBLISHED")
+
+
 def _deployment(name: str, container: dict[str, Any], pod: dict[str, Any]) -> dict[str, Any]:
     labels = {"app.kubernetes.io/name": name, "app.kubernetes.io/part-of": "eph-bootstrap"}
     return {
@@ -200,6 +227,7 @@ def render_local_registry(
         required_repositories.add(repository)
         service_images.append(container["image"])
         container.update({"name": name, "imagePullPolicy": "IfNotPresent"})
+        _require_reachable_ports(name, container, pod)
         service_documents.append(_deployment(name, container, dict(pod)))
     if not required_repositories.issubset(repositories):
         raise Metal3SkillError("EPH_LOCAL_REGISTRY_IMAGE_SET_INCOMPLETE")
