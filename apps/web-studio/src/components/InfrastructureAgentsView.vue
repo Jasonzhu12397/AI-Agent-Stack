@@ -233,8 +233,8 @@ function defaultPayload(type: string): string {
     },
     "cluster.plan": {
       cluster_name: "edge-lab",
-      control_plane_count: 3,
-      worker_replicas: 4,
+      control_plane_count: 1,
+      worker_replicas: 0,
       fleet: [
         {
           name: "master-0",
