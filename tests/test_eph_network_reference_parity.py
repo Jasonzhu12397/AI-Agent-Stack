@@ -228,3 +228,65 @@ def test_network_data_keeps_control_default_route_only_when_undeclared():
     assert control_addresses["control-net"]["routes"] == [
         {"destination": "0.0.0.0/0", "gateway": "172.18.0.1"}
     ]
+
+
+def test_both_documents_name_the_same_vlan_links():
+    """One topology resolver must drive nmstate and Metal3 networkData.
+
+    A VLAN profile used to render the bare bond in one document and the
+    sub-interface in the other; both now take their links from
+    ``network_link_id``, so the names are identical by construction.
+    """
+
+    from packages.agent_contracts.infra_networks import (
+        derive_network_spec,
+        render_role_network_data,
+    )
+
+    profile = {
+        "networks": [
+            {
+                "name": "ccd-control",
+                "role": "control",
+                "vlan": 3220,
+                "cidr": "10.0.60.0/24",
+                "gateway_ipv4": "10.0.60.1",
+                "ip_pools": [{"start": "10.0.60.10", "end": "10.0.60.250", "prefix": 24}],
+                "bond": {
+                    "name": "bond_control",
+                    "interfaces": ["eno1", "eno2"],
+                    "mode": "active-backup",
+                },
+                "host_roles": ["control_plane", "worker", "storage"],
+            },
+            {
+                "name": "ccd-data",
+                "role": "data",
+                "vlan": 3300,
+                "mtu": 9000,
+                "cidr": "10.0.61.0/24",
+                "ip_pools": [{"start": "10.0.61.10", "end": "10.0.61.250", "prefix": 24}],
+                "bond": {
+                    "name": "bond_data",
+                    "interfaces": ["ens1f0", "ens1f1"],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["worker", "storage"],
+            },
+        ]
+    }
+    plan = plan_infra_networks(profile)
+    spec = derive_network_spec(plan)
+    state = eph_network_state(plan, addresses={"control": "10.0.60.3/24"})
+    interfaces = _interfaces(state)
+    assert spec["control_plane_interface"] == "bond_control.3220"
+    assert interfaces["bond_control.3220"]["ipv4"]["address"] == [
+        {"ip": "10.0.60.3", "prefix-length": 24}
+    ]
+    # The bare bond stays unaddressed and is not the control link.
+    assert interfaces["bond_control"]["ipv4"] == {"enabled": False}
+    worker = render_role_network_data(plan, "worker")
+    worker_links = {item["link"] for item in worker["networks"]["ipv4"]}
+    assert worker_links == {"bond_control.3220", "bond_data.3300"}
+    assert spec["data_plane_interface"] == "bond_data.3300"
+    assert interfaces["bond_data.3300"]["type"] == "vlan"

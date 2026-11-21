@@ -102,7 +102,7 @@ def _ip_pools(value: Any, network: ipaddress.IPv4Network, code: str) -> list[dic
     return pools
 
 
-def _base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
+def vlan_base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
     """Return the link a VLAN stacks on: its data bond, else the control link."""
 
     for role in ("data", "control"):
@@ -116,7 +116,7 @@ def _base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
     raise InfraNetworkError("INFRA_NETWORK_BASE_INTERFACE_REQUIRED")
 
 
-def _link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
+def network_link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
     """Return the Metal3/nmstate link id for one network.
 
     A VLAN that declares neither bond nor interface inherits its base link; the
@@ -133,7 +133,7 @@ def _link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
     base = (
         network["bond"]["name"]
         if network.get("bond")
-        else network.get("interface") or _base_link(plan, network)
+        else network.get("interface") or vlan_base_link(plan, network)
     )
     return f"{base}.{network['vlan']}"
 
@@ -368,9 +368,9 @@ def role_links(plan: dict[str, Any], host_role: str) -> list[dict[str, Any]]:
         base = (
             network["bond"]["name"]
             if network.get("bond")
-            else network.get("interface") or _base_link(plan, network)
+            else network.get("interface") or vlan_base_link(plan, network)
         )
-        link = _link_id(plan, network)
+        link = network_link_id(plan, network)
         if link in seen:
             continue
         vlans.append(
@@ -403,7 +403,7 @@ def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, 
     for network in plan["networks"]:
         if host_role not in network["host_roles"] or network["cidr"] is None:
             continue
-        link = _link_id(plan, network)
+        link = network_link_id(plan, network)
         if network["dhcp"]:
             ipv4_dhcp.append({"id": network["name"], "link": link})
             continue
@@ -457,12 +457,12 @@ def derive_network_spec(plan: dict[str, Any]) -> dict[str, Any]:
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_REQUIRED")
     if control["cidr"] is None or data["cidr"] is None:
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_CIDR_REQUIRED")
-    if _link_id(plan, control) == _link_id(plan, data):
+    if network_link_id(plan, control) == network_link_id(plan, data):
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_INTERFACE_COLLISION")
     spec = {
-        "control_plane_interface": _link_id(plan, control),
+        "control_plane_interface": network_link_id(plan, control),
         "control_plane_cidr": control["cidr"],
-        "data_plane_interface": _link_id(plan, data),
+        "data_plane_interface": network_link_id(plan, data),
         "data_plane_cidr": data["cidr"],
         "data_plane_mtu": data["mtu"],
     }

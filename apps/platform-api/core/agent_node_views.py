@@ -29,6 +29,10 @@ from packages.agent_contracts.metal3_bmh_inventory import (
     BmhInventoryError,
     inspect_bmh_document,
 )
+from packages.agent_contracts.agent_commands import (
+    EPH_AGENT_COMMANDS,
+    TARGET_AGENT_COMMANDS,
+)
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
 from core.audit import record_audit_event
@@ -72,46 +76,11 @@ def _network_observation(inventory: Any, result: Any) -> dict[str, Any] | None:
     }
 
 
-EPH_COMMANDS = {
-    "host.network.observe",
-    "node.health",
-    "host.preflight",
-    "cluster.plan",
-    "cluster.health",
-    "cluster.network.inspect",
-    "cluster.observe",
-    "cluster.diagnose",
-    "cluster.postflight",
-    "k8s.resource.read",
-    "capi.cluster.observe",
-    "metal3.host.inspect",
-    "cluster.provider.discover",
-    "cluster.provider.compatibility",
-    "cluster.manifest.validate",
-    "cluster.capi.pivot.source.preflight",
-    "cluster.capi.pivot.dry-run",
-    "cluster.capi.pivot.execute",
-}
-TARGET_COMMANDS = {
-    "host.network.observe",
-    "node.health",
-    "cluster.provider.compatibility",
-    "cluster.health",
-    "cluster.network.inspect",
-    "cluster.observe",
-    "cluster.diagnose",
-    "cluster.postflight",
-    "cluster.control-plane.verify",
-    "cluster.capi.pivot.target.preflight",
-    "cluster.capi.pivot.target.verify",
-    "cluster.capi.pivot.postflight",
-    "cluster.capi.worker.preflight",
-    "cluster.capi.worker.provision",
-    "cluster.delivery.lifecycle.evaluate",
-    "cluster.kubernetes.version.upgrade",
-    "cluster.metal3.observe",
-    "k8s.resource.read",
-}
+#: Derived from the Agent contract so a new step cannot be authorized in only
+#: one place. ``MUTATING_COMMANDS`` below stays platform-local because it is an
+#: approval policy, not an Agent capability.
+EPH_COMMANDS = EPH_AGENT_COMMANDS
+TARGET_COMMANDS = TARGET_AGENT_COMMANDS
 MUTATING_COMMANDS = {
     "cluster.capi.pivot.execute",
     "cluster.capi.worker.provision",

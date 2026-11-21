@@ -101,7 +101,17 @@ def eph_network_state(
     ``addresses`` maps a network role to ``ip/prefix``. The primary role (the
     control network, falling back to provisioning) always needs one unless the
     profile says DHCP. Other addressed segments are optional.
+
+    Link naming, VLAN parents and default-route ownership come from
+    ``infra_networks`` (``network_link_id`` / ``vlan_base_link``) instead of a
+    second local implementation, so the nmstate document and the Metal3
+    ``networkData`` document cannot describe different interfaces.
     """
+
+    from packages.agent_contracts.infra_networks import (
+        network_link_id,
+        vlan_base_link,
+    )
 
     if not isinstance(plan, dict) or not isinstance(plan.get("networks"), list):
         raise EphNetworkError("EPH_NETWORK_PROFILE_INVALID")
@@ -120,19 +130,6 @@ def eph_network_state(
     if primary is None:
         raise EphNetworkError("EPH_NETWORK_PRIMARY_ROLE_REQUIRED")
 
-    interfaces: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    routes: list[dict[str, Any]] = []
-
-    def append(document: dict[str, Any], ports: list[dict[str, Any]]) -> None:
-        for port in ports:
-            if port["name"] not in seen:
-                interfaces.append(port)
-                seen.add(port["name"])
-        if document["name"] not in seen:
-            interfaces.append(document)
-            seen.add(document["name"])
-
     declared_default = next(
         (
             network
@@ -143,10 +140,59 @@ def eph_network_state(
     )
     default_role = declared_default["role"] if declared_default else primary["role"]
 
-    primary_document, primary_ports = _link(primary)
-    append(primary_document, primary_ports)
-    primary_link = primary_document["name"]
+    interfaces: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    routes: list[dict[str, Any]] = []
 
+    def add(document: dict[str, Any]) -> bool:
+        if document["name"] in seen:
+            return False
+        interfaces.append(document)
+        seen.add(document["name"])
+        return True
+
+    def bind_link(network: dict[str, Any]) -> tuple[str, dict[str, Any], bool]:
+        """Register the link documents for one network and return its link."""
+
+        if network.get("vlan") is None:
+            document, ports = _link(network)
+            for port in ports:
+                add(port)
+            return document["name"], document, add(document)
+        if network.get("bond") or network.get("interface"):
+            base_document, ports = _link(network)
+            for port in ports:
+                add(port)
+            add(base_document)
+            base_name = base_document["name"]
+        else:
+            # A VLAN without its own link stacks on the data bond or the
+            # primary link; both must already be registered.
+            base_name = vlan_base_link(plan, network)
+            if base_name not in seen:
+                raise EphNetworkError("EPH_NETWORK_BASE_INTERFACE_REQUIRED")
+        document = {
+            "name": network_link_id(plan, network),
+            "type": "vlan",
+            "state": "up",
+            "mtu": network["mtu"],
+            "vlan": {"base-iface": base_name, "id": network["vlan"]},
+        }
+        return document["name"], document, add(document)
+
+    def add_default_route(network: dict[str, Any], link: str) -> None:
+        gateway = network.get("gateway_ipv4")
+        if gateway and network["role"] == default_role:
+            routes.append(
+                {
+                    "destination": "0.0.0.0/0",
+                    "next-hop-address": gateway,
+                    "next-hop-interface": link,
+                    "table-id": 254,
+                }
+            )
+
+    primary_link, primary_document, _ = bind_link(primary)
     primary_address = addresses.get(primary["role"])
     if primary.get("dhcp"):
         primary_document["ipv4"] = {"enabled": True, "dhcp": True}
@@ -157,16 +203,7 @@ def eph_network_state(
             "dhcp": False,
             "address": [{"ip": ip, "prefix-length": prefix}],
         }
-        gateway = primary.get("gateway_ipv4")
-        if gateway and default_role == primary["role"]:
-            routes.append(
-                {
-                    "destination": "0.0.0.0/0",
-                    "next-hop-address": gateway,
-                    "next-hop-interface": primary_link,
-                    "table-id": 254,
-                }
-            )
+        add_default_route(primary, primary_link)
     else:
         raise EphNetworkError(
             f"EPH_NETWORK_ADDRESS_REQUIRED:{primary['role']}"
@@ -176,9 +213,7 @@ def eph_network_state(
     data = _role(plan, "data")
     data_link = ""
     if data is not None:
-        document, ports = _link(data)
-        append(document, ports)
-        data_link = document["name"]
+        data_link, _, _ = bind_link(data)
 
     for network in plan["networks"]:
         role = network["role"]
@@ -186,84 +221,19 @@ def eph_network_state(
             continue
         if not network.get("enabled", True):
             continue
-        name = _check_name(network["name"], "EPH_NETWORK_SEGMENT_NAME_INVALID")
-        if name in seen:
-            raise EphNetworkError("EPH_NETWORK_SEGMENT_NAME_DUPLICATE")
-        if network["vlan"] is None:
-            # An untagged secondary segment must live on its own link; two
-            # untagged addresses on one interface would be ambiguous.
-            segment_document, ports = _link(network)
-            if segment_document["name"] == primary_link:
+        _check_name(network["name"], "EPH_NETWORK_SEGMENT_NAME_INVALID")
+        link, document, created = bind_link(network)
+        if not created:
+            if network.get("vlan") is None and link == primary_link:
                 raise EphNetworkError("EPH_NETWORK_PRIMARY_SEGMENT_CONFLICT")
-            append(segment_document, ports)
-            segment_link = segment_document["name"]
-        else:
-            base = ""
-            bond = network.get("bond")
-            if bond:
-                base = bond["name"]
-                for port in bond["interfaces"]:
-                    if port not in seen:
-                        interfaces.append(
-                            {
-                                "name": port,
-                                "type": "ethernet",
-                                "state": "up",
-                                "mtu": network["mtu"],
-                            }
-                        )
-                        seen.add(port)
-                if base not in seen:
-                    interfaces.append(
-                        {
-                            "name": base,
-                            "type": "bond",
-                            "state": "up",
-                            "mtu": network["mtu"],
-                            "link-aggregation": {
-                                "mode": bond["mode"],
-                                "options": dict(BOND_OPTIONS),
-                                "port": [
-                                    {"interface-name": port}
-                                    for port in bond["interfaces"]
-                                ],
-                            },
-                        }
-                    )
-                    seen.add(base)
-            elif network.get("interface"):
-                base = network["interface"]
-                if base not in seen:
-                    interfaces.append(
-                        {
-                            "name": base,
-                            "type": "ethernet",
-                            "state": "up",
-                            "mtu": network["mtu"],
-                        }
-                    )
-                    seen.add(base)
-            else:
-                base = data_link or primary_link
-            if not base:
-                raise EphNetworkError("EPH_NETWORK_BASE_INTERFACE_REQUIRED")
-            segment_link = f"{base}.{network['vlan']}"
-            segment_document = {
-                "name": segment_link,
-                "type": "vlan",
-                "state": "up",
-                "mtu": network["mtu"],
-                "vlan": {"base-iface": base, "id": network["vlan"]},
-            }
-            interfaces.append(segment_document)
-            seen.add(segment_link)
+            raise EphNetworkError("EPH_NETWORK_SEGMENT_NAME_DUPLICATE")
         segment_address = addresses.get(role)
         if role == default_role and not segment_address:
             # A declared default route without an own address cannot be reached.
             raise EphNetworkError("EPH_NETWORK_DEFAULT_ROUTE_ADDRESS_REQUIRED")
         if segment_address:
             ip, prefix = _parse_cidr(segment_address)
-            segment_document["ipv4"] = {
+            document["ipv4"] = {
                 "enabled": True,
                 "dhcp": False,
                 "address": [{"ip": ip, "prefix-length": prefix}],
@@ -274,31 +244,32 @@ def eph_network_state(
                     {
                         "destination": str(network["cidr"]),
                         "next-hop-address": gateway,
-                        "next-hop-interface": segment_link,
+                        "next-hop-interface": link,
                         "table-id": 254,
                     }
                 )
-            if gateway and role == default_role:
-                routes.append(
-                    {
-                        "destination": "0.0.0.0/0",
-                        "next-hop-address": gateway,
-                        "next-hop-interface": segment_link,
-                        "table-id": 254,
-                    }
-                )
+            add_default_route(network, link)
         else:
-            segment_document["ipv4"] = {"enabled": False}
-        segment_document["ipv6"] = {"enabled": False, "dhcp": False}
+            document["ipv4"] = {"enabled": False}
+        document["ipv6"] = {"enabled": False, "dhcp": False}
 
     for document in interfaces:
         if document["type"] in {"bond", "ethernet"}:
             document.setdefault("ipv4", {"enabled": False})
             document.setdefault("ipv6", {"enabled": False, "dhcp": False})
+    routes.sort(
+        key=lambda route: (
+            0 if route["destination"] == "0.0.0.0/0" else 1,
+            route["destination"],
+            route["next-hop-interface"],
+        )
+    )
     state: dict[str, Any] = {"interfaces": interfaces}
     if routes:
         state["routes"] = {"config": routes}
     return state
+
+
 def observed_sriov_pci_defaults(
     profile: dict[str, Any],
     inventories: list[dict[str, Any]],

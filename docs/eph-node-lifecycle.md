@@ -230,6 +230,26 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Single topology resolver and command registry
+
+Two classes of duplication used to let the same decision live in two places:
+
+- Link naming, VLAN parents and default-route ownership were implemented once
+  in `infra_networks.py` and again in `eph_network.py`. They now live in
+  `network_link_id` / `vlan_base_link` only; the nmstate renderer imports them,
+  so a VLAN profile cannot address `bond_data` in one document and
+  `bond_data.3300` in the other. `tests/test_eph_network_reference_parity.py`
+  asserts both documents name the same links for a VLAN profile.
+- The Agent command surface was restated in the platform next to the
+  orchestration sets, which already caused `metal3.host.inspect` to exist in
+  only one of them. `packages/agent_contracts/agent_commands.py` is now the
+  single registry (`EPH_AGENT_COMMANDS` / `TARGET_AGENT_COMMANDS` =
+  direct commands ∪ orchestration actions), the platform imports it, and
+  `tests/test_agent_command_registry.py` asserts that every orchestration step
+  is dispatchable, every Agent handler is authorized, and every orchestration
+  step has a handler. Approval policy (`MUTATING_COMMANDS`) stays platform-local
+  because it is not an Agent capability.
+
 ### Lab workflow contract
 
 The physical acceptance workflow (`.github/workflows/metal3-lab-e2e.yml`) can only run on the `self-hosted, metal3-lab, physical` runner, so it stays manual and gated behind a readiness report. `.github/workflows/metal3-lab-contract.yml` runs on every change to the lab workflow, the readiness/acceptance tools or their tests, and proves two things on a GitHub-hosted runner: the workflow YAML still satisfies its contract, and the readiness gate keeps its honest semantics — missing kubeconfig secrets must report `ready=false` with the failed checks listed, a well-formed kubeconfig must report `ready=true`. A green contract run is not evidence of a bare-metal deployment; it only proves the pipeline cannot silently claim one.
