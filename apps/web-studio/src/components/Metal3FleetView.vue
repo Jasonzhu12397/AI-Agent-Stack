@@ -6,6 +6,8 @@ import {
   getFleetMachines,
   collectFleetNetwork,
   pxeBootFleetMachines,
+  runFleetDiscovery,
+  type FleetDiscoveryResult,
   ingestFleetBmhInventory,
   type BmhInventoryIngest,
   type PxeBootResult,
@@ -164,6 +166,40 @@ async function loadProjects(tenantId: string): Promise<void> {
     selectedProjectId.value = projects.value[0]?.id ?? "";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load project scope.";
+  }
+}
+
+const discoveryBusy = ref(false);
+const discoveryMessage = ref("");
+const discoveryResult = ref<FleetDiscoveryResult | null>(null);
+
+async function runDiscovery(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  if (
+    !window.confirm(
+      "Boot every configured machine into the inspection image once, then queue metal3.host.inspect on the online EPH nodes?",
+    )
+  ) {
+    return;
+  }
+  discoveryBusy.value = true;
+  discoveryMessage.value = "";
+  discoveryResult.value = null;
+  try {
+    const result = await runFleetDiscovery(
+      selectedTenantId.value,
+      selectedProjectId.value,
+    );
+    discoveryResult.value = result;
+    const inspectText = result.inspect.queued.length
+      ? `inspection queued on ${result.inspect.queued.length} EPH node(s)`
+      : `inspection not queued (${result.inspect.reason || "no online EPH"})`;
+    discoveryMessage.value = `Discovery: ${result.executed}/${result.machine_count} machine(s) booted; ${inspectText}.`;
+  } catch (cause) {
+    discoveryMessage.value =
+      cause instanceof Error ? cause.message : "Unable to run the discovery chain.";
+  } finally {
+    discoveryBusy.value = false;
   }
 }
 
@@ -791,11 +827,23 @@ onUnmounted(() => {
           <el-button size="small" type="warning" :loading="pxeBootBusy" @click="runPxeBoot(true)">
             Execute PXE boot
           </el-button>
+          <el-button size="small" type="danger" :loading="discoveryBusy" @click="runDiscovery">
+            Run discovery (PXE + inspect)
+          </el-button>
           <el-button size="small" plain @click="bmhDialogVisible = true">
             Ingest BMH inspection
           </el-button>
         </div>
         <p v-if="collectMessage" class="task-note">{{ collectMessage }}</p>
+        <p v-if="discoveryMessage" class="task-note">{{ discoveryMessage }}</p>
+        <div v-if="discoveryResult" class="pxe-boot-results">
+          <small>Discovery chain</small>
+          <ul>
+            <li v-for="item in discoveryResult.results" :key="'discovery-' + item.machine_id">
+              {{ item.name }}: {{ item.status }}<template v-if="item.error_code"> · {{ item.error_code }}</template>
+            </li>
+          </ul>
+        </div>
         <p v-if="pxeBootMessage" class="task-note">{{ pxeBootMessage }}</p>
         <div v-if="pxeBootResults" class="pxe-boot-results">
           <small>PXE boot ({{ pxeBootResults.execution ? "executed" : "planned" }})</small>

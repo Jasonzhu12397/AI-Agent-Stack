@@ -3029,53 +3029,7 @@ class FleetPxeBootView(APIView):
         machines = list(queryset.order_by("agent_node__name")[: self.MAX_MACHINES])
         if not machines:
             return Response({"detail": "No machines with BMC configuration found."}, status=404)
-        results = []
-        executed = 0
-        for machine in machines:
-            entry = {
-                "machine_id": str(machine.id),
-                "name": machine.agent_node.name,
-            }
-            if not machine.bmc_endpoint or not machine.bmc_credential_ref:
-                results.append(
-                    {
-                        **entry,
-                        "status": "skipped",
-                        "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED",
-                    }
-                )
-                continue
-            try:
-                credential, trust_bundle_pem = _bmc_credential_for(machine, tenant, project)
-                evidence = pxe_boot_machine(
-                    endpoint=machine.bmc_endpoint,
-                    credential=credential,
-                    trust_bundle_pem=trust_bundle_pem,
-                    execute=execute,
-                )
-            except (PxeBootError, ValueError, ImportError, AttributeError, RuntimeError) as exc:
-                code = exc.code if isinstance(exc, PxeBootError) else "PXE_BOOT_REQUEST_FAILED"
-                results.append({**entry, "status": "failed", "error_code": code})
-                continue
-            observed_at = timezone.now().isoformat()
-            inventory = dict(machine.hardware_inventory or {})
-            pxe_record = {
-                **evidence,
-                "execution": execute,
-                "requested_at": observed_at,
-            }
-            inventory["pxe_boot"] = pxe_record
-            machine.hardware_inventory = inventory
-            machine.save(update_fields=["hardware_inventory", "updated_at"])
-            if execute:
-                executed += 1
-            results.append(
-                {
-                    **entry,
-                    "status": "executed" if execute else "planned",
-                    "evidence": pxe_record,
-                }
-            )
+        results, executed = _pxe_boot_results(tenant, project, machines, execute=execute)
         return Response(
             {
                 "execution": execute,
@@ -3085,6 +3039,229 @@ class FleetPxeBootView(APIView):
             },
             status=200,
         )
+
+
+def _pxe_boot_results(tenant, project, machines, *, execute):
+    """Run the Redfish one-time PXE override for each machine, independently.
+
+    Shared by the plan/execute endpoint and the discovery chain, so the evidence
+    written to ``hardware_inventory["pxe_boot"]`` and the per-machine isolation
+    rules exist once.
+    """
+
+    results = []
+    executed = 0
+    for machine in machines:
+        entry = {
+            "machine_id": str(machine.id),
+            "name": machine.agent_node.name,
+        }
+        if not machine.bmc_endpoint or not machine.bmc_credential_ref:
+            results.append(
+                {
+                    **entry,
+                    "status": "skipped",
+                    "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED",
+                }
+            )
+            continue
+        try:
+            credential, trust_bundle_pem = _bmc_credential_for(machine, tenant, project)
+            evidence = pxe_boot_machine(
+                endpoint=machine.bmc_endpoint,
+                credential=credential,
+                trust_bundle_pem=trust_bundle_pem,
+                execute=execute,
+            )
+        except (PxeBootError, ValueError, ImportError, AttributeError, RuntimeError) as exc:
+            code = exc.code if isinstance(exc, PxeBootError) else "PXE_BOOT_REQUEST_FAILED"
+            results.append({**entry, "status": "failed", "error_code": code})
+            continue
+        observed_at = timezone.now().isoformat()
+        inventory = dict(machine.hardware_inventory or {})
+        pxe_record = {
+            **evidence,
+            "execution": execute,
+            "requested_at": observed_at,
+        }
+        inventory["pxe_boot"] = pxe_record
+        machine.hardware_inventory = inventory
+        machine.save(update_fields=["hardware_inventory", "updated_at"])
+        if execute:
+            executed += 1
+        results.append(
+            {
+                **entry,
+                "status": "executed" if execute else "planned",
+                "evidence": pxe_record,
+            }
+        )
+    return results, executed
+
+
+class FleetDiscoveryView(APIView):
+    """One confirmed action that boots every machine into discovery, then inspects.
+
+    A bare-metal fleet needs two separate things to become inventory: the
+    machines must PXE boot into the inspection image, and the EPH must run
+    ``metal3.host.inspect`` afterwards to read the BareMetalHost view. Operators
+    had to press plan, execute and ingest in that order, so the second step was
+    routinely forgotten and the inventory stayed empty.
+
+    This endpoint composes the chain with the same primitives: the per-machine
+    Redfish override from ``_pxe_boot_results`` and a queued
+    ``metal3.host.inspect`` command for every online EPH node in the project.
+    Inspection is only queued when the boot was actually executed, and a
+    machine that failed to boot is never reported as discovered.
+    """
+
+    permission_classes = [IsAuthenticated]
+    MAX_MACHINES = 100
+    CONFIRMATION = "PXE_ONCE"
+    INSPECT_ACTION = "metal3.host.inspect"
+
+    def post(self, request, tenant_id, project_id):
+        if not isinstance(request.data, dict):
+            return Response({"detail": "Request body must be a JSON object."}, status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(
+            request, tenant_id, project_id
+        )
+        project_admin = ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role=ProjectMembership.Role.ADMIN,
+        ).exists()
+        if not is_tenant_admin and not project_admin:
+            return Response(
+                {"detail": "Tenant or project administrator role is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        execute = request.data.get("execution", False)
+        if not isinstance(execute, bool):
+            return Response({"detail": "execution must be a boolean."}, status=400)
+        if execute and request.data.get("confirm") != self.CONFIRMATION:
+            return Response(
+                {
+                    "detail": f"execution requires confirm={self.CONFIRMATION}.",
+                    "confirmation": self.CONFIRMATION,
+                },
+                status=400,
+            )
+        machine_ids = request.data.get("machine_ids")
+        queryset = AgentMachine.objects.filter(tenant=tenant, project=project)
+        if machine_ids is not None:
+            if (
+                not isinstance(machine_ids, list)
+                or not machine_ids
+                or len(machine_ids) > self.MAX_MACHINES
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "machine_ids must be a non-empty list of up to "
+                            f"{self.MAX_MACHINES} UUIDs."
+                        )
+                    },
+                    status=400,
+                )
+            try:
+                parsed = [uuid.UUID(str(item)) for item in machine_ids]
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "machine_ids contains an invalid UUID."},
+                    status=400,
+                )
+            queryset = queryset.filter(pk__in=parsed)
+        machines = list(
+            queryset.exclude(bmc_endpoint="")
+            .exclude(bmc_credential_ref="")
+            .order_by("agent_node__name")[: self.MAX_MACHINES]
+        )
+        if not machines:
+            return Response(
+                {"detail": "No machines with BMC configuration found."},
+                status=404,
+            )
+        results, executed = _pxe_boot_results(
+            tenant,
+            project,
+            machines,
+            execute=execute,
+        )
+        inspect: dict[str, object] = {
+            "queued": [],
+            "skipped": [],
+            "reason": None,
+        }
+        if not execute:
+            inspect["reason"] = "NOT_EXECUTED"
+        elif not executed:
+            inspect["reason"] = "NO_MACHINE_BOOTED"
+        else:
+            idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+            if not idempotency_key or len(idempotency_key) > 96:
+                return Response(
+                    {"detail": "A valid Idempotency-Key header is required."},
+                    status=400,
+                )
+            eph_nodes = list(
+                AgentNode.objects.filter(
+                    tenant=tenant,
+                    project=project,
+                    status=AgentNode.Status.ONLINE,
+                    node_type=AgentNode.NodeType.EPH_NODE,
+                ).order_by("name", "id")
+            )
+            if not eph_nodes:
+                inspect["reason"] = "EPH_OFFLINE"
+            plan_hash = _payload_hash(self.INSPECT_ACTION, {})
+            queued: list[dict[str, str]] = []
+            skipped: list[dict[str, str]] = []
+            with transaction.atomic():
+                for node in eph_nodes:
+                    key = f"discovery:{idempotency_key}:{node.id}"
+                    command, created = AgentCommand.objects.get_or_create(
+                        tenant=tenant,
+                        idempotency_key=key,
+                        defaults={
+                            "project": project,
+                            "node": node,
+                            "requested_by": request.user,
+                            "command_type": self.INSPECT_ACTION,
+                            "payload": {},
+                            "status": AgentCommand.Status.QUEUED,
+                            "plan_hash": plan_hash,
+                        },
+                    )
+                    if created:
+                        queued.append(
+                            {"node_id": str(node.id), "command_id": str(command.id)}
+                        )
+                    else:
+                        skipped.append({"node_id": str(node.id), "reason": "already_queued"})
+            inspect["queued"] = queued
+            inspect["skipped"] = skipped
+            if queued:
+                record_audit_event(
+                    request,
+                    tenant,
+                    "fleet.discovery.queued",
+                    "project",
+                    project.id,
+                    project=project,
+                    metadata={"booted": executed, "inspect_queued": len(queued)},
+                )
+        return Response(
+            {
+                "execution": execute,
+                "machine_count": len(machines),
+                "executed": executed,
+                "results": results,
+                "inspect": inspect,
+            },
+            status=200 if not execute else 202,
+        )
+
 
 class FleetBmhInventoryView(APIView):
     """Ingest a BareMetalHost inspection document into machine inventory.

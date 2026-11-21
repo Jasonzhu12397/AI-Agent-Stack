@@ -670,6 +670,37 @@ export function pxeBootFleetMachines(
   );
 }
 
+export type FleetDiscoveryResult = {
+  execution: boolean;
+  machine_count: number;
+  executed: number;
+  results: PxeBootResult["results"];
+  inspect: {
+    queued: Array<{ node_id: string; command_id: string }>;
+    skipped: Array<{ node_id: string; reason: string }>;
+    reason: string | null;
+  };
+};
+
+export function runFleetDiscovery(
+  tenantId: string,
+  projectId: string,
+  machineIds?: string[],
+): Promise<FleetDiscoveryResult> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/fleet/machines/discovery/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        execution: true,
+        confirm: "PXE_ONCE",
+        ...(machineIds ? { machine_ids: machineIds } : {}),
+      }),
+    },
+  );
+}
+
 export function collectFleetNetwork(
   tenantId: string,
   projectId: string,

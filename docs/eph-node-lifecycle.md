@@ -230,6 +230,24 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Discovery chain: one confirmed action
+
+`POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/discovery/`
+composes what used to be three manual steps — plan, execute, ingest — into one:
+
+1. every machine with BMC configuration gets the one-time Redfish `Pxe` override
+   and reset (`_pxe_boot_results`, the same evidence written to
+   `hardware_inventory["pxe_boot"]`);
+2. only when at least one machine actually booted, `metal3.host.inspect` is
+   queued on every online EPH node of the project.
+
+Guarantees: execution needs `confirm="PXE_ONCE"` and an `Idempotency-Key`
+(repeating the key returns `already_queued` instead of a second command), a
+failed boot is never counted as discovered (`NO_MACHINE_BOOTED`), an offline EPH
+is reported as `EPH_OFFLINE` instead of being skipped silently, and a plan-only
+call (`execution: false`) never queues an inspection. The Fleet Inventory
+toolbar exposes it as "Run discovery (PXE + inspect)".
+
 ### Snapshot reconciliation on read
 
 The EPH reports results only through the command lease channel. The platform
