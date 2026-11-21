@@ -102,8 +102,40 @@ def _ip_pools(value: Any, network: ipaddress.IPv4Network, code: str) -> list[dic
     return pools
 
 
-def _link_id(network: dict[str, Any]) -> str:
-    return network["bond"]["name"] if network.get("bond") else network["interface"]
+def _base_link(plan: dict[str, Any], network: dict[str, Any]) -> str:
+    """Return the link a VLAN stacks on: its data bond, else the control link."""
+
+    for role in ("data", "control"):
+        base = network_by_role(plan, role)
+        if base is None or base is network or base.get("vlan") is not None:
+            continue
+        if base.get("bond"):
+            return base["bond"]["name"]
+        if base.get("interface"):
+            return base["interface"]
+    raise InfraNetworkError("INFRA_NETWORK_BASE_INTERFACE_REQUIRED")
+
+
+def _link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
+    """Return the Metal3/nmstate link id for one network.
+
+    A VLAN that declares neither bond nor interface inherits its base link; the
+    link id then follows the same ``<base>.<vlan>`` naming the nmstate renderer
+    uses, so both documents describe the same interface.
+    """
+
+    if network.get("vlan") is None:
+        if network.get("bond"):
+            return network["bond"]["name"]
+        if network.get("interface"):
+            return network["interface"]
+        raise InfraNetworkError("INFRA_NETWORK_INTERFACE_INVALID")
+    base = (
+        network["bond"]["name"]
+        if network.get("bond")
+        else network.get("interface") or _base_link(plan, network)
+    )
+    return f"{base}.{network['vlan']}"
 
 
 def _network(value: Any, index: int) -> dict[str, Any]:
@@ -326,10 +358,35 @@ def role_links(plan: dict[str, Any], host_role: str) -> list[dict[str, Any]]:
                 }
             )
             seen.add(bond["name"])
-        elif network["interface"] not in seen:
+        elif network.get("interface") and network["interface"] not in seen:
             ethernets.append({"type": "phy", "id": network["interface"]})
             seen.add(network["interface"])
-    return {"ethernets": ethernets, **( {"bonds": bonds} if bonds else {}) }
+    vlans: list[dict[str, Any]] = []
+    for network in plan["networks"]:
+        if host_role not in network["host_roles"] or network.get("vlan") is None:
+            continue
+        base = (
+            network["bond"]["name"]
+            if network.get("bond")
+            else network.get("interface") or _base_link(plan, network)
+        )
+        link = _link_id(plan, network)
+        if link in seen:
+            continue
+        vlans.append(
+            {
+                "type": "vlan",
+                "id": link,
+                "vlanId": network["vlan"],
+                "links": [base],
+            }
+        )
+        seen.add(link)
+    return {
+        "ethernets": ethernets,
+        **( {"bonds": bonds} if bonds else {}),
+        **( {"vlans": vlans} if vlans else {}),
+    }
 
 
 def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, Any]:
@@ -338,12 +395,15 @@ def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, 
     if host_role not in _HOST_ROLES:
         raise InfraNetworkError("INFRA_NETWORK_HOST_ROLE_INVALID")
     links = role_links(plan, host_role)
+    declared_default = any(
+        network.get("default_route") for network in plan["networks"]
+    )
     ipv4: list[dict[str, Any]] = []
     ipv4_dhcp: list[dict[str, Any]] = []
     for network in plan["networks"]:
         if host_role not in network["host_roles"] or network["cidr"] is None:
             continue
-        link = _link_id(network)
+        link = _link_id(plan, network)
         if network["dhcp"]:
             ipv4_dhcp.append({"id": network["name"], "link": link})
             continue
@@ -352,15 +412,27 @@ def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, 
             "link": link,
             "ipAddressFromIPPool": network["name"],
         }
-        if network["role"] == "control" and network["gateway_ipv4"] is not None:
-            # The OS needs an explicit default route; Metal3 networkData does
-            # not infer one from the IPPool gateway.
-            address["routes"] = [
-                {
-                    "destination": "0.0.0.0/0",
-                    "gateway": network["gateway_ipv4"],
-                }
-            ]
+        if network["gateway_ipv4"] is not None:
+            # The OS needs explicit routes; Metal3 networkData does not infer
+            # them from the IPPool gateway. Only the declared default-route
+            # network owns 0.0.0.0/0, exactly as the nmstate document does.
+            owns_default = bool(network.get("default_route")) or (
+                not declared_default and network["role"] == "control"
+            )
+            if owns_default:
+                address["routes"] = [
+                    {
+                        "destination": "0.0.0.0/0",
+                        "gateway": network["gateway_ipv4"],
+                    }
+                ]
+            elif network["role"] != "control":
+                address["routes"] = [
+                    {
+                        "destination": network["cidr"],
+                        "gateway": network["gateway_ipv4"],
+                    }
+                ]
         ipv4.append(address)
     networks: dict[str, Any] = {}
     if ipv4:
@@ -385,12 +457,12 @@ def derive_network_spec(plan: dict[str, Any]) -> dict[str, Any]:
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_REQUIRED")
     if control["cidr"] is None or data["cidr"] is None:
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_CIDR_REQUIRED")
-    if _link_id(control) == _link_id(data):
+    if _link_id(plan, control) == _link_id(plan, data):
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_DATA_INTERFACE_COLLISION")
     spec = {
-        "control_plane_interface": _link_id(control),
+        "control_plane_interface": _link_id(plan, control),
         "control_plane_cidr": control["cidr"],
-        "data_plane_interface": _link_id(data),
+        "data_plane_interface": _link_id(plan, data),
         "data_plane_cidr": data["cidr"],
         "data_plane_mtu": data["mtu"],
     }

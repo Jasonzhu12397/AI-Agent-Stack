@@ -137,8 +137,9 @@ def test_cluster_spec_generates_role_cloud_init_and_ip_pools() -> None:
     request = SimpleNamespace(data={"cluster_spec": spec_value})
     spec, error = _validated_spec(request)
     assert error is None
-    assert spec["network_spec"]["control_plane_interface"] == "bond_control"
-    assert spec["network_spec"]["data_plane_interface"] == "bond_data"
+    # VLAN profiles address the sub-interface, so the OS contract names it.
+    assert spec["network_spec"]["control_plane_interface"] == "bond_control.3220"
+    assert spec["network_spec"]["data_plane_interface"] == "bond_data.3300"
     assert spec["data_template"]["network_data"]["links"]["bonds"][0]["id"] == "bond_control"
     worker_bonds = {
         item["id"]

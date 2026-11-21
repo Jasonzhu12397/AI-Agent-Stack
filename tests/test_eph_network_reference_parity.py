@@ -24,6 +24,7 @@ def _reference_profile():
                     {"start": "172.18.0.3", "end": "172.18.0.10", "prefix": 24}
                 ],
                 "interface": "bond_control",
+                "gateway_ipv4": "172.18.0.1",
                 "host_roles": ["control_plane", "worker", "storage"],
             },
             {
@@ -170,4 +171,60 @@ def test_reference_shape_routes_default_via_the_declared_network():
             "next-hop-interface": "bond_control.70",
             "table-id": 254,
         }
+    ]
+
+
+def test_network_data_inherits_vlan_links_and_default_route():
+    from packages.agent_contracts.infra_networks import render_role_network_data
+
+    plan = plan_infra_networks(_reference_profile())
+    worker = render_role_network_data(plan, "worker")
+    vlan_links = {item["id"]: item for item in worker["links"]["vlans"]}
+    assert vlan_links["bond_data.3220"] == {
+        "type": "vlan",
+        "id": "bond_data.3220",
+        "vlanId": 3220,
+        "links": ["bond_data"],
+    }
+    assert vlan_links["bond_data.3200"]["vlanId"] == 3200
+    assert {item["id"] for item in worker["links"]["bonds"]} == {"bond_data"}
+
+    addresses = {item["id"]: item for item in worker["networks"]["ipv4"]}
+    external = addresses["ccd-om"]
+    assert external["link"] == "bond_data.3200"
+    assert external["routes"] == [
+        {"destination": "0.0.0.0/0", "gateway": "10.130.60.81"}
+    ]
+    internal = addresses["ccd-int"]
+    assert internal["link"] == "bond_data.3220"
+    # Only the declared default-route network owns 0.0.0.0/0.
+    assert all(
+        route["destination"] != "0.0.0.0/0"
+        for item in worker["networks"]["ipv4"]
+        for route in item.get("routes", [])
+        if item["id"] != "ccd-om"
+    )
+
+
+def test_network_data_keeps_control_default_route_only_when_undeclared():
+    from packages.agent_contracts.infra_networks import render_role_network_data
+
+    declared = plan_infra_networks(_reference_profile())
+    control = render_role_network_data(declared, "control_plane")
+    control_addresses = {item["id"]: item for item in control["networks"]["ipv4"]}
+    assert "routes" not in control_addresses["control-net"]
+    provision = control_addresses["sdi-semc"]
+    assert provision["link"] == "bond_control.70"
+    assert provision["routes"] == [
+        {"destination": "172.18.37.0/24", "gateway": "172.18.37.1"}
+    ]
+
+    undeclared = _reference_profile()
+    for network in undeclared["networks"]:
+        network.pop("default_route", None)
+    plan = plan_infra_networks(undeclared)
+    control = render_role_network_data(plan, "control_plane")
+    control_addresses = {item["id"]: item for item in control["networks"]["ipv4"]}
+    assert control_addresses["control-net"]["routes"] == [
+        {"destination": "0.0.0.0/0", "gateway": "172.18.0.1"}
     ]

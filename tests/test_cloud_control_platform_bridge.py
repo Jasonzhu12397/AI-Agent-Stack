@@ -389,7 +389,9 @@ def test_create_inherits_saved_project_network_profile(bridge_workspace, monkeyp
     assert response.status_code == 202
     deployment = ClusterDeployment.objects.get(id=response.data["id"])
     assert deployment.spec["infra_network_profile"]["networks"][0]["name"] == "control"
-    assert deployment.spec["network_spec"]["control_plane_interface"] == "eno1"
+    assert (
+        deployment.spec["network_spec"]["control_plane_interface"] == "eno1.100"
+    )
     assert deployment.spec["data_template"]["network_data"]["networks"]["ipv4"][0]["routes"] == [
         {"destination": "0.0.0.0/0", "gateway": "10.0.0.1"}
     ]

@@ -147,6 +147,15 @@ both `bond` and `interface`: it then inherits its base link from its own data
 bond or from the primary link, so a storage VLAN no longer has to repeat the
 data bond definition.
 
+The Metal3 `networkData` document (`render_role_network_data`) now follows the
+same two rules: only the declared default-route network carries `0.0.0.0/0`
+(falling back to the control gateway when nothing is declared), other addressed
+segments carry a route to their own CIDR, and VLAN networks are rendered as
+`vlans` links with `vlanId` and an explicit parent. The OS contract
+(`derive_network_spec`) names the link that actually holds the address, so a
+VLAN profile reports `bond_data.3300` rather than the bare bond; cloud-init and
+postflight compare the same name on both sides.
+
 `tests/test_eph_network_reference_parity.py` pins the rendered document to the
 uploaded lab reference: untagged control address, VLAN 70 on `bond_control`,
 802.3ad `bond_data` with both ports and MTU 9000, VLANs 3220/3200 on

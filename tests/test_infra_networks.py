@@ -94,8 +94,12 @@ def _profile() -> dict:
 def test_plan_normalizes_network_profile() -> None:
     plan = plan_infra_networks(_profile())
     assert len(plan["networks"]) == 5
-    assert derive_network_spec(plan)["control_plane_interface"] == "bond_control"
-    assert derive_network_spec(plan)["data_plane_interface"] == "bond_data"
+    # The addressed link is the VLAN sub-interface, not the bare bond, so the
+    # OS contract names the interface that actually holds the address.
+    assert (
+        derive_network_spec(plan)["control_plane_interface"] == "bond_control.3220"
+    )
+    assert derive_network_spec(plan)["data_plane_interface"] == "bond_data.3300"
 
 
 def test_control_plane_cloud_init_uses_bond_and_ip_pool() -> None:
@@ -158,6 +162,8 @@ def test_overlapping_control_and_data_cidr_is_rejected() -> None:
 
 def test_control_data_interface_collision_is_rejected() -> None:
     profile = _profile()
+    profile["networks"][0]["vlan"] = None
+    profile["networks"][1]["vlan"] = None
     profile["networks"][1]["bond"] = {
         "name": "bond_control",
         "interfaces": ["ens1f0"],
