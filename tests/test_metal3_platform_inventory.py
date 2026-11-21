@@ -190,3 +190,43 @@ def test_slugify_keeps_the_node_identity():
     assert slugify_bmh_name("BM_Node 1") == "bm-node-1"
     assert slugify_bmh_name("", fallback="node-2") == "node-2"
     assert len(slugify_bmh_name("a" * 60)) <= 40
+
+def test_pxe_ports_resolve_a_multi_nic_boot_nic_by_pci_address():
+    inventory = {
+        "nics": [
+            {"name": "eno1", "pciAddress": "0000:19:00.0", "mac": "AA:BB:CC:DD:EE:10"},
+            {"name": "eno2", "pciAddress": "0000:19:00.1", "mac": "AA:BB:CC:DD:EE:11"},
+            {"name": "eno3", "pciAddress": "0000:3b:00.0", "mac": "AA:BB:CC:DD:EE:12"},
+            {"name": "eno4", "pciAddress": "0000:3b:00.1", "mac": "AA:BB:CC:DD:EE:13"},
+        ]
+    }
+    # Two ports carry the PXE link, so two MACs are candidates and the answer
+    # stays ambiguous instead of silently picking one.
+    ports = ("pci@0000:3b:00.0", "pci@0000:3b:00.1")
+    assert boot_mac_from_inventory(inventory, preferred_ports=ports) is None
+
+
+def test_a_boot_flag_outside_the_pxe_link_is_refused():
+    inventory = {
+        "nics": [
+            {"name": "eno1", "pxe": True, "mac": "aa:bb:cc:dd:ee:20"},
+            {"name": "eno3", "pciAddress": "0000:3b:00.0", "mac": "aa:bb:cc:dd:ee:22"},
+        ]
+    }
+    with pytest.raises(ValueError, match="not on the PXE link"):
+        boot_mac_from_inventory(
+            inventory, preferred_ports=("pci@0000:3b:00.0",)
+        )
+
+
+def test_pxe_port_matches_the_per_port_mac_even_for_a_multi_port_nic():
+    inventory = {
+        "nics": [
+            {"name": "eth0", "mac": "aa:bb:cc:dd:ee:30"},
+            {"name": "pci@0000:3b:00.0", "mac": "aa:bb:cc:dd:ee:31"},
+        ]
+    }
+    assert (
+        boot_mac_from_inventory(inventory, preferred_ports=("pci@0000:3b:00.0",))
+        == "aa:bb:cc:dd:ee:31"
+    )

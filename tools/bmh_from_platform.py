@@ -65,8 +65,17 @@ def _iter_nics(inventory: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def boot_mac_from_inventory(inventory: dict[str, Any]) -> str | None:
-    """Read the boot MAC from reported hardware, never from a guess."""
+def boot_mac_from_inventory(
+    inventory: dict[str, Any],
+    preferred_ports: tuple[str, ...] = (),
+) -> str | None:
+    """Read the boot MAC from reported hardware, never from a guess.
+
+    ``preferred_ports`` names the physical NICs that carry the PXE network
+    (derived from the control link). A multi-NIC server reports no boot flag
+    until something boots it, so the PXE port list is what makes the answer
+    unambiguous — and a boot MAC outside it would simply not boot.
+    """
 
     if not isinstance(inventory, dict):
         return None
@@ -80,11 +89,73 @@ def boot_mac_from_inventory(inventory: dict[str, Any]) -> str | None:
         if any(bool(nic.get(flag)) for flag in NIC_BOOT_FLAGS):
             mac = nic.get("mac") or nic.get("mac_address") or nic.get("hw_address")
             if isinstance(mac, str) and mac.strip():
-                return normalise_mac(mac)
+                chosen = normalise_mac(mac)
+                if preferred_ports and not _on_preferred_port(nic, preferred_ports):
+                    raise ValueError(
+                        f"boot NIC {nic.get('name')} is not on the PXE link "
+                        f"({', '.join(preferred_ports)})"
+                    )
+                return chosen
+
+    pxe_macs: list[str] = []
+    for nic in nics:
+        if not _on_preferred_port(nic, preferred_ports):
+            continue
+        mac = _nic_mac(nic)
+        if mac:
+            pxe_macs.append(mac)
+    if len(set(pxe_macs)) == 1:
+        return pxe_macs[0]
+    if preferred_ports and not pxe_macs:
+        # The profile names ports the hardware does not have; booting would
+        # silently fail later, so refuse now instead of guessing a NIC.
+        raise ValueError(
+            "no NIC carries the PXE link " + ", ".join(preferred_ports)
+        )
     if len(nics) == 1:
-        mac = nics[0].get("mac") or nics[0].get("mac_address") or nics[0].get("hw_address")
-        if isinstance(mac, str) and mac.strip():
-            return normalise_mac(mac)
+        return _nic_mac(nics[0])
+    return None
+
+
+def _nic_name(nic: dict[str, Any]) -> str:
+    for key in ("name", "device", "ifname", "interface"):
+        value = nic.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _pci_forms(nic: dict[str, Any]) -> set[str]:
+    """Return the PCI BDF spellings a port name may use for this NIC."""
+
+    value = ""
+    for key in ("pciAddress", "pci_address", "pci", "bdf"):
+        item = nic.get(key)
+        if isinstance(item, str) and item.strip():
+            value = item.strip().lower()
+            break
+    if not value:
+        return set()
+    bdf = value.split("pci@", 1)[-1].split("/", 1)[0]
+    forms = {bdf, f"pci@{bdf}"}
+    if "." in bdf:
+        forms.add(f"pci@{bdf.split('.', 1)[0]}")
+    return forms
+
+
+def _on_preferred_port(nic: dict[str, Any], ports: tuple[str, ...]) -> bool:
+    name = _nic_name(nic)
+    if name and name in ports:
+        return True
+    pci = _pci_forms(nic)
+    return bool(pci) and any(port.lower() in pci for port in ports)
+
+
+def _nic_mac(nic: dict[str, Any]) -> str | None:
+    for key in ("mac", "mac_address", "hw_address"):
+        value = nic.get(key)
+        if isinstance(value, str) and value.strip():
+            return normalise_mac(value)
     return None
 
 

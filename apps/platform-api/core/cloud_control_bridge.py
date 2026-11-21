@@ -7,6 +7,11 @@ import dataclasses
 import uuid
 from typing import Any
 
+from agent_contracts.infra_networks import (
+    InfraNetworkError,
+    plan_infra_networks,
+    pxe_boot_ports,
+)
 from django.conf import settings
 
 from core.cloud_control_client import (
@@ -82,6 +87,7 @@ def build_cloud_control_spec(
         machines = load_platform_fleet(
             project_id=str(project_id),
             require_credentials=False,
+            pxe_boot_ports=_pxe_boot_ports(spec),
         )
         fleet = [
             dataclasses.asdict(machine.spec)
@@ -104,6 +110,19 @@ def build_cloud_control_spec(
     # the control plane only carries the Secret reference, never the credentials.
     spec["bmc_credential_mode"] = "preprovisioned"
     return spec
+
+
+def _pxe_boot_ports(spec: dict[str, Any]) -> tuple[str, ...]:
+    """Physical NICs on the PXE link, read from the deployment's own profile."""
+
+    profile = spec.get("infra_network_profile")
+    if not isinstance(profile, dict):
+        return ()
+    try:
+        plan = plan_infra_networks(profile)
+        return tuple(pxe_boot_ports(plan))
+    except InfraNetworkError:
+        return ()
 
 
 def build_cloud_control_client() -> CloudControlClient:

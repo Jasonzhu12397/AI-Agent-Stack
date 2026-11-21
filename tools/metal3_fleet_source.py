@@ -84,6 +84,7 @@ def load_platform_fleet(
     systems_path: str = DEFAULT_REDFISH_SYSTEMS_PATH,
     skipped: list[str] | None = None,
     require_credentials: bool = True,
+    pxe_boot_ports: tuple[str, ...] = (),
 ) -> list[PlatformMachine]:
     """Return every machine the platform can describe well enough to plan."""
 
@@ -126,7 +127,10 @@ def load_platform_fleet(
             continue
 
         try:
-            boot_mac = boot_mac_from_inventory(machine.hardware_inventory or {})
+            boot_mac = boot_mac_from_inventory(
+                machine.hardware_inventory or {},
+                preferred_ports=pxe_boot_ports,
+            )
             address = _bmc_address(machine.bmc_endpoint, systems_path)
         except ValueError as exc:
             skipped.append(f"{name}: {exc}")

@@ -182,6 +182,43 @@ def network_link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
     return f"{base}.{network['vlan']}"
 
 
+def _link_ports(plan: dict[str, Any], link: str) -> list[str]:
+    for network in plan["networks"]:
+        bond = network.get("bond")
+        if bond and bond["name"] == link:
+            return list(bond["interfaces"])
+        if network.get("interface") == link:
+            return [link]
+    return []
+
+
+def pxe_boot_ports(plan: dict[str, Any]) -> list[str]:
+    """Return the physical NICs the PXE / Live ISO boot path rides on.
+
+    The provisioning segment (VLAN 70 in the reference lab) is the network the
+    machine boots from, and it stacks on the control link alongside the control
+    planes. Resolving its base link down to the member ports tells an installer
+    which MAC can appear as ``bootMACAddress`` — the bond MAC never can, because
+    a bond is assembled by the OS rather than by the firmware PXE client.
+    """
+
+    network = network_by_role(plan, "provisioning") or network_by_role(plan, "control")
+    if network is None:
+        raise InfraNetworkError("INFRA_NETWORK_PXE_LINK_REQUIRED")
+    if network.get("bond"):
+        base = network["bond"]["name"]
+    elif network.get("interface"):
+        base = network["interface"]
+    elif network.get("vlan") is not None:
+        base = vlan_base_link(plan, network)
+    else:
+        raise InfraNetworkError("INFRA_NETWORK_INTERFACE_INVALID")
+    ports = _link_ports(plan, base)
+    if not ports:
+        raise InfraNetworkError("INFRA_NETWORK_PXE_PORT_REQUIRED")
+    return ports
+
+
 def _network(value: Any, index: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise InfraNetworkError("INFRA_NETWORK_INVALID")

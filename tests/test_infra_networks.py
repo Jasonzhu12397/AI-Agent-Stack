@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from packages.agent_contracts import infra_networks as infra
 from packages.agent_contracts.infra_networks import (
     InfraNetworkError,
     derive_network_spec,
@@ -293,3 +294,11 @@ def test_underscored_segment_names_map_to_dns_safe_object_names():
     pools = {item["metadata"]["name"] for item in render_ip_pools(plan, cluster_name="target")}
     assert "sdi-semc" in pools
     assert "sdi_semc" not in pools
+
+def test_pxe_boot_ports_are_the_physical_ports_of_the_control_bond():
+    plan = plan_infra_networks(_pxe_profile())
+    ports = infra.pxe_boot_ports(plan)
+    assert ports == ["pci@0000:18:00.0", "pci@0000:18:00.1"]
+    # The bond and the VLAN are assembled in software, so neither can boot.
+    assert "bond_control" not in ports
+    assert "bond_control.70" not in ports
