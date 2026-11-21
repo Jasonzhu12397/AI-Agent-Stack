@@ -133,6 +133,16 @@ def eph_network_state(
             interfaces.append(document)
             seen.add(document["name"])
 
+    declared_default = next(
+        (
+            network
+            for network in plan["networks"]
+            if network.get("default_route") and network.get("enabled", True)
+        ),
+        None,
+    )
+    default_role = declared_default["role"] if declared_default else primary["role"]
+
     primary_document, primary_ports = _link(primary)
     append(primary_document, primary_ports)
     primary_link = primary_document["name"]
@@ -148,7 +158,7 @@ def eph_network_state(
             "address": [{"ip": ip, "prefix-length": prefix}],
         }
         gateway = primary.get("gateway_ipv4")
-        if gateway:
+        if gateway and default_role == primary["role"]:
             routes.append(
                 {
                     "destination": "0.0.0.0/0",
@@ -248,6 +258,9 @@ def eph_network_state(
             interfaces.append(segment_document)
             seen.add(segment_link)
         segment_address = addresses.get(role)
+        if role == default_role and not segment_address:
+            # A declared default route without an own address cannot be reached.
+            raise EphNetworkError("EPH_NETWORK_DEFAULT_ROUTE_ADDRESS_REQUIRED")
         if segment_address:
             ip, prefix = _parse_cidr(segment_address)
             segment_document["ipv4"] = {
@@ -260,6 +273,15 @@ def eph_network_state(
                 routes.append(
                     {
                         "destination": str(network["cidr"]),
+                        "next-hop-address": gateway,
+                        "next-hop-interface": segment_link,
+                        "table-id": 254,
+                    }
+                )
+            if gateway and role == default_role:
+                routes.append(
+                    {
+                        "destination": "0.0.0.0/0",
                         "next-hop-address": gateway,
                         "next-hop-interface": segment_link,
                         "table-id": 254,

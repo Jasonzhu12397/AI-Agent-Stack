@@ -127,6 +127,9 @@ def _network(value: Any, index: int) -> dict[str, Any]:
     dhcp = value.get("dhcp", False)
     if not isinstance(dhcp, bool):
         raise InfraNetworkError("INFRA_NETWORK_DHCP_INVALID")
+    default_route = value.get("default_route", False)
+    if not isinstance(default_route, bool):
+        raise InfraNetworkError("INFRA_NETWORK_DEFAULT_ROUTE_INVALID")
     cidr_value = value.get("cidr")
     cidr = None if cidr_value in (None, "") else _cidr(cidr_value, "INFRA_NETWORK_CIDR_INVALID")
     gateway = value.get("gateway_ipv4")
@@ -175,9 +178,13 @@ def _network(value: Any, index: int) -> dict[str, Any]:
         bond = None
     direct_interface = None
     if bond is None:
-        direct_interface = _interface(
-            value.get("interface"), "INFRA_NETWORK_INTERFACE_INVALID"
-        )
+        declared_interface = value.get("interface")
+        # A VLAN may inherit its base link at render time (its own data bond or
+        # the primary link), so only an untagged network must name one.
+        if declared_interface is not None or vlan is None:
+            direct_interface = _interface(
+                declared_interface, "INFRA_NETWORK_INTERFACE_INVALID"
+            )
     pci_addresses = value.get("pci_addresses", [])
     if not isinstance(pci_addresses, list) or len(pci_addresses) > 16:
         raise InfraNetworkError("INFRA_NETWORK_PCI_ADDRESSES_INVALID")
@@ -206,6 +213,7 @@ def _network(value: Any, index: int) -> dict[str, Any]:
         "vlan": vlan,
         "mtu": mtu,
         "dhcp": dhcp,
+        "default_route": default_route,
         "cidr": str(cidr) if cidr is not None else None,
         "gateway_ipv4": gateway,
         "ip_pools": pools,
@@ -270,6 +278,15 @@ def plan_infra_networks(value: Any) -> dict[str, Any]:
         for network in networks
     ):
         raise InfraNetworkError("INFRA_NETWORK_CONTROL_PLANE_BINDING_REQUIRED")
+    default_networks = [network for network in networks if network["default_route"]]
+    if len(default_networks) > 1:
+        raise InfraNetworkError("INFRA_NETWORK_DEFAULT_ROUTE_DUPLICATE")
+    if default_networks:
+        # A default route without a gateway would be an unreachable black hole.
+        if not default_networks[0]["gateway_ipv4"]:
+            raise InfraNetworkError("INFRA_NETWORK_DEFAULT_ROUTE_GATEWAY_REQUIRED")
+        if default_networks[0]["role"] == "sriov":
+            raise InfraNetworkError("INFRA_NETWORK_DEFAULT_ROUTE_ROLE_INVALID")
     return {
         "networks": networks,
         "dns_servers": list(dns),

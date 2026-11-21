@@ -77,6 +77,7 @@ const networkDraft = ref({
   interface: "",
   bondName: "",
   bondInterfaces: "",
+  defaultRoute: false,
   pciAddresses: "",
   numVfs: 8,
   hostRoles: ["control_plane", "worker"] as InfraNetwork["host_roles"],
@@ -306,8 +307,14 @@ function addInfraNetwork(): void {
     infraNetworkStatus.value = "A CIDR is required for this network role.";
     return;
   }
-  if (!draft.interface.trim() && !draft.bondName.trim()) {
-    infraNetworkStatus.value = "Provide a NIC interface or a bond definition.";
+  const declaresVlan = Boolean(draft.vlan);
+  if (!draft.interface.trim() && !draft.bondName.trim() && !declaresVlan) {
+    infraNetworkStatus.value =
+      "Provide a NIC interface or a bond definition (a VLAN may inherit its base link).";
+    return;
+  }
+  if (draft.defaultRoute && !draft.gateway.trim()) {
+    infraNetworkStatus.value = "A default-route network needs a gateway.";
     return;
   }
   const network: InfraNetwork = {
@@ -318,6 +325,7 @@ function addInfraNetwork(): void {
     mtu: draft.mtu,
     cidr: draft.cidr.trim() || null,
     gateway_ipv4: draft.gateway.trim() || null,
+    default_route: draft.defaultRoute,
     host_roles: [...draft.hostRoles],
     interface: draft.interface.trim() || null,
     pci_addresses: draft.pciAddresses
@@ -978,6 +986,11 @@ onUnmounted(() => {
             </label>
             <label>MTU
               <el-input-number v-model="networkDraft.mtu" :min="576" :max="9216" />
+            </label>
+            <label>Default route
+              <el-checkbox v-model="networkDraft.defaultRoute">
+                Route 0.0.0.0/0 through this network
+              </el-checkbox>
             </label>
           </div>
           <div class="replica-fields">

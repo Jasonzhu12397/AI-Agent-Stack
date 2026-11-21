@@ -1042,6 +1042,7 @@ export type InfraNetwork = {
   vlan?: number | null;
   mtu?: number;
   dhcp?: boolean;
+  default_route?: boolean;
   cidr?: string | null;
   gateway_ipv4?: string | null;
   ip_pools?: Array<{ start: string; end: string; prefix: number }>;

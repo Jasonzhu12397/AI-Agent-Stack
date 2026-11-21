@@ -135,6 +135,27 @@ untagged duplicates fail with `EPH_NETWORK_PRIMARY_SEGMENT_CONFLICT`, unknown
 roles with `EPH_NETWORK_ADDRESS_ROLE_INVALID`, and malformed addresses with
 `EPH_NETWORK_ADDRESS_INVALID`.
 
+A network may set `default_route: true` in the profile. Only one network may
+declare it (`INFRA_NETWORK_DEFAULT_ROUTE_DUPLICATE`), it must have a gateway
+(`INFRA_NETWORK_DEFAULT_ROUTE_GATEWAY_REQUIRED`) and it cannot be an SR-IOV
+network. The rendered document then routes `0.0.0.0/0` through that network's
+interface instead of the control link, which is what the lab reference does
+(`ccd_om` VLAN 3200 carries the default route, `sdi_semc` VLAN 70 carries a
+segment route and `bond_control` stays untagged). Without that flag the default
+route falls back to the control/provisioning gateway. A VLAN network may omit
+both `bond` and `interface`: it then inherits its base link from its own data
+bond or from the primary link, so a storage VLAN no longer has to repeat the
+data bond definition.
+
+`tests/test_eph_network_reference_parity.py` pins the rendered document to the
+uploaded lab reference: untagged control address, VLAN 70 on `bond_control`,
+802.3ad `bond_data` with both ports and MTU 9000, VLANs 3220/3200 on
+`bond_data`, the default route on VLAN 3200 and the segment route on VLAN 70.
+
+The readiness report also exposes `secret_presence` (`configured` / `empty` per
+kubeconfig secret). It reports configuration state only and never echoes the
+kubeconfig content.
+
 The rendered document is stored as `spec.eph_network` by the platform and
 forwarded in every `eph.controlstack.apply` payload, where it is applied before
 any control-stack manifest. The standalone `eph.network.configure` action

@@ -155,6 +155,19 @@ def build_report(arguments: argparse.Namespace) -> dict[str, Any]:
             "acceptance tool must exist in the checkout",
         )
     )
+    secret_presence = {}
+    for label, path in (
+        ("eph", arguments.eph_kubeconfig or ""),
+        ("target", arguments.target_kubeconfig or ""),
+    ):
+        source = Path(path) if path else None
+        # Only the presence is reported; the kubeconfig content is never echoed.
+        client_present = bool(
+            source is not None
+            and source.is_file()
+            and source.read_text(encoding="utf-8").strip()
+        )
+        secret_presence[label] = "configured" if client_present else "empty"
     ready = all(item["ok"] for item in checks)
     skipped = []
     if not ready:
@@ -165,6 +178,7 @@ def build_report(arguments: argparse.Namespace) -> dict[str, Any]:
         ]
     return {
         "ready": ready,
+        "secret_presence": secret_presence,
         "checks": checks,
         "failed_checks": [item["name"] for item in checks if not item["ok"]],
         "skipped_stages": skipped,

@@ -116,3 +116,14 @@ def test_cli_writes_report_and_github_output_without_failing(tmp_path, capsys):
     assert report["ready"] is False
     assert "will be skipped" in capsys.readouterr().out
     assert github_output.read_text(encoding="utf-8").strip() == "ready=false"
+
+
+def test_secret_presence_reports_only_configuration_state(tmp_path):
+    arguments = _arguments(tmp_path)
+    report = build_report(arguments)
+    assert report["secret_presence"] == {"eph": "configured", "target": "configured"}
+
+    arguments.eph_kubeconfig = ""
+    report = build_report(arguments)
+    assert report["secret_presence"]["eph"] == "empty"
+    assert report["secret_presence"]["target"] == "configured"
