@@ -21,6 +21,12 @@ TRANSITIONS: dict[str, tuple[str, ...]] = {
     RETIRED: (DISCOVERED,),
 }
 
+# Actions that put a machine back on the wire. A retired machine must be returned
+# to ``discovered`` (an explicit lifecycle review) before it may be booted again,
+# and an unknown state is treated the same way: fail closed.
+BOOT_ACTIONS = ("pxe_boot", "discovery")
+BOOTABLE_STATES = (DISCOVERED, IDENTITY_REVIEW, COMMISSIONED)
+
 REASON_MIN_LENGTH = 10
 REASON_MAX_LENGTH = 500
 
@@ -41,6 +47,14 @@ def transition_allowed(expected_state: str | None, target_state: str | None) -> 
     if not isinstance(expected_state, str) or not isinstance(target_state, str):
         return False
     return target_state in allowed_targets(expected_state)
+
+
+def action_blocked(state: str | None, action: str) -> bool:
+    """Return True when the machine state forbids the requested boot action."""
+
+    if action not in BOOT_ACTIONS:
+        raise ValueError(f"unknown machine action: {action}")
+    return not isinstance(state, str) or state not in BOOTABLE_STATES
 
 
 def normalize_reason(reason: object) -> str:

@@ -223,3 +223,23 @@ def test_repeating_the_same_key_does_not_queue_twice(monkeypatch):
     assert second.data["inspect"]["queued"] == []
     assert second.data["inspect"]["skipped"][0]["reason"] == "already_queued"
     assert AgentCommand.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_discovery_refuses_a_retired_machine_before_any_boot(monkeypatch):
+    tenant, project, _node, machine, client = _workspace()
+    machine.lifecycle_state = "retired"
+    machine.save(update_fields=["lifecycle_state"])
+    monkeypatch.setattr(
+        "core.agent_node_views.pxe_boot_machine",
+        lambda **kwargs: pytest.fail("a retired machine must never be booted"),
+    )
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/discovery/",
+        {"machine_ids": [str(machine.id)], "execution": True, "confirm": "PXE_ONCE"},
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "MACHINE_NOT_BOOTABLE"

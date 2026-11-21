@@ -400,6 +400,13 @@ endpoint only, never the credential or trust references), `bmh_name`,
   and the API returns `lifecycle_targets` so the UI never duplicates the table.
   Reviews require a 10–500 character reason and are audited as
   `fleet.machine.lifecycle_reviewed`.
+- **The lifecycle gates provisioning.** PXE boot and discovery only accept
+  machines in `discovered`, `identity_review` or `commissioned`. A `retired`
+  machine must be returned to `discovered` first, otherwise both endpoints
+  answer `409 MACHINE_NOT_BOOTABLE` with the offending machines and their
+  states before any Redfish call is made; an unknown state fails closed the
+  same way. The fleet-wide selection leaves non-bootable machines out instead of
+  silently skipping them.
 
 ## Package layout
 

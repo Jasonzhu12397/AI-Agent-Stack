@@ -257,3 +257,46 @@ def test_pxe_boot_api_executes_and_records_evidence(monkeypatch):
     record = machine.hardware_inventory["pxe_boot"]
     assert record["boot_override"] == "Pxe/Once"
     assert record["execution"] is True
+
+
+@pytest.mark.django_db
+@override_settings(BMC_CREDENTIAL_RESOLVER="tests.test_pxe_boot.fake_resolver")
+def test_pxe_boot_refuses_a_retired_machine(monkeypatch):
+    tenant, project, machine, client = _workspace()
+    machine.lifecycle_state = "retired"
+    machine.save(update_fields=["lifecycle_state"])
+    monkeypatch.setattr(
+        "core.agent_node_views.pxe_boot_machine",
+        lambda **kwargs: pytest.fail("a retired machine must never reach the BMC"),
+    )
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/pxe-boot/",
+        {"machine_ids": [str(machine.id)], "execution": True, "confirm": "PXE_ONCE"},
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "MACHINE_NOT_BOOTABLE"
+    assert response.data["machines"] == [
+        {
+            "machine_id": str(machine.id),
+            "name": machine.agent_node.name,
+            "lifecycle_state": "retired",
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_pxe_boot_plan_leaves_retired_machines_out_of_the_default_selection():
+    tenant, project, machine, client = _workspace()
+    machine.lifecycle_state = "retired"
+    machine.save(update_fields=["lifecycle_state"])
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/pxe-boot/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 404

@@ -58,6 +58,10 @@ provisioning network, interface or address is missing — those same warnings ar
 persisted in `preflight_result.network_defaults.warnings` and shown on the
 deployment.
 
+A `retired` machine is refused by PXE boot and discovery with
+`409 MACHINE_NOT_BOOTABLE`: return it to `discovered` through a lifecycle review
+before reusing it.
+
 ## 6. Preflight, then deploy
 
 **Sync EPH preflight** stores the EPH's own readiness snapshot in

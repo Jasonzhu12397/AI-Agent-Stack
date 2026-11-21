@@ -51,3 +51,32 @@ def test_reasons_are_trimmed_and_bounded():
     assert normalize_reason("short") == ""
     assert normalize_reason("x" * 501) == ""
     assert normalize_reason(None) == ""
+
+
+def test_retired_machines_may_not_be_booted():
+    from agent_contracts.machine_lifecycle import action_blocked
+
+    assert action_blocked(RETIRED, "pxe_boot") is True
+    assert action_blocked(RETIRED, "discovery") is True
+
+
+def test_active_machines_may_be_booted():
+    from agent_contracts.machine_lifecycle import action_blocked
+
+    for state in (DISCOVERED, IDENTITY_REVIEW, COMMISSIONED):
+        assert action_blocked(state, "pxe_boot") is False
+        assert action_blocked(state, "discovery") is False
+
+
+def test_unknown_states_fail_closed_for_boot_actions():
+    from agent_contracts.machine_lifecycle import action_blocked
+
+    assert action_blocked(None, "pxe_boot") is True
+    assert action_blocked("weird", "discovery") is True
+
+
+def test_only_boot_actions_are_gated():
+    from agent_contracts.machine_lifecycle import action_blocked
+
+    with pytest.raises(ValueError):
+        action_blocked(DISCOVERED, "firmware")

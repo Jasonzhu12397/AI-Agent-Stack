@@ -36,7 +36,9 @@ from packages.agent_contracts.agent_commands import (
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
 from packages.agent_contracts.machine_lifecycle import (
+    BOOTABLE_STATES,
     REASON_MAX_LENGTH,
+    action_blocked,
     allowed_targets,
     REASON_MIN_LENGTH,
     normalize_reason,
@@ -3070,10 +3072,15 @@ class FleetPxeBootView(APIView):
                     return Response({"detail": "machine_ids contains an invalid UUID."}, status=400)
             queryset = queryset.filter(pk__in=parsed)
         else:
-            queryset = queryset.exclude(bmc_endpoint="").exclude(bmc_credential_ref="")
+            queryset = queryset.filter(lifecycle_state__in=BOOTABLE_STATES).exclude(
+                bmc_endpoint=""
+            ).exclude(bmc_credential_ref="")
         machines = list(queryset.order_by("agent_node__name")[: self.MAX_MACHINES])
         if not machines:
             return Response({"detail": "No machines with BMC configuration found."}, status=404)
+        refusal = _refuse_non_bootable(machines, "pxe_boot")
+        if refusal is not None:
+            return refusal
         results, executed = _pxe_boot_results(tenant, project, machines, execute=execute)
         return Response(
             {
@@ -3084,6 +3091,35 @@ class FleetPxeBootView(APIView):
             },
             status=200,
         )
+
+
+def _refuse_non_bootable(machines, action):
+    """Fail closed when a machine is not in a bootable lifecycle state.
+
+    A retired machine has to be returned to ``discovered`` through an explicit
+    lifecycle review before it may be booted again, so the operator sees the
+    reason instead of a silent skip.
+    """
+
+    blocked = [machine for machine in machines if action_blocked(machine.lifecycle_state, action)]
+    if not blocked:
+        return None
+    return Response(
+        {
+            "detail": "Machines must be in a bootable lifecycle state for this action.",
+            "code": "MACHINE_NOT_BOOTABLE",
+            "action": action,
+            "machines": [
+                {
+                    "machine_id": str(machine.id),
+                    "name": machine.agent_node.name,
+                    "lifecycle_state": machine.lifecycle_state,
+                }
+                for machine in blocked
+            ],
+        },
+        status=409,
+    )
 
 
 def _pxe_boot_results(tenant, project, machines, *, execute):
@@ -3217,6 +3253,8 @@ class FleetDiscoveryView(APIView):
                     status=400,
                 )
             queryset = queryset.filter(pk__in=parsed)
+        else:
+            queryset = queryset.filter(lifecycle_state__in=BOOTABLE_STATES)
         machines = list(
             queryset.exclude(bmc_endpoint="")
             .exclude(bmc_credential_ref="")
@@ -3227,6 +3265,9 @@ class FleetDiscoveryView(APIView):
                 {"detail": "No machines with BMC configuration found."},
                 status=404,
             )
+        refusal = _refuse_non_bootable(machines, "discovery")
+        if refusal is not None:
+            return refusal
         results, executed = _pxe_boot_results(
             tenant,
             project,
