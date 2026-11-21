@@ -85,7 +85,7 @@ def test_control_stack_probes_agree_with_readiness_checks():
     ]
     assert set(planned) & providers == {
         ("capm3-system", "capm3-controller-manager"),
-        ("capm3-system", "ipam-controller-manager"),
+        ("metal3-ipam-system", "ipam-controller-manager"),
         ("capi-system", "capi-controller-manager"),
         (
             "capi-kubeadm-bootstrap-system",

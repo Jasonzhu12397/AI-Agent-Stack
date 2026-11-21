@@ -67,7 +67,7 @@ class StackComponent:
 #: on a Deployment that does not exist.
 _COMPONENTS: tuple[tuple[str, str, str, dict[str, str] | None], ...] = (
     ("cert-manager", "cert-manager", "cert-manager", None),
-    ("ipam", "capm3-system", "ipam-controller-manager", None),
+    ("ipam", "metal3-ipam-system", "ipam-controller-manager", None),
     ("capi-core", "capi-system", "capi-controller-manager", None),
     (
         "capi-bootstrap",

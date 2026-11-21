@@ -166,6 +166,13 @@ hop, and an ssh failure after that leaves the cluster half upgraded.
 Nodes already reporting the target minor are skipped with a
 `<node>: already on <version>, skipped` note, so a retry after a mid-run failure
 does not repeat `kubeadm upgrade apply` or re-ssh into nodes that are done.
+A retry of an upgrade that already finished changes nothing and says so:
+every node already on the target minor is skipped (workers are not drained
+again, `kubeadm upgrade apply` is not repeated), the run reports
+`upgrade_performed=false` with `already_at_target=true`, and the platform
+accepts that result only with that flag and an empty performed-step list. A run
+that silently upgraded nothing is still refused.
+
 Peer failures keep the node in the detail: `UPGRADE_CONTROL_PLANE_PEER_PACKAGE_FAILED`,
 `UPGRADE_CONTROL_PLANE_PEER_FAILED`, `UPGRADE_CONTROL_PLANE_PEER_KUBELET_RESTART_FAILED`.
 

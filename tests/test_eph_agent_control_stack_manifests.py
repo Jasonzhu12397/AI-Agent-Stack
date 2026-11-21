@@ -10,7 +10,7 @@ from apps.eph_agent.control_stack_manifests import (
 
 def test_loads_multi_document_manifest(tmp_path: Path):
     (tmp_path / "ipam.yaml").write_text(
-        "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: capm3-system\n"
+        "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: metal3-ipam-system\n"
         "---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ipam-manager\n",
         encoding="utf-8",
     )
@@ -37,18 +37,26 @@ def test_rejects_empty_manifest(tmp_path: Path):
 
 
 def test_shipped_ipam_manifest_has_no_unexpanded_shell_placeholders():
-    """Kubernetes does not expand ``${VAR:=default}`` inside container args."""
+    """Kubernetes does not expand ``${VAR:=default}`` inside container args.
 
-    import yaml
+    The vendored files stay byte-identical to their upstream release artifacts
+    (and therefore still carry the placeholders), so the check is on the loader
+    output: what would actually be applied must be fully expanded.
+    """
 
     root = Path(__file__).resolve().parents[1]
-    manifest = root / "deploy/offline/addons/control-stack/ipam.yaml"
-    deployments = [
-        document
-        for document in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
-        if document and document.get("kind") == "Deployment"
-    ]
-    assert deployments
-    for container in deployments[0]["spec"]["template"]["spec"]["containers"]:
-        for argument in container.get("args", []):
-            assert "${" not in argument, argument
+    directory = root / "deploy/offline/addons/control-stack"
+    names = sorted(path.stem for path in directory.glob("*.yaml"))
+    documents = load_component_manifests(names, directory)
+
+    assert set(documents) == set(names)
+    found_args = 0
+    for component, loaded in documents.items():
+        for document in loaded:
+            if document.get("kind") != "Deployment":
+                continue
+            for container in document["spec"]["template"]["spec"]["containers"]:
+                for argument in container.get("args", []):
+                    found_args += 1
+                    assert "${" not in argument, f"{component}: {argument}"
+    assert found_args > 0

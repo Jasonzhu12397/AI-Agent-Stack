@@ -2559,6 +2559,29 @@ def test_kubernetes_upgrade_result_accepts_a_proven_execution():
     empty_checks = dict(result, preflight={"blocked": False, "checks": []})
     assert "preflight checks it ran" in _validate_kubernetes_upgrade_result(command, empty_checks)
 
+    retry = dict(
+        result,
+        upgrade_performed=False,
+        already_at_target=True,
+        performed_steps=["preflight", "postflight"],
+    )
+    assert _validate_kubernetes_upgrade_result(command, retry) is None
+
+    silent_noop = dict(
+        result, upgrade_performed=False, already_at_target=False, performed_steps=[]
+    )
+    assert "execution safety" in _validate_kubernetes_upgrade_result(command, silent_noop)
+
+    contradictory = dict(
+        result,
+        upgrade_performed=False,
+        already_at_target=True,
+        performed_steps=["preflight", "control_plane"],
+    )
+    assert "cannot report upgraded nodes" in _validate_kubernetes_upgrade_result(
+        command, contradictory
+    )
+
 
 @pytest.mark.django_db
 def test_target_agent_kubernetes_execute_upgrade_requires_approval(node_workspace):

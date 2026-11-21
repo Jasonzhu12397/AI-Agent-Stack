@@ -658,3 +658,29 @@ def test_an_unhealthy_cluster_is_refused_before_anything_runs():
     failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
     assert "etcd.quorum" in failed
     assert result["upgrade_performed"] is False
+
+
+def test_workers_already_on_the_target_are_not_drained_and_upgraded_again(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    nodes = _nodes(
+        ("cp-0", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.10", "v1.34.1"),
+        ("w-0", {}, "10.0.0.20", "v1.34.1"),
+    )
+    runner = FakeRunner(nodes=nodes)
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] is None
+    assert result["already_at_target"] is True
+    assert result["upgrade_performed"] is False
+    assert ["kubectl", "drain", "w-0", "--ignore-daemonsets", "--delete-emptydir-data",
+            "--timeout=15m"] not in runner.calls
+    # `kubeadm upgrade plan` is a read-only preflight step and still runs.
+    assert not [
+        call
+        for call in runner.calls
+        if call[:3] in (["kubeadm", "upgrade", "apply"], ["kubeadm", "upgrade", "node"])
+    ]
+    assert result["upgrade_steps"][1]["status"] == "skipped"
+    assert "every control plane already runs v1.34.1" in result["upgrade_steps"][1]["detail"]
+    assert result["upgrade_steps"][2]["status"] == "skipped"
+    assert "every worker already on v1.34.1" in result["upgrade_steps"][2]["detail"]

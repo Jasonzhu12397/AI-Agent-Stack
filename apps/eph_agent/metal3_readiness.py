@@ -35,7 +35,7 @@ PROVIDER_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
     ("capi-system", "capi-controller-manager"),
     ("capi-kubeadm-bootstrap-system", "capi-kubeadm-bootstrap-controller-manager"),
     ("capi-kubeadm-control-plane-system", "capi-kubeadm-control-plane-controller-manager"),
-    ("capm3-system", "ipam-controller-manager"),
+    ("metal3-ipam-system", "ipam-controller-manager"),
     ("baremetal-operator-system", "baremetal-operator-controller-manager"),
     ("ai-agent-system", "registry"),
     ("ai-agent-system", "vbmc"),
@@ -49,7 +49,7 @@ PROVIDER_REPLICASETS: tuple[tuple[str, str, str, int], ...] = (
     ("cluster.x-k8s.io/provider", "cluster-api", "capi-system", 1),
     ("cluster.x-k8s.io/provider", "bootstrap-kubeadm", "capi-kubeadm-bootstrap-system", 1),
     ("cluster.x-k8s.io/provider", "control-plane-kubeadm", "capi-kubeadm-control-plane-system", 1),
-    ("cluster.x-k8s.io/provider", "ipam-metal3", "capm3-system", 1),
+    ("cluster.x-k8s.io/provider", "ipam-metal3", "metal3-ipam-system", 1),
 )
 
 # All EPH infrastructure services are Pods; only network links remain host-side.

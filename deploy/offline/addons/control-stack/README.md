@@ -7,7 +7,7 @@ names must equal the component names in that plan.
 | Component | File | Version | SHA256 | Namespace / controller |
 | --- | --- | --- | --- | --- |
 | cert-manager | `cert-manager.yaml` | v1.16.3 | `5dda0f9c9dbed90825a0073f1c0f986c8a49e9b6c97a7701c87733afadc734bf` | cert-manager / cert-manager |
-| Metal3 IPAM | `ipam.yaml` | v1.9.6 | `920ab5c2ce87ba963983b971986584d56d954f453fd70b92ec034babcb014cd3` | capm3-system / ipam-controller-manager |
+| Metal3 IPAM | `ipam.yaml` | v1.14.3 | `c693215a94810ff935c303adbcd14f8535aec3653aa7cc32a6931f44b78f0c39` | metal3-ipam-system / ipam-controller-manager |
 | Cluster API core | `capi-core.yaml` | v1.14.4 | `0030264eb0a0d90ebacc9da8f6bbb717bee32e45ffadc4a74784fb5ad7b9bb0b` | capi-system / capi-controller-manager |
 | Kubeadm bootstrap | `capi-bootstrap.yaml` | v1.14.4 | `cf805775f24d197581b06e938bcd0eb9a9ed49d675f67e0f689ce7b71e5e397c` | capi-kubeadm-bootstrap-system / capi-kubeadm-bootstrap-controller-manager |
 | Kubeadm control plane | `capi-control-plane.yaml` | v1.14.4 | `7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb68be12d3c1805be438` | capi-kubeadm-control-plane-system / capi-kubeadm-control-plane-controller-manager |
@@ -18,25 +18,49 @@ names must equal the component names in that plan.
 Sources:
 
 - cert-manager: `https://github.com/cert-manager/cert-manager/releases/download/v1.16.3/cert-manager.yaml`
-- Metal3 IPAM: `https://github.com/metal3-io/ip-address-manager/releases/download/v1.9.6/ipam-components.yaml`
+- Metal3 IPAM: `https://github.com/metal3-io/ip-address-manager/releases/download/v1.14.3/ipam-components.yaml`
 - Cluster API: `https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.4/{core,bootstrap,control-plane}-components.yaml`
 - BareMetal Operator: `https://github.com/metal3-io/baremetal-operator/releases/download/v0.14.3/baremetal-operator.yaml`
 - Ironic Standalone Operator: `https://github.com/metal3-io/ironic-standalone-operator/releases/download/v0.12.0/install.yaml`
 - CAPM3: `https://github.com/metal3-io/cluster-api-provider-metal3/releases/download/v1.14.3/infrastructure-components.yaml`
 
-All manifests are Apache-2.0. `quay.io/metal3-io/ip-address-manager:v1.9.6` is
-the IPAM controller image; the other images are pinned inside their manifests.
+All manifests are Apache-2.0 and byte-identical to their published release
+artifacts; the SHA256 column is the upstream checksum and
+`tests/test_control_stack_vendor_guard.py` fails when a file stops matching it.
+Images are pinned inside their manifests; Metal3 IPAM v1.14.3 pins
+`quay.io/metal3-io/ip-address-manager` by digest.
+
+IPAM tracks the CAPM3 release train: CAPM3 v1.14.3 requires the IPPool schema of
+v1.14.3, which adds `allocationStrategy`. Vendoring IPAM v1.9.6 silently dropped
+that field: an IPPool that sets it would have been pruned by the API server
+while CAPM3 believed the strategy was applied.
 
 ## Local patches
 
-`ipam.yaml` carries two local patches:
+None. The files are unmodified upstream artifacts, including the kustomize
+placeholders several of them carry (`capi-core.yaml`, `capi-bootstrap.yaml`,
+`capi-control-plane.yaml`, `capm3.yaml`, `ipam.yaml`).
 
-- The upstream release ships `${VAR:=default}` placeholders in the controller
-  args, which Kubernetes does not expand. They are replaced with their defaults
-  (`:8443`, `false`, `VersionTLS13`); without this the manager exits at startup
-  and the IPPool admission webhook never serves.
-- The upstream file assumes `capm3-system` already exists. A `Namespace`
-  document is prepended because the EPH applies each component file as one unit.
+## Variable expansion (not a patch)
+
+Upstream publishes these manifests as kustomize output *before* variable
+substitution, so controller args contain text such as
+`--diagnostics-address=${CAPI_DIAGNOSTICS_ADDRESS:=:8443}` and
+`--feature-gates=MachinePool=${EXP_MACHINE_POOL:=true}`. Kubernetes does not
+expand `${VAR:=default}`: a plain `kubectl apply` hands the literal text to the
+container and the controller fails to parse its own flags. Editing the files
+would break their published checksums, so expansion happens at install time in
+`apps/eph_agent/control_stack_manifests.py` through
+`packages/agent_contracts/kustomize_vars.py`:
+
+- `${NAME:=default}` becomes the default, or an override when one is supplied;
+- `${NAME}` without a default is refused (`KUSTOMIZE_VAR_UNEXPANDED`) instead of
+  being applied as literal text.
+
+`tests/test_eph_agent_control_stack_manifests.py` asserts that every deployment
+arg the loader returns is fully expanded, and
+`tests/integration/kind_metal3_crds.sh` server-side dry-runs the expanded
+documents rather than the raw files.
 
 The other files are unmodified upstream release artifacts and declare their own
 namespaces as the first document.

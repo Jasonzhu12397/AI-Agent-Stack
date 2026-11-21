@@ -280,12 +280,24 @@ def _validate_executed_upgrade(command, result):
         result.get("execution_mode") != "execute"
         or result.get("approval_required") is not True
         or result.get("upgrade_simulated") is not False
-        or result.get("upgrade_performed") is not True
         or result.get("requires_manual_execution") is not False
         or result.get("resume_supported") is not False
         or result.get("side_effects") is not True
     ):
         return "Kubernetes upgrade result violates the execution safety contract."
+    if result.get("upgrade_performed") is not True:
+        # Nothing was upgraded. That is only acceptable as an explicit
+        # already-at-target retry, never as an upgrade that did nothing.
+        if result.get("upgrade_performed") is False and result.get(
+            "already_at_target"
+        ) is True:
+            performed = result.get("performed_steps") or []
+            if isinstance(performed, list) and any(
+                str(step).startswith(("control_plane", "worker")) for step in performed
+            ):
+                return "A retry that changed nothing cannot report upgraded nodes."
+        else:
+            return "Kubernetes upgrade result violates the execution safety contract."
     steps = result.get("upgrade_steps")
     if not isinstance(steps, list) or len(steps) != len(_UPGRADE_STEP_NAMES):
         return "Kubernetes upgrade execution must report the four ordered stages."

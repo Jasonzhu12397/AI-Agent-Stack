@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from agent_contracts.kustomize_vars import KustomizeVarError, expand_kustomize_vars
 
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 DEFAULT_MANIFEST_DIR = Path("/opt/addons/control-stack")
@@ -45,8 +46,14 @@ def load_component_manifests(
         if path.stat().st_size > MAX_MANIFEST_BYTES:
             raise ControlStackManifestError("CONTROL_STACK_MANIFEST_TOO_LARGE")
         try:
-            loaded = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, yaml.YAMLError) as exc:
+            text = expand_kustomize_vars(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ControlStackManifestError("CONTROL_STACK_MANIFEST_INVALID") from exc
+        except KustomizeVarError as exc:
+            raise ControlStackManifestError(exc.code) from exc
+        try:
+            loaded = list(yaml.safe_load_all(text))
+        except (ValueError, yaml.YAMLError) as exc:
             raise ControlStackManifestError("CONTROL_STACK_MANIFEST_INVALID") from exc
         docs = [item for item in loaded if isinstance(item, dict) and item]
         if not docs:

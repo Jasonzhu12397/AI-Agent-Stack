@@ -90,6 +90,7 @@ class UpgradeExecutor:
         self._last_preflight: dict[str, Any] = {"checks": [], "blocked": False}
         self._last_snapshot: dict[str, Any] | None = None
         self._etcd_pod = ""
+        self._already_at_target = False
         self._etcd_health: list[dict[str, Any]] = []
         self._etcd_health_attempts = max(1, int(etcd_health_attempts))
         self._etcd_health_interval = max(0.0, float(etcd_health_interval))
@@ -619,6 +620,9 @@ class UpgradeExecutor:
     def run(self, request: dict[str, str]) -> dict[str, Any]:
         target = request["target_version"]
         nodes = self._nodes()
+        self._already_at_target = all(
+            self._on_target(self._node_version(node), target) for node in nodes
+        )
         control_planes = [node for node in nodes if self._is_control_plane(node)]
         workers = [node for node in nodes if not self._is_control_plane(node)]
         if not control_planes:
@@ -681,6 +685,11 @@ class UpgradeExecutor:
             self._step(3, "workers", []),
             self._step(4, "postflight", ["kubectl get nodes -o wide"]),
         ]
+        if not local_upgrade_needed and not any(
+            argv_list for _peer, argv_list in peer_commands
+        ):
+            steps[1]["status"] = "skipped"
+            steps[1]["detail"] = f"every control plane already runs {target}"
         performed: list[str] = []
 
         preflight = self._preflight(
@@ -752,6 +761,12 @@ class UpgradeExecutor:
         for node in workers:
             name = self._node_name(node)
             address = self._node_address(node)
+            if self._on_target(self._node_version(node), target):
+                note = f"{name}: already on {target}, skipped"
+                worker_step["detail"] = "; ".join(
+                    part for part in (worker_step["detail"], note) if part
+                )
+                continue
             if not name or not address:
                 worker_step["status"] = "failed"
                 worker_step["detail"] = f"node {name or '<unnamed>'} has no InternalIP"
@@ -798,6 +813,13 @@ class UpgradeExecutor:
         if not workers:
             worker_step["status"] = "skipped"
             worker_step["detail"] = "the cluster has no worker nodes"
+        elif not [item for item in performed if item.startswith("worker:")]:
+            worker_step["status"] = "skipped"
+            worker_step["detail"] = "; ".join(
+                part
+                for part in (worker_step["detail"], f"every worker already on {target}")
+                if part
+            )
 
         postflight = self._execute_step(steps[3], ["kubectl", "get", "nodes", "-o", "json"], 60)
         if not postflight:
@@ -842,6 +864,10 @@ class UpgradeExecutor:
                 or step.startswith("worker:")
                 for step in performed
             ),
+            # A retry of an upgrade that already finished changes nothing. The
+            # platform needs that stated, or it cannot tell a no-op retry from a
+            # run that quietly failed to upgrade anything.
+            "already_at_target": self._already_at_target,
             "requires_manual_execution": False,
             "resume_supported": False,
             "performed_steps": performed,

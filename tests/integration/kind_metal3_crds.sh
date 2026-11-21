@@ -19,6 +19,9 @@ done
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.3}"
 CERT_MANAGER_URL="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 
+split_dir="$(mktemp -d)"
+trap 'rm -rf "${split_dir}"' EXIT
+
 for namespace in capm3-system sriov-network-operator metal3; do
   "${KUBECTL}" create namespace "${namespace}" --dry-run=client -o yaml \
     | "${KUBECTL}" apply -f -
@@ -31,22 +34,38 @@ echo "Installing cert-manager ${CERT_MANAGER_VERSION} (IPAM webhook prerequisite
 "${KUBECTL}" rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
 "${KUBECTL}" rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
 
-echo "Applying Metal3 IPAM manifests"
-"${KUBECTL}" apply -f "${IPAM_MANIFEST}"
+# Vendored release artifacts carry kustomize placeholders (``${VAR:=default}``)
+# that Kubernetes does not expand, so the check applies the same expansion the
+# EPH installer performs. Applying the raw file would only dry-run literal text.
+expand_manifest() {
+  python3 - "${ROOT_DIR}" "$1" "$2" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "packages"))
+from agent_contracts.kustomize_vars import expand_kustomize_vars
+
+Path(sys.argv[3]).write_text(
+    expand_kustomize_vars(Path(sys.argv[2]).read_text(encoding="utf-8"))
+)
+PY
+}
+
+echo "Applying Metal3 IPAM manifests (expanded)"
+expand_manifest "${IPAM_MANIFEST}" "${split_dir}/ipam-expanded.yaml"
+"${KUBECTL}" apply -f "${split_dir}/ipam-expanded.yaml"
 # The IPPool admission webhook must actually answer: a dry-run that skips it
 # would only prove the structural schema, not that real admission accepts the
 # platform's rendered pools.
 echo "Waiting for the IPAM webhook to serve requests"
 "${KUBECTL}" wait --for condition=Ready --timeout=180s \
-  certificate/ipam-serving-cert -n capm3-system
+  certificate/ipam-serving-cert -n metal3-ipam-system
 "${KUBECTL}" rollout status deployment/ipam-controller-manager \
-  -n capm3-system --timeout=240s
+  -n metal3-ipam-system --timeout=240s
 
 echo "Applying SR-IOV CRDs first, then the operator resources"
 # kubectl discovery cannot resolve SriovOperatorConfig in the same batch that
 # creates its CRD, so mirror the production installer's two-phase apply.
-split_dir="$(mktemp -d)"
-trap 'rm -rf "${split_dir}"' EXIT
 awk -v dir="${split_dir}" '
   BEGIN { n = 0; file = sprintf("%s/doc-%03d.yaml", dir, n) }
   /^--- *$/ { n++; file = sprintf("%s/doc-%03d.yaml", dir, n); next }
@@ -174,7 +193,8 @@ for namespace in \
 done
 for manifest in "${ROOT_DIR}"/deploy/offline/addons/control-stack/*.yaml; do
   echo "  $(basename "${manifest}")"
-  "${KUBECTL}" apply --dry-run=server -f "${manifest}" >/dev/null
+  expand_manifest "${manifest}" "${split_dir}/expanded.yaml"
+  "${KUBECTL}" apply --dry-run=server -f "${split_dir}/expanded.yaml" >/dev/null
 done
 echo "All control-stack manifests are accepted by the API server"
 
