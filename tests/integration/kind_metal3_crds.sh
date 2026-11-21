@@ -240,36 +240,89 @@ document = module.render_ironic_cr(
 )
 Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
 PY
-# Validate the rendered CR against the schema of the CRD that is installed right
-# above it. ``--validate=true`` asks kubectl to fetch that schema and check the
-# document, which is the check that matters: is this an acceptable Ironic
-# object? A server dry-run would additionally round-trip the created object
-# through kubectl's printers, and that printer reads the CRD's
-# additionalPrinterColumns (``.status.conditions``) on a freshly rendered object
-# that has no status yet -- it intermittently fails on that alone, after the API
-# server already accepted the object, which turns the gate into a coin flip.
-"${KUBECTL}" apply --dry-run=client --validate=true \
-  -f "${split_dir}/rendered-ironic-cr.yaml" 2> "${split_dir}/ironic-cr-validation.log"
-if grep -q "no matches for kind" "${split_dir}/ironic-cr-validation.log"; then
-  cat "${split_dir}/ironic-cr-validation.log"
-  echo "The Ironic CRD is not discoverable by kubectl; the CR cannot be validated" >&2
-  exit 1
-fi
-# Prove the gate is live: an object with a wrongly typed field must be rejected.
-# Without this check a kubectl that silently skips CR validation would pass every
-# manifest, which is the same as having no gate at all.
-python3 - "${split_dir}/rendered-ironic-cr.yaml" "${split_dir}/broken-ironic-cr.yaml" <<'PY'
+# Server-side dry-run is the only check that applies the real CRD schema, and it
+# has to be made through the API server directly: kubectl's dry-run round trip
+# prints the object it created, and its printer reads the CRD's
+# additionalPrinterColumns (``.status.conditions``) on an object that has no
+# status yet, failing intermittently *after* the API server accepted the object.
+# kubectl's ``--validate=true`` is not an alternative either: for custom
+# resources it silently skips validation, which the probe below detects.
+#
+# So: start a local proxy (it carries the cluster credentials), POST the object
+# with ``?dryRun=All``, and judge the HTTP status alone.
+python3 - "${split_dir}/rendered-ironic-cr.yaml" "${split_dir}/rendered-ironic-cr.json" <<'PY'
+import json
 import sys
 from pathlib import Path
 
 import yaml
 
 document = yaml.safe_load(Path(sys.argv[1]).read_text())
-document["spec"]["version"] = 37.0
-Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
+Path(sys.argv[2]).write_text(json.dumps(document))
 PY
-if "${KUBECTL}" apply --dry-run=client --validate=true \
-    -f "${split_dir}/broken-ironic-cr.yaml" >/dev/null 2>&1; then
-  echo "kubectl accepted a wrongly typed Ironic field; CRD schema validation is not active" >&2
-  exit 1
-fi
+
+api_path_for() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+document = json.loads(open(sys.argv[1]).read())
+version = document["apiVersion"]
+kind = document["kind"].lower()
+namespace = document["metadata"].get("namespace")
+group, _, api_version = version.partition("/")
+resource = kind + "s"
+if namespace:
+    print(f"/apis/{group}/{api_version}/namespaces/{namespace}/{resource}?dryRun=All")
+else:
+    print(f"/apis/{group}/{api_version}/{resource}?dryRun=All")
+PY
+}
+
+dry_run_status() {
+  curl -sS -o "${split_dir}/dry-run-response.json" -w '%{http_code}' \
+    -X POST "http://127.0.0.1:8010$(api_path_for "$1")" \
+    -H 'Content-Type: application/json' --data-binary @"$1"
+}
+
+"${KUBECTL}" proxy --port=8010 >/dev/null 2>&1 &
+proxy_pid=$!
+trap 'kill "${proxy_pid}" 2>/dev/null; rm -rf "${split_dir}"' EXIT
+for _ in $(seq 1 40); do
+  if curl -sf "http://127.0.0.1:8010/version" >/dev/null 2>&1; then break; fi
+  sleep 0.25
+done
+
+status=$(dry_run_status "${split_dir}/rendered-ironic-cr.json")
+case "${status}" in
+  200|201) echo "The API server accepts the platform-rendered Ironic CR (dry run)" ;;
+  *)
+    cat "${split_dir}/dry-run-response.json" >&2
+    echo "The API server rejected the platform-rendered Ironic CR (HTTP ${status})" >&2
+    exit 1
+    ;;
+esac
+
+# Prove the gate is live: the same POST with a wrongly typed field must be
+# rejected. Without this, a proxy or a skipped handler would look like success.
+python3 - "${split_dir}/rendered-ironic-cr.json" "${split_dir}/broken-ironic-cr.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+document = json.loads(Path(sys.argv[1]).read_text())
+document["spec"]["version"] = 37.0
+Path(sys.argv[2]).write_text(json.dumps(document))
+PY
+broken_status=$(dry_run_status "${split_dir}/broken-ironic-cr.json")
+case "${broken_status}" in
+  200|201)
+    echo "The API server accepted a wrongly typed Ironic field; the dry-run gate is not active" >&2
+    exit 1
+    ;;
+  *) echo "The dry-run gate rejects an invalid Ironic CR (HTTP ${broken_status})" ;;
+esac
+
+kill "${proxy_pid}" 2>/dev/null || true
+wait "${proxy_pid}" 2>/dev/null || true
+trap 'rm -rf "${split_dir}"' EXIT
