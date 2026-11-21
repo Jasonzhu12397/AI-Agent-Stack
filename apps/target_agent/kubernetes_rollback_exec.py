@@ -244,7 +244,11 @@ class RollbackExecutor:
         }
 
     def _execute(self, step: dict[str, Any], argv: list[str], timeout: int) -> bool:
-        step["commands"].append(" ".join(argv))
+        command = " ".join(argv)
+        # The step already lists the planned command; record the executed one
+        # once so evidence and plan cannot drift apart.
+        if command not in step["commands"]:
+            step["commands"].append(command)
         result = self._run(argv, timeout=timeout)
         step["exit_code"] = result.get("returncode")
         ok = self._ok(result)
@@ -280,6 +284,10 @@ class RollbackExecutor:
         self._restore_dir = restore_dir_for(request)
         self._member_backup = member_backup_for(self._restore_dir)
         steps = planned_steps(request, restore_dir=self._restore_dir)
+        # The plan carries placeholders (``<etcd-pod>``, ``<utc>``); an executed
+        # step must list what really ran instead of both.
+        for step in steps:
+            step["commands"] = []
         performed: list[str] = []
 
         preflight = {"checks": assessment["checks"], "blocked": assessment["blocked"]}
@@ -289,6 +297,18 @@ class RollbackExecutor:
             f"{len(preflight['checks'])} checks passed"
         )
         steps[0]["exit_code"] = 0 if not preflight["blocked"] else 1
+        steps[0]["commands"] = [
+            "kubectl get nodes -o json",
+            " ".join(
+                [
+                    *self._upgrade._etcdctl_argv(etcd_pod),
+                    "snapshot",
+                    "status",
+                    request["snapshot_path"],
+                    "--write-out=json",
+                ]
+            ),
+        ]
         if preflight["blocked"]:
             return self._result(
                 request, steps, preflight, performed, "ROLLBACK_PREFLIGHT_BLOCKED"
@@ -354,7 +374,6 @@ class RollbackExecutor:
             return self._result(
                 request, steps, preflight, performed, "ROLLBACK_KUBELET_START_FAILED"
             )
-        steps[3]["commands"] = ["sudo systemctl start kubelet"]
         api_ok, api_detail = self._wait_for_api()
         steps[3]["detail"] = api_detail
         if not api_ok:
@@ -365,7 +384,6 @@ class RollbackExecutor:
         steps[3]["status"] = "succeeded"
         performed.append("kubelet_restart")
 
-        steps[4]["commands"] = []
         try:
             nodes_after = self._nodes()
         except RollbackExecutionError as error:

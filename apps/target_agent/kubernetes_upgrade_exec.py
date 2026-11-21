@@ -491,6 +491,17 @@ class UpgradeExecutor:
             )
         ]
 
+    @staticmethod
+    def _snapshot_pod(pods: list[dict[str, Any]], local_node: str) -> str:
+        """The etcd pod on the local control plane, else the first one."""
+
+        for item in pods:
+            if str((item.get("spec") or {}).get("nodeName")) == local_node:
+                name = str((item.get("metadata") or {}).get("name") or "")
+                if name:
+                    return name
+        return str((pods[0].get("metadata") or {}).get("name") or "")
+
     def _etcd_snapshot_checks(
         self, local_node: str, target: str
     ) -> list[dict[str, Any]]:
@@ -512,7 +523,35 @@ class UpgradeExecutor:
                 ]
             max_age = _snapshot_max_age_hours()
             taken = age_hours <= max_age
-            if taken:
+            # A file that exists is not a snapshot that can be restored: the
+            # restore reads it inside the etcd pod, so verify it there.
+            pod = self._snapshot_pod(pods, local_node)
+            verified = False
+            detail = "no etcd pod to verify the snapshot in"
+            if pod and taken:
+                probe = self._runner(
+                    [
+                        *self._etcdctl_argv(pod),
+                        "snapshot",
+                        "status",
+                        supplied,
+                        "--write-out=json",
+                    ],
+                    timeout=60,
+                )
+                body = (probe.get("stdout") or "").strip()
+                verified = (
+                    probe.get("available", True)
+                    and probe.get("returncode") == 0
+                    and body.startswith("{")
+                    and "hash" in body
+                )
+                detail = (
+                    "snapshot status verified it"
+                    if verified
+                    else f"snapshot status could not verify it: {_output(probe)}"
+                )
+            if taken and verified:
                 self._last_snapshot = {
                     "path": supplied,
                     "verified": True,
@@ -521,17 +560,11 @@ class UpgradeExecutor:
             return [
                 self._check(
                     "etcd.snapshot",
-                    taken,
-                    f"reusing {supplied} ({age_hours:.1f}h old, limit {max_age}h)",
+                    taken and verified,
+                    f"reusing {supplied} ({age_hours:.1f}h old, limit {max_age}h): {detail}",
                 )
             ]
-        pod = ""
-        for item in pods:
-            if str((item.get("spec") or {}).get("nodeName")) == local_node:
-                pod = str((item.get("metadata") or {}).get("name") or "")
-                break
-        if not pod:
-            pod = str((pods[0].get("metadata") or {}).get("name") or "")
+        pod = self._snapshot_pod(pods, local_node)
         if not pod:
             return [
                 self._check("etcd.snapshot", False, "no etcd pod name to run etcdctl in")
@@ -891,8 +924,11 @@ class UpgradeExecutor:
                     }
                 )
             etcd["members"] = members
-            etcd["healthy"] = bool(members) and all(
-                member["healthy"] for member in members
+            etcd["stacked"] = bool(members)
+            # No stacked etcd (external etcd) is not a degraded cluster; saying
+            # so would send an operator looking for members that never existed.
+            etcd["healthy"] = (
+                all(member["healthy"] for member in members) if members else None
             )
             if members and not etcd["healthy"]:
                 warnings.append("at least one etcd member is not healthy")

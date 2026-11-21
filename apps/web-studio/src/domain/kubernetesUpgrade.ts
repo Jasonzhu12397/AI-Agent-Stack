@@ -54,7 +54,8 @@ export interface KubernetesRecoveryReport {
   observedAt: string;
   nodes: KubernetesRecoveryNode[];
   drift: number;
-  etcdHealthy: boolean;
+  etcdHealthy: boolean | null;
+  etcdStacked: boolean;
   etcdMembers: { pod: string; node: string; healthy: boolean; detail: string }[];
   snapshots: { name: string; bytes: number; taken: string }[];
   warnings: string[];
@@ -85,7 +86,8 @@ export function getKubernetesRecoveryReport(
       onTarget: node.on_target === true,
     })).filter((node) => node.name !== ""),
     drift: typeof result.drift === "number" ? result.drift : 0,
-    etcdHealthy: etcd.healthy === true,
+    etcdHealthy: etcd.healthy === true ? true : etcd.healthy === false ? false : null,
+    etcdStacked: etcd.stacked === true,
     etcdMembers: toRecords(etcd.members).map((member) => ({
       pod: typeof member.pod === "string" ? member.pod : "",
       node: typeof member.node === "string" ? member.node : "",

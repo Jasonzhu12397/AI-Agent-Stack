@@ -96,3 +96,16 @@ test("recovery report stays null for an absent or malformed payload", async () =
   assert.equal(getKubernetesRecoveryReport(null), null);
   assert.equal(getKubernetesRecoveryReport({ nodes: "nope" }), null);
 });
+
+test("an external etcd is neither healthy nor degraded", async () => {
+  const { getKubernetesRecoveryReport } = await import("../src/domain/kubernetesUpgrade.ts");
+  const report = getKubernetesRecoveryReport({
+    target_version: "v1.34.1",
+    nodes: [{ name: "cp-0", role: "control-plane", version: "v1.34.1", on_target: true }],
+    etcd: { available: true, stacked: false, healthy: null, members: [] },
+    snapshots: { entries: [] },
+    warnings: [],
+  });
+  assert.equal(report.etcdHealthy, null);
+  assert.equal(report.etcdStacked, false);
+});

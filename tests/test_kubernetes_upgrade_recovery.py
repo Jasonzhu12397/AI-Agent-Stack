@@ -126,6 +126,10 @@ def test_report_degrades_when_etcd_and_the_snapshot_dir_are_unreadable():
     report = UpgradeExecutor(runner).report_recovery("v1.34.1")
 
     assert report["drift"] == 1
+    # No stacked etcd is not a degraded etcd: it must not be reported as broken.
+    assert report["etcd"]["available"] is True
+    assert report["etcd"]["stacked"] is False
+    assert report["etcd"]["healthy"] is None
     assert report["snapshots"]["directory"] == DEFAULT_ETCD_SNAPSHOT_DIR
     assert report["snapshots"]["error"]
     assert "is unreadable" in report["warnings"][0]

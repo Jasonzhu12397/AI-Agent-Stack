@@ -1835,7 +1835,7 @@ onUnmounted(() => {
                 </li>
               </ul>
               <p class="fleet-preflight-hint">
-                etcd: {{ recoveryReport(command.node_id)?.etcdHealthy ? "healthy" : "degraded or unreadable" }}
+                etcd: {{ recoveryReport(command.node_id)?.etcdHealthy === null ? "external etcd (no stacked members)" : recoveryReport(command.node_id)?.etcdHealthy ? "healthy" : "degraded or unreadable" }}
                 · {{ recoveryReport(command.node_id)?.etcdMembers.length }} member(s)
                 · {{ recoveryReport(command.node_id)?.snapshots.length }} snapshot(s)
               </p>

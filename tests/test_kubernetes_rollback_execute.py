@@ -231,3 +231,13 @@ def test_assessment_reports_three_control_planes_without_touching_them():
     assert [check["name"] for check in assessed["checks"]] == [
         "cluster.control_plane.count"
     ]
+
+
+def test_a_step_never_lists_the_same_command_twice():
+    runner = RollbackRunner()
+    result = RollbackExecutor(runner, api_wait_attempts=1).run(REQUEST)
+
+    for step in result["steps"]:
+        assert len(step["commands"]) == len(set(step["commands"]))
+    assert "sudo systemctl start kubelet" in result["steps"][3]["commands"]
+    assert "sudo systemctl stop kubelet" in result["steps"][2]["commands"]

@@ -57,6 +57,8 @@ class FakeRunner:
             return json.dumps({"items": []})
         if "component=etcd" in joined:
             return json.dumps({"items": []})
+        if "status" in argv and "snapshot" in argv:
+            return '{"hash":"sha256:abc","revision":42}'
         return self._nodes
 
     """A cluster that reports the new kubelet version once kubeadm applied it."""
@@ -73,6 +75,13 @@ class FakeRunner:
 
     def __call__(self, argv, timeout=20, **kwargs):
         self.calls.append(list(argv))
+        if "snapshot" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": '{"hash":"sha256:abc","revision":42}',
+                "stderr": "",
+            }
         if argv and argv[0] == "kubectl" and "get" in argv:
             return {"available": True, "returncode": 0, "stdout": self._answer(argv), "stderr": ""}
         if self._fail_when is not None and self._fail_when(argv):
@@ -401,6 +410,13 @@ def _nodes_with(node_overrides, *, config_version="v1.33.4", pdb=None, etcd=Fals
             }
         if argv[:3] == ["kubeadm", "upgrade", "apply"]:
             return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        if "snapshot" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": '{"hash":"sha256:abc","revision":42}',
+                "stderr": "",
+            }
         return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
 
     runner.calls = []
@@ -526,7 +542,8 @@ def test_a_supplied_snapshot_is_reused_instead_of_taking_a_new_one(monkeypatch, 
     result = UpgradeExecutor(runner).run(REQUEST)
 
     assert result["etcd_snapshot"] == {"path": str(supplied), "verified": True, "taken": False}
-    assert not [call for call in runner.calls if "snapshot" in call]
+    assert not [call for call in runner.calls if "snapshot restore" in " ".join(call)]
+    assert any("status" in call for call in runner.calls)
 
     import os
     import time
@@ -538,6 +555,30 @@ def test_a_supplied_snapshot_is_reused_instead_of_taking_a_new_one(monkeypatch, 
     assert stale["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
     failed = {check["name"] for check in stale["preflight"]["checks"] if not check["ok"]}
     assert "etcd.snapshot" in failed
+
+
+def test_a_supplied_snapshot_that_does_not_verify_blocks_the_upgrade(monkeypatch, tmp_path):
+    supplied = tmp_path / "etcd.db"
+    supplied.write_bytes(b"not a snapshot")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(supplied))
+    base = _nodes_with(_raw_nodes(), etcd=True)
+
+    def runner(argv, timeout=20, **kwargs):
+        if "snapshot" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "snapshot file integrity error",
+            }
+        return base(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "integrity error" in failed["etcd.snapshot"]["detail"]
+    assert result["etcd_snapshot"] is None
 
 
 def test_a_pod_disruption_budget_at_zero_blocks_the_preflight():
