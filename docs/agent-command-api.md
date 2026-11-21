@@ -101,9 +101,17 @@ Before `kubeadm upgrade plan`, the preflight stage checks the cluster facts an
 upgrade depends on and records each one in `preflight.checks`: every node
 `Ready=True`, no node cordoned, the `kube-system/kubeadm-config` version on the
 same minor the cluster reports, every PodDisruptionBudget has disruptions
-available, and — when stacked etcd is present — a snapshot newer than
-`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS` (default 24) at
-`KUBERNETES_UPGRADE_ETCD_SNAPSHOT`. Any failed check stops the run with
+available, and `etcd.snapshot`: stacked etcd is backed up automatically. The
+Agent runs `etcdctl snapshot save` inside the etcd pod on the local control
+plane into `KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR` (default
+`/var/lib/etcd/backups`, the host data directory the pod mounts at the same
+path, so the file survives a failed upgrade) and reads it back with
+`etcdctl snapshot status` — a snapshot that cannot be read is not a backup. To
+reuse an existing backup instead, set `KUBERNETES_UPGRADE_ETCD_SNAPSHOT`; it is
+then accepted only while newer than
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS` (default 24). The path, whether
+it was taken now and its verification are returned as `etcd_snapshot`. The
+preflight writes only this backup file. Any failed check stops the run with
 `UPGRADE_PREFLIGHT_BLOCKED` and the failing detail, before anything is drained.
 
 Package upgrade is part of the same stages, not a manual preamble: set

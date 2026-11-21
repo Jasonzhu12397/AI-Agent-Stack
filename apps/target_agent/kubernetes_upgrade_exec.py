@@ -4,6 +4,9 @@ The contract module decides whether a request is legal and describes what an
 upgrade would do. This module is the only place that touches a live cluster, and
 it is deliberately narrow:
 
+* stacked etcd is backed up by the agent itself before anything changes
+    (``etcdctl snapshot save`` inside the etcd pod, then ``snapshot status``);
+    the preflight writes only that backup file;
 * the Target Agent upgrades the control plane it is running beside
     (``kubeadm upgrade apply``);
 * workers are upgraded through an explicitly configured remote executor
@@ -35,6 +38,8 @@ from typing import Any
 REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
 LOCAL_NODE_ENV = "KUBERNETES_UPGRADE_LOCAL_NODE"
 ETCD_SNAPSHOT_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT"
+ETCD_SNAPSHOT_DIR_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR"
+DEFAULT_ETCD_SNAPSHOT_DIR = "/var/lib/etcd/backups"
 ETCD_SNAPSHOT_MAX_AGE_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS"
 DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS = 24.0
 PACKAGE_MANAGER_ENV = "KUBERNETES_UPGRADE_PACKAGE_MANAGER"
@@ -74,6 +79,7 @@ class UpgradeExecutor:
             os.environ.get(PACKAGE_MANAGER_ENV, "").strip()
         )
         self._last_preflight: dict[str, Any] = {"checks": [], "blocked": False}
+        self._last_snapshot: dict[str, Any] | None = None
 
     # -- cluster facts ---------------------------------------------------
     def _nodes(self) -> list[dict[str, Any]]:
@@ -325,40 +331,140 @@ class UpgradeExecutor:
             )
         ]
 
-    def _etcd_snapshot_checks(self) -> list[dict[str, Any]]:
+    def _etcd_pods(self) -> list[dict[str, Any]]:
+        """Stacked etcd members, with the node each one runs on."""
+
         pods = self._runner(
             ["kubectl", "-n", "kube-system", "get", "pods", "-l", "component=etcd", "-o", "json"],
             timeout=60,
         )
-        etcd_present = False
-        if pods.get("available", True) and pods.get("returncode") == 0:
-            try:
-                etcd_present = bool(json.loads(pods.get("stdout") or "").get("items"))
-            except ValueError:
-                etcd_present = False
-        if not etcd_present:
+        if not pods.get("available", True) or pods.get("returncode") != 0:
+            raise UpgradeExecutionError("UPGRADE_ETCD_UNREADABLE", _output(pods))
+        try:
+            items = json.loads(pods.get("stdout") or "").get("items") or []
+        except ValueError as exc:
+            raise UpgradeExecutionError("UPGRADE_ETCD_UNREADABLE", str(exc)) from exc
+        return [item for item in items if isinstance(item, dict)]
+
+    ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
+
+    def _snapshot_argv(self, pod: str) -> list[str]:
+        return [
+            "kubectl",
+            "-n",
+            "kube-system",
+            "exec",
+            pod,
+            "--",
+            "etcdctl",
+            "--endpoints=https://127.0.0.1:2379",
+            f"--cacert={self.ETCD_PKI_DIR}/ca.crt",
+            f"--cert={self.ETCD_PKI_DIR}/server.crt",
+            f"--key={self.ETCD_PKI_DIR}/server.key",
+        ]
+
+    def _take_etcd_snapshot(
+        self, pod: str, local_node: str, target: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Back up stacked etcd to a verified file before anything is upgraded.
+
+        The file is written through the etcd pod, which mounts the host data
+        directory at the same path, so it survives on the host even if the
+        upgrade fails. The snapshot is then read back with ``snapshot status``:
+        a snapshot that cannot be read is not a backup.
+        """
+
+        directory = os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip() or (
+            DEFAULT_ETCD_SNAPSHOT_DIR
+        )
+        name = f"snapshot-pre-{target}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.db"
+        path = f"{directory.rstrip('/')}/{name}"
+        if not os.path.isabs(path) or ".." in path:
+            return None, self._check(
+                "etcd.snapshot",
+                False,
+                f"{ETCD_SNAPSHOT_DIR_ENV} must be an absolute directory",
+            )
+        mkdir = self._runner(["sudo", "mkdir", "-p", directory], timeout=60)
+        if not mkdir.get("available", True) or mkdir.get("returncode") != 0:
+            return None, self._check(
+                "etcd.snapshot",
+                False,
+                f"cannot create {directory}: " + (_output(mkdir) or "mkdir failed"),
+            )
+        save = self._runner(
+            [*self._snapshot_argv(pod), "snapshot", "save", path],
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        if not save.get("available", True) or save.get("returncode") != 0:
+            return None, self._check(
+                "etcd.snapshot",
+                False,
+                f"snapshot save failed on {local_node}: " + (_output(save) or "no output"),
+            )
+        status = self._runner(
+            [*self._snapshot_argv(pod), "snapshot", "status", path],
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        if not status.get("available", True) or status.get("returncode") != 0:
+            return None, self._check(
+                "etcd.snapshot",
+                False,
+                f"snapshot {path} is not readable: " + (_output(status) or "no output"),
+            )
+        snapshot = {"path": path, "verified": True, "taken": True}
+        return snapshot, self._check(
+            "etcd.snapshot", True, f"took {path} and verified it"
+        )
+
+    def _etcd_snapshot_checks(
+        self, local_node: str, target: str
+    ) -> list[dict[str, Any]]:
+        try:
+            pods = self._etcd_pods()
+        except UpgradeExecutionError as error:
+            return [self._check("etcd.snapshot", False, f"{error.code}: {error.detail}")]
+        if not pods:
             return [self._check("etcd.snapshot", True, "no stacked etcd on this cluster")]
-        path = os.environ.get(ETCD_SNAPSHOT_ENV, "").strip()
-        if not path:
+        supplied = os.environ.get(ETCD_SNAPSHOT_ENV, "").strip()
+        if supplied:
+            try:
+                age_hours = (time.time() - os.stat(supplied).st_mtime) / 3600
+            except OSError:
+                return [
+                    self._check(
+                        "etcd.snapshot", False, f"{supplied} is not readable"
+                    )
+                ]
+            max_age = _snapshot_max_age_hours()
+            taken = age_hours <= max_age
+            if taken:
+                self._last_snapshot = {
+                    "path": supplied,
+                    "verified": True,
+                    "taken": False,
+                }
             return [
                 self._check(
                     "etcd.snapshot",
-                    False,
-                    f"set {ETCD_SNAPSHOT_ENV} to a recent etcd snapshot before upgrading",
+                    taken,
+                    f"reusing {supplied} ({age_hours:.1f}h old, limit {max_age}h)",
                 )
             ]
-        try:
-            age_hours = (time.time() - os.stat(path).st_mtime) / 3600
-        except OSError:
-            return [self._check("etcd.snapshot", False, f"{path} is not readable")]
-        max_age = _snapshot_max_age_hours()
-        return [
-            self._check(
-                "etcd.snapshot",
-                age_hours <= max_age,
-                f"{path} is {age_hours:.1f}h old (limit {max_age}h)",
-            )
-        ]
+        pod = ""
+        for item in pods:
+            if str((item.get("spec") or {}).get("nodeName")) == local_node:
+                pod = str((item.get("metadata") or {}).get("name") or "")
+                break
+        if not pod:
+            pod = str((pods[0].get("metadata") or {}).get("name") or "")
+        if not pod:
+            return [
+                self._check("etcd.snapshot", False, "no etcd pod name to run etcdctl in")
+            ]
+        snapshot, check = self._take_etcd_snapshot(pod, local_node, target)
+        self._last_snapshot = snapshot
+        return [check]
 
     def _ssh_reachability_checks(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Prove every remote node answers ssh before anything local changes.
@@ -403,13 +509,14 @@ class UpgradeExecutor:
         self,
         request: dict[str, str],
         nodes: list[dict[str, Any]],
+        local_node: str,
         remote_nodes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         checks = [
             *self._handler_ready(nodes),
             *self._kubeadm_config_checks(request["current_version"]),
             *self._pod_disruption_checks(),
-            *self._etcd_snapshot_checks(),
+            *self._etcd_snapshot_checks(local_node, request["target_version"]),
             *self._ssh_reachability_checks(remote_nodes or []),
         ]
         failed = [check for check in checks if not check["ok"]]
@@ -505,6 +612,7 @@ class UpgradeExecutor:
         preflight = self._preflight(
             request,
             nodes,
+            local_name,
             [
                 node
                 for node in [*peers, *workers]
@@ -658,6 +766,7 @@ class UpgradeExecutor:
             "resume_supported": False,
             "performed_steps": performed,
             "preflight": self._last_preflight,
+            "etcd_snapshot": self._last_snapshot,
             "package_upgrade": (
                 "configured" if self._package_configured else "skipped_unconfigured"
             ),
@@ -678,6 +787,7 @@ def _snapshot_max_age_hours() -> float:
 
 
 __all__ = [
+    "ETCD_SNAPSHOT_DIR_ENV",
     "ETCD_SNAPSHOT_ENV",
     "LOCAL_NODE_ENV",
     "PACKAGE_MANAGER_ENV",

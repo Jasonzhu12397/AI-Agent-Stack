@@ -454,31 +454,90 @@ def test_a_kubeadm_config_on_another_minor_blocks_the_preflight():
     assert "kubeadm-config.version" in failed
 
 
-def test_stacked_etcd_requires_a_recent_snapshot(monkeypatch, tmp_path):
-    monkeypatch.delenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", raising=False)
+def test_stacked_etcd_is_backed_up_and_verified_before_the_upgrade():
     runner = _nodes_with(_raw_nodes(), etcd=True)
     result = UpgradeExecutor(runner).run(REQUEST)
 
-    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
-    assert "etcd.snapshot" in failed
+    snapshot = result["etcd_snapshot"]
+    assert snapshot["taken"] is True
+    assert snapshot["verified"] is True
+    assert snapshot["path"].startswith("/var/lib/etcd/backups/snapshot-pre-v1.34.1-")
+    assert ["sudo", "mkdir", "-p", "/var/lib/etcd/backups"] in runner.calls
+    saved = [call for call in runner.calls if "snapshot" in call and "save" in call]
+    checked = [call for call in runner.calls if "snapshot" in call and "status" in call]
+    assert saved and saved[0][-1] == snapshot["path"]
+    assert checked and checked[0][-1] == snapshot["path"]
+    etcd_check = next(
+        check for check in result["preflight"]["checks"] if check["name"] == "etcd.snapshot"
+    )
+    assert etcd_check["ok"] is True
 
-    snapshot = tmp_path / "etcd.db"
-    snapshot.write_bytes(b"snapshot")
-    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(snapshot))
-    fresh = UpgradeExecutor(_nodes_with(_raw_nodes(), etcd=True)).run(REQUEST)
-    fresh_failed = {check["name"] for check in fresh["preflight"]["checks"] if not check["ok"]}
-    assert "etcd.snapshot" not in fresh_failed
+
+def test_a_snapshot_that_cannot_be_saved_blocks_the_upgrade():
+    base = _nodes_with(_raw_nodes(), etcd=True)
+
+    def runner(argv, timeout=20, **kwargs):
+        if "snapshot" in argv and "save" in argv:
+            return {"available": True, "returncode": 1, "stdout": "", "stderr": "no auth"}
+        return base(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "no auth" in failed["etcd.snapshot"]["detail"]
+    assert result["etcd_snapshot"] is None
+
+
+def test_a_snapshot_that_cannot_be_read_back_blocks_the_upgrade():
+    base = _nodes_with(_raw_nodes(), etcd=True)
+
+    def runner(argv, timeout=20, **kwargs):
+        if "snapshot" in argv and "status" in argv:
+            return {"available": True, "returncode": 1, "stdout": "", "stderr": "bad file"}
+        return base(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "bad file" in failed["etcd.snapshot"]["detail"]
+
+
+def test_an_unreadable_etcd_list_blocks_the_upgrade():
+    base = _nodes_with(_raw_nodes(), etcd=True)
+
+    def runner(argv, timeout=20, **kwargs):
+        if "component=etcd" in " ".join(argv):
+            return {"available": True, "returncode": 1, "stdout": "", "stderr": "forbidden"}
+        return base(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "UPGRADE_ETCD_UNREADABLE" in failed["etcd.snapshot"]["detail"]
+
+
+def test_a_supplied_snapshot_is_reused_instead_of_taking_a_new_one(monkeypatch, tmp_path):
+    supplied = tmp_path / "etcd.db"
+    supplied.write_bytes(b"snapshot")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(supplied))
+    runner = _nodes_with(_raw_nodes(), etcd=True)
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["etcd_snapshot"] == {"path": str(supplied), "verified": True, "taken": False}
+    assert not [call for call in runner.calls if "snapshot" in call]
 
     import os
     import time
 
     old = time.time() - 72 * 3600
-    os.utime(snapshot, (old, old))
+    os.utime(supplied, (old, old))
     monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS", "24")
     stale = UpgradeExecutor(_nodes_with(_raw_nodes(), etcd=True)).run(REQUEST)
     assert stale["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
-    stale_failed = {check["name"] for check in stale["preflight"]["checks"] if not check["ok"]}
-    assert "etcd.snapshot" in stale_failed
+    failed = {check["name"] for check in stale["preflight"]["checks"] if not check["ok"]}
+    assert "etcd.snapshot" in failed
 
 
 def test_a_pod_disruption_budget_at_zero_blocks_the_preflight():
