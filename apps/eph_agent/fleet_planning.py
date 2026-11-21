@@ -20,7 +20,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .data_template import DataTemplateError, default_data_template
+from packages.agent_contracts.infra_networks import InfraNetworkError
+
+from .data_template import (
+    DataTemplateError,
+    default_data_template,
+    profile_data_template,
+)
 
 ROLE_LABEL = "ai-agent-stack.io/role"
 POOL_LABEL = "ai-agent-stack.io/pool"
@@ -213,8 +219,17 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
     ) and control_plane_endpoint:
         data_template = payload.get("data_template")
         if not isinstance(data_template, dict):
+            # The profile still carries bonds, VLANs and pools, so it renders the
+            # same document the platform would; the link-id-only fallback below
+            # cannot describe those and refuses instead of guessing.
+            profile = payload.get("infra_network_profile")
             network_spec = payload.get("network_spec")
-            if isinstance(network_spec, dict):
+            if isinstance(profile, dict):
+                try:
+                    data_template = profile_data_template(profile)
+                except (DataTemplateError, InfraNetworkError) as exc:
+                    raise PlanningError(str(exc)) from exc
+            elif isinstance(network_spec, dict):
                 try:
                     data_template = default_data_template(network_spec)
                 except DataTemplateError as exc:

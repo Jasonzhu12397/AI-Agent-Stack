@@ -236,3 +236,66 @@ def test_auto_waits_for_platform_pivot_and_worker_evidence(tmp_path):
     assert len(calls) == 2
     assert calls[0][0] == "stages"
     assert "--require-ready" in calls[0]
+
+
+def test_default_data_template_refuses_a_composite_control_plane_link():
+    # A VLAN or bond link cannot be declared as one physical port; the caller
+    # has to pass the renderer that knows the base link and its ports.
+    for interface in ("bond0.100", "bond0", "eno1.400"):
+        with pytest.raises(data_template.DataTemplateError) as error:
+            data_template.default_data_template(
+                {"control_plane_interface": interface}
+            )
+        assert str(error.value) == "METAL3_DATA_TEMPLATE_REQUIRED"
+
+
+PROFILE = {
+    "networks": [
+        {
+            "name": "control",
+            "role": "control",
+            "vlan": 100,
+            "cidr": "10.0.0.0/24",
+            "gateway_ipv4": "10.0.0.1",
+            "ip_pools": [{"start": "10.0.0.10", "end": "10.0.0.50"}],
+            "bond": {"name": "bond0", "interfaces": ["eno1", "eno2"], "mode": "802.3ad"},
+            "host_roles": ["control_plane", "worker"],
+        },
+        {
+            "name": "data",
+            "role": "data",
+            "cidr": "10.10.0.0/24",
+            "gateway_ipv4": "10.10.0.1",
+            "ip_pools": [{"start": "10.10.0.10", "end": "10.10.0.50"}],
+            "bond": {"name": "bond1", "interfaces": ["eno3", "eno4"], "mode": "802.3ad"},
+            "host_roles": ["worker"],
+        },
+        {
+            "name": "storage",
+            "role": "storage-internal",
+            "cidr": "10.20.0.0/24",
+            "gateway_ipv4": "10.20.0.1",
+            "ip_pools": [{"start": "10.20.0.10", "end": "10.20.0.50"}],
+            "interface": "eno5",
+            "host_roles": ["storage"],
+        },
+    ]
+}
+
+
+def test_profile_template_keeps_the_bond_and_vlan_links():
+    # The link id alone cannot describe this stack; the profile can, and the
+    # rendered networkData must name the same sub-interface nmstate does.
+    result = data_template.profile_data_template(PROFILE)
+
+    links = result["network_data"]["links"]
+    assert links["bonds"][0]["id"] == "bond0"
+    assert [item["id"] for item in links["vlans"]] == ["bond0.100"]
+    assert links["vlans"][0]["links"] == ["bond0"]
+    assert result["network_data"]["networks"]["ipv4"][0]["link"] == "bond0.100"
+
+
+def test_profile_template_refuses_an_profile_without_a_provisioning_plan():
+    with pytest.raises(Exception) as error:
+        data_template.profile_data_template({"networks": []})
+    assert "INFRA_NETWORK" in str(error.value)

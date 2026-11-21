@@ -364,3 +364,62 @@ def test_fleet_request_honours_requested_worker_replicas():
     assert evidence["worker_replicas"] == 2
     assert {item["node_type"] for item in evidence["hosts"]} == {"controlplane", "worker"}
     assert any("spare capacity" in warning for warning in evidence["fleet_plan"]["warnings"])
+
+
+def test_fleet_request_renders_the_template_from_the_declared_profile():
+    # The profile carries the bond and VLAN stack, so the data template must
+    # describe it instead of pretending the link id is one physical port.
+    payload = {
+        "cluster_name": "target",
+        "control_plane_count": 1,
+        "image_url": "http://registry.local/worker.raw",
+        "control_plane_endpoint": "10.0.0.50:6443",
+        "infra_network_profile": {
+            "networks": [
+                {
+                    "name": "control",
+                    "role": "control",
+                    "vlan": 100,
+                    "cidr": "10.0.0.0/24",
+                    "gateway_ipv4": "10.0.0.1",
+                    "ip_pools": [{"start": "10.0.0.10", "end": "10.0.0.50"}],
+                    "bond": {
+                        "name": "bond0",
+                        "interfaces": ["eno1", "eno2"],
+                        "mode": "802.3ad",
+                    },
+                    "host_roles": ["control_plane", "worker"],
+                },
+                {
+                    "name": "data",
+                    "role": "data",
+                    "cidr": "10.10.0.0/24",
+                    "gateway_ipv4": "10.10.0.1",
+                    "ip_pools": [{"start": "10.10.0.10", "end": "10.10.0.50"}],
+                    "interface": "eno3",
+                    "host_roles": ["worker"],
+                },
+                {
+                    "name": "storage",
+                    "role": "storage-internal",
+                    "cidr": "10.20.0.0/24",
+                    "gateway_ipv4": "10.20.0.1",
+                    "ip_pools": [{"start": "10.20.0.10", "end": "10.20.0.50"}],
+                    "interface": "eno4",
+                    "host_roles": ["storage"],
+                },
+            ],
+        },
+        "fleet": [
+            _request_machine("cp", cpu_cores=32, ram_mib=128 * 1024),
+            _request_machine("worker"),
+        ],
+    }
+    evidence = fp.plan_fleet_request(payload)
+    template = evidence["cluster_spec"]["control_plane_data_template"]
+    links = template["network_data"]["links"]
+
+    assert links["bonds"][0]["id"] == "bond0"
+    assert [item["id"] for item in links["vlans"]] == ["bond0.100"]
+    networks = template["network_data"]["networks"]["ipv4"]
+    assert networks[0]["link"] == "bond0.100"

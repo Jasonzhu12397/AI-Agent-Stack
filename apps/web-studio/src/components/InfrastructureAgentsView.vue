@@ -6,6 +6,10 @@ import {
   ironicWorkloadTemplate,
 } from "../domain/ironicWorkload.ts";
 import {
+  bmhInventoryVerdict,
+  ephPreflightVerdict,
+} from "../domain/preflightSnapshots.ts";
+import {
   approveAgentCommand,
   cancelClusterDeployment,
   createAgentCommand,
@@ -1363,11 +1367,15 @@ onUnmounted(() => {
                   </div>
                   <template v-if="deployment.preflight_result?.eph_preflight">
                     <el-tag
-                      :type="deployment.preflight_result.eph_preflight.eph_ready ? 'success' : 'warning'"
+                      :type="ephPreflightVerdict(deployment.preflight_result.eph_preflight).tone"
                       size="small"
                     >
-                      {{ deployment.preflight_result.eph_preflight.available ? (deployment.preflight_result.eph_preflight.eph_ready ? "EPH ready" : "EPH not ready") : "EPH preflight unavailable" }}
+                      {{ ephPreflightVerdict(deployment.preflight_result.eph_preflight).label }}
                     </el-tag>
+                    <small
+                      v-if="ephPreflightVerdict(deployment.preflight_result.eph_preflight).detail"
+                      class="readiness-blocked"
+                    >{{ ephPreflightVerdict(deployment.preflight_result.eph_preflight).detail }}</small>
                     <small>
                       Observed {{ formatTime(deployment.preflight_result.eph_preflight.observed_at) }}
                       · Synced {{ formatTime(deployment.preflight_result.eph_preflight.synced_at) }}
@@ -1401,11 +1409,15 @@ onUnmounted(() => {
                   </div>
                   <template v-if="deployment.preflight_result?.bmh_inventory_sync">
                     <el-tag
-                      :type="deployment.preflight_result.bmh_inventory_sync.available ? 'success' : 'info'"
+                      :type="bmhInventoryVerdict(deployment.preflight_result.bmh_inventory_sync).tone"
                       size="small"
                     >
-                      {{ deployment.preflight_result.bmh_inventory_sync.available ? deployment.preflight_result.bmh_inventory_sync.matched + " / " + deployment.preflight_result.bmh_inventory_sync.host_count + " host(s) matched" : "Inspection not run" }}
+                      {{ bmhInventoryVerdict(deployment.preflight_result.bmh_inventory_sync).label }}
                     </el-tag>
+                    <small
+                      v-if="bmhInventoryVerdict(deployment.preflight_result.bmh_inventory_sync).detail"
+                      class="readiness-blocked"
+                    >{{ bmhInventoryVerdict(deployment.preflight_result.bmh_inventory_sync).detail }}</small>
                     <small>
                       Observed {{ formatTime(deployment.preflight_result.bmh_inventory_sync.observed_at) }}
                       · Synced {{ formatTime(deployment.preflight_result.bmh_inventory_sync.synced_at) }}

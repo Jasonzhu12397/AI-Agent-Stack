@@ -189,9 +189,15 @@ def test_failed_inspection_is_not_trusted(deployment, monkeypatch):
 
     changed = deployment_reconcile.reconcile_deployment(record, client=stub)
 
-    assert BMH_INVENTORY_KEY not in changed or changed[BMH_INVENTORY_KEY] is False
+    # The failure is stored as the current verdict; the previous successful
+    # snapshot must not survive as if the inventory were still in sync.
+    assert changed[BMH_INVENTORY_KEY] is True
     record.refresh_from_db()
-    assert BMH_INVENTORY_KEY not in record.preflight_result
+    snapshot = record.preflight_result[BMH_INVENTORY_KEY]
+    assert snapshot["status"] == "failed"
+    assert snapshot["reason"] == "BMH_INSPECT_NOT_SUCCEEDED"
+    assert snapshot["host_count"] == 0
+    assert snapshot["matched"] == 0
 
 
 def test_a_changed_verdict_under_the_same_command_is_rewritten(deployment):
@@ -209,3 +215,42 @@ def test_a_changed_verdict_under_the_same_command_is_rewritten(deployment):
         "IRONIC_IMAGE_REQUIRED",
         "ETCD_SNAPSHOT_MISSING",
     ]
+
+
+def test_a_failed_inspection_replaces_a_previous_success(deployment, monkeypatch):
+    record, _client = deployment
+    good = {
+        "available": True,
+        "reason": None,
+        "status": "succeeded",
+        "error_code": None,
+        "command_id": "cmd-ok",
+        "host_count": 3,
+        "matched": 3,
+        "unmatched": [],
+        "warnings": [],
+        "observed_at": "2026-11-20T02:00:00+00:00",
+        "synced_at": "2026-11-20T02:00:01+00:00",
+    }
+    assert deployment_reconcile.store_snapshot(record, BMH_INVENTORY_KEY, good)
+    record.refresh_from_db()
+
+    stub = _StubClient(
+        {
+            "metal3.host.inspect": {
+                "status": "failed",
+                "command_id": "cmd-bad",
+                "output": {"observed_at": "2026-11-20T03:00:00+00:00"},
+            }
+        }
+    )
+    monkeypatch.setattr(
+        "core.deployment_reconcile.build_cloud_control_client",
+        lambda: stub,
+    )
+    deployment_reconcile.reconcile_deployment(record, client=stub)
+    record.refresh_from_db()
+
+    snapshot = record.preflight_result[BMH_INVENTORY_KEY]
+    assert snapshot["command_id"] == "cmd-bad"
+    assert snapshot["status"] == "failed"

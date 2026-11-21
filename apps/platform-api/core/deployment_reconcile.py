@@ -205,7 +205,9 @@ def reconcile_deployment(deployment, *, client=None) -> dict[str, Any]:
                 )
             else:
                 record, _updated, error = bmh_inventory_snapshot(deployment, payload)
-                if error is None:
+                # A failed inspection is a verdict too: storing only successful
+                # runs left the page showing the previous green snapshot.
+                if error is None or record.get("status") is not None:
                     changed[key] = store_snapshot(deployment, key, record)
         return changed
     finally:
