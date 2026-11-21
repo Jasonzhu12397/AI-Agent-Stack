@@ -38,6 +38,7 @@ import {
 import InfrastructureAgentsView from "./InfrastructureAgentsView.vue";
 import SriovDevicePluginEditor from "./SriovDevicePluginEditor.vue";
 import {
+  getKubernetesRecoveryReport,
   getKubernetesUpgradeEtcdHealth,
   getKubernetesUpgradeFailure,
   getKubernetesUpgradePreflight,
@@ -88,6 +89,8 @@ const selectedUpgradeModes = ref<Record<string, "simulation" | "execute">>({});
 const upgradeModes = ["simulation", "execute"] as const;
 const readinessBusy = ref<string | null>(null);
 const readinessMessages = ref<Record<string, string>>({});
+const recoveryBusy = ref<string | null>(null);
+const recoveryMessages = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
@@ -854,6 +857,56 @@ function upgradePreflightFailedCount(command: AgentCommand): number {
   return preflight ? preflight.checks.filter((check) => !check.ok).length : 0;
 }
 
+function recoveryCommands(nodeId: string): AgentCommand[] {
+  return recentCommands.value.filter(
+    (command) =>
+      command.command_type === "cluster.kubernetes.recovery.report" && command.node_id === nodeId,
+  );
+}
+
+function latestRecoveryCommand(nodeId: string): AgentCommand | null {
+  return recoveryCommands(nodeId)[0] ?? null;
+}
+
+function recoveryReport(nodeId: string) {
+  return getKubernetesRecoveryReport(latestRecoveryCommand(nodeId)?.result ?? null);
+}
+
+function recoveryTargetVersion(deployment: ClusterDeployment): string {
+  const lastUpgrade = kubernetesUpgradeCommands.value.find(
+    (command) => command.node_id === deployment.target_node_id,
+  );
+  const target = lastUpgrade?.payload.target_version;
+  return typeof target === "string" && target ? target : deployment.kubernetes_version;
+}
+
+async function requestRecoveryReport(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    recoveryMessages.value[deployment.id] = "A Target Agent must be assigned first.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    recoveryMessages.value[deployment.id] = "The Target Agent must be online to report recovery state.";
+    return;
+  }
+  recoveryBusy.value = deployment.id;
+  recoveryMessages.value[deployment.id] = "";
+  try {
+    await createAgentCommand(targetAgent.id, "cluster.kubernetes.recovery.report", {
+      target_version: recoveryTargetVersion(deployment),
+    });
+    await refreshData();
+    recoveryMessages.value[deployment.id] =
+      "Read-only recovery report queued; nothing on the cluster is touched.";
+  } catch (cause) {
+    recoveryMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to request a recovery report.";
+  } finally {
+    recoveryBusy.value = null;
+  }
+}
+
 function upgradeEtcdHealth(command: AgentCommand) {
   return getKubernetesUpgradeEtcdHealth(command.result);
 }
@@ -1442,7 +1495,25 @@ onUnmounted(() => {
                   >missing {{ item }}</small>
                 </template>
               </div>
+              <div class="fleet-version-control">
+                <el-button
+                  size="small"
+                  text
+                  :loading="recoveryBusy === scope.row.id"
+                  @click="requestRecoveryReport(scope.row)"
+                >Recovery report</el-button>
+                <template v-if="recoveryReport(scope.row.target_node_id)">
+                  <el-tag
+                    :type="recoveryReport(scope.row.target_node_id)?.drift ? 'warning' : 'success'"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ recoveryReport(scope.row.target_node_id)?.drift }} node(s) off target
+                  </el-tag>
+                </template>
+              </div>
               <small v-if="readinessMessages[scope.row.id]" class="fleet-version-message">{{ readinessMessages[scope.row.id] }}</small>
+              <small v-if="recoveryMessages[scope.row.id]" class="fleet-version-message">{{ recoveryMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
@@ -1603,6 +1674,40 @@ onUnmounted(() => {
                   <small>{{ check.detail }}</small>
                 </li>
               </ul>
+            </div>
+            <div v-if="recoveryReport(command.node_id)" class="fleet-preflight">
+              <div class="fleet-preflight-heading">
+                <span>Recovery state · {{ recoveryReport(command.node_id)?.targetVersion || "target not set" }}</span>
+                <el-tag :type="recoveryReport(command.node_id)?.drift ? 'warning' : 'success'" size="small">
+                  {{ recoveryReport(command.node_id)?.drift }} OFF TARGET
+                </el-tag>
+              </div>
+              <ul>
+                <li
+                  v-for="node in recoveryReport(command.node_id)?.nodes"
+                  :key="'recovery-' + node.name"
+                  :class="{ failed: !node.onTarget }"
+                >
+                  <span class="fleet-preflight-mark">{{ node.onTarget ? "✓" : "✕" }}</span>
+                  <code>{{ node.name }} <small>{{ node.role }}</small></code>
+                  <small>{{ node.version || "version unreadable" }}</small>
+                </li>
+              </ul>
+              <p class="fleet-preflight-hint">
+                etcd: {{ recoveryReport(command.node_id)?.etcdHealthy ? "healthy" : "degraded or unreadable" }}
+                · {{ recoveryReport(command.node_id)?.etcdMembers.length }} member(s)
+                · {{ recoveryReport(command.node_id)?.snapshots.length }} snapshot(s)
+              </p>
+              <p
+                v-for="warning in recoveryReport(command.node_id)?.warnings || []"
+                :key="'recovery-warning-' + warning"
+                class="fleet-preflight-hint"
+              >{{ warning }}</p>
+              <p
+                v-for="snapshot in recoveryReport(command.node_id)?.snapshots || []"
+                :key="'recovery-snapshot-' + snapshot.name"
+                class="fleet-preflight-hint"
+              >{{ snapshot.name }} · {{ snapshot.taken }}</p>
             </div>
             <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
               Upgrade simulation failed. Review the Agent error before taking further action.

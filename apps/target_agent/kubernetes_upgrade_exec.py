@@ -838,6 +838,102 @@ class UpgradeExecutor:
         performed.append("postflight")
         return self._result(request, steps, performed, None)
 
+    def report_recovery(self, target: str = "") -> dict[str, Any]:
+        """Read-only state of a cluster that may or may not have upgraded.
+
+        Nothing here mutates: it lists every node with the version it actually
+        reports, whether that matches the requested target, the health of the
+        stacked etcd members and the snapshots the upgrade path already wrote.
+        """
+
+        snapshot_dir = os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip() or (
+            DEFAULT_ETCD_SNAPSHOT_DIR
+        )
+        try:
+            nodes = self._nodes()
+        except UpgradeExecutionError as error:
+            raise UpgradeExecutionError(
+                "RECOVERY_NODES_UNREADABLE", error.detail
+            ) from error
+        node_rows: list[dict[str, Any]] = []
+        for node in nodes:
+            version = self._node_version(node)
+            node_rows.append(
+                {
+                    "name": self._node_name(node),
+                    "role": "control-plane" if self._is_control_plane(node) else "worker",
+                    "version": version,
+                    "on_target": bool(target) and self._on_target(version, target),
+                }
+            )
+        warnings: list[str] = []
+        etcd: dict[str, Any] = {"available": False, "healthy": False, "members": []}
+        try:
+            pods = self._etcd_pods()
+        except UpgradeExecutionError as error:
+            etcd["error"] = error.code
+            warnings.append(f"etcd state is unreadable: {error.detail}")
+        else:
+            etcd["available"] = True
+            members = []
+            for item in pods:
+                metadata = item.get("metadata") or {}
+                name = str(metadata.get("name") or "")
+                if not name:
+                    continue
+                ok, detail = self._etcd_quorum_healthy(name)
+                members.append(
+                    {
+                        "pod": name,
+                        "node": str((item.get("spec") or {}).get("nodeName") or ""),
+                        "healthy": ok,
+                        "detail": detail,
+                    }
+                )
+            etcd["members"] = members
+            etcd["healthy"] = bool(members) and all(
+                member["healthy"] for member in members
+            )
+            if members and not etcd["healthy"]:
+                warnings.append("at least one etcd member is not healthy")
+        snapshots: dict[str, Any] = {"directory": snapshot_dir, "entries": []}
+        listing = self._runner(
+            [
+                "sudo",
+                "find",
+                snapshot_dir,
+                "-maxdepth",
+                "1",
+                "-name",
+                "*.db",
+                "-printf",
+                "%f %s %TY-%Tm-%TdT%TH:%TM:%TS\n",
+            ],
+            timeout=60,
+        )
+        if not listing.get("available", True) or listing.get("returncode") != 0:
+            snapshots["error"] = _output(listing) or "snapshot directory is unreadable"
+            warnings.append(f"{snapshot_dir} is unreadable")
+        else:
+            for line in (listing.get("stdout") or "").splitlines():
+                parts = line.split()
+                if len(parts) != 3:
+                    continue
+                name, size, taken = parts
+                snapshots["entries"].append(
+                    {"name": name, "bytes": int(size) if size.isdigit() else 0,
+                     "taken": taken}
+                )
+        return {
+            "target_version": target,
+            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "nodes": node_rows,
+            "drift": sum(1 for row in node_rows if not row["on_target"]),
+            "etcd": etcd,
+            "snapshots": snapshots,
+            "warnings": warnings[:10],
+        }
+
     @staticmethod
     def _target_prefix(target: str) -> str:
         return ".".join(target.split(".")[:2])

@@ -29,11 +29,28 @@ _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 
 #: Read-only probe that answers "is this Agent able to run an execute upgrade?"
 READINESS_ACTION = "cluster.kubernetes.upgrade.readiness"
+
+#: Read-only post-failure view: per-node version drift, etcd member health and
+#: the snapshots the upgrade path wrote. It never mutates anything, so no
+#: approval is needed to look.
+RECOVERY_ACTION = "cluster.kubernetes.recovery.report"
 READINESS_PACKAGE_MANAGER_ENV = "KUBERNETES_UPGRADE_PACKAGE_MANAGER"
 READINESS_PACKAGE_VERSION_ENV = "KUBERNETES_UPGRADE_PACKAGE_VERSION"
 READINESS_REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
 READINESS_PACKAGE_MANAGERS = ("apt", "dnf")
 _PACKAGE_VERSION_SHAPE = re.compile(r"^[0-9A-Za-z.+~:-]{1,64}$")
+
+
+def validate_recovery_request(payload: Any) -> dict[str, str]:
+    """The recovery report takes an optional target version to measure drift."""
+
+    payload = payload if isinstance(payload, Mapping) else {}
+    target = str(payload.get("target_version") or "").strip()
+    if target and not _VERSION.match(target):
+        raise KubernetesUpgradeError(
+            "RECOVERY_TARGET_VERSION_INVALID", "target_version must look like v1.34.3"
+        )
+    return {"target_version": target}
 
 
 class KubernetesUpgradeError(ValueError):

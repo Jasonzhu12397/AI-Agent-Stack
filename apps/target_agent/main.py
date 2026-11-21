@@ -18,9 +18,11 @@ from packages.agent_contracts.host_network_observe import HostNetworkObserveErro
 from packages.agent_contracts.host_network_probe import collect_local_host_networks
 from packages.agent_contracts.kubernetes_upgrade import (
     READINESS_ACTION,
+    RECOVERY_ACTION,
     KubernetesUpgradeError,
     readiness_report,
     simulation_plan,
+    validate_recovery_request,
 )
 from packages.agent_contracts.kubernetes_upgrade import (
     validate_request as validate_kubernetes_upgrade,
@@ -1582,6 +1584,33 @@ def execute(
             "status": "succeeded",
             "error_code": None,
             "output": readiness_report(),
+            "side_effects": False,
+        }
+    if action == RECOVERY_ACTION:
+        try:
+            recovery = validate_recovery_request(command.get("payload", {}))
+        except KubernetesUpgradeError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        try:
+            report = UpgradeExecutor(_run_read_only).report_recovery(
+                recovery["target_version"]
+            )
+        except UpgradeExecutionError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": report,
             "side_effects": False,
         }
     if action == "cluster.kubernetes.version.upgrade":

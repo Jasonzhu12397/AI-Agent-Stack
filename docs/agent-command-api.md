@@ -179,6 +179,24 @@ Peer failures keep the node in the detail: `UPGRADE_CONTROL_PLANE_PEER_PACKAGE_F
 `execute` refuses what one agent cannot do safely: workers or control-plane
 peers without `KUBERNETES_UPGRADE_REMOTE_USER`
 (`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It stops at the first failed step and
-returns its exit code and output; there is no rollback. Both modes still need a
-platform approval, and the platform accepts execution evidence only when every
-stage ran to completion.
+returns its exit code and output. Both modes still need a platform approval, and
+the platform accepts execution evidence only when every stage ran to completion;
+a retry that found every node already on the target reports
+`upgrade_performed=false` with `already_at_target=true` instead.
+
+## A failed upgrade is described, not repaired
+
+`cluster.kubernetes.recovery.report` is read-only and needs no approval. It takes
+an optional `target_version` (anything not shaped like `v1.34.1` is refused with
+`RECOVERY_TARGET_VERSION_INVALID`) and answers with the state a failed upgrade
+leaves behind: every node with its role and the kubelet version it actually
+reports, whether that version is on target, the drift count, the health of each
+stacked etcd member, and the snapshots already written to
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR` (default `/var/lib/etcd/backups`). Nodes
+it cannot read fail closed with `RECOVERY_NODES_UNREADABLE`; an unreadable etcd
+or snapshot directory is reported as a warning instead of being guessed at.
+
+The product still has no automatic rollback. Restoring a snapshot and re-running
+`kubeadm init` is a destructive, cluster-specific operation that needs its own
+approval contract, so the report gives an operator the facts to act on and the
+runbook stays manual.

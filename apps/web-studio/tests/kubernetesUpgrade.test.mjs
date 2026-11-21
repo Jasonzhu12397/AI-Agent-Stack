@@ -69,3 +69,30 @@ test("etcd health entries of a rolling upgrade are rendered from the result", as
   assert.deepEqual(getKubernetesUpgradeEtcdHealth(null), []);
   assert.deepEqual(getKubernetesUpgradeEtcdHealth({ etcd_health: "nope" }), []);
 });
+
+test("recovery report renders node drift, etcd members and snapshots", async () => {
+  const { getKubernetesRecoveryReport } = await import("../src/domain/kubernetesUpgrade.ts");
+  const report = getKubernetesRecoveryReport({
+    target_version: "v1.34.1",
+    nodes: [
+      { name: "cp-0", role: "control-plane", version: "v1.33.4", on_target: false },
+      { name: "w-0", role: "worker", version: "v1.34.1", on_target: true },
+    ],
+    drift: 1,
+    etcd: { healthy: true, members: [{ pod: "etcd-cp-0", node: "cp-0", healthy: true, detail: "ok" }] },
+    snapshots: { entries: [{ name: "snapshot-pre-v1.34.1.db", bytes: 4096, taken: "2026-11-21T00:46:00Z" }] },
+    warnings: [],
+  });
+  assert.equal(report.nodes.length, 2);
+  assert.equal(report.nodes[0].role, "control-plane");
+  assert.equal(report.drift, 1);
+  assert.equal(report.etcdHealthy, true);
+  assert.equal(report.etcdMembers[0].pod, "etcd-cp-0");
+  assert.equal(report.snapshots[0].bytes, 4096);
+});
+
+test("recovery report stays null for an absent or malformed payload", async () => {
+  const { getKubernetesRecoveryReport } = await import("../src/domain/kubernetesUpgrade.ts");
+  assert.equal(getKubernetesRecoveryReport(null), null);
+  assert.equal(getKubernetesRecoveryReport({ nodes: "nope" }), null);
+});
