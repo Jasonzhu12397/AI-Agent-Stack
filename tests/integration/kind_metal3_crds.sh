@@ -240,9 +240,18 @@ document = module.render_ironic_cr(
 )
 Path(sys.argv[2]).write_text(yaml.safe_dump(document, sort_keys=False))
 PY
-# ``-o yaml`` keeps kubectl's column printer out of the path: the Ironic CRD
-# declares additional printer columns that read ``.status.conditions``, and the
-# table printer fails on an object that has no status yet even though the API
-# server accepted it. YAML output serializes the object directly, so the only
-# thing under test is the server-side validation.
-"${KUBECTL}" apply --dry-run=server -o yaml -f "${split_dir}/rendered-ironic-cr.yaml" >/dev/null
+# Validate the rendered CR against the schema of the CRD that is installed right
+# above it. ``--validate=true`` asks kubectl to fetch that schema and check the
+# document, which is the check that matters: is this an acceptable Ironic
+# object? A server dry-run would additionally round-trip the created object
+# through kubectl's printers, and that printer reads the CRD's
+# additionalPrinterColumns (``.status.conditions``) on a freshly rendered object
+# that has no status yet -- it intermittently fails on that alone, after the API
+# server already accepted the object, which turns the gate into a coin flip.
+"${KUBECTL}" apply --dry-run=client --validate=true \
+  -f "${split_dir}/rendered-ironic-cr.yaml" 2> "${split_dir}/ironic-cr-validation.log"
+if grep -q "no matches for kind" "${split_dir}/ironic-cr-validation.log"; then
+  cat "${split_dir}/ironic-cr-validation.log"
+  echo "The Ironic CRD is not discoverable by kubectl; the CR cannot be validated" >&2
+  exit 1
+fi
