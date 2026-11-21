@@ -77,6 +77,11 @@ const commandStatus = ref("");
 const commandPageSize = 100;
 const supportedKubernetesVersions = SUPPORTED_KUBERNETES_VERSIONS;
 const selectedKubernetesVersions = ref<Record<string, string>>({});
+// Simulation only describes the plan; execution really drains/applies/uncordons.
+// Execution stays the deliberate choice: the default is the safe one, and it
+// still needs approval before the Agent runs anything.
+const selectedUpgradeModes = ref<Record<string, "simulation" | "execute">>({});
+const upgradeModes = ["simulation", "execute"] as const;
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
@@ -685,6 +690,14 @@ function nextKubernetesMinorVersion(deployment: ClusterDeployment): string | nul
   return supportedKubernetesVersions.find((version) => Number(version.split(".")[1]) === currentMinor + 1) ?? null;
 }
 
+function upgradeMode(deployment: ClusterDeployment): "simulation" | "execute" {
+  return selectedUpgradeModes.value[deployment.id] ?? "simulation";
+}
+
+function setUpgradeMode(deploymentId: string, mode: "simulation" | "execute"): void {
+  selectedUpgradeModes.value[deploymentId] = mode;
+}
+
 function selectedKubernetesVersion(deployment: ClusterDeployment): string {
   return selectedKubernetesVersions.value[deployment.id] ?? nextKubernetesMinorVersion(deployment) ?? "";
 }
@@ -719,9 +732,12 @@ async function applyKubernetesVersion(deployment: ClusterDeployment): Promise<vo
       cluster_name: deployment.cluster_name,
       current_version: deployment.kubernetes_version,
       target_version: targetVersion,
-      execution_mode: "simulation",
+      execution_mode: upgradeMode(deployment),
     });
-    versionApplyMessages.value[deployment.id] = "Version " + targetVersion + " request created (" + command.status + "); independent approval is required.";
+    versionApplyMessages.value[deployment.id] =
+      upgradeMode(deployment) === "execute"
+        ? "Version " + targetVersion + " execution request created (" + command.status + "); approval is required before the cluster is touched."
+        : "Version " + targetVersion + " simulation request created (" + command.status + "); independent approval is required.";
     await refreshData();
   } catch (cause) {
     versionApplyMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request Kubernetes version change.";
@@ -765,6 +781,21 @@ function kubernetesUpgradeSteps(command: AgentCommand): Array<Record<string, unk
         Boolean(step) && typeof step === "object" && !Array.isArray(step),
       )
     : [];
+}
+
+function upgradeStepDetail(step: Record<string, unknown>): string {
+  const exitCode = step.exit_code;
+  const detail = typeof step.detail === "string" ? step.detail.trim() : "";
+  const commands = Array.isArray(step.commands) ? step.commands.filter((item) => typeof item === "string") : [];
+  const parts: string[] = [];
+  if (typeof exitCode === "number" && exitCode !== 0) parts.push("exit " + exitCode);
+  if (commands.length) parts.push(commands.join(" → "));
+  if (detail) parts.push(detail.length > 240 ? detail.slice(0, 240) + "…" : detail);
+  return parts.join(" · ");
+}
+
+function upgradeCommandMode(command: AgentCommand): "simulation" | "execute" {
+  return command.payload.execution_mode === "execute" ? "execute" : "simulation";
 }
 
 function upgradeStepStatus(step: Record<string, unknown>): string {
@@ -1303,6 +1334,14 @@ onUnmounted(() => {
                     :disabled="!isNextKubernetesMinorVersion(scope.row, version)"
                   />
                 </el-select>
+                <el-select
+                  :model-value="upgradeMode(scope.row)"
+                  size="small"
+                  style="width: 108px"
+                  @change="(value: string) => setUpgradeMode(scope.row.id, value as 'simulation' | 'execute')"
+                >
+                  <el-option v-for="mode in upgradeModes" :key="mode" :label="mode" :value="mode" />
+                </el-select>
                 <el-button
                   size="small"
                   type="primary"
@@ -1314,6 +1353,9 @@ onUnmounted(() => {
               </div>
               <small class="fleet-version-current">Current: {{ scope.row.kubernetes_version }} · Upgrade one minor version at a time</small>
               <small v-if="versionApplyMessages[scope.row.id]" class="fleet-version-message">{{ versionApplyMessages[scope.row.id] }}</small>
+              <small v-if="upgradeMode(scope.row) === 'execute'" class="readiness-blocked">
+                Execute mode runs kubeadm, package upgrades and drain/uncordon on the cluster.
+              </small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
@@ -1418,7 +1460,12 @@ onUnmounted(() => {
                 <strong>{{ String(command.payload.cluster_name ?? "Target cluster") }}</strong>
                 <small>{{ String(command.payload.current_version ?? "unknown") }} → {{ String(command.payload.target_version ?? "unknown") }}</small>
               </div>
-              <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+              <div class="fleet-upgrade-plan-tags">
+                <el-tag :type="upgradeCommandMode(command) === 'execute' ? 'danger' : 'info'" size="small" effect="plain">
+                  {{ upgradeCommandMode(command) === "execute" ? "LIVE EXECUTION" : "SIMULATION" }}
+                </el-tag>
+                <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+              </div>
             </div>
             <ol v-if="kubernetesUpgradeSteps(command).length" class="fleet-upgrade-steps">
               <li v-for="step in kubernetesUpgradeSteps(command)" :key="String(step.sequence ?? step.name)">
@@ -1426,8 +1473,9 @@ onUnmounted(() => {
                 <div>
                   <strong>{{ String(step.name ?? "Upgrade step").replaceAll("_", " ") }}</strong>
                   <small>{{ String(step.description ?? "") }}</small>
+                  <small v-if="upgradeStepDetail(step)" class="fleet-upgrade-step-detail">{{ upgradeStepDetail(step) }}</small>
                 </div>
-                <el-tag type="info" size="small">{{ upgradeStepStatus(step) }}</el-tag>
+                <el-tag :type="step.status === 'failed' ? 'danger' : step.status === 'succeeded' ? 'success' : 'info'" size="small">{{ upgradeStepStatus(step) }}</el-tag>
               </li>
             </ol>
             <p v-else-if="command.status === 'failed'" class="fleet-upgrade-pending fleet-upgrade-failure">
@@ -1438,7 +1486,10 @@ onUnmounted(() => {
             <p v-else class="fleet-upgrade-pending">
               {{ command.status === "waiting_approval" ? "Awaiting independent approval; no upgrade step has executed." : "The Agent has not returned an upgrade plan yet." }}
             </p>
-            <p class="fleet-upgrade-safety">Simulation-only · no live Kubernetes or kubeadm changes</p>
+            <p v-if="upgradeCommandMode(command) === 'execute'" class="fleet-upgrade-safety fleet-upgrade-live">
+              Live execution · steps above are the real commands and their exit codes
+            </p>
+            <p v-else class="fleet-upgrade-safety">Simulation-only · no live Kubernetes or kubeadm changes</p>
           </article>
         </section>
         <div class="fleet-terminal-body">

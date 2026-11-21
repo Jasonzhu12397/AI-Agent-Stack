@@ -2543,3 +2543,31 @@ def test_kubernetes_upgrade_result_accepts_a_proven_execution():
 
     no_side_effects = dict(result, side_effects=False)
     assert "execution safety" in _validate_kubernetes_upgrade_result(command, no_side_effects)
+
+
+@pytest.mark.django_db
+def test_target_agent_kubernetes_execute_upgrade_requires_approval(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "execute-target", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.35",
+                "execution_mode": "execute",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-execute-edge-lab-v135",
+    )
+
+    assert response.status_code == 202
+    assert response.data["status"] == AgentCommand.Status.WAITING_APPROVAL
+    assert response.data["payload"]["execution_mode"] == "execute"

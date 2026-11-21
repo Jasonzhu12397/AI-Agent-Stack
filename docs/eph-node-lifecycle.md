@@ -436,3 +436,18 @@ current spec names the sub-interface (`eno1.100`).
   answering `409` for a representation change.
 * New installs should re-plan from the current profile so cloud-init templates and
   the Target worker contract use the sub-interface names the hosts actually use.
+
+## Kubernetes upgrade in the UI
+
+The Target Cluster Delivery table offers two modes next to **Apply**:
+
+* `simulation` (default) — the Agent returns the four ordered stages without
+  touching anything; the plan card is labelled `SIMULATION`.
+* `execute` — the Agent runs the real sequence, and the plan card is labelled
+  `LIVE EXECUTION`. The row warns that kubeadm, package upgrades and
+  drain/uncordon will run. Both modes are created as `waiting_approval`, so
+  nothing moves until the command is approved.
+
+Once the run finishes, each stage card shows the real command it ran, its exit
+code and the tail of its output (`exit 1 · kubectl drain … · boom`), so a failed
+run can be diagnosed from the page without opening the Agent log.

@@ -400,3 +400,31 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .lab-workflow-note {
   color: #92400e;
 }
+
+/* Kubernetes upgrade plans: the same card shows a simulated plan and a real
+   run, so the mode has to be legible at a glance. */
+.fleet-upgrade-plan-tags {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.fleet-upgrade-step-detail {
+  display: block;
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #6b7280;
+  word-break: break-word;
+}
+
+.fleet-upgrade-safety.fleet-upgrade-live {
+  color: #b91c1c;
+}
+
+.fleet-version-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
