@@ -62,6 +62,7 @@ from core.cluster_deployment_views import (
     ClusterDeploymentNetworkEvidenceView,
     ClusterDeploymentListCreateView,
 )
+from core.metal3_lab_views import Metal3LabWorkflowView
 from core.knowledge_views import (
     KnowledgeDocumentDetailView,
     KnowledgeDocumentRetryView,
@@ -195,6 +196,11 @@ urlpatterns = [
         "api/v1/plugin-connections/<uuid:connection_id>/sync-tools/",
         PluginConnectionToolSyncView.as_view(),
         name="plugin-connection-sync-tools",
+    ),
+    path(
+        "api/v1/metal3/lab-workflow/",
+        Metal3LabWorkflowView.as_view(),
+        name="metal3-lab-workflow",
     ),
     path(
         "api/v1/plugin-connections/<uuid:connection_id>/status/",

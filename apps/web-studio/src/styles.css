@@ -381,3 +381,22 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   margin: 6px 0 0;
   padding-left: 18px;
 }
+
+.lab-workflow-tag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.lab-workflow-tag small {
+  display: block;
+  width: 100%;
+  color: #6b7280;
+}
+.lab-workflow-ok {
+  color: #15803d;
+}
+.lab-workflow-note {
+  color: #92400e;
+}

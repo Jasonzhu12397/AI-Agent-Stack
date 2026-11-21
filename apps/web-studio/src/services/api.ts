@@ -1124,6 +1124,28 @@ export function previewIronicTemplate(
   );
 }
 
+export type LabWorkflowCheck = { name: string; ok: boolean; detail: string };
+
+export type LabWorkflowReport = {
+  available: boolean;
+  workflow: string;
+  checks: LabWorkflowCheck[];
+  dispatch_inputs: string[];
+  secrets_referenced: string[];
+  environment: string | null;
+  ready: boolean;
+  // The platform cannot read GitHub repository secrets; it says so explicitly.
+  secret_presence: "not_observable";
+  reason: string | null;
+  workflow_url: string | null;
+  readiness_job?: { name: string | null; runs_on: string[]; environment: string | null; outputs: string[] };
+  acceptance_job?: { name: string | null; runs_on: string[]; needs: string | null; environment: string | null };
+};
+
+export function getLabWorkflow(): Promise<LabWorkflowReport> {
+  return request("/api/v1/metal3/lab-workflow/");
+}
+
 export function createClusterDeployment(
   tenantId: string,
   projectId: string,

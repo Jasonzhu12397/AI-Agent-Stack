@@ -17,6 +17,8 @@ import {
   getClusterDeployments,
   getProjects,
   getTenants,
+  getLabWorkflow,
+  type LabWorkflowReport,
   updateClusterSriovDevicePlugin,
   SUPPORTED_KUBERNETES_VERSIONS,
   type AgentCommand,
@@ -162,6 +164,20 @@ async function loadProjects(tenantId: string): Promise<void> {
     selectedProjectId.value = projects.value[0]?.id ?? "";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load project scope.";
+  }
+}
+
+const labWorkflow = ref<LabWorkflowReport | null>(null);
+const labWorkflowError = ref("");
+
+async function loadLabWorkflow(): Promise<void> {
+  try {
+    labWorkflow.value = await getLabWorkflow();
+    labWorkflowError.value = "";
+  } catch (cause) {
+    labWorkflow.value = null;
+    labWorkflowError.value =
+      cause instanceof Error ? cause.message : "Unable to probe the lab workflow.";
   }
 }
 
@@ -638,6 +654,7 @@ watch(selectedProjectId, () => void refreshData());
 watch(selectedSriovDeploymentId, (deploymentId) => loadSriovConfig(deploymentId));
 
 onMounted(async () => {
+  void loadLabWorkflow();
   await loadTenants();
   refreshTimer = window.setInterval(() => void refreshData(), 15000);
 });
@@ -722,6 +739,36 @@ onUnmounted(() => {
     <template v-else-if="activeTab === 'fleet'">
       <section class="fleet-panel">
         <div class="fleet-panel-heading"><h3>Bare-metal Machine Inventory</h3><span>{{ inventoryCount }} REGISTERED</span></div>
+        <div class="lab-workflow-tag">
+          <el-tag
+            :type="labWorkflow?.ready ? 'success' : 'warning'"
+            size="small"
+            effect="plain"
+          >
+            Metal3 lab e2e ·
+            {{ labWorkflow ? (labWorkflow.ready ? "workflow ready" : labWorkflow.available ? "workflow incomplete" : "workflow not deployed") : "probe unavailable" }}
+          </el-tag>
+          <el-link
+            v-if="labWorkflow?.workflow_url"
+            :href="labWorkflow.workflow_url"
+            target="_blank"
+            :underline="false"
+          >Open workflow</el-link>
+          <small v-if="labWorkflow">
+            Runner labels {{ labWorkflow.acceptance_job?.runs_on.join(", ") || "not declared" }} ·
+            secrets referenced {{ labWorkflow.secrets_referenced.join(", ") || "none" }}
+          </small>
+          <small class="lab-workflow-note">
+            Secret values are not visible to the platform; run the Lab readiness job to learn
+            whether EPH_KUBECONFIG / TARGET_KUBECONFIG are actually configured.
+          </small>
+          <small
+            v-for="check in labWorkflow?.checks || []"
+            :key="'lab-' + check.name"
+            :class="check.ok ? 'lab-workflow-ok' : 'readiness-blocked'"
+          >{{ check.ok ? "✓" : "✗" }} {{ check.name }}: {{ check.detail }}</small>
+          <small v-if="labWorkflowError" class="readiness-blocked">{{ labWorkflowError }}</small>
+        </div>
         <div class="fleet-inventory-controls">
           <el-input v-model="inventorySearch" clearable size="small" placeholder="Search machine, cluster or agent version" @keyup.enter="refreshData" />
           <el-select v-model="inventoryNodeType" clearable size="small" placeholder="All roles">

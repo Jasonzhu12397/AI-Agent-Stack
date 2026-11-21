@@ -296,6 +296,25 @@ Two classes of duplication used to let the same decision live in two places:
   step has a handler. Approval policy (`MUTATING_COMMANDS`) stays platform-local
   because it is not an Agent capability.
 
+### Lab workflow tag in the UI
+
+`GET /api/v1/metal3/lab-workflow/` parses `.github/workflows/metal3-lab-e2e.yml`
+(`core/lab_workflow.py`) and reports only what the checked-in file proves: the
+acceptance job's `runs-on` labels (`self-hosted`, `metal3-lab`, `physical`), its
+`needs` + `ready == 'true'` gate, the declared `workflow_dispatch` inputs, and
+the secret names the workflow consumes. The Fleet Inventory panel renders it as
+a tag plus the individual checks.
+
+- `secret_presence` is always `not_observable`: the platform cannot read
+  GitHub repository secrets, so the tag must not turn green in a way that
+  implies a lab run happened. Presence is decided by the Lab readiness job, whose
+  report also lands in the workflow artifacts.
+- `METAL3_LAB_WORKFLOW_URL` adds an "Open workflow" link when the deployment
+  sets it; the tag itself never calls GitHub.
+- PyYAML resolves the unquoted `on:` key to boolean `True`, so the trigger block
+  is looked up under both spellings; a naive lookup silently loses the dispatch
+  inputs.
+
 ### Lab workflow contract
 
 The physical acceptance workflow (`.github/workflows/metal3-lab-e2e.yml`) can only run on the `self-hosted, metal3-lab, physical` runner, so it stays manual and gated behind a readiness report. `.github/workflows/metal3-lab-contract.yml` runs on every change to the lab workflow, the readiness/acceptance tools or their tests, and proves two things on a GitHub-hosted runner: the workflow YAML still satisfies its contract, and the readiness gate keeps its honest semantics — missing kubeconfig secrets must report `ready=false` with the failed checks listed, a well-formed kubeconfig must report `ready=true`. A green contract run is not evidence of a bare-metal deployment; it only proves the pipeline cannot silently claim one.
