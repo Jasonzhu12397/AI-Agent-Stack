@@ -13,7 +13,6 @@ import re
 from typing import Any
 
 from packages.agent_contracts.infra_networks import (
-    InfraNetworkError,
     plan_infra_networks,
     render_role_network_data,
 )
