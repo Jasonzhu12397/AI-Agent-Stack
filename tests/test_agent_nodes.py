@@ -318,11 +318,11 @@ def test_node_agent_enrollment_is_tenant_admin_only(node_workspace):
 
 
 @pytest.mark.django_db
-def test_eph_capi_pivot_command_is_queued_without_cloud_approval_and_is_leased(node_workspace):
+def test_target_pivot_command_is_queued_without_cloud_approval_and_is_leased(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
-        {"name": "eph-autonomous-pivot", "node_type": "eph_node"},
+        {"name": "target-autonomous-pivot", "node_type": "target_cluster"},
         format="json",
     )
     node_id = enrolled.data["id"]
@@ -337,7 +337,7 @@ def test_eph_capi_pivot_command_is_queued_without_cloud_approval_and_is_leased(n
     }
     created = client.post(
         f"/api/v1/agent-nodes/{node_id}/commands/",
-        {"command_type": "cluster.capi.pivot.execute", "payload": payload},
+        {"command_type": "target.capi.pivot", "payload": payload},
         format="json",
         HTTP_IDEMPOTENCY_KEY="eph-provision-001",
     )
@@ -368,14 +368,14 @@ def test_eph_capi_pivot_command_is_queued_without_cloud_approval_and_is_leased(n
     )
     assert polled.status_code == 200
     assert polled.data["command"]["id"] == created.data["id"]
-    assert polled.data["command"]["command_type"] == "cluster.capi.pivot.execute"
+    assert polled.data["command"]["command_type"] == "target.capi.pivot"
     assert polled.data["command"]["lease_token"]
     assert AgentCommand.objects.get(pk=created.data["id"]).status == AgentCommand.Status.RUNNING
 
 @pytest.mark.django_db
 def test_expired_mutating_agent_command_fails_closed_without_redelivery(node_workspace):
-    node_type = "eph_node"
-    command_type = "cluster.capi.pivot.execute"
+    node_type = "target_cluster"
+    command_type = "target.capi.pivot"
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -800,7 +800,7 @@ def test_revoking_node_marks_running_mutating_command_outcome_unknown(node_works
     )
     assert polled.data["command"]["id"] == created.data["id"]
     AgentCommand.objects.filter(pk=created.data["id"]).update(
-        command_type="cluster.capi.pivot.execute",
+        command_type="target.capi.pivot",
     )
 
     revoked = client.post(f"/api/v1/agent-nodes/{node_id}/revoke/", {}, format="json")
@@ -834,7 +834,7 @@ def test_pivot_command_dispatch_is_not_blocked_by_legacy_approval_fields(node_wo
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
-        {"name": "eph-autonomous-pivot", "node_type": "eph_node"},
+        {"name": "target-autonomous-dispatch", "node_type": "target_cluster"},
         format="json",
     )
     node_id = enrolled.data["id"]
@@ -842,7 +842,7 @@ def test_pivot_command_dispatch_is_not_blocked_by_legacy_approval_fields(node_wo
     created = client.post(
         f"/api/v1/agent-nodes/{node_id}/commands/",
         {
-            "command_type": "cluster.capi.pivot.execute",
+            "command_type": "target.capi.pivot",
             "payload": {"cluster_spec": {"cluster_name": "edge-lab"}},
         },
         format="json",
@@ -861,7 +861,7 @@ def test_pivot_command_dispatch_is_not_blocked_by_legacy_approval_fields(node_wo
     command.refresh_from_db()
     assert poll.status_code == 200
     assert poll.data["command"]["id"] == str(command.id)
-    assert poll.data["command"]["command_type"] == "cluster.capi.pivot.execute"
+    assert poll.data["command"]["command_type"] == "target.capi.pivot"
     assert command.status == AgentCommand.Status.RUNNING
 
 
@@ -919,7 +919,7 @@ def test_agent_poll_rejects_queued_commands_not_allowed_for_node_role(
 
 
 @pytest.mark.django_db
-def test_target_agent_control_plane_verify_command_is_allowed(node_workspace):
+def test_target_agent_cluster_observe_command_is_allowed(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -929,8 +929,8 @@ def test_target_agent_control_plane_verify_command_is_allowed(node_workspace):
     response = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
         {
-            "command_type": "cluster.control-plane.verify",
-            "payload": {"expected_control_plane_replicas": 1},
+            "command_type": "target.cluster.observe",
+            "payload": {},
         },
         format="json",
         HTTP_IDEMPOTENCY_KEY="target-control-plane-verify",
@@ -939,7 +939,7 @@ def test_target_agent_control_plane_verify_command_is_allowed(node_workspace):
 
 
 @pytest.mark.django_db
-def test_target_agent_capi_pivot_preflight_command_is_allowed(node_workspace):
+def test_target_agent_capi_pivot_dry_run_command_is_allowed(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -949,8 +949,8 @@ def test_target_agent_capi_pivot_preflight_command_is_allowed(node_workspace):
     response = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
         {
-            "command_type": "cluster.capi.pivot.target.preflight",
-            "payload": {"cluster_name": "edge-lab"},
+            "command_type": "target.capi.pivot.dry_run",
+            "payload": {},
         },
         format="json",
         HTTP_IDEMPOTENCY_KEY="target-capi-pivot-preflight",
@@ -959,7 +959,7 @@ def test_target_agent_capi_pivot_preflight_command_is_allowed(node_workspace):
 
 
 @pytest.mark.django_db
-def test_eph_agent_capi_pivot_source_preflight_command_is_allowed(node_workspace):
+def test_eph_agent_capi_cluster_observe_command_is_allowed(node_workspace):
     user, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -969,8 +969,8 @@ def test_eph_agent_capi_pivot_source_preflight_command_is_allowed(node_workspace
     response = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
         {
-            "command_type": "cluster.capi.pivot.source.preflight",
-            "payload": {"cluster_name": "edge-lab"},
+            "command_type": "eph.capi.cluster.observe",
+            "payload": {},
         },
         format="json",
         HTTP_IDEMPOTENCY_KEY="eph-capi-pivot-source-preflight",
@@ -1128,7 +1128,7 @@ def test_agent_credential_rotation_is_blocked_while_command_is_running(node_work
     assert node.credential_hash == original_hash
 
 @pytest.mark.django_db
-def test_worker_provisioning_command_cannot_be_created_outside_deployment_workflow(
+def test_a_removed_worker_provisioning_alias_is_not_dispatchable(
     node_workspace,
 ):
     user, tenant, project, client = node_workspace
@@ -1151,13 +1151,13 @@ def test_worker_provisioning_command_cannot_be_created_outside_deployment_workfl
         HTTP_IDEMPOTENCY_KEY="unbound-worker-provisioning",
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 400
     assert not AgentCommand.objects.filter(node=node).exists()
 
 
 
 @pytest.mark.django_db
-def test_target_agent_capi_pivot_postflight_command_is_allowed(node_workspace):
+def test_target_agent_handoff_evaluate_command_is_allowed(node_workspace):
     _, tenant, project, client = node_workspace
     enrolled = client.post(
         f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
@@ -1167,12 +1167,8 @@ def test_target_agent_capi_pivot_postflight_command_is_allowed(node_workspace):
     response = client.post(
         f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
         {
-            "command_type": "cluster.capi.pivot.postflight",
-            "payload": {
-                "cluster_name": "edge-lab",
-                "namespace": "metal3",
-                "baremetal_host_namespace": "metal3-system",
-            },
+            "command_type": "target.handoff.evaluate",
+            "payload": {},
         },
         format="json",
         HTTP_IDEMPOTENCY_KEY="target-capi-pivot-postflight",

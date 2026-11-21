@@ -35,6 +35,12 @@ from packages.agent_contracts.agent_commands import (
 )
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
+from packages.agent_contracts.kubernetes_upgrade import (
+    KubernetesUpgradeError,
+)
+from packages.agent_contracts.kubernetes_upgrade import (
+    validate_request as validate_kubernetes_upgrade,
+)
 from packages.agent_contracts.machine_lifecycle import (
     BOOTABLE_STATES,
     REASON_MAX_LENGTH,
@@ -92,14 +98,15 @@ def _network_observation(inventory: Any, result: Any) -> dict[str, Any] | None:
 EPH_COMMANDS = EPH_AGENT_COMMANDS
 TARGET_COMMANDS = TARGET_AGENT_COMMANDS
 MUTATING_COMMANDS = {
-    "cluster.capi.pivot.execute",
-    "cluster.capi.worker.provision",
+    "target.capi.pivot",
+    "target.worker.provision",
+    "target.eph.cleanup",
     "cluster.kubernetes.version.upgrade",
 }
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
 }
-SUPPORTED_KUBERNETES_MINOR_VERSIONS = frozenset({"v1.33", "v1.34", "v1.35", "v1.36"})
+
 
 def _cancel_agent_commands(queryset, now):
     unknown_outcomes = []
@@ -2340,16 +2347,6 @@ class AgentNodeCommandListCreateView(APIView):
         allowed = EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
         if not isinstance(command_type, str) or command_type not in allowed:
             return Response({"detail": "Command is not allowed for this agent type."}, status=400)
-        if command_type == "cluster.capi.worker.provision":
-            return Response(
-                {
-                    "detail": (
-                        "Worker provisioning commands can only be queued "
-                        "by the deployment workflow."
-                    )
-                },
-                status=403,
-            )
         payload = request.data.get("payload", {})
         payload_error = _validate_payload(payload)
         if payload_error:
@@ -2360,20 +2357,11 @@ class AgentNodeCommandListCreateView(APIView):
                     {"detail": "Kubernetes version changes require a Target Cluster Agent."},
                     status=400,
                 )
-            if (
-                set(payload)
-                != {"cluster_name", "current_version", "target_version", "execution_mode"}
-                or payload.get("cluster_name") != node.cluster_name
-                or not isinstance(payload.get("current_version"), str)
-                or not re.fullmatch(r"v1\.\d+(?:\.\d+)?", payload["current_version"])
-                or not isinstance(payload.get("target_version"), str)
-                or payload.get("target_version") not in SUPPORTED_KUBERNETES_MINOR_VERSIONS
-                or int(payload["target_version"].split(".")[1])
-                != int(payload["current_version"].split(".")[1]) + 1
-                or payload.get("execution_mode") != "simulation"
-            ):
+            try:
+                validate_kubernetes_upgrade(payload, cluster_name=node.cluster_name)
+            except KubernetesUpgradeError as exc:
                 return Response(
-                    {"detail": "Kubernetes version request is invalid or unsupported."},
+                    {"detail": exc.detail, "code": exc.code},
                     status=400,
                 )
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
@@ -2674,7 +2662,7 @@ class AgentRuntimePollView(APIView):
                     candidate.error = {
                         "code": (
                             "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
-                            if candidate.command_type == "cluster.capi.pivot.execute"
+                            if candidate.command_type == "target.capi.pivot"
                             and lease_expired_while_running
                             else "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
                             if candidate.command_type in MUTATING_COMMANDS

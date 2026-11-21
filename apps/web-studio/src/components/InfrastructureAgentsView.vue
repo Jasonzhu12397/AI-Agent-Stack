@@ -196,12 +196,16 @@ const availableCommands = computed(() => {
   return [
     "node.health",
     "host.preflight",
-    "cluster.plan",
+    "cluster.health",
+    "cluster.observe",
+    "cluster.diagnose",
+    "cluster.postflight",
     "cluster.network.inspect",
+    "cluster.manifest.validate",
+    "cluster.plan",
     "capi.cluster.observe",
     "metal3.host.inspect",
-    "cluster.provider.discover",
-    "cluster.manifest.validate",
+    "k8s.resource.read",
   ];
 });
 
@@ -217,7 +221,6 @@ function defaultPayload(type: string): string {
     "k8s.resource.read": { resource: "nodes" },
     "capi.cluster.observe": {},
     "metal3.host.inspect": {},
-    "cluster.provider.discover": {},
     "cluster.manifest.validate": {
       manifests: [
         {
@@ -229,12 +232,23 @@ function defaultPayload(type: string): string {
       ],
     },
     "cluster.plan": {
-      cluster_spec: {
-        cluster_name: "edge-lab",
-        kubernetes_version: "v1.32.2",
-        control_plane_replicas: 3,
-        worker_replicas: 4,
-      },
+      cluster_name: "edge-lab",
+      control_plane_count: 3,
+      worker_replicas: 4,
+      fleet: [
+        {
+          name: "master-0",
+          machine_id: "00000000-0000-0000-0000-000000000001",
+          project_id: "00000000-0000-0000-0000-000000000000",
+          bmc_address: "10.0.0.11",
+          boot_mac: "aa:bb:cc:dd:ee:01",
+          secret_ref: "vault/bmc/rack-1",
+          cpu_cores: 24,
+          ram_mib: 65536,
+          disk_gib: 480,
+          identity_status: "verified",
+        },
+      ],
     },
     "cluster.provision": {
       cluster_spec: {

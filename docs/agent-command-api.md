@@ -48,3 +48,46 @@ Checkpoint advancement is idempotent for duplicate result processing. EPH reclai
 
 Checkpoint phase progression is monotonic. The control plane rejects unknown phases, attempts to move a checkpoint backwards, and conflicting updates within the same phase. An exact replay of an already-applied phase update remains idempotent. A late or stale result therefore cannot roll a verified worker pool back into worker provisioning.
 Target Agent checkpoint sequence numbers must be contiguous: each new checkpoint must use exactly the previous sequence plus one. Gaps are rejected with HTTP 409 and include the expected and received sequence numbers; exact duplicate replay remains idempotent, while lower sequence numbers remain stale and rejected.
+
+## The authorized command surface is the implemented command surface
+
+`packages/agent_contracts/agent_commands.py` is what the platform authorizes. It
+had drifted from what the Agents execute: the terminal listed `cluster.plan`,
+`cluster.provider.discover`, `cluster.manifest.validate` and `capi.cluster.observe`
+for an EPH node, and several `cluster.*` pivot aliases for a Target node that no
+handler answered, so dispatching them returned `ACTION_NOT_IMPLEMENTED`.
+
+Two changes close that gap for good:
+
+- **Read-only diagnostics execute.** `packages/agent_contracts/readonly_commands.py`
+  implements `node.health`, `host.preflight`, `cluster.health`, `cluster.observe`,
+  `cluster.diagnose`, `cluster.postflight`, `cluster.network.inspect`,
+  `cluster.manifest.validate` and `k8s.resource.read` once, and both Agents call it
+  through their own runner. `cluster.manifest.validate` sends the documents to
+  `kubectl apply --dry-run=server -f -`, so the API server validates them without
+  creating anything; `k8s.resource.read` is restricted to an allowlist of namespaced
+  and cluster resources.
+- **The registry only names implemented actions.** The stale `cluster.*` aliases
+  were removed; orchestration keeps its canonical `eph.*` / `target.*` names, and
+  `cluster.plan` / `capi.cluster.observe` are real EPH handlers (fleet planning and
+  the CAPI observer). `tests/test_agent_command_coverage.py` dispatches every
+  authorized action through the real `execute()` of both Agents with stubbed
+  binaries: a dead command now fails the build instead of the operator.
+
+`MUTATING_COMMANDS` follows the same rule: it lists the Target actions that really
+mutate (`target.capi.pivot`, `target.worker.provision`, `target.eph.cleanup`) plus
+`cluster.kubernetes.version.upgrade`, so an uncertain lease expiry is treated as an
+unknown mutating outcome instead of a retryable read.
+
+## Kubernetes minor upgrade is simulated end to end
+
+`packages/agent_contracts/kubernetes_upgrade.py` owns the request rules (exact
+payload keys, adjacent minor only, target minor inside the supported list, and
+`execution_mode=simulation` only). The platform validates the request with it and
+the Target Agent executes it with the same function, returning the four ordered,
+unexecuted stages — `preflight`, `control_plane`, `workers`, `postflight` — plus
+`upgrade_simulated=true`, `upgrade_performed=false`, `requires_manual_execution=true`
+and `resume_supported=false`. The platform's result validator accepts exactly that
+shape, so a queued upgrade now produces evidence instead of
+`ACTION_NOT_IMPLEMENTED`. A real upgrade still requires an operator: no adapter
+performs the drain/apply/uncordon sequence.

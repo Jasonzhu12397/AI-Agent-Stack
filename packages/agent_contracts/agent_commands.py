@@ -30,12 +30,7 @@ EPH_DIRECT_COMMANDS: Final[frozenset[str]] = frozenset(
         "k8s.resource.read",
         "capi.cluster.observe",
         "metal3.host.inspect",
-        "cluster.provider.discover",
-        "cluster.provider.compatibility",
         "cluster.manifest.validate",
-        "cluster.capi.pivot.source.preflight",
-        "cluster.capi.pivot.dry-run",
-        "cluster.capi.pivot.execute",
     }
 )
 
@@ -44,21 +39,14 @@ TARGET_DIRECT_COMMANDS: Final[frozenset[str]] = frozenset(
     {
         "host.network.observe",
         "node.health",
-        "cluster.provider.compatibility",
+        "host.preflight",
         "cluster.health",
         "cluster.network.inspect",
         "cluster.observe",
         "cluster.diagnose",
         "cluster.postflight",
-        "cluster.control-plane.verify",
-        "cluster.capi.pivot.target.preflight",
-        "cluster.capi.pivot.target.verify",
-        "cluster.capi.pivot.postflight",
-        "cluster.capi.worker.preflight",
-        "cluster.capi.worker.provision",
-        "cluster.delivery.lifecycle.evaluate",
+        "cluster.manifest.validate",
         "cluster.kubernetes.version.upgrade",
-        "cluster.metal3.observe",
         "k8s.resource.read",
     }
 )

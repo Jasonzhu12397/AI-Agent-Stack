@@ -20,6 +20,10 @@ from packages.agent_contracts.orchestration import (
     EPH_CHECKPOINT_PHASES,
 )
 from packages.agent_contracts.outcomes import is_retryable_outcome
+from packages.agent_contracts.readonly_commands import (
+    READONLY_ACTIONS,
+    execute_readonly,
+)
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -172,6 +176,35 @@ def execute(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    if action in READONLY_ACTIONS:
+        # Diagnostics are pure observations. Both Agents answer them from the
+        # same contract module so the terminal cannot drift between roles.
+        return execute_readonly(
+            action,
+            command.get("payload", {}),
+            lambda argv, timeout=20, stdin=None: _run_read_only(
+                argv, timeout=timeout, stdin=stdin
+            ),
+        )
+    if action == "capi.cluster.observe":
+        # Legacy name kept for the terminal; the CAPI observer is the same code.
+        action = "eph.capi.cluster.observe"
+    if action == "cluster.plan":
+        try:
+            plan = plan_fleet_request(command.get("payload", {}))
+        except PlanningError as exc:
+            return {
+                "status": "blocked",
+                "error_code": "FLEET_PLAN_REJECTED",
+                "output": {"detail": str(exc)},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": plan,
+            "side_effects": False,
+        }
     if action == "host.network.observe":
         from packages.agent_contracts.host_network_probe import collect_local_host_networks
 

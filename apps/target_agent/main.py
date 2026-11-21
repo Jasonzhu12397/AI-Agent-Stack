@@ -16,8 +16,19 @@ from uuid import UUID
 
 from packages.agent_contracts.host_network_observe import HostNetworkObserveError
 from packages.agent_contracts.host_network_probe import collect_local_host_networks
+from packages.agent_contracts.kubernetes_upgrade import (
+    KubernetesUpgradeError,
+    simulation_plan,
+)
+from packages.agent_contracts.kubernetes_upgrade import (
+    validate_request as validate_kubernetes_upgrade,
+)
 from packages.agent_contracts.orchestration import TARGET_CHECKPOINT_PHASES
 from packages.agent_contracts.outcomes import is_retryable_outcome
+from packages.agent_contracts.readonly_commands import (
+    READONLY_ACTIONS,
+    execute_readonly,
+)
 from packages.agent_transport import (
     AgentControlClient,
     AgentSettings,
@@ -119,7 +130,11 @@ def _configure_in_cluster_kubeconfig() -> None:
     os.environ["KUBECONFIG"] = path
 
 
-def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
+def _run_read_only(
+    command: list[str],
+    timeout: int = 20,
+    stdin: str | None = None,
+) -> dict[str, Any]:
     try:
         completed = subprocess.run(
             command,
@@ -128,6 +143,7 @@ def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
             text=True,
             timeout=timeout,
             env=dict(os.environ),
+            input=stdin,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "error": type(exc).__name__}
@@ -1032,6 +1048,16 @@ def execute(
     lease_lost_event: Any = None,
 ) -> dict[str, Any]:
     action = command.get("action")
+    if action in READONLY_ACTIONS:
+        # Diagnostics are pure observations. Both Agents answer them from the
+        # same contract module so the terminal cannot drift between roles.
+        return execute_readonly(
+            action,
+            command.get("payload", {}),
+            lambda argv, timeout=20, stdin=None: _run_read_only(
+                argv, timeout=timeout, stdin=stdin
+            ),
+        )
     if action == "host.network.observe":
         try:
             observation = collect_local_host_networks(
@@ -1546,6 +1572,25 @@ def execute(
                 "output": {},
                 "side_effects": False,
             }
+    if action == "cluster.kubernetes.version.upgrade":
+        try:
+            request = validate_kubernetes_upgrade(
+                command.get("payload", {}),
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+        except KubernetesUpgradeError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": simulation_plan(request),
+            "side_effects": False,
+        }
     return {
         "status": "blocked",
         "error_code": "ACTION_NOT_IMPLEMENTED",
