@@ -249,6 +249,10 @@ def eph_network_state(
                     }
                 )
             add_default_route(network, link)
+        elif network.get("dhcp"):
+            # A secondary segment may be addressed by DHCP (the provisioning
+            # network does this); disabling IPv4 there left the link dead.
+            document["ipv4"] = {"enabled": True, "dhcp": True}
         else:
             document["ipv4"] = {"enabled": False}
         document["ipv6"] = {"enabled": False, "dhcp": False}

@@ -91,9 +91,9 @@ def test_provisioning_network_fills_interface_and_address():
     # sub-interface the nmstate renderer and networkData also name.
     assert spec["ironic"]["networking"] == {
         "interface": "eno4.400",
-        "ip_address": "10.40.0.1",
+        "ip_address": "10.40.0.2/24",
     }
-    assert spec["ironic_defaults_sources"] == ["interface", "ip_address"]
+    assert spec["ironic_defaults_sources"] == ["interface", "ip_address_subnet"]
 
 
 def test_explicit_values_win_over_the_provisioning_network():
@@ -130,7 +130,7 @@ def test_bond_name_is_the_provisioning_link():
     assert spec["ironic"]["networking"]["interface"] == "bond-prov.400"
 
 
-def test_absent_gateway_still_requires_an_explicit_address():
+def test_absent_gateway_still_never_borrows_the_first_host_of_the_segment():
     profile = _profile(
         {
             "name": "provisioning",
@@ -145,8 +145,9 @@ def test_absent_gateway_still_requires_an_explicit_address():
     )
     spec, error = _validate(_cluster_spec(), profile)
 
-    assert spec is None
-    assert error == "ironic: IRONIC_IP_ADDRESS_REQUIRED"
+    assert error is None
+    # 10.40.0.1 stays reserved for the router even when no gateway is declared.
+    assert spec["ironic"]["networking"]["ip_address"] == "10.40.0.2/24"
 
 
 def test_profile_without_provisioning_network_uses_only_explicit_values():

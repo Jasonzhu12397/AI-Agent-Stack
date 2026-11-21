@@ -192,3 +192,20 @@ def test_failed_inspection_is_not_trusted(deployment, monkeypatch):
     assert BMH_INVENTORY_KEY not in changed or changed[BMH_INVENTORY_KEY] is False
     record.refresh_from_db()
     assert BMH_INVENTORY_KEY not in record.preflight_result
+
+
+def test_a_changed_verdict_under_the_same_command_is_rewritten(deployment):
+    record, _client = deployment
+    first = deployment_reconcile.eph_preflight_snapshot(_preflight_payload())
+    assert deployment_reconcile.store_snapshot(record, EPH_PREFLIGHT_KEY, first)
+
+    # The bridge can return the same command with a different outcome; the
+    # identifiers are unchanged, so this used to be dropped as "not stale".
+    same_ids = dict(first, warnings=["IRONIC_IMAGE_REQUIRED", "ETCD_SNAPSHOT_MISSING"])
+    assert deployment_reconcile.store_snapshot(record, EPH_PREFLIGHT_KEY, same_ids)
+
+    record.refresh_from_db()
+    assert record.preflight_result[EPH_PREFLIGHT_KEY]["warnings"] == [
+        "IRONIC_IMAGE_REQUIRED",
+        "ETCD_SNAPSHOT_MISSING",
+    ]

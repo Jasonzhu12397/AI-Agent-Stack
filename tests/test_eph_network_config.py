@@ -247,3 +247,24 @@ def test_sriov_pci_defaults_warn_without_inventory():
     assert updated["networks"][0].get("pci_addresses") in (None, [])
     assert sources == {}
     assert warnings == ["SR-IOV_PCI_UNAVAILABLE:sriov-dp"]
+
+
+def test_a_dhcp_segment_without_an_address_stays_addressed():
+    profile = _profile()
+    # The provisioning link is DHCP-addressed: no owned address is given, and
+    # the segment must not be rendered with IPv4 disabled.
+    profile["networks"][1].pop("ip_pools")
+    profile["networks"][1]["dhcp"] = True
+    plan = plan_infra_networks(profile)
+
+    state = eph_network_state(
+        plan,
+        addresses={
+            "control": "172.18.0.3/24",
+            "storage-internal": "10.0.10.3/24",
+            "storage-external": "10.130.60.85/28",
+        },
+    )
+
+    by_name = {item["name"]: item for item in state["interfaces"]}
+    assert by_name["bond_control.70"]["ipv4"] == {"enabled": True, "dhcp": True}

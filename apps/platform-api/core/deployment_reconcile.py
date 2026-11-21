@@ -71,14 +71,23 @@ def eph_preflight_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _is_stale(stored: dict[str, Any], incoming: dict[str, Any]) -> bool:
-    """A snapshot is stale when the EPH has reported a different observation."""
+def _comparable(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """The snapshot without the field stamped when it was stored."""
 
-    if not isinstance(stored, dict):
+    return {key: value for key, value in snapshot.items() if key != "synced_at"}
+
+
+def _is_stale(stored: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    """A snapshot is stale when its content differs from what is stored.
+
+    Comparing only ``command_id`` and ``observed_at`` missed the case the
+    bridges actually produce: the same command polled again with a different
+    verdict keeps both identifiers, so updated warnings were never written.
+    """
+
+    if not isinstance(stored, dict) or not stored:
         return True
-    if stored.get("command_id") != incoming.get("command_id"):
-        return True
-    return stored.get("observed_at") != incoming.get("observed_at")
+    return _comparable(stored) != _comparable(incoming)
 
 
 def store_snapshot(deployment, key: str, snapshot: dict[str, Any]) -> bool:

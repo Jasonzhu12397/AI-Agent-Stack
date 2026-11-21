@@ -502,9 +502,9 @@ def _validated_spec(request, *, infra_profile=None, project=None):
         if isinstance(addresses, dict):
             owned = addresses.get("provisioning") or addresses.get("control")
             if isinstance(owned, str) and owned.strip():
-                # The EPH-owned address beats the network gateway guess.
+                # Only an address the EPH owns is pre-filled into the template.
                 eph_address = owned.strip()
-        defaults: dict[str, str] = {}
+        defaults: dict[str, Any] = {}
         if plan is not None:
             defaults, sources, template_warnings = provisioning_networking(
                 plan,
@@ -517,6 +517,7 @@ def _validated_spec(request, *, infra_profile=None, project=None):
             ironic_config, filled = apply_provisioning_defaults(
                 ironic_config,
                 defaults,
+                sources,
             )
             if filled:
                 # Persist the resolved values so the dispatch payload and the
@@ -689,8 +690,17 @@ class ClusterDeploymentListCreateView(APIView):
             )
 
         plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
-        if deployment.preflight_result != preflight:
-            deployment.preflight_result = preflight
+        # A retry recomputes three plan sections, not the whole record. Replacing
+        # the field outright dropped the runtime snapshots the EPH had already
+        # reported, and the detail page fell back to guessing from the spec.
+        stored_preflight = (
+            deployment.preflight_result
+            if isinstance(deployment.preflight_result, dict)
+            else {}
+        )
+        merged_preflight = {**stored_preflight, **preflight}
+        if merged_preflight != stored_preflight:
+            deployment.preflight_result = merged_preflight
             deployment.save(update_fields=["preflight_result", "updated_at"])
         drift = _network_evidence_drift(project, deployment.spec)
         if drift:

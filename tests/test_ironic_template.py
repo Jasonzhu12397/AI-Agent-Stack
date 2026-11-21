@@ -75,11 +75,13 @@ def test_template_names_the_provisioning_sub_interface():
     template = ironic_template_for_profile(_profile())
 
     assert template["provisioning_network"] == "provisioning"
+    # The interface comes from the plan; the address is derived from the
+    # provisioning subnet and never from the gateway of that subnet.
     assert template["configuration"]["networking"] == {
         "interface": "eno4.400",
-        "ip_address": "10.40.0.1",
+        "ip_address": "10.40.0.2/24",
     }
-    assert template["defaults_sources"] == ["interface", "ip_address"]
+    assert template["defaults_sources"] == ["interface", "ip_address_subnet"]
 
 
 def test_image_urls_and_identity_stay_operator_owned():
@@ -133,7 +135,14 @@ def test_profile_without_provisioning_network_reports_the_gap():
 
 
 def test_provisioning_network_without_address_reports_the_gap():
-    provisioning = {**PROVISIONING, "gateway_ipv4": None}
+    # Every usable host of the subnet is already spoken for, so nothing may be
+    # handed to ironic and the operator has to supply the address.
+    provisioning = {
+        **PROVISIONING,
+        "cidr": "10.40.0.0/30",
+        "gateway_ipv4": "10.40.0.1",
+        "ip_pools": [{"start": "10.40.0.2", "end": "10.40.0.2"}],
+    }
     template = ironic_template_for_profile(_profile(provisioning))
 
     assert template["configuration"]["networking"] == {"interface": "eno4.400"}
@@ -191,3 +200,23 @@ def test_preview_endpoint_rejects_an_invalid_profile(template_workspace):
 
     assert response.status_code == 400
     assert response.data["code"] == "ironic_template_profile_invalid"
+
+
+def test_the_gateway_is_never_used_as_the_provisioning_address():
+    template = ironic_template_for_profile(_profile())
+
+    networking = template["configuration"]["networking"]
+    assert networking["ip_address"] != PROVISIONING["gateway_ipv4"]
+    assert networking["ip_address"] == "10.40.0.2/24"
+    assert "ip_address_subnet" in template["defaults_sources"]
+
+
+def test_a_dhcp_provisioning_network_needs_no_static_address():
+    provisioning = {**PROVISIONING, "dhcp": True, "gateway_ipv4": None}
+    template = ironic_template_for_profile(_profile(provisioning))
+
+    assert template["configuration"]["networking"] == {
+        "interface": "eno4.400",
+        "dhcp": True,
+    }
+    assert WARNING_ADDRESS_UNAVAILABLE not in template["warnings"]

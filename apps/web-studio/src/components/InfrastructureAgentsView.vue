@@ -1166,8 +1166,9 @@ onUnmounted(() => {
                 </el-button>
                 <small>
                   Interface {{ provisioningDefaults.interfaceName || "not declared" }} · address
-                  {{ provisioningDefaults.ipAddress || "no gateway declared" }}. The gateway is a
-                  prefill default; edit it if the EPH owns a different address.
+                  {{ provisioningDefaults.ipAddress || "not available (DHCP or no free host)" }}.
+                  The address is the first free host of the provisioning subnet (never the
+                  gateway); edit it if the EPH owns a different address.
                 </small>
               </div>
               <div class="replica-fields">

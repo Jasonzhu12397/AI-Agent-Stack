@@ -236,3 +236,22 @@ same question read-only on a real cluster: one control plane, the node Ready, th
 snapshot readable from inside the etcd pod and its hash verifiable, etcd healthy.
 It shells `kubectl` only, never `sudo`, and the lab workflow runs it when
 `rollback_snapshot` is passed to the manual dispatch.
+
+## Provisioning network defaults are derived, never borrowed
+
+The Ironic template pre-fills `networking.interface` and `networking.ipAddress`
+from the deployment profile. The address sources, in order:
+
+1. `ip_address` — the address the EPH owns (`eph_network_addresses.provisioning`
+   or `.control`), entered in the UI.
+2. `ip_address_subnet` — the first free host of the provisioning subnet,
+   skipping the segment's first usable host and every declared allocation pool.
+3. `dhcp` — set to `true` when the provisioning network is DHCP-addressed; the
+   `Ironic` CR then needs no static `ipAddress` (`IRONIC_IP_ADDRESS_REQUIRED`
+   applies only to static links).
+
+The subnet gateway is never used as the provisioning address: it belongs to the
+router on that segment, so writing it into `networking.ipAddress` would put the
+router's IP on the EPH NIC. If a static segment has no free host left, the
+template reports `IRONIC_TEMPLATE_ADDRESS_UNAVAILABLE` and the deployment is
+rejected until the operator supplies the address.

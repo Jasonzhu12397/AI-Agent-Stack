@@ -1094,3 +1094,29 @@ def test_sriov_pci_defaults_explicit_values_win(bridge_workspace):
     policy = spec["sriov_node_policy_manifests"][0]
     assert policy["spec"]["nicSelector"]["rootDevices"] == ["0000:af:00.1"]
     assert spec["network_defaults"]["sriov_pci_sources"] == {}
+
+
+@pytest.mark.django_db
+def test_a_retry_keeps_the_runtime_snapshots_on_the_deployment(bridge_workspace, monkeypatch):
+    user, tenant, project, node, client = bridge_workspace
+    for index in range(1, 6):
+        _machine(tenant, project, node, index)
+    monkeypatch.setattr(
+        "core.cluster_deployment_views.dispatch_deployment",
+        lambda **kwargs: {"created": True, "phase": "not_started", "sequence": 0},
+    )
+    created = _post(client, tenant, project, node)
+    assert created.status_code == 202
+
+    deployment = ClusterDeployment.objects.get(id=created.data["id"])
+    runtime = {"eph_preflight": {"eph_ready": True, "warnings": ["NOTE"]}}
+    deployment.preflight_result = {**deployment.preflight_result, **runtime}
+    deployment.save(update_fields=["preflight_result", "updated_at"])
+
+    repeated = _post(client, tenant, project, node)
+    assert repeated.status_code == 200
+
+    deployment.refresh_from_db()
+    # The retry recomputes plan sections; it must not wipe what the EPH reported.
+    assert deployment.preflight_result["eph_preflight"]["eph_ready"] is True
+    assert deployment.preflight_result["network_defaults"]["warnings"] == []

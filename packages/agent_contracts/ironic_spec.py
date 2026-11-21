@@ -42,6 +42,7 @@ _NETWORK_INTEGER_KEYS = {
 _NETWORK_BOOLEAN_KEYS = {
     "disable_host_network": "disableHostNetwork",
     "bind_interface": "bindInterface",
+    "dhcp": "dhcp",
 }
 
 
@@ -98,11 +99,15 @@ def normalize_ironic_config(ironic: Any) -> dict[str, Any]:
             networking_value.get("interface"),
             "IRONIC_INTERFACE_REQUIRED",
         ),
-        "ipAddress": _required_string(
+    }
+    # A DHCP-addressed provisioning link obtains its own address from the
+    # network, so demanding a static one here would force callers to invent an
+    # address (and they used to invent the gateway's).
+    if networking_value.get("dhcp") is not True:
+        networking["ipAddress"] = _required_string(
             networking_value.get("ip_address"),
             "IRONIC_IP_ADDRESS_REQUIRED",
-        ),
-    }
+        )
     for key, cr_key in _NETWORK_STRING_KEYS.items():
         if key in networking:
             continue
@@ -149,11 +154,26 @@ def normalize_ironic_config(ironic: Any) -> dict[str, Any]:
     }
 
 
+#: How a template provenance label maps back to the networking key it filled.
+_TEMPLATE_SOURCE_KEYS = {
+    "interface": "interface",
+    "ip_address": "ip_address",
+    "ip_address_subnet": "ip_address",
+    "dhcp": "dhcp",
+}
+
+
 def apply_provisioning_defaults(
     ironic: Any,
-    defaults: dict[str, str],
+    defaults: dict[str, Any],
+    sources: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Fill only absent networking keys and report which keys came from defaults."""
+    """Fill only absent networking keys and report where the values came from.
+
+    ``sources`` is the provenance the template reported. Passing it keeps the
+    label honest (an address derived from the subnet stays
+    ``ip_address_subnet``) instead of relabelling every filled key ``ip_address``.
+    """
 
     if not isinstance(ironic, dict):
         return ironic, []
@@ -163,13 +183,32 @@ def apply_provisioning_defaults(
     if not isinstance(networking, dict):
         return ironic, []
     filled = dict(networking)
-    sources: list[str] = []
-    if not filled.get("interface") and defaults.get("interface"):
-        filled["interface"] = defaults["interface"]
-        sources.append("interface")
-    if not filled.get("ip_address") and defaults.get("ip_address"):
-        filled["ip_address"] = defaults["ip_address"]
-        sources.append("ip_address")
-    if not sources:
+    filled_keys: list[str] = []
+    for key in ("interface", "ip_address", "dhcp"):
+        if filled.get(key) not in (None, "", False):
+            continue
+        value = defaults.get(key)
+        if value in (None, ""):
+            continue
+        filled[key] = value
+        filled_keys.append(key)
+    if not filled_keys:
         return ironic, []
-    return {**ironic, "networking": filled}, sources
+    if sources is None:
+        used = [key for key in filled_keys if key in ("interface", "ip_address")]
+    else:
+        used = [
+            label
+            for label in sources
+            if _TEMPLATE_SOURCE_KEYS.get(label) in filled_keys
+        ]
+    return {**ironic, "networking": filled}, used
+
+
+# Kept for callers that only need the resolved networking block.
+def resolve_provisioning_networking(
+    ironic: Any,
+    defaults: dict[str, Any],
+) -> dict[str, Any]:
+    resolved, _ = apply_provisioning_defaults(ironic, defaults)
+    return resolved

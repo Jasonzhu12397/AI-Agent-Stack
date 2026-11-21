@@ -1174,7 +1174,7 @@ export type IronicTemplatePreview = {
       deploy_ramdisk_downloader: string;
       keepalived: string;
     };
-    networking: { interface?: string; ip_address?: string };
+    networking: { interface?: string; ip_address?: string; dhcp?: boolean };
   };
   provisioning_network: string | null;
   defaults_sources: string[];
