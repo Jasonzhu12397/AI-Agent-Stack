@@ -8,7 +8,10 @@ the Agent cannot disagree about what a valid request is.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+from collections.abc import Callable, Mapping
 from typing import Any
 
 SUPPORTED_MINORS: tuple[str, ...] = ("v1.33", "v1.34", "v1.35", "v1.36")
@@ -22,6 +25,15 @@ PAYLOAD_KEYS = frozenset(
 
 _VERSION = re.compile(r"^v1\.\d+(?:\.\d+)?$")
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+
+
+#: Read-only probe that answers "is this Agent able to run an execute upgrade?"
+READINESS_ACTION = "cluster.kubernetes.upgrade.readiness"
+READINESS_PACKAGE_MANAGER_ENV = "KUBERNETES_UPGRADE_PACKAGE_MANAGER"
+READINESS_PACKAGE_VERSION_ENV = "KUBERNETES_UPGRADE_PACKAGE_VERSION"
+READINESS_REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
+READINESS_PACKAGE_MANAGERS = ("apt", "dnf")
+_PACKAGE_VERSION_SHAPE = re.compile(r"^[0-9A-Za-z.+~:-]{1,64}$")
 
 
 class KubernetesUpgradeError(ValueError):
@@ -98,6 +110,66 @@ def validate_request(
         "current_version": current,
         "target_version": target,
         "execution_mode": mode,
+    }
+
+
+def readiness_report(
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> dict[str, Any]:
+    """Report whether this host can run ``execution_mode=execute``.
+
+    Only presence is reported, never a secret value. ``missing`` names the
+    variables an operator still has to set, so the UI can show one actionable
+    line instead of a bare "not ready".
+    """
+
+    env = os.environ if env is None else env
+    which = shutil.which if which is None else which
+
+    manager = (env.get(READINESS_PACKAGE_MANAGER_ENV) or "").strip()
+    package_version = (env.get(READINESS_PACKAGE_VERSION_ENV) or "").strip()
+    remote_user = (env.get(READINESS_REMOTE_USER_ENV) or "").strip()
+
+    missing: list[str] = []
+    detail: list[str] = []
+    if not manager:
+        missing.append(READINESS_PACKAGE_MANAGER_ENV)
+    elif manager not in READINESS_PACKAGE_MANAGERS:
+        detail.append(
+            f"{READINESS_PACKAGE_MANAGER_ENV}={manager} is not one of "
+            + ", ".join(READINESS_PACKAGE_MANAGERS)
+        )
+    if not package_version:
+        missing.append(READINESS_PACKAGE_VERSION_ENV)
+    elif not _PACKAGE_VERSION_SHAPE.match(package_version):
+        detail.append(f"{READINESS_PACKAGE_VERSION_ENV} is not a package version")
+    if not remote_user:
+        missing.append(READINESS_REMOTE_USER_ENV)
+        detail.append(
+            "workers cannot be upgraded until a remote executor user is configured; "
+            "a control-plane-only cluster does not need it"
+        )
+
+    binaries = {name: bool(which(name)) for name in ("kubeadm", "kubectl")}
+    for name, present in binaries.items():
+        if not present:
+            detail.append(f"{name} is not on PATH for this Agent")
+
+    package_configured = (
+        manager in READINESS_PACKAGE_MANAGERS
+        and bool(_PACKAGE_VERSION_SHAPE.match(package_version))
+    )
+    return {
+        "action": READINESS_ACTION,
+        "execution_mode_supported": ["simulation", "execute"],
+        "execute_ready": package_configured and all(binaries.values()),
+        "package_upgrade_configured": package_configured,
+        "package_manager": manager if manager in READINESS_PACKAGE_MANAGERS else None,
+        "remote_executor_configured": bool(remote_user),
+        "binaries": binaries,
+        "missing": missing,
+        "detail": detail,
     }
 
 

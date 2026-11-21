@@ -448,6 +448,13 @@ The Target Cluster Delivery table offers two modes next to **Apply**:
   drain/uncordon will run. Both modes are created as `waiting_approval`, so
   nothing moves until the command is approved.
 
+**Check upgrade readiness** on the same row queues
+`cluster.kubernetes.upgrade.readiness`, a Target-only read-only probe. It reports
+which of `KUBERNETES_UPGRADE_PACKAGE_MANAGER`, `KUBERNETES_UPGRADE_PACKAGE_VERSION`
+and `KUBERNETES_UPGRADE_REMOTE_USER` are set, whether `kubeadm`/`kubectl` exist on
+the Agent host, and whether the Agent is ready for `execute`. Presence only, never
+values, and no approval needed.
+
 Once the run finishes, each stage card shows the real command it ran, its exit
 code and the tail of its output (`exit 1 · kubectl drain … · boom`), so a failed
 run can be diagnosed from the page without opening the Agent log.

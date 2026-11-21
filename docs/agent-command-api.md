@@ -109,6 +109,17 @@ drained. Without the two variables the run reports
 `package_upgrade: skipped_unconfigured` and relies on the operator having the
 binaries in place — the kubeadm steps then fail visibly instead of silently.
 
+### Readiness probe
+
+`cluster.kubernetes.upgrade.readiness` is a Target-only, read-only command. It
+reports whether that Agent can run an execute upgrade: which of
+`KUBERNETES_UPGRADE_PACKAGE_MANAGER`, `KUBERNETES_UPGRADE_PACKAGE_VERSION` and
+`KUBERNETES_UPGRADE_REMOTE_USER` are present, whether `kubeadm`/`kubectl` are on
+`PATH`, and the resulting `execute_ready` flag. It reports presence only — never
+a configured value — and needs no approval. The deployment row shows a
+"Check upgrade readiness" action and renders `missing` names, so an operator sees
+the exact variable to set instead of a bare "not ready".
+
 `execute` refuses what one agent cannot do safely: more than one control-plane
 node (`UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED`) and workers without
 `KUBERNETES_UPGRADE_REMOTE_USER` (`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It

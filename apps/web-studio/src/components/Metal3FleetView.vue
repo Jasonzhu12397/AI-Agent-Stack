@@ -82,6 +82,8 @@ const selectedKubernetesVersions = ref<Record<string, string>>({});
 // still needs approval before the Agent runs anything.
 const selectedUpgradeModes = ref<Record<string, "simulation" | "execute">>({});
 const upgradeModes = ["simulation", "execute"] as const;
+const readinessBusy = ref<string | null>(null);
+const readinessMessages = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
@@ -688,6 +690,47 @@ function nextKubernetesMinorVersion(deployment: ClusterDeployment): string | nul
   const currentMinor = Number(deployment.kubernetes_version.match(/^v1\.(\d+)/)?.[1]);
   if (!Number.isInteger(currentMinor)) return null;
   return supportedKubernetesVersions.find((version) => Number(version.split(".")[1]) === currentMinor + 1) ?? null;
+}
+
+function upgradeReadinessCommand(deployment: ClusterDeployment): AgentCommand | null {
+  if (!deployment.target_node_id) return null;
+  return (
+    recentCommands.value.find(
+      (command) =>
+        command.command_type === "cluster.kubernetes.upgrade.readiness" &&
+        command.node_id === deployment.target_node_id,
+    ) ?? null
+  );
+}
+
+function upgradeReadinessOutput(deployment: ClusterDeployment): Record<string, unknown> | null {
+  const command = upgradeReadinessCommand(deployment);
+  return command && command.result ? command.result : null;
+}
+
+async function checkUpgradeReadiness(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    readinessMessages.value[deployment.id] = "A Target Agent must be assigned first.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.status !== "online") {
+    readinessMessages.value[deployment.id] = "The Target Agent must be online to report readiness.";
+    return;
+  }
+  readinessBusy.value = deployment.id;
+  readinessMessages.value[deployment.id] = "";
+  try {
+    await createAgentCommand(targetAgent.id, "cluster.kubernetes.upgrade.readiness", {});
+    await refreshData();
+    readinessMessages.value[deployment.id] =
+      "Readiness probe queued; the Agent answers on its next poll.";
+  } catch (cause) {
+    readinessMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to request a readiness probe.";
+  } finally {
+    readinessBusy.value = null;
+  }
 }
 
 function upgradeMode(deployment: ClusterDeployment): "simulation" | "execute" {
@@ -1356,6 +1399,33 @@ onUnmounted(() => {
               <small v-if="upgradeMode(scope.row) === 'execute'" class="readiness-blocked">
                 Execute mode runs kubeadm, package upgrades and drain/uncordon on the cluster.
               </small>
+              <div class="fleet-version-control">
+                <el-button
+                  size="small"
+                  text
+                  :loading="readinessBusy === scope.row.id"
+                  @click="checkUpgradeReadiness(scope.row)"
+                >Check upgrade readiness</el-button>
+                <template v-if="upgradeReadinessOutput(scope.row)">
+                  <el-tag
+                    :type="upgradeReadinessOutput(scope.row)?.execute_ready ? 'success' : 'warning'"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ upgradeReadinessOutput(scope.row)?.execute_ready ? "execute ready" : "execute not ready" }}
+                  </el-tag>
+                  <small
+                    v-if="!upgradeReadinessOutput(scope.row)?.remote_executor_configured"
+                    class="readiness-blocked"
+                  >workers need KUBERNETES_UPGRADE_REMOTE_USER</small>
+                  <small
+                    v-for="item in (upgradeReadinessOutput(scope.row)?.missing as string[] | undefined) || []"
+                    :key="'missing-' + item"
+                    class="readiness-blocked"
+                  >missing {{ item }}</small>
+                </template>
+              </div>
+              <small v-if="readinessMessages[scope.row.id]" class="fleet-version-message">{{ readinessMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">

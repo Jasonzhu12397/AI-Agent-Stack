@@ -17,7 +17,9 @@ from uuid import UUID
 from packages.agent_contracts.host_network_observe import HostNetworkObserveError
 from packages.agent_contracts.host_network_probe import collect_local_host_networks
 from packages.agent_contracts.kubernetes_upgrade import (
+    READINESS_ACTION,
     KubernetesUpgradeError,
+    readiness_report,
     simulation_plan,
 )
 from packages.agent_contracts.kubernetes_upgrade import (
@@ -1573,6 +1575,15 @@ def execute(
                 "output": {},
                 "side_effects": False,
             }
+    if action == READINESS_ACTION:
+        # Read-only: reports which upgrade variables are present and whether the
+        # binaries exist. It never echoes a value and never touches the cluster.
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": readiness_report(),
+            "side_effects": False,
+        }
     if action == "cluster.kubernetes.version.upgrade":
         try:
             request = validate_kubernetes_upgrade(

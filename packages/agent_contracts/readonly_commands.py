@@ -18,6 +18,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from .kubernetes_upgrade import readiness_report as upgrade_readiness_report
+
 Runner = Callable[..., dict[str, Any]]
 
 READONLY_ACTIONS: frozenset[str] = frozenset(
@@ -512,7 +514,20 @@ def _run_network_inspect(run: Runner) -> dict[str, Any]:
     return _succeeded(summary)
 
 
+def _run_upgrade_readiness(_run: Runner) -> dict[str, Any]:
+    outcome = upgrade_readiness_report()
+    return {
+        "status": "succeeded",
+        "error_code": None,
+        "output": outcome,
+        "side_effects": False,
+    }
+
+
+#: Target-only probe: it reports the Target Agent's own environment, not a
+#: cluster, so it is not part of the shared read-only surface.
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
+    "cluster.kubernetes.upgrade.readiness": _run_upgrade_readiness,
     "node.health": _run_node_health,
     "host.preflight": _run_host_preflight,
     "cluster.health": _run_cluster_health,

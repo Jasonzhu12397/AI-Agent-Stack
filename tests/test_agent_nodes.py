@@ -2571,3 +2571,34 @@ def test_target_agent_kubernetes_execute_upgrade_requires_approval(node_workspac
     assert response.status_code == 202
     assert response.data["status"] == AgentCommand.Status.WAITING_APPROVAL
     assert response.data["payload"]["execution_mode"] == "execute"
+
+
+@pytest.mark.django_db
+def test_upgrade_readiness_is_a_target_only_command(node_workspace):
+    _, tenant, project, client = node_workspace
+    target = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "readiness-target", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    eph = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "readiness-eph", "node_type": "eph_node"},
+        format="json",
+    )
+    accepted = client.post(
+        f"/api/v1/agent-nodes/{target.data['id']}/commands/",
+        {"command_type": "cluster.kubernetes.upgrade.readiness", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="readiness-target-edge-lab",
+    )
+    refused = client.post(
+        f"/api/v1/agent-nodes/{eph.data['id']}/commands/",
+        {"command_type": "cluster.kubernetes.upgrade.readiness", "payload": {}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="readiness-eph-edge-lab",
+    )
+
+    assert accepted.status_code == 202
+    assert accepted.data["status"] == AgentCommand.Status.QUEUED
+    assert refused.status_code == 400
