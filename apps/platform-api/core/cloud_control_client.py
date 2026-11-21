@@ -114,12 +114,6 @@ class CloudControlClient:
             f"/api/v1/control/deployments/{deployment_id}",
         )
 
-    def get_deployment_preflight(self, deployment_id: UUID) -> dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/api/v1/control/deployments/{deployment_id}/preflight",
-        )
-
     def get_deployment_action_result(
         self, deployment_id: UUID, action: str
     ) -> dict[str, Any]:

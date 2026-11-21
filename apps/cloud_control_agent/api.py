@@ -576,12 +576,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     return
                 if (
                     self.path.startswith("/api/v1/control/deployments/")
-                    and self.path.endswith("/preflight")
-                ):
-                    self._get_deployment_preflight(self.path.split("/")[-2])
-                    return
-                if (
-                    self.path.startswith("/api/v1/control/deployments/")
                     and "/actions/" in self.path
                     and self.path.endswith("/result")
                 ):
@@ -2465,63 +2459,6 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
             if row is None:
                 raise ControlApiError("DEPLOYMENT_NOT_FOUND")
             self._send(200, row)
-
-        def _get_deployment_preflight(self, raw_id: str) -> None:
-            """Expose the newest EPH preflight result for this deployment.
-
-            The platform keeps the authoritative readiness gate, but only the
-            control plane stores what the EPH actually observed before running.
-            Without this read path the platform field can never carry runtime
-            warnings, so it would forever guess from the spec.
-            """
-
-            self._require_platform_api()
-            deployment_id = _parse_uuid(raw_id, "DEPLOYMENT_ID")
-            with psycopg.connect(database_url, row_factory=dict_row) as connection:
-                deployment = connection.execute(
-                    "SELECT deployment_id, phase, sequence FROM agent_control_deployments "
-                    "WHERE deployment_id = %s",
-                    (deployment_id,),
-                ).fetchone()
-                if deployment is None:
-                    raise ControlApiError("DEPLOYMENT_NOT_FOUND")
-                row = connection.execute(
-                    """
-                    SELECT command_id, status, result, updated_at
-                    FROM agent_control_commands
-                    WHERE deployment_id = %s AND action = 'eph.preflight'
-                    ORDER BY updated_at DESC, command_id DESC
-                    LIMIT 1
-                    """,
-                    (deployment_id,),
-                ).fetchone()
-            if row is None:
-                self._send(
-                    200,
-                    {
-                        "deployment_id": str(deployment_id),
-                        "available": False,
-                        "reason": "EPH_PREFLIGHT_NOT_RUN",
-                    },
-                )
-                return
-            result = row["result"] if isinstance(row["result"], dict) else {}
-            output = result.get("output")
-            self._send(
-                200,
-                {
-                    "deployment_id": str(deployment_id),
-                    "available": isinstance(output, dict),
-                    "reason": None if isinstance(output, dict) else "EPH_PREFLIGHT_OUTPUT_INVALID",
-                    "phase": deployment["phase"],
-                    "sequence": deployment["sequence"],
-                    "command_id": str(row["command_id"]),
-                    "status": row["status"],
-                    "error_code": result.get("error_code"),
-                    "output": output if isinstance(output, dict) else {},
-                    "updated_at": row["updated_at"],
-                },
-            )
 
         def _get_deployment_action_result(self, raw_id: str, action: str) -> None:
             """Return the newest command result for one deployment action.

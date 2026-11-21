@@ -846,9 +846,10 @@ class _StubPreflightClient:
         self._error = error
         self.closed = False
 
-    def get_deployment_preflight(self, deployment_id):
+    def get_deployment_action_result(self, deployment_id, action):
         if self._error is not None:
             raise self._error
+        assert action == "eph.preflight"
         return {**self._payload, "deployment_id": str(deployment_id)}
 
     def close(self):

@@ -1300,7 +1300,7 @@ def test_failed_step_retries_until_its_attempt_budget_is_exhausted(control_serve
         platform_client.close()
 
 
-def test_deployment_preflight_returns_the_latest_eph_result(control_server, tls_material):
+def test_deployment_action_result_returns_the_latest_eph_preflight(control_server, tls_material):
     platform_client = _tls_client(
         control_server,
         tls_material,
@@ -1323,7 +1323,7 @@ def test_deployment_preflight_returns_the_latest_eph_result(control_server, tls_
         )
         missing = _get(
             platform_client,
-            f"/api/v1/control/deployments/{deployment_id}/preflight",
+            f"/api/v1/control/deployments/{deployment_id}/actions/eph.preflight/result",
         )
         assert missing["available"] is False
         assert missing["reason"] == "EPH_PREFLIGHT_NOT_RUN"
@@ -1356,7 +1356,7 @@ def test_deployment_preflight_returns_the_latest_eph_result(control_server, tls_
             connection.commit()
         synced = _get(
             platform_client,
-            f"/api/v1/control/deployments/{deployment_id}/preflight",
+            f"/api/v1/control/deployments/{deployment_id}/actions/eph.preflight/result",
         )
         assert synced["available"] is True
         assert synced["status"] == "succeeded"

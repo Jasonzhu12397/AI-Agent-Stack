@@ -230,6 +230,28 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Snapshot reconciliation on read
+
+The EPH reports results only through the command lease channel. The platform
+used to require two manual sync buttons before ``preflight_result`` knew
+anything, so it normally rendered from the spec instead of from observations.
+``apps/platform-api/core/deployment_reconcile.py`` now owns both transforms
+(``eph_preflight_snapshot`` / ``bmh_inventory_snapshot``) and one
+``reconcile_deployment`` entry point:
+
+- ``GET /api/v1/cluster-deployments/<id>/`` reconciles best-effort before
+  rendering, so a snapshot appears without a click; a bridge outage returns the
+  page unchanged instead of an error.
+- A snapshot is written only when the EPH observation changed
+  (``command_id`` / ``observed_at``), so repeated reads do not churn
+  ``updated_at`` or machine inventory.
+- A failed or incomplete ``metal3.host.inspect`` is never trusted: no machine
+  is touched and the failure is recorded only when the operator explicitly
+  forces a sync.
+- ``GET /api/v1/control/deployments/<id>/preflight`` was a duplicate of
+  ``/actions/eph.preflight/result`` specialised to one action; it has been
+  removed, and the platform client reads the action channel for both snapshots.
+
 ### Ironic template is rendered by the platform
 
 `packages/agent_contracts/ironic_template.py` is the only place that answers

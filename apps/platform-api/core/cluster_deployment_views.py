@@ -31,10 +31,15 @@ from apps.agent_contracts.sriov_device_plugin import (
 )
 from core.audit import record_audit_event
 from core.agent_node_views import _tenant_and_project, _validate_payload
-from core.bmh_inventory import match_machines, merge_bmh_host
-from packages.agent_contracts.metal3_bmh_inventory import (
-    BmhInventoryError,
-    normalize_hosts,
+from core.deployment_reconcile import (
+    BMH_INSPECT_ACTION,
+    BMH_INVENTORY_KEY,
+    EPH_PREFLIGHT_ACTION,
+    EPH_PREFLIGHT_KEY,
+    bmh_inventory_snapshot,
+    eph_preflight_snapshot,
+    reconcile_deployment_quietly,
+    store_snapshot,
 )
 from packages.agent_contracts.eph_network import (
     EphNetworkError,
@@ -825,6 +830,8 @@ class ClusterDeploymentDetailView(APIView):
                 user=request.user,
             ).exists():
                 return Response({"detail": "Project membership required."}, status=403)
+        # Anything the EPH already reported becomes visible without a button.
+        reconcile_deployment_quietly(deployment)
         data = _deployment_data(deployment)
         drift = _network_evidence_drift(deployment.project, deployment.spec)
         if drift is None:
@@ -842,14 +849,12 @@ class ClusterDeploymentEphPreflightView(APIView):
 
     Readiness gating stays on the platform; this endpoint only mirrors what the
     EPH reported so the detail page can show runtime warnings instead of
-    inferring them from the spec. The stored snapshot is explicit and timestamped,
-    so a stale sync is visible rather than silently trusted.
+    inferring them from the spec. The same snapshot is also refreshed
+    automatically when the detail page is read; this endpoint is what an
+    operator uses to force a refresh and see a failure.
     """
 
     permission_classes = [IsAuthenticated]
-
-    MAX_WARNINGS = 32
-    MAX_WARNING_LENGTH = 160
 
     def post(self, request, deployment_id):
         deployment = get_object_or_404(
@@ -865,7 +870,10 @@ class ClusterDeploymentEphPreflightView(APIView):
         client = None
         try:
             client = build_cloud_control_client()
-            payload = client.get_deployment_preflight(deployment.id)
+            payload = client.get_deployment_action_result(
+                deployment.id,
+                EPH_PREFLIGHT_ACTION,
+            )
         except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
             return Response(
                 {"detail": str(exc), "code": "eph_preflight_unavailable"},
@@ -882,35 +890,13 @@ class ClusterDeploymentEphPreflightView(APIView):
         finally:
             if client is not None:
                 client.close()
-        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
-        raw_warnings = output.get("warnings")
-        warnings = []
-        if isinstance(raw_warnings, list):
-            for item in raw_warnings[: self.MAX_WARNINGS]:
-                text = str(item)[: self.MAX_WARNING_LENGTH]
-                if text and text not in warnings:
-                    warnings.append(text)
-        record = {
-            "available": bool(payload.get("available")),
-            "reason": payload.get("reason"),
-            "status": payload.get("status"),
-            "error_code": payload.get("error_code"),
-            "eph_ready": output.get("eph_ready"),
-            "warnings": warnings,
-            "observed_at": output.get("observed_at"),
-            "command_id": payload.get("command_id"),
-            "synced_at": timezone.now().isoformat(),
-        }
-        preflight = (
-            dict(deployment.preflight_result)
-            if isinstance(deployment.preflight_result, dict)
-            else {}
-        )
-        preflight["eph_preflight"] = record
-        deployment.preflight_result = preflight
-        deployment.save(update_fields=["preflight_result", "updated_at"])
+        record = eph_preflight_snapshot(payload)
+        store_snapshot(deployment, EPH_PREFLIGHT_KEY, record)
         return Response(
-            {"eph_preflight": record, "preflight_result": preflight}
+            {
+                "eph_preflight": record,
+                "preflight_result": deployment.preflight_result,
+            }
         )
 
 
@@ -921,11 +907,11 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
     channel; this endpoint mirrors that result so an operator does not have to
     paste JSON. The result must be ``succeeded`` before any host is trusted,
     and every host goes through the same validation and merge path as the
-    manual ingest endpoint.
+    manual ingest endpoint. The detail page refreshes the same snapshot
+    automatically; this endpoint surfaces the failure an operator asked for.
     """
 
     permission_classes = [IsAuthenticated]
-    ACTION = "metal3.host.inspect"
 
     def post(self, request, deployment_id):
         deployment = get_object_or_404(
@@ -941,7 +927,10 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
         client = None
         try:
             client = build_cloud_control_client()
-            payload = client.get_deployment_action_result(deployment.id, self.ACTION)
+            payload = client.get_deployment_action_result(
+                deployment.id,
+                BMH_INSPECT_ACTION,
+            )
         except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
             return Response(
                 {"detail": str(exc), "code": "bmh_inventory_unavailable"},
@@ -955,84 +944,24 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
         finally:
             if client is not None:
                 client.close()
-        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
-        record = {
-            "available": bool(payload.get("available")),
-            "reason": payload.get("reason"),
-            "status": payload.get("status"),
-            "error_code": payload.get("error_code"),
-            "command_id": payload.get("command_id"),
-            "host_count": 0,
-            "matched": 0,
-            "unmatched": [],
-            "warnings": [],
-            "observed_at": output.get("observed_at"),
-            "synced_at": timezone.now().isoformat(),
-        }
-        if not record["available"]:
-            self._store(deployment, record)
-            return Response({"bmh_inventory": record}, status=200)
-        if payload.get("status") != "succeeded":
-            record["reason"] = "BMH_INSPECT_NOT_SUCCEEDED"
-            self._store(deployment, record)
+        record, updated, error = bmh_inventory_snapshot(deployment, payload)
+        if error is None:
+            store_snapshot(deployment, BMH_INVENTORY_KEY, record)
+            return Response({"bmh_inventory": record, "updated": updated}, status=200)
+        store_snapshot(deployment, BMH_INVENTORY_KEY, record)
+        if error == "bmh_inspect_not_succeeded":
             return Response(
                 {
                     "detail": "The EPH inspection did not succeed.",
-                    "code": "bmh_inspect_not_succeeded",
+                    "code": error,
                     "bmh_inventory": record,
                 },
                 status=409,
             )
-        try:
-            hosts = normalize_hosts(output.get("hosts"))
-        except BmhInventoryError as exc:
-            record["reason"] = exc.code
-            self._store(deployment, record)
-            return Response(
-                {"detail": f"bmh: {exc.code}", "error_code": exc.code},
-                status=400,
-            )
-        machines = list(
-            AgentMachine.objects.filter(
-                tenant=deployment.tenant, project=deployment.project
-            ).select_related("agent_node")
+        return Response(
+            {"detail": f"bmh: {error}", "error_code": error},
+            status=400,
         )
-        pairs, unmatched = match_machines(machines, hosts)
-        now = timezone.now()
-        updated: list[dict[str, Any]] = []
-        with transaction.atomic():
-            for host, machine in pairs:
-                adopted_pci = merge_bmh_host(machine, host, now)
-                updated.append(
-                    {
-                        "machine_id": str(machine.id),
-                        "name": host["bmh_name"],
-                        "pci_addresses": host.get("pci_addresses", []),
-                        "pci_inventory_adopted": adopted_pci,
-                    }
-                )
-        warnings = output.get("warnings")
-        record.update(
-            {
-                "host_count": len(hosts),
-                "matched": len(updated),
-                "unmatched": unmatched[:64],
-                "warnings": warnings[:32] if isinstance(warnings, list) else [],
-            }
-        )
-        self._store(deployment, record)
-        return Response({"bmh_inventory": record, "updated": updated}, status=200)
-
-    @staticmethod
-    def _store(deployment, record) -> None:
-        preflight = (
-            dict(deployment.preflight_result)
-            if isinstance(deployment.preflight_result, dict)
-            else {}
-        )
-        preflight["bmh_inventory_sync"] = record
-        deployment.preflight_result = preflight
-        deployment.save(update_fields=["preflight_result", "updated_at"])
 
 
 class ClusterDeploymentIronicTemplateView(APIView):
