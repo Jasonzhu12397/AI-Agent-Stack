@@ -2519,6 +2519,12 @@ def test_kubernetes_upgrade_result_accepts_a_proven_execution():
         "requires_manual_execution": False,
         "resume_supported": False,
         "side_effects": True,
+        "preflight": {
+            "blocked": False,
+            "checks": [
+                {"name": "node.ready/cp-0", "ok": True, "detail": "Ready=True"},
+            ],
+        },
         "upgrade_steps": [
             {"sequence": 1, "name": "preflight", "status": "succeeded"},
             {"sequence": 2, "name": "control_plane", "status": "succeeded"},
@@ -2543,6 +2549,15 @@ def test_kubernetes_upgrade_result_accepts_a_proven_execution():
 
     no_side_effects = dict(result, side_effects=False)
     assert "execution safety" in _validate_kubernetes_upgrade_result(command, no_side_effects)
+
+    missing_preflight = {key: value for key, value in result.items() if key != "preflight"}
+    assert "preflight evidence" in _validate_kubernetes_upgrade_result(command, missing_preflight)
+
+    blocked = dict(result, preflight={"blocked": True, "checks": result["preflight"]["checks"]})
+    assert "preflight is blocked" in _validate_kubernetes_upgrade_result(command, blocked)
+
+    empty_checks = dict(result, preflight={"blocked": False, "checks": []})
+    assert "preflight checks it ran" in _validate_kubernetes_upgrade_result(command, empty_checks)
 
 
 @pytest.mark.django_db

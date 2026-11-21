@@ -300,6 +300,14 @@ def _validate_executed_upgrade(command, result):
             or step.get("status") == "failed"
         ):
             return "Kubernetes upgrade stages must all have run to completion."
+    preflight = result.get("preflight")
+    if not isinstance(preflight, dict):
+        return "A completed Kubernetes upgrade must report its preflight evidence."
+    checks = preflight.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return "A completed Kubernetes upgrade must list the preflight checks it ran."
+    if preflight.get("blocked") is not False:
+        return "A Kubernetes upgrade cannot complete while its preflight is blocked."
     return None
 
 
