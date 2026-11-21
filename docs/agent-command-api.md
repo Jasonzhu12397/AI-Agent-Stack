@@ -97,6 +97,18 @@ with it and the Target Agent executes it with the same function.
   minor. It reports `upgrade_simulated=false`, `upgrade_performed=true`,
   `requires_manual_execution=false`, `side_effects=true` and per-step exit codes.
 
+Package upgrade is part of the same stages, not a manual preamble: set
+`KUBERNETES_UPGRADE_PACKAGE_MANAGER` (`apt` or `dnf`) and
+`KUBERNETES_UPGRADE_PACKAGE_VERSION` (the distribution package version, e.g.
+`1.34.1-1.1` for apt or `1.34.1-1500` for dnf) and the agent installs
+kubelet/kubeadm/kubectl before `kubeadm upgrade apply` on the control plane and,
+through the remote executor, on each worker before `kubeadm upgrade node`, then
+restarts kubelet. The version must be built from the target release; a version
+from another minor answers `UPGRADE_PACKAGE_VERSION_MISMATCH` before anything is
+drained. Without the two variables the run reports
+`package_upgrade: skipped_unconfigured` and relies on the operator having the
+binaries in place — the kubeadm steps then fail visibly instead of silently.
+
 `execute` refuses what one agent cannot do safely: more than one control-plane
 node (`UPGRADE_MULTI_CONTROL_PLANE_UNSUPPORTED`) and workers without
 `KUBERNETES_UPGRADE_REMOTE_USER` (`UPGRADE_REMOTE_EXECUTOR_NOT_CONFIGURED`). It

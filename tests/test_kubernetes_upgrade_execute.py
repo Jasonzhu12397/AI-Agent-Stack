@@ -4,6 +4,8 @@ import json
 
 import pytest
 from target_agent.kubernetes_upgrade_exec import (
+    PACKAGE_MANAGER_ENV,
+    PACKAGE_VERSION_ENV,
     REMOTE_USER_ENV,
     UpgradeExecutionError,
     UpgradeExecutor,
@@ -143,3 +145,80 @@ def test_unreadable_node_list_refuses_to_start():
     with pytest.raises(UpgradeExecutionError) as excinfo:
         UpgradeExecutor(runner).run(REQUEST)
     assert excinfo.value.code == "UPGRADE_NODES_JSON_INVALID"
+
+
+def test_package_upgrade_runs_before_kubeadm_apply(monkeypatch):
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "apt")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.34.1-1.1")
+    runner = FakeRunner(nodes=_nodes(CONTROL), upgraded=_nodes(UPGRADED_CONTROL))
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["package_upgrade"] == "configured"
+    assert result["failure_code"] is None
+    package = [
+        "sudo",
+        "apt-get",
+        "install",
+        "-y",
+        "--allow-change-held-packages",
+        "kubelet=1.34.1-1.1",
+        "kubeadm=1.34.1-1.1",
+        "kubectl=1.34.1-1.1",
+    ]
+    assert package in runner.calls
+    assert runner.calls.index(package) < runner.calls.index(
+        ["kubeadm", "upgrade", "apply", "-y", "v1.34.1"]
+    )
+
+
+def test_package_upgrade_reaches_the_worker_through_ssh(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "dnf")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.34.1-1500")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(UPGRADED_CONTROL, ("w-0", {}, "10.0.0.20", "v1.34.1")),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] is None
+    remote_package = [
+        "ssh",
+        "metal@10.0.0.20",
+        "sudo dnf install -y kubelet-1.34.1-1500 kubeadm-1.34.1-1500 kubectl-1.34.1-1500",
+    ]
+    assert remote_package in runner.calls
+    assert result["upgrade_steps"][2]["status"] == "succeeded"
+
+
+def test_a_package_version_from_another_release_is_refused(monkeypatch):
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "apt")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.33.4-1.1")
+    runner = FakeRunner(nodes=_nodes(CONTROL))
+
+    with pytest.raises(UpgradeExecutionError) as excinfo:
+        UpgradeExecutor(runner).run(REQUEST)
+
+    assert excinfo.value.code == "UPGRADE_PACKAGE_VERSION_MISMATCH"
+    assert runner.calls == [["kubectl", "get", "nodes", "-o", "json"]]
+
+
+def test_an_unknown_package_manager_is_refused(monkeypatch):
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "yum")
+    runner = FakeRunner(nodes=_nodes(CONTROL))
+
+    with pytest.raises(UpgradeExecutionError) as excinfo:
+        UpgradeExecutor(runner).run(REQUEST)
+
+    assert excinfo.value.code == "UPGRADE_PACKAGE_MANAGER_UNSUPPORTED"
+
+
+def test_a_failed_package_install_stops_the_run(monkeypatch):
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "apt")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.34.1-1.1")
+    runner = FakeRunner(nodes=_nodes(CONTROL), fail_on=["apt-get"])
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PACKAGE_FAILED"
+    assert result["upgrade_performed"] is False
+    assert runner.calls[-1][0] == "sudo"
