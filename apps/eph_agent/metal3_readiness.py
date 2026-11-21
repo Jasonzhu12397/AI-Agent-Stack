@@ -38,10 +38,22 @@ PROVIDER_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
     ("metal3-ipam-system", "ipam-controller-manager"),
     ("baremetal-operator-system", "baremetal-operator-controller-manager"),
     ("ai-agent-system", "registry"),
-    ("ai-agent-system", "vbmc"),
-    ("ai-agent-system", "sushy-tools"),
     ("ai-agent-system", "httpd-infra"),
 )
+
+#: Only a virtual fleet needs these; a physical one has real BMCs.
+EMULATED_BMC_DEPLOYMENTS: tuple[tuple[str, str], ...] = (
+    ("ai-agent-system", "vbmc"),
+    ("ai-agent-system", "sushy-tools"),
+)
+
+
+def provider_deployments(*, emulated_bmc: bool = False) -> tuple[tuple[str, str], ...]:
+    """Return the controller deployments this deployment actually needs."""
+
+    if emulated_bmc:
+        return (*PROVIDER_DEPLOYMENTS, *EMULATED_BMC_DEPLOYMENTS)
+    return PROVIDER_DEPLOYMENTS
 
 # (label key, label value, namespace, expected replica set count)
 PROVIDER_REPLICASETS: tuple[tuple[str, str, str, int], ...] = (
@@ -108,9 +120,14 @@ def _replica_finding(label: str, status: dict[str, Any]) -> Finding:
     return Finding(label, ok, f"ready={ready} desired={desired}")
 
 
-def check_deployments(runner: Runner, kubeconfig: str | None = None) -> list[Finding]:
+def check_deployments(
+    runner: Runner,
+    kubeconfig: str | None = None,
+    *,
+    emulated_bmc: bool = False,
+) -> list[Finding]:
     findings: list[Finding] = []
-    for namespace, name in PROVIDER_DEPLOYMENTS:
+    for namespace, name in provider_deployments(emulated_bmc=emulated_bmc):
         document = _json_document(
             _kubectl(
                 runner,
@@ -210,12 +227,13 @@ def verify_management_cluster(
     host_runner: Runner | None = None,
     http_probe: Callable[[str], int | None] | None = None,
     ironic_url: str | None = None,
+    emulated_bmc: bool = False,
 ) -> list[Finding]:
     """Collect every management-cluster judgement in one pass."""
 
     findings: list[Finding] = []
     findings.extend(check_crds(runner, kubeconfig))
-    findings.extend(check_deployments(runner, kubeconfig))
+    findings.extend(check_deployments(runner, kubeconfig, emulated_bmc=emulated_bmc))
     findings.extend(check_replicasets(runner, kubeconfig))
     if host_runner is not None:
         findings.extend(check_bridges(host_runner))

@@ -29,17 +29,23 @@ def merge_bmh_host(machine: AgentMachine, host: dict[str, Any], now) -> bool:
         isinstance(nic, dict) and nic.get("pci_address") for nic in existing_nics
     )
     pci_addresses = host.get("pci_addresses") if isinstance(host.get("pci_addresses"), list) else []
-    if pci_addresses and not has_pci:
-        inventory["nics"] = [
-            {
-                "name": nic["name"],
-                "pci_address": nic["pci_address"],
-                "mac": nic.get("mac", ""),
-                "sriov_capable": bool(nic["pci_address"]),
-            }
-            for nic in host.get("nics") or []
-            if isinstance(nic, dict) and nic.get("name") and nic.get("pci_address")
-        ]
+    # The BMH view is the weaker source, but while it *is* the only source a
+    # later inspection is the newer truth: refusing it froze a partial NIC
+    # inventory forever. Only an agent-owned inventory outranks the BMH.
+    bmh_owned = inventory.get("nics_source") == "bmh_inspect"
+    adopt = bool(pci_addresses) and (not has_pci or bmh_owned)
+    nics = [
+        {
+            "name": nic["name"],
+            "pci_address": nic["pci_address"],
+            "mac": nic.get("mac", ""),
+            "sriov_capable": bool(nic["pci_address"]),
+        }
+        for nic in host.get("nics") or []
+        if isinstance(nic, dict) and nic.get("name") and nic.get("pci_address")
+    ]
+    if adopt and nics != existing_nics:
+        inventory["nics"] = nics
         inventory["nics_source"] = "bmh_inspect"
         adopted_pci = True
         machine.inventory_source = "bmh_inspect"

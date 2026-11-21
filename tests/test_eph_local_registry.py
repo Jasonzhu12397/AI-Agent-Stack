@@ -114,9 +114,33 @@ def test_local_registry_rejects_external_target_agent_registry():
     assert str(error.value) == "EPH_TARGET_AGENT_IMAGE_MUST_USE_LOCAL_REGISTRY"
 
 
-def test_local_registry_requires_vbmc_and_sushy_tools():
+def test_a_physical_fleet_does_not_need_the_bmc_emulators():
+    spec = _spec()
+    for name in ("vbmc", "sushy-tools"):
+        del spec["registry"]["services"][name]
+    rendered = local_registry.render_local_registry(
+        spec["registry"], node_ip="10.0.0.10", agent_image=spec["agent"]["image"]
+    )
+
+    assert rendered["config"]["service_names"] == ["httpd-infra"]
+    assert rendered["config"]["emulated_bmc"] is False
+    assert rendered["config"]["pinned_images"]
+
+
+def test_half_a_bmc_emulator_pair_is_rejected():
     spec = _spec()
     del spec["registry"]["services"]["vbmc"]
+    with pytest.raises(Metal3SkillError) as error:
+        local_registry.render_local_registry(
+            spec["registry"], node_ip="10.0.0.10", agent_image=spec["agent"]["image"]
+        )
+    assert str(error.value) == "EPH_LOCAL_BMC_SERVICES_INCOMPLETE"
+
+
+def test_the_boot_artifact_server_is_still_required():
+    spec = _spec()
+    for name in ("vbmc", "sushy-tools", "httpd-infra"):
+        del spec["registry"]["services"][name]
     with pytest.raises(Metal3SkillError) as error:
         local_registry.render_local_registry(
             spec["registry"], node_ip="10.0.0.10", agent_image=spec["agent"]["image"]

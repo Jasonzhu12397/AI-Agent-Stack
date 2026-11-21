@@ -103,8 +103,16 @@ def test_bridges_are_read_from_json_not_grep():
 
 def test_all_eph_infrastructure_is_checked_as_kubernetes_deployments():
     assert not hasattr(readiness, "check_containers")
-    for name in ("registry", "vbmc", "sushy-tools", "httpd-infra"):
-        assert ("ai-agent-system", name) in readiness.PROVIDER_DEPLOYMENTS
+    required = readiness.provider_deployments()
+    for name in ("registry", "httpd-infra"):
+        assert ("ai-agent-system", name) in required
+    # A physical fleet has real BMCs; the emulators are only required when the
+    # deployment actually declares a virtual one.
+    for name in ("vbmc", "sushy-tools"):
+        assert ("ai-agent-system", name) not in required
+        assert ("ai-agent-system", name) in readiness.provider_deployments(
+            emulated_bmc=True
+        )
 
 
 def test_ironic_must_refuse_anonymous_reads():

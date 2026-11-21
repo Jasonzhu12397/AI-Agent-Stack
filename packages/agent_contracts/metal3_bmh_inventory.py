@@ -84,7 +84,9 @@ def bmc_host_key(address: str) -> str:
 
 def _nics(hardware: dict[str, Any], inventory: dict[str, Any]) -> list[dict[str, Any]]:
     entries = hardware.get("nics")
-    if not isinstance(entries, list):
+    # The BMH status often carries an empty nic list while the IPA inventory of
+    # the same host already knows the NICs; an empty list must not shadow it.
+    if not isinstance(entries, list) or not entries:
         entries = inventory.get("nics")
     if not isinstance(entries, list):
         return []

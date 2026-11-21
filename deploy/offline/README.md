@@ -16,7 +16,9 @@ removes the kube-proxy DaemonSet and ConfigMap.
 
 Edit `images.json` before fetching. It contains one entry for every image, the
 Python base image, kubectl, clusterctl, Python requirements, IPA branch/flavor,
-and the vbmc/sushy-tools/httpd-infra Pod definitions.
+and the httpd-infra Pod definition. The vbmc and sushy-tools emulator Pods are
+only declared for a virtual fleet; a physical one has real BMCs and the
+`metal3_deploy.py verify` check requires them only with `--emulated-bmc`.
 
 `main`, `master` and `latest` are convenient upstream development references, not
 immutable versions. Replace them with the exact releases validated on your

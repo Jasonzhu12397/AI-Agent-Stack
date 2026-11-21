@@ -59,7 +59,8 @@ and is included in the rendered bundle.
 This lab provisions real hardware and never requires libvirt, KVM, a VM domain,
 or a second kind/minikube management cluster. The EPH single-node Kubernetes
 cluster directly contains the BMH/CAPI resources, EPH Agent, Ironic/BMO,
-registry, vbmc, sushy-tools and httpd-infra Pods. Target Agent is likewise a
+registry and httpd-infra Pods (plus vbmc/sushy-tools when the lab fleet is
+virtual rather than physical). Target Agent is likewise a
 Kubernetes Deployment in the target cluster. None of these workloads uses
 Docker Compose or a host container lifecycle. The upstream VM creation path is
 deleted rather than toggled off.

@@ -1,9 +1,10 @@
 """Render the EPH local registry and BMC services as Kubernetes workloads.
 
-The registry, vbmc, sushy-tools, and httpd-infra all run as Pods in the EPH
-single-node cluster. Images arrive in Live ISO archives, are imported into containerd, and
-are published only to the registry on the EPH provisioning NIC. No Docker
-Compose stack, virtual machine, or external registry is involved.
+The registry, httpd-infra and — only for a virtual fleet — the vbmc and
+sushy-tools BMC emulators run as Pods in the EPH single-node cluster. Images
+arrive in Live ISO archives, are imported into containerd, and are published
+only to the registry on the EPH provisioning NIC. No Docker Compose stack,
+virtual machine, or external registry is involved.
 """
 
 from __future__ import annotations
@@ -18,7 +19,11 @@ _DIGEST_IMAGE = re.compile(
     r"^(?P<endpoint>[A-Za-z0-9.-]+:[0-9]{1,5})/(?P<repository>[a-z0-9._/-]+)@sha256:[a-f0-9]{64}$"
 )
 _ENDPOINT = re.compile(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
-_REQUIRED_SERVICES = ("vbmc", "sushy-tools", "httpd-infra")
+# httpd-infra serves the boot artifacts every provisioning host needs. vbmc and
+# sushy-tools emulate a BMC for virtual machines; a physical fleet has real
+# BMCs and must not be blocked on pods that would never run there.
+_BASE_SERVICES = ("httpd-infra",)
+_EMULATED_BMC_SERVICES = ("vbmc", "sushy-tools")
 _NAMESPACE = "ai-agent-system"
 
 
@@ -162,12 +167,23 @@ def render_local_registry(
         )
 
     services = value.get("services")
-    if not isinstance(services, dict) or not set(_REQUIRED_SERVICES).issubset(services):
+    if not isinstance(services, dict):
         raise Metal3SkillError("EPH_LOCAL_BMC_SERVICES_REQUIRED")
+    emulated = [name for name in _EMULATED_BMC_SERVICES if name in services]
+    if not isinstance(services, dict) or not set(_BASE_SERVICES).issubset(services):
+        raise Metal3SkillError("EPH_LOCAL_BMC_SERVICES_REQUIRED")
+    # Both emulators or neither: a half pair can start a BMC endpoint that
+    # cannot serve Redfish for the hosts it was declared for.
+    if emulated and len(emulated) != len(_EMULATED_BMC_SERVICES):
+        raise Metal3SkillError("EPH_LOCAL_BMC_SERVICES_INCOMPLETE")
+    extra = set(services) - set(_BASE_SERVICES) - set(_EMULATED_BMC_SERVICES)
+    if extra:
+        raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_UNKNOWN")
+    service_names = [*_BASE_SERVICES, *emulated]
     required_repositories = {agent_repository, target_repository}
     service_documents = []
     service_images = []
-    for name in _REQUIRED_SERVICES:
+    for name in service_names:
         service = services[name]
         if not isinstance(service, dict) or set(service) - {"container", "pod"}:
             raise Metal3SkillError("EPH_LOCAL_BMC_SERVICE_INVALID")
@@ -235,7 +251,8 @@ def render_local_registry(
         "target_agent_image": target_image,
         "images": normalized_archives,
         "pinned_images": pinned_images,
-        "service_names": list(_REQUIRED_SERVICES),
+        "service_names": service_names,
+        "emulated_bmc": bool(emulated),
         "wait_seconds": value.get("wait_seconds", 120),
     }
     if not isinstance(config["wait_seconds"], int) or not 1 <= config["wait_seconds"] <= 600:

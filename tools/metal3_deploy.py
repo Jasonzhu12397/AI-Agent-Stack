@@ -393,6 +393,7 @@ def command_verify(args: argparse.Namespace) -> int:
             host_runner=None if args.no_host_checks else local_command_runner,
             http_probe=None if args.no_host_checks else http_status_probe,
             ironic_url=args.ironic_url,
+            emulated_bmc=args.emulated_bmc,
         )
         for finding in findings:
             print(finding.render())
@@ -779,6 +780,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-host-checks",
         action="store_true",
         help="skip the provisioning-host bridges and Ironic probe",
+    )
+    verify.add_argument(
+        "--emulated-bmc",
+        action="store_true",
+        help="the fleet is virtual (vbmc/sushy-tools), so require those pods too",
     )
     verify.set_defaults(func=command_verify)
 

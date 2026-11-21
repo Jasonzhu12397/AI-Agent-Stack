@@ -398,3 +398,109 @@ def test_bmh_inventory_sync_rejects_unsucceeded_and_missing_runs(monkeypatch):
     assert response.status_code == 200
     assert response.data["bmh_inventory"]["available"] is False
     assert response.data["bmh_inventory"]["reason"] == "DEPLOYMENT_ACTION_NOT_RUN"
+
+
+def test_inspect_falls_back_to_the_ipa_inventory_when_bmh_nics_are_empty():
+    bmh = _bmh(nics=[])
+    bmh["status"]["hardware"]["inventory"] = {
+        "nics": [
+            {
+                "name": "eno2",
+                "mac": "aa:bb:cc:dd:ee:02",
+                "pciAddress": "0000:3b:00.1",
+            }
+        ]
+    }
+    parsed = inspect_bmh_document({"items": [bmh]})
+
+    host = parsed["hosts"][0]
+    assert host["nics"][0]["name"] == "eno2"
+    assert host["pci_addresses"] == ["0000:3b:00.1"]
+
+
+@pytest.mark.django_db
+def test_bmh_inventory_api_does_not_bump_the_revision_for_the_same_view():
+    tenant, project, machine, client = _workspace()
+    document = {
+        "items": [
+            _bmh(
+                nics=[
+                    {
+                        "name": "eno1",
+                        "mac": "aa:bb:cc:dd:ee:01",
+                        "pciAddress": "0000:3b:00.0",
+                    }
+                ]
+            )
+        ]
+    }
+    first = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/bmh-inventory/",
+        {"document": document},
+        format="json",
+    )
+    assert first.data["updated"][0]["pci_inventory_adopted"] is True
+    machine.refresh_from_db()
+    assert machine.inventory_revision == 1
+
+    second = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/bmh-inventory/",
+        {"document": document},
+        format="json",
+    )
+    assert second.status_code == 200
+    machine.refresh_from_db()
+    assert machine.inventory_revision == 1
+
+
+@pytest.mark.django_db
+def test_bmh_inventory_api_refreshes_a_richer_inspection_of_its_own_view():
+    tenant, project, machine, client = _workspace()
+    first_document = {
+        "items": [
+            _bmh(
+                nics=[
+                    {
+                        "name": "eno1",
+                        "mac": "aa:bb:cc:dd:ee:01",
+                        "pciAddress": "0000:3b:00.0",
+                    }
+                ]
+            )
+        ]
+    }
+    client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/bmh-inventory/",
+        {"document": first_document},
+        format="json",
+    )
+    machine.refresh_from_db()
+    assert machine.inventory_revision == 1
+
+    second_document = {
+        "items": [
+            _bmh(
+                nics=[
+                    {
+                        "name": "eno1",
+                        "mac": "aa:bb:cc:dd:ee:01",
+                        "pciAddress": "0000:3b:00.0",
+                    },
+                    {
+                        "name": "eno2",
+                        "mac": "aa:bb:cc:dd:ee:02",
+                        "pciAddress": "0000:3b:00.1",
+                    },
+                ]
+            )
+        ]
+    }
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/fleet/machines/bmh-inventory/",
+        {"document": second_document},
+        format="json",
+    )
+    assert response.data["updated"][0]["pci_inventory_adopted"] is True
+    machine.refresh_from_db()
+    assert [nic["name"] for nic in machine.hardware_inventory["nics"]] == ["eno1", "eno2"]
+    assert machine.inventory_revision == 2
