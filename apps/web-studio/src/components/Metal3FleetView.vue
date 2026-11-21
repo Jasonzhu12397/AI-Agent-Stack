@@ -753,6 +753,27 @@ onUnmounted(() => {
         </section>
         <section class="fleet-panel">
           <div class="fleet-panel-heading"><h3>Deployment pipeline</h3><span>{{ deployments.length }} CLUSTERS</span></div>
+          <div class="lab-workflow-tag">
+            <el-tag
+              :type="labWorkflow?.ready ? 'success' : 'warning'"
+              size="small"
+              effect="plain"
+            >
+              Lab acceptance ·
+              {{ labWorkflow ? (labWorkflow.ready ? "workflow ready" : labWorkflow.available ? "workflow incomplete" : "workflow not deployed") : "probe unavailable" }}
+            </el-tag>
+            <el-link
+              v-if="labWorkflow?.workflow_url"
+              :href="labWorkflow.workflow_url"
+              target="_blank"
+              :underline="false"
+            >Open workflow</el-link>
+            <small v-if="labWorkflow">
+              Physical result requires runner labels
+              {{ labWorkflow.acceptance_job?.runs_on.join(", ") || "not declared" }}; secret presence
+              is decided by the readiness job, not here.
+            </small>
+          </div>
           <div v-for="deployment in deployments.slice(0, 6)" :key="deployment.id" class="fleet-deployment-row">
             <div>
               <strong>{{ deployment.cluster_name }}</strong>

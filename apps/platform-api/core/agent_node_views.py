@@ -36,6 +36,7 @@ from packages.agent_contracts.agent_commands import (
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
 from core.audit import record_audit_event
+from core.fleet_inspection import sync_fleet_inspections_quietly
 from core.models import (
     AgentCommand,
     AgentMachine,
@@ -465,10 +466,18 @@ class AgentNodeListCreateView(APIView):
 
 
 class FleetMachineInventoryView(APIView):
+    """List machines, after applying inspection results the EPH already reported.
+
+    Discovery chains queue ``metal3.host.inspect``; its result lands on the
+    command record. Applying it here means a fleet refresh shows the discovered
+    PCI inventory without opening a deployment or pressing a sync button.
+    """
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
+        sync_fleet_inspections_quietly(tenant, project)
         try:
             limit = int(request.query_params.get("limit", "50"))
             offset = int(request.query_params.get("offset", "0"))

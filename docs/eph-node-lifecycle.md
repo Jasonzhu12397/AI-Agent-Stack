@@ -230,6 +230,23 @@ The EPH already reports the action result through the command lease channel, so 
 
 The same document can still be submitted manually to `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/bmh-inventory/` (administrator only). The platform matches machines by BMC host, then BMH name, then system UUID; unmatched hosts are reported instead of guessed. The BMH block is always stored as `hardware_inventory["bmh"]`. NIC records are adopted only when the BMH view carries PCI addresses and the machine has no PCI-bearing NIC inventory from the agent; only that adoption advances `inventory_source`, `inventory_revision` and `observed_at`, because those fields feed the 24-hour inventory gate and the SR-IOV PCI prefill.
 
+### Fleet refresh applies reported inspections
+
+`core/fleet_inspection.py` reads the ``metal3.host.inspect`` results that are
+already stored on succeeded ``AgentCommand`` records and applies them through
+the same ``normalize_hosts`` / ``match_machines`` / ``merge_bmh_host`` path as
+the manual ingest endpoint:
+
+- `GET .../fleet/machines/` runs a best-effort pass first, so a discovery chain's
+  PCI inventory appears on the next fleet refresh without opening a deployment
+  or pressing a sync button;
+- each machine records the applied command id (``bmh_inspect_command_id``), so a
+  repeated pass does not replay the same observation or advance
+  ``inventory_revision``;
+- a failed command, a malformed result, or a machine that already has
+  agent-observed PCI is left untouched: the weaker BMH view never replaces an
+  Agent observation.
+
 ### Discovery chain: one confirmed action
 
 `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/discovery/`
@@ -327,6 +344,9 @@ a tag plus the individual checks.
   GitHub repository secrets, so the tag must not turn green in a way that
   implies a lab run happened. Presence is decided by the Lab readiness job, whose
   report also lands in the workflow artifacts.
+- The tag appears both on the Fleet Inventory panel and on the Overview
+  deployment pipeline, so the lab precondition is visible before a deployment
+  is planned.
 - `METAL3_LAB_WORKFLOW_URL` adds an "Open workflow" link when the deployment
   sets it; the tag itself never calls GitHub.
 - PyYAML resolves the unquoted `on:` key to boolean `True`, so the trigger block
