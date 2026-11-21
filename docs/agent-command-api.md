@@ -194,7 +194,14 @@ reports, whether that version is on target, the drift count, the health of each
 stacked etcd member, and the snapshots already written to
 `KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR` (default `/var/lib/etcd/backups`). Nodes
 it cannot read fail closed with `RECOVERY_NODES_UNREADABLE`; an unreadable etcd
-or snapshot directory is reported as a warning instead of being guessed at.
+or snapshot directory is reported as a warning instead of being guessed at, and a
+cluster with external etcd reports `stacked=false, healthy=null` instead of
+looking degraded.
+
+A reused `KUBERNETES_UPGRADE_ETCD_SNAPSHOT` is verified the way a fresh one is:
+the run reads it with `etcdctl snapshot status` inside the etcd pod, so a file
+that exists but cannot be restored blocks the upgrade instead of passing on its
+mtime.
 
 ## Rollback restores the snapshot and keeps the old data
 
