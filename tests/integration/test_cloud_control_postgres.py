@@ -1326,7 +1326,8 @@ def test_deployment_action_result_returns_the_latest_eph_preflight(control_serve
             f"/api/v1/control/deployments/{deployment_id}/actions/eph.preflight/result",
         )
         assert missing["available"] is False
-        assert missing["reason"] == "EPH_PREFLIGHT_NOT_RUN"
+        # The unified action channel names the gap generically.
+        assert missing["reason"] == "DEPLOYMENT_ACTION_NOT_RUN"
         with psycopg.connect(_database_url()) as connection:
             connection.execute(
                 """
