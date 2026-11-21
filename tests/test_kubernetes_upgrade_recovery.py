@@ -170,3 +170,11 @@ def test_recovery_request_only_accepts_a_version_shape():
     with pytest.raises(KubernetesUpgradeError) as raised:
         validate_recovery_request({"target_version": "v1.34; rm -rf /"})
     assert raised.value.code == "RECOVERY_TARGET_VERSION_INVALID"
+
+def test_without_a_target_the_report_does_not_claim_zero_drift():
+    runner = RecoveryRunner(nodes=_nodes(CONTROL, WORKER), etcd_pods=_pods(("etcd-cp-0", "cp-0")))
+    report = UpgradeExecutor(runner).report_recovery("")
+
+    assert report["target_version"] == ""
+    assert report["drift"] is None
+    assert all(row["on_target"] is False for row in report["nodes"])

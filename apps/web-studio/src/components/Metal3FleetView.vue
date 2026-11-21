@@ -1574,7 +1574,7 @@ onUnmounted(() => {
                     size="small"
                     effect="plain"
                   >
-                    {{ recoveryReport(scope.row.target_node_id)?.drift }} node(s) off target
+                    {{ recoveryReport(scope.row.target_node_id)?.drift === null ? "no target set" : recoveryReport(scope.row.target_node_id)?.drift + " node(s) off target" }}
                   </el-tag>
                 </template>
               </div>
@@ -1820,7 +1820,7 @@ onUnmounted(() => {
               <div class="fleet-preflight-heading">
                 <span>Recovery state · {{ recoveryReport(command.node_id)?.targetVersion || "target not set" }}</span>
                 <el-tag :type="recoveryReport(command.node_id)?.drift ? 'warning' : 'success'" size="small">
-                  {{ recoveryReport(command.node_id)?.drift }} OFF TARGET
+                  {{ recoveryReport(command.node_id)?.drift === null ? "TARGET NOT SET" : recoveryReport(command.node_id)?.drift + " OFF TARGET" }}
                 </el-tag>
               </div>
               <ul>

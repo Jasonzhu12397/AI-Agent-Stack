@@ -964,7 +964,9 @@ class UpgradeExecutor:
             "target_version": target,
             "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "nodes": node_rows,
-            "drift": sum(1 for row in node_rows if not row["on_target"]),
+            # Without a target there is nothing to drift from; zero would read
+            # as "all nodes are fine".
+            "drift": sum(1 for row in node_rows if not row["on_target"]) if target else None,
             "etcd": etcd,
             "snapshots": snapshots,
             "warnings": warnings[:10],
