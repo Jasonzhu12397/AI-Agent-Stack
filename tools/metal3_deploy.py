@@ -47,6 +47,8 @@ for _path in (ROOT, ROOT / "apps" / "platform-api"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from agent_contracts import infra_networks  # noqa: E402
+
 from apps.eph_agent import (  # noqa: E402
     capi_renderer,
     data_template,
@@ -64,6 +66,7 @@ SECRETS_FILE = "secrets.yaml"
 BMH_FILE = "bmh.yaml"
 CAPI_FILE = "capi.yaml"
 NETWORK_SPEC_FILE = "network-spec.yaml"
+NETWORK_PROFILE_FILE = "network-profile.yaml"
 NETWORK_FILE = "network.json"
 TARGET_KUBECONFIG_FILE = "target.kubeconfig"
 READY_STATES = {"available", "ready", "provisioned"}
@@ -216,9 +219,17 @@ def command_plan(args: argparse.Namespace) -> int:
             (out_dir / NETWORK_SPEC_FILE).write_text(
                 yaml.safe_dump(network_spec, sort_keys=False), encoding="utf-8"
             )
+        profile = None
+        if args.network_profile:
+            profile = yaml.safe_load(args.network_profile.read_text(encoding="utf-8"))
+            (out_dir / NETWORK_PROFILE_FILE).write_text(
+                yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
+            )
         template_content = None
         if args.data_template:
             template_content = yaml.safe_load(args.data_template.read_text(encoding="utf-8"))
+        elif profile is not None:
+            template_content = data_template.profile_data_template(profile)
         else:
             template_content = data_template.default_data_template(network_spec)
         spec = fleet_planning.cluster_spec(
@@ -266,6 +277,21 @@ def command_plan(args: argparse.Namespace) -> int:
     if capi_documents:
         print(f"capi: {out_dir / CAPI_FILE}")
     return 0
+
+
+def _recorded_host_links(out_dir: Path) -> tuple[str, ...]:
+    """Host links the recorded network profile needs, or nothing if absent."""
+
+    path = out_dir / NETWORK_PROFILE_FILE
+    if not path.is_file():
+        return ()
+    try:
+        profile = yaml.safe_load(path.read_text(encoding="utf-8"))
+        plan = infra_networks.plan_infra_networks(profile)
+        return tuple(infra_networks.required_host_links(plan))
+    except (infra_networks.InfraNetworkError, yaml.YAMLError) as exc:
+        sys.stderr.write(f"WARNING: cannot derive host links from {path}: {exc}\n")
+        return ()
 
 
 def _parse_pool_labels(value: str | None) -> dict[str, list[str]]:
@@ -387,6 +413,7 @@ def command_verify(args: argparse.Namespace) -> int:
             failures.append(f"{name} is not ready (status={status}, state={state})")
 
     if not args.bmh_only:
+        required_links = tuple(args.required_link) or _recorded_host_links(args.dir)
         findings = metal3_readiness.verify_management_cluster(
             _plain_runner(),
             kubeconfig=args.kubeconfig,
@@ -394,7 +421,7 @@ def command_verify(args: argparse.Namespace) -> int:
             http_probe=None if args.no_host_checks else http_status_probe,
             ironic_url=args.ironic_url,
             emulated_bmc=args.emulated_bmc,
-            required_links=tuple(args.required_link),
+            required_links=required_links,
         )
         for finding in findings:
             print(finding.render())
@@ -742,6 +769,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--network-spec",
         type=Path,
         help="physical network and CNI/data-plane specification (YAML or JSON)",
+    )
+    plan.add_argument(
+        "--network-profile",
+        type=Path,
+        help="platform infra network profile (roles/VLANs/bonds) that drives the "
+        "host networkData; recorded so verify can check the same host links",
     )
     plan.add_argument("--worker-node-labels", help="JSON object of pool -> label list")
     plan.add_argument("--django-settings", default="platform_api.settings")

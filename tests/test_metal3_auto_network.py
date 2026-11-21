@@ -299,3 +299,53 @@ def test_profile_template_refuses_an_profile_without_a_provisioning_plan():
     with pytest.raises(Exception) as error:
         data_template.profile_data_template({"networks": []})
     assert "INFRA_NETWORK" in str(error.value)
+
+def test_verified_host_links_come_from_the_recorded_profile(tmp_path):
+    profile = {
+        "networks": [
+            {
+                "name": "ctrl",
+                "role": "control",
+                "cidr": "172.18.0.0/24",
+                "ip_pools": [{"start": "172.18.0.10", "end": "172.18.0.50"}],
+                "bond": {
+                    "name": "bond_control",
+                    "interfaces": ["pci@0000:18:00.0", "pci@0000:18:00.1"],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                "name": "sdi_semc",
+                "role": "provisioning",
+                "vlan": 70,
+                "cidr": "172.18.37.0/24",
+                "ip_pools": [{"start": "172.18.37.10", "end": "172.18.37.50"}],
+                "host_roles": ["control_plane", "worker"],
+            },
+            {
+                "name": "data_net",
+                "role": "data",
+                "cidr": "10.0.200.0/24",
+                "ip_pools": [{"start": "10.0.200.10", "end": "10.0.200.50"}],
+                "bond": {
+                    "name": "bond_data",
+                    "interfaces": ["pci@0000:3b:00.0", "pci@0000:3b:00.1"],
+                    "mode": "802.3ad",
+                },
+                "host_roles": ["control_plane", "worker", "storage"],
+            },
+        ]
+    }
+    (tmp_path / metal3_deploy.NETWORK_PROFILE_FILE).write_text(
+        yaml.safe_dump(profile), encoding="utf-8"
+    )
+    assert metal3_deploy._recorded_host_links(tmp_path) == (
+        "bond_control",
+        "bond_data",
+        "bond_control.70",
+    )
+    # Nothing recorded means nothing is claimed as required.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert metal3_deploy._recorded_host_links(empty) == ()

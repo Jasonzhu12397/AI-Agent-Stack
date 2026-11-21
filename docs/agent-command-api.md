@@ -274,3 +274,11 @@ consistently for the IPPool, `ipAddressFromIPPool` and SR-IOV policy names.
 A physical EPH has bonds and VLAN sub-interfaces, not bridges, so the host check
 verifies declared links: `metal3_deploy.py verify --required-link bond_control
 --required-link bond_control.70`.
+
+## Verification reuses the recorded network profile
+
+`plan --network-profile profile.yaml` renders the host `networkData` from that
+profile and records it as `network-profile.yaml` in the output directory. `verify`
+then derives the host links to check from the recorded profile instead of a
+hand-written list, so the links that are verified are exactly the bonds and VLAN
+interfaces cloud-init brings up (`--required-link` remains available to override).

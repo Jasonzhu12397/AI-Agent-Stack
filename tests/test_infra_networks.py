@@ -302,3 +302,17 @@ def test_pxe_boot_ports_are_the_physical_ports_of_the_control_bond():
     # The bond and the VLAN are assembled in software, so neither can boot.
     assert "bond_control" not in ports
     assert "bond_control.70" not in ports
+
+def test_required_host_links_match_the_rendered_network_data():
+    plan = plan_infra_networks(_pxe_profile())
+    links = infra.required_host_links(plan)
+    assert links == [
+        "bond_control",
+        "bond_control.70",
+        "bond_data",
+        "bond_data.3220",
+    ]
+    # Every checked link is one cloud-init actually brings up.
+    data = render_role_network_data(plan, "worker")
+    rendered = {item["id"] for key in ("bonds", "vlans") for item in data["links"].get(key, [])}
+    assert set(links) == rendered

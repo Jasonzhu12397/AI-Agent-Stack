@@ -470,6 +470,25 @@ def role_links(plan: dict[str, Any], host_role: str) -> list[dict[str, Any]]:
     }
 
 
+def required_host_links(plan: dict[str, Any]) -> list[str]:
+    """Return every host link the rendered plan needs on a machine.
+
+    Readiness has to verify what will actually be applied. The link list comes
+    from the same ``role_links`` render that produces ``networkData``, so a
+    host is checked for exactly the bonds and VLAN interfaces cloud-init will
+    bring up.
+    """
+
+    links: list[str] = []
+    for host_role in ("control_plane", "worker", "storage"):
+        data = role_links(plan, host_role)
+        for key in ("bonds", "vlans"):
+            for item in data.get(key, []):
+                if item["id"] not in links:
+                    links.append(item["id"])
+    return links
+
+
 def render_role_network_data(plan: dict[str, Any], host_role: str) -> dict[str, Any]:
     """Render the Metal3DataTemplate data block for one host role."""
 
