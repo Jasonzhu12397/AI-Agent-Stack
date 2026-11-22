@@ -392,3 +392,14 @@ as `protect`, and the contract refuses anything that is not a bare snapshot name
 of this cluster — a caller cannot point the pruning pass at a path, and cannot
 protect a file that does not belong here. The read-only view reports the same
 set, so "why was this file kept?" has an answer on the screen.
+
+A backup that nobody checks is not a control. `python
+apps/platform-api/manage.py check_etcd_backups` walks every `succeeded` deployment,
+asks each one the same question the read-only view asks, writes an
+`cluster.etcd_backup.problem` audit event for every cluster that has no usable
+recent backup (with the contract code, the newest file and its age), prints the
+whole picture as JSON and exits non-zero. `--dry-run` reports without writing
+audit events; `--no-audit` keeps the exit code but stays out of the chain. A
+cluster that declares `kubernetes.etcd_backup: false` reports
+`ETCD_BACKUP_DISABLED` and is neither a problem nor an audit event, so a
+deliberate opt-out does not page anyone.

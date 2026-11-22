@@ -23,6 +23,15 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   view shows the protected set. A rollback that failed or was cancelled stops
   protecting its file.
 
+### Added
+
+- `check_etcd_backups`: reports every installed cluster with a missing, stale or
+  never-run backup, writes a `cluster.etcd_backup.problem` audit event for each
+  and exits non-zero, so a cron entry or monitoring probe can alarm without a
+  human watching the table. `--dry-run` reports without auditing, and a cluster
+  that opted out with `kubernetes.etcd_backup: false` is reported as disabled
+  rather than as a problem.
+
 ### Changed
 
 - `queue_etcd_backups` honours the retention policy a deployment declares in
