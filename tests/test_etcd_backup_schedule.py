@@ -374,3 +374,32 @@ def test_an_unset_flag_leaves_the_spec_policy_untouched():
     payload = AgentCommand.objects.get(command_type=ACTION).payload
     assert payload["keep_count"] == 12
     assert payload["min_free_bytes"] == 1073741824
+
+
+@pytest.mark.django_db
+def test_a_succeeded_rollback_releases_the_snapshot_it_restored_from():
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={
+            "snapshot_path": (
+                "/var/lib/etcd/backups/snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+            )
+        },
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="rollback-done",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    _run()
+
+    # The file did its job. Keeping it protected forever is how a backup
+    # directory never shrinks.
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert "protect" not in payload

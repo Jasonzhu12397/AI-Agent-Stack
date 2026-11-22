@@ -24,8 +24,12 @@ SPEC_POLICY_KEYS = {
     "min_free_bytes": "etcd_backup_min_free_bytes",
 }
 
-#: A rollback that ended this way no longer holds the snapshot it named.
+#: A rollback that ended this way no longer holds the snapshot it named: it
+#: either failed (the file is still usable, but nothing is waiting on it) or it
+#: succeeded, in which case that snapshot has already done its job and must not
+#: be kept forever by a protection nobody releases.
 ROLLBACK_ENDED = (
+    AgentCommand.Status.SUCCEEDED,
     AgentCommand.Status.FAILED,
     AgentCommand.Status.CANCELLED,
 )

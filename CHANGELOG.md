@@ -30,6 +30,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A rollback that already succeeded releases the snapshot it restored from,
+  so retention is no longer told to hold that file forever.
 - A cluster with backups switched off reports `enabled: false` and no findings
   rather than looking like a cluster that never backed up.
 - Scheduler overrides default to unset instead of 0 (an unset flag no longer
