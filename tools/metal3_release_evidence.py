@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from packages.version import project_version
+
 MANIFEST_VERSION = "1"
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
@@ -131,6 +133,9 @@ def build_manifest(
     return {
         "manifest_version": MANIFEST_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
+        # A release manifest has to name the product it seals, or two releases
+        # whose evidence directory looks alike cannot be told apart.
+        "product_version": project_version(),
         "commit": commit,
         "status": status,
         "required_kinds": list(required_kinds),

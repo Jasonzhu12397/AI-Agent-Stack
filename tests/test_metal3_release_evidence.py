@@ -89,3 +89,16 @@ def test_release_manifest_cli_exit_codes(tmp_path):
     assert json.loads(out.read_text())["status"] == "pass"
     write_evidence(evidence, "03-cluster.json", "metal3-cluster-evidence", "fail")
     assert main(["--evidence-dir", str(evidence), "--out", str(out), "--commit", "abc"]) == 1
+
+
+def test_release_manifest_names_the_product_version(tmp_path):
+    from packages.version import project_version
+
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    write_evidence(evidence, "01-preflight.json", "metal3-preflight", "pass")
+    write_evidence(evidence, "02-redfish.json", "metal3-redfish-evidence", "pass")
+    write_evidence(evidence, "03-cluster.json", "metal3-cluster-evidence", "pass")
+    manifest = build_manifest(evidence, commit="abc")
+    assert manifest["product_version"] == project_version()
+    assert manifest["product_version"] != ""
