@@ -63,7 +63,10 @@ from core.cluster_deployment_views import (
     ClusterDeploymentNetworkEvidenceView,
     ClusterDeploymentListCreateView,
 )
-from core.etcd_backup_views import ClusterDeploymentEtcdBackupView
+from core.etcd_backup_views import (
+    ClusterDeploymentEtcdBackupPolicyView,
+    ClusterDeploymentEtcdBackupView,
+)
 from core.metal3_lab_views import Metal3LabWorkflowView
 from core.knowledge_views import (
     KnowledgeDocumentDetailView,
@@ -233,6 +236,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/etcd-backup/",
         ClusterDeploymentEtcdBackupView.as_view(),
         name="cluster-deployment-etcd-backup",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/etcd-backup/policy/",
+        ClusterDeploymentEtcdBackupPolicyView.as_view(),
+        name="cluster-deployment-etcd-backup-policy",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/preflight/eph/sync/",

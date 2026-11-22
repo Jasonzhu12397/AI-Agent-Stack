@@ -1108,6 +1108,25 @@ export type EtcdBackupState = {
   findings: Array<{ name: string; ok: boolean; code: string; detail: string }>;
 };
 
+export type EtcdBackupPolicyInput = {
+  keep_count?: number;
+  keep_max_age_hours?: number;
+  pre_upgrade_keep_max_age_hours?: number;
+  max_age_hours?: number;
+  directory?: string;
+  enabled?: boolean;
+};
+
+export function setClusterDeploymentEtcdBackupPolicy(
+  deploymentId: string,
+  policy: EtcdBackupPolicyInput,
+): Promise<EtcdBackupState> {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/etcd-backup/policy/",
+    { method: "POST", body: JSON.stringify(policy) },
+  );
+}
+
 export function getClusterDeploymentEtcdBackup(
   deploymentId: string,
 ): Promise<EtcdBackupState> {

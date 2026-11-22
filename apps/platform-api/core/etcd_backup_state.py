@@ -52,6 +52,47 @@ def backup_policy(deployment: ClusterDeployment) -> dict[str, Any]:
     }
 
 
+#: Spec keys a caller may set through the policy endpoint, mapped to the request
+#: field they control. ``etcd_backup`` itself is the on/off switch.
+POLICY_FIELDS = {
+    "keep_count": "etcd_backup_keep_count",
+    "keep_max_age_hours": "etcd_backup_keep_max_age_hours",
+    "pre_upgrade_keep_max_age_hours": "etcd_backup_pre_upgrade_keep_max_age_hours",
+    "max_age_hours": "etcd_backup_max_age_hours",
+    "directory": "etcd_backup_directory",
+}
+
+
+def store_policy(deployment: ClusterDeployment, values: dict[str, Any]) -> dict[str, Any]:
+    """Validate a policy change against the contract, then write it into the spec.
+
+    The contract is the only authority: a value it refuses is refused here with
+    the same code, so a UI cannot save a policy the executor would reject.
+    """
+
+    kubernetes = dict((deployment.spec or {}).get("kubernetes") or {})
+    for field, key in POLICY_FIELDS.items():
+        if field in values:
+            kubernetes[key] = values[field]
+    if "enabled" in values:
+        kubernetes["etcd_backup"] = bool(values["enabled"])
+    request_payload = {
+        "cluster_name": deployment.cluster_name,
+        "execution_mode": "execute",
+        "confirm_cluster_name": deployment.cluster_name,
+    }
+    request_payload.update(spec_policy(kubernetes))
+    protect = protected_names(deployment)
+    if protect:
+        request_payload["protect"] = protect
+    contract.validate_request(request_payload, cluster_name=deployment.cluster_name)
+    spec = dict(deployment.spec or {})
+    spec["kubernetes"] = kubernetes
+    deployment.spec = spec
+    deployment.save(update_fields=["spec"])
+    return kubernetes
+
+
 def _entries_from(names: Any, cluster_name: str) -> list[dict[str, Any]]:
     """Rebuild contract entries from the file names a command reported."""
 

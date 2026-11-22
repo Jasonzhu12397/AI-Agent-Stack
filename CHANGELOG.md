@@ -32,6 +32,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   that opted out with `kubernetes.etcd_backup: false` is reported as disabled
   rather than as a problem.
 
+- `POST /api/v1/cluster-deployments/<id>/etcd-backup/policy/` and a policy dialog
+  in the delivery table: the contract validates the change before it is written
+  into `spec.kubernetes`, every accepted change is audited, and unknown keys are
+  refused instead of dropped.
+
 ### Changed
 
 - `queue_etcd_backups` honours the retention policy a deployment declares in

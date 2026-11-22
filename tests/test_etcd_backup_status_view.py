@@ -203,3 +203,82 @@ def test_the_view_shows_which_snapshots_a_rollback_is_holding():
     body = client.get(URL.format(deployment.id)).data
 
     assert body["policy"]["protect"] == [snapshot]
+
+
+POLICY_URL = "/api/v1/cluster-deployments/{}/etcd-backup/policy/"
+
+
+@pytest.mark.django_db
+def test_the_policy_endpoint_writes_a_validated_policy_into_the_spec():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.post(
+        POLICY_URL.format(deployment.id),
+        {"keep_count": 12, "pre_upgrade_keep_max_age_hours": 336, "enabled": True},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["policy"]["keep_count"] == 12
+    assert response.data["policy"]["pre_upgrade_keep_max_age_hours"] == 336
+    deployment.refresh_from_db()
+    assert deployment.spec["kubernetes"]["etcd_backup_keep_count"] == 12
+    assert deployment.spec["kubernetes"]["etcd_backup_pre_upgrade_keep_max_age_hours"] == 336
+    assert deployment.spec["kubernetes"]["etcd_backup"] is True
+    from core.models import AuditEvent
+
+    assert AuditEvent.objects.filter(
+        event_type="cluster.etcd_backup.policy.updated"
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_the_policy_endpoint_refuses_a_policy_the_contract_refuses():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.post(
+        POLICY_URL.format(deployment.id), {"keep_count": 1}, format="json"
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "ETCD_BACKUP_RETENTION_INVALID"
+    deployment.refresh_from_db()
+    assert deployment.spec == {}
+
+
+@pytest.mark.django_db
+def test_the_policy_endpoint_refuses_fields_it_does_not_own():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.post(
+        POLICY_URL.format(deployment.id),
+        {"keep_count": 12, "cluster_name": "other"},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "policy_fields_only"
+    deployment.refresh_from_db()
+    assert deployment.spec == {}
+
+
+@pytest.mark.django_db
+def test_the_policy_endpoint_can_switch_backups_off_without_a_contract_error():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.post(POLICY_URL.format(deployment.id), {"enabled": False}, format="json")
+
+    assert response.status_code == 200
+    assert response.data["policy"]["enabled"] is False
+    deployment.refresh_from_db()
+    assert deployment.spec["kubernetes"]["etcd_backup"] is False
+
+
+@pytest.mark.django_db
+def test_the_policy_endpoint_needs_a_body():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.post(POLICY_URL.format(deployment.id), {}, format="json")
+
+    assert response.status_code == 400
+    assert response.data["code"] == "policy_empty"

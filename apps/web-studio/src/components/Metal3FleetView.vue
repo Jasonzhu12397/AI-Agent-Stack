@@ -18,6 +18,7 @@ import {
   getProjectAgentCommands,
   getClusterDeployments,
   getClusterDeploymentEtcdBackup,
+  setClusterDeploymentEtcdBackupPolicy,
   type EtcdBackupState,
   getProjects,
   getTenants,
@@ -94,6 +95,16 @@ const upgradeModes = ["simulation", "execute"] as const;
 const backupStates = ref<Record<string, EtcdBackupState>>({});
 const backupBusy = ref<string | null>(null);
 const backupMessages = ref<Record<string, string>>({});
+const backupPolicyVisible = ref(false);
+const backupPolicyDeployment = ref<ClusterDeployment | null>(null);
+const backupPolicySaving = ref(false);
+const backupPolicyError = ref("");
+const backupPolicyForm = ref({
+  keep_count: 2,
+  keep_max_age_hours: 8760,
+  pre_upgrade_keep_max_age_hours: 168,
+  enabled: true,
+});
 const readinessBusy = ref<string | null>(null);
 const readinessMessages = ref<Record<string, string>>({});
 const recoveryBusy = ref<string | null>(null);
@@ -726,6 +737,40 @@ function upgradeReadinessCommand(deployment: ClusterDeployment): AgentCommand | 
 function upgradeReadinessOutput(deployment: ClusterDeployment): Record<string, unknown> | null {
   const command = upgradeReadinessCommand(deployment);
   return command && command.result ? command.result : null;
+}
+
+function openBackupPolicy(deployment: ClusterDeployment) {
+  const state = backupStates.value[deployment.id];
+  const policy = state && state.policy;
+  backupPolicyDeployment.value = deployment;
+  backupPolicyError.value = "";
+  backupPolicyForm.value = {
+    keep_count: policy && policy.valid ? policy.keep_count : 2,
+    keep_max_age_hours: policy && policy.valid ? policy.keep_max_age_hours : 8760,
+    pre_upgrade_keep_max_age_hours:
+      policy && policy.valid ? policy.pre_upgrade_keep_max_age_hours : 168,
+    enabled: policy ? policy.enabled : true,
+  };
+  backupPolicyVisible.value = true;
+}
+
+async function saveBackupPolicy() {
+  const deployment = backupPolicyDeployment.value;
+  if (!deployment) return;
+  backupPolicySaving.value = true;
+  backupPolicyError.value = "";
+  try {
+    backupStates.value[deployment.id] = await setClusterDeploymentEtcdBackupPolicy(
+      deployment.id,
+      backupPolicyForm.value,
+    );
+    backupPolicyVisible.value = false;
+  } catch (cause) {
+    backupPolicyError.value =
+      cause instanceof Error ? cause.message : "Unable to save the backup policy.";
+  } finally {
+    backupPolicySaving.value = false;
+  }
 }
 
 async function loadEtcdBackup(deployment: ClusterDeployment) {
@@ -1533,6 +1578,11 @@ onUnmounted(() => {
                 :loading="backupBusy === scope.row.id"
                 @click="loadEtcdBackup(scope.row)"
               >Backups</el-button>
+              <el-button
+                size="small"
+                text
+                @click="openBackupPolicy(scope.row)"
+              >Policy</el-button>
               <template v-if="backupStates[scope.row.id]">
                 <el-tag
                   :type="backupStates[scope.row.id].stale ? 'warning' : 'success'"
@@ -1966,6 +2016,46 @@ onUnmounted(() => {
         <el-button size="small" type="primary" :loading="bmhIngestBusy" @click="ingestBmhInventory">
           Ingest
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="backupPolicyVisible" title="etcd Backup Policy" width="560px">
+      <p class="fleet-version-current">
+        The scheduler queues one backup per hour for this cluster. Retention never
+        deletes the newest file, anything younger than an hour, or a snapshot a
+        rollback is holding.
+      </p>
+      <el-form label-width="220px" size="small">
+        <el-form-item label="Backups enabled">
+          <el-switch v-model="backupPolicyForm.enabled" />
+        </el-form-item>
+        <el-form-item label="Keep at least (count)">
+          <el-input-number v-model="backupPolicyForm.keep_count" :min="2" :max="168" />
+        </el-form-item>
+        <el-form-item label="Keep recurring backups for (hours)">
+          <el-input-number
+            v-model="backupPolicyForm.keep_max_age_hours"
+            :min="1"
+            :max="8760"
+          />
+        </el-form-item>
+        <el-form-item label="Keep pre-upgrade snapshots for (hours)">
+          <el-input-number
+            v-model="backupPolicyForm.pre_upgrade_keep_max_age_hours"
+            :min="1"
+            :max="8760"
+          />
+        </el-form-item>
+      </el-form>
+      <small v-if="backupPolicyError" class="readiness-blocked">{{ backupPolicyError }}</small>
+      <template #footer>
+        <el-button size="small" @click="backupPolicyVisible = false">Cancel</el-button>
+        <el-button
+          size="small"
+          type="primary"
+          :loading="backupPolicySaving"
+          @click="saveBackupPolicy"
+        >Save policy</el-button>
       </template>
     </el-dialog>
   </section>

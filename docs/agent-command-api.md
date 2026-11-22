@@ -403,3 +403,12 @@ audit events; `--no-audit` keeps the exit code but stays out of the chain. A
 cluster that declares `kubernetes.etcd_backup: false` reports
 `ETCD_BACKUP_DISABLED` and is neither a problem nor an audit event, so a
 deliberate opt-out does not page anyone.
+
+`POST /api/v1/cluster-deployments/<deployment_id>/etcd-backup/policy/` writes the
+policy into `spec.kubernetes` after the contract accepts it, so the UI cannot
+save something the executor would reject: a bad `keep_count` comes back as
+`ETCD_BACKUP_RETENTION_INVALID` and nothing is written. Only the policy fields
+(`keep_count`, `keep_max_age_hours`, `pre_upgrade_keep_max_age_hours`,
+`max_age_hours`, `directory`, `enabled`) are accepted; any other key is refused
+with `policy_fields_only` rather than silently dropped, and every accepted change
+is audited as `cluster.etcd_backup.policy.updated`.
