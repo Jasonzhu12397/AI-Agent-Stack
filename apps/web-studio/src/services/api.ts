@@ -1161,11 +1161,33 @@ export function getInfraNetworkProfile(
   );
 }
 
+//: One declared port checked against the inventories the machines reported.
+export type PortInventoryFinding = {
+  port: string;
+  matched: boolean;
+  hosts: string[];
+  missing_on: string[];
+  code: string;
+  detail: string;
+};
+
+export type PortInventoryReport = {
+  ok: boolean;
+  ports: PortInventoryFinding[];
+  warnings: string[];
+  hosts: number;
+};
+
 export function saveInfraNetworkProfile(
   tenantId: string,
   projectId: string,
   profile: InfraNetworkProfile,
-): Promise<{ profile: InfraNetworkProfile; generated: InfraNetworkGenerated }> {
+): Promise<{
+  profile: InfraNetworkProfile;
+  generated: InfraNetworkGenerated;
+  port_inventory?: PortInventoryReport;
+  warnings?: string[];
+}> {
   return request(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/infrastructure-networks/",
     {

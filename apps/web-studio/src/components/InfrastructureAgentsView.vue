@@ -21,8 +21,10 @@ import {
   getAgentCommands,
   getAgentNodes,
   getClusterDeployments,
+  getFleetMachines,
   getInfraNetworkProfile,
   saveInfraNetworkProfile,
+  type PortInventoryReport,
   previewIronicTemplate,
   syncClusterDeploymentEphPreflight,
   syncClusterDeploymentBmhInventory,
@@ -33,6 +35,7 @@ import {
   type AgentCommand,
   type AgentNode,
   type ClusterDeployment,
+  type FleetMachine,
   type InfraNetwork,
   type InfraNetworkProfile,
   type IronicTemplatePreview,
@@ -69,7 +72,11 @@ const buildWorkerReplicas = ref(3);
 const buildNetworkProfile = ref("");
 const infraNetworkProfile = ref<InfraNetworkProfile>({ networks: [] });
 const infraNetworkStatus = ref("");
+const fleetMachines = ref<FleetMachine[]>([]);
+const bondMembers = ref<string[]>([]);
+const sriovPci = ref<string[]>([]);
 const infraNetworkSaving = ref(false);
+const portInventory = ref<PortInventoryReport | null>(null);
 const networkDraft = ref({
   name: "",
   role: "control" as InfraNetwork["role"],
@@ -88,6 +95,35 @@ const networkDraft = ref({
   numVfs: 8,
   hostRoles: ["control_plane", "worker"] as InfraNetwork["host_roles"],
 });
+// The ports a NIC can be bound to come from what the machines reported after
+// their PXE boot: the operator picks a name instead of typing a PCI address, and
+// the exact PCI function stays a hardware fact. An empty list means nothing was
+// collected yet, so the form still accepts free text.
+const collectedNicOptions = computed(() => {
+  const options: Array<{ value: string; label: string; mac: string; pci: string }> = [];
+  const seen = new Set<string>();
+  for (const machine of fleetMachines.value) {
+    const nics = (machine.hardware_inventory as { nics?: Array<Record<string, unknown>> }).nics;
+    if (!Array.isArray(nics)) continue;
+    for (const nic of nics) {
+      const name = String(nic?.name ?? "").trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const mac = String(nic?.mac ?? "").trim();
+      const pci = String(nic?.pci_address ?? "").trim();
+      options.push({
+        value: name,
+        label: [name, mac, pci].filter(Boolean).join(" · "),
+        mac,
+        pci,
+      });
+    }
+  }
+  return options;
+});
+const collectedPciOptions = computed(() =>
+  [...new Set(collectedNicOptions.value.map((item) => item.pci).filter(Boolean))],
+);
 const NETWORK_ROLES = [
   { value: "control", label: "Control / management" },
   { value: "data", label: "Data plane" },
@@ -318,6 +354,18 @@ async function loadNodes(): Promise<void> {
   }
 }
 
+async function loadFleetMachines(): Promise<void> {
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  try {
+    const response = await getFleetMachines(selectedTenantId.value, selectedProjectId.value);
+    fleetMachines.value = response.results ?? [];
+  } catch {
+    // The port pickers fall back to free text; a failed read must not block the
+    // network profile itself.
+    fleetMachines.value = [];
+  }
+}
+
 async function loadInfraNetworks(): Promise<void> {
   if (!selectedTenantId.value || !selectedProjectId.value) return;
   try {
@@ -373,18 +421,12 @@ function addInfraNetwork(): void {
     default_route: draft.defaultRoute,
     host_roles: [...draft.hostRoles],
     interface: draft.interface.trim() || null,
-    pci_addresses: draft.pciAddresses
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
+    pci_addresses: sriovPci.value.map((item) => item.trim()).filter(Boolean),
     num_vfs: draft.numVfs,
     bond: draft.bondName.trim()
       ? {
           name: draft.bondName.trim(),
-          interfaces: draft.bondInterfaces
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
+          interfaces: bondMembers.value.map((item) => item.trim()).filter(Boolean),
           mode: "active-backup",
         }
       : null,
@@ -398,6 +440,8 @@ function addInfraNetwork(): void {
       },
     ];
   }
+  bondMembers.value = [];
+  sriovPci.value = [];
   infraNetworkProfile.value = {
     ...infraNetworkProfile.value,
     networks: [...infraNetworkProfile.value.networks, network],
@@ -422,6 +466,7 @@ async function saveInfraNetworks(): Promise<void> {
       infraNetworkProfile.value,
     );
     infraNetworkProfile.value = response.profile;
+    portInventory.value = response.port_inventory ?? null;
     infraNetworkStatus.value =
       "Network profile validated. Metal3 networkData and IPPools were generated for control plane, workers and storage.";
   } catch (cause) {
@@ -823,6 +868,7 @@ watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
 watch(selectedProjectId, () => {
   void loadNodes();
   void loadInfraNetworks();
+  void loadFleetMachines();
 });
 watch(selectedNodeId, () => {
   commandType.value = availableCommands.value[0] ?? "node.health";
@@ -1019,6 +1065,17 @@ onUnmounted(() => {
           applying each SriovNetworkNodePolicy. The host-side check compares this profile with the network data reported by the OS
           (interfaces, bonds, MTU, VLAN and PCI); switch configuration is out of scope.
         </p>
+        <ul
+          v-if="portInventory && !portInventory.ok"
+          class="readiness-blocked"
+        >
+          <li v-for="finding in portInventory.ports.filter((item) => !item.matched)" :key="finding.port">
+            {{ finding.code }}: {{ finding.detail }}
+            <span v-if="finding.missing_on.length">
+              (missing on {{ finding.missing_on.join(", ") }})
+            </span>
+          </li>
+        </ul>
         <el-alert
           v-if="infraNetworkStatus"
           :title="infraNetworkStatus"

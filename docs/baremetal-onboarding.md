@@ -58,6 +58,18 @@ provisioning network, interface or address is missing — those same warnings ar
 persisted in `preflight_result.network_defaults.warnings` and shown on the
 deployment.
 
+The ports a profile may bind come from the machines, not from memory. Saving a
+profile (`PUT .../infrastructure-networks/`) answers with `port_inventory`: every
+enabled bond member and directly bound NIC is matched against the `nics` each
+machine reported after its discovery boot, by name, PCI address (`pci@0000:3b:00.0`
+and `0000:3b:00.0` are the same port) or MAC. A port no host reports is a warning
+(`INFRA_NETWORK_PORT_NOT_COLLECTED`) naming the hosts that lack it, not an error —
+the profile is usually written before every machine is discovered. Bonds, bridges
+and VLAN sub-interfaces are skipped on purpose: the OS assembles them, so their
+member ports are the hardware facts to check. SR-IOV PCI addresses are the same
+deal: leave the list empty and the platform fills it from the collected devices
+(`network_defaults.sriov_pci_sources` records where each address came from).
+
 A `retired` machine is refused by PXE boot and discovery with
 `409 MACHINE_NOT_BOOTABLE`: return it to `discovered` through a lifecycle review
 before reusing it.

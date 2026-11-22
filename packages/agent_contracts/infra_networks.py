@@ -735,3 +735,150 @@ def render_ip_pools(
             document["spec"]["gateway"] = network["gateway_ipv4"]
         documents.append(document)
     return documents
+
+
+#: A port a profile binds has not appeared in the inventory the machines
+#: reported, so the rendered networkData would name an NIC the host lacks.
+CODE_PORT_NOT_COLLECTED = "INFRA_NETWORK_PORT_NOT_COLLECTED"
+
+
+def _is_logical_link(identifier: str, known: set[str]) -> bool:
+    """Whether an identifier names a bundled link rather than a NIC.
+
+    A bond, a bridge and a VLAN sub-interface are assembled by the OS. Their
+    ports are the hardware facts to check; the aggregation itself is not, even
+    when a profile binds it directly instead of declaring a bond for it.
+    """
+
+    if identifier in known:
+        return True
+    if identifier.startswith(("bond", "br", "vlan", "vxlan", "ovs")):
+        return True
+    base = identifier.split(".", 1)[0]
+    return bool(base) and base in known and "." in identifier
+
+
+def declared_physical_ports(plan: dict[str, Any]) -> list[str]:
+    """Return the physical NIC identifiers a plan binds, in declaration order.
+
+    Only enabled networks count. A bond contributes its member ports, a direct
+    network contributes its interface, and a VLAN contributes nothing because it
+    stacks on a link that already declares its own ports.
+    """
+
+    networks = [
+        network
+        for network in plan.get("networks") or []
+        if isinstance(network, dict) and network.get("enabled") is not False
+    ]
+    logical: set[str] = set()
+    for network in networks:
+        bond = network.get("bond")
+        if isinstance(bond, dict) and isinstance(bond.get("name"), str):
+            logical.add(bond["name"])
+        interface = network.get("interface")
+        if isinstance(interface, str):
+            logical.add(interface)
+    ports: list[str] = []
+    for network in networks:
+        bond = network.get("bond")
+        if isinstance(bond, dict):
+            for port in bond.get("interfaces") or []:
+                if isinstance(port, str) and port and port not in ports:
+                    ports.append(port)
+            continue
+        interface = network.get("interface")
+        if not isinstance(interface, str) or not interface:
+            continue
+        if _is_logical_link(interface, logical):
+            continue
+        if interface not in ports:
+            ports.append(interface)
+    return ports
+
+
+def _port_keys(value: str) -> set[str]:
+    """Every spelling of one NIC that the platform and the host may use."""
+
+    normalised = value.strip().lower()
+    if not normalised:
+        return set()
+    keys = {normalised}
+    if normalised.startswith("pci@"):
+        # ``pci@0000:3b:00.0`` and the inventory's ``0000:3b:00.0`` are the same
+        # port; a host may report either side of the pair.
+        keys.add(normalised[len("pci@"):])
+    else:
+        keys.add(f"pci@{normalised}")
+    return keys
+
+
+def _host_ports(host: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for nic in host.get("nics") or []:
+        if not isinstance(nic, dict):
+            continue
+        for field in ("name", "pci_address", "mac"):
+            value = nic.get(field)
+            if isinstance(value, str):
+                keys |= _port_keys(value)
+    boot_mac = host.get("boot_mac")
+    if isinstance(boot_mac, str):
+        keys |= _port_keys(boot_mac)
+    return keys
+
+
+def port_inventory_findings(
+    plan: dict[str, Any],
+    hosts: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Check the profile's ports against the inventory every host reported.
+
+    A profile is authored before the hardware is known in detail, and a NIC
+    name that no machine ever reported renders networkData for an interface the
+    host does not have. The check is a warning rather than an error: machines
+    are usually discovered after the profile is written, and a missing machine
+    is not a wrong machine. Once inventories exist, every uncollected port is
+    reported with the hosts that do declare it, so the operator can pick the
+    name the hardware actually uses.
+    """
+
+    ports = declared_physical_ports(plan)
+    if not ports:
+        return {"ok": True, "ports": [], "warnings": [], "hosts": 0}
+    collected: list[tuple[str, set[str]]] = []
+    for host in hosts or []:
+        if not isinstance(host, dict):
+            continue
+        name = host.get("bmh_name") or host.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        collected.append((name, _host_ports(host)))
+    if not collected:
+        return {"ok": True, "ports": [], "warnings": [], "hosts": 0}
+    findings: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for port in ports:
+        keys = _port_keys(port)
+        matched = [name for name, host_keys in collected if keys & host_keys]
+        finding = {
+            "port": port,
+            "matched": bool(matched),
+            "hosts": matched,
+            "missing_on": [name for name, _ in collected if name not in matched],
+            "code": "" if matched else CODE_PORT_NOT_COLLECTED,
+            "detail": (
+                f"{port} is bound by the profile and reported by {len(matched)} host(s)"
+                if matched
+                else f"{port} is bound by the profile but no collected host reports it"
+            ),
+        }
+        findings.append(finding)
+        if not matched:
+            warnings.append(f"{CODE_PORT_NOT_COLLECTED}: {finding['detail']}")
+    return {
+        "ok": all(item["matched"] for item in findings),
+        "ports": findings,
+        "warnings": warnings,
+        "hosts": len(collected),
+    }

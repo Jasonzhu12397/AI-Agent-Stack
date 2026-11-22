@@ -127,3 +127,99 @@ def test_put_rejects_overlapping_cidrs(network_workspace):
     response = client.put(url, {"profile": profile}, format="json")
     assert response.status_code == 400
     assert response.data["detail"] == "INFRA_NETWORK_CIDR_OVERLAP"
+
+
+def _machine(tenant, project, name, nics, user=None):
+    import hashlib
+
+    from core.models import AgentMachine, AgentNode
+
+    node = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name=name,
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash=hashlib.sha256(name.encode("utf-8")).hexdigest(),
+    )
+    return AgentMachine.objects.create(
+        tenant=tenant,
+        project=project,
+        agent_node=node,
+        bmh_name=name,
+        hardware_inventory={"nics": nics},
+    )
+
+
+@pytest.mark.django_db
+def test_put_reports_ports_the_collected_inventory_confirms(network_workspace):
+    user, tenant, project, client = network_workspace
+    _machine(
+        tenant,
+        project,
+        "lab-cp-1",
+        [
+            {"name": "eno1", "pci_address": "0000:18:00.0", "mac": "aa:bb:cc:00:00:01"},
+            {"name": "eno2", "pci_address": "0000:18:00.1", "mac": "aa:bb:cc:00:00:02"},
+        ],
+        user=user,
+    )
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/infrastructure-networks/"
+    response = client.put(url, {"profile": _profile()}, format="json")
+    assert response.status_code == 200
+    report = response.data["port_inventory"]
+    assert report["hosts"] == 1
+    assert report["ok"] is True
+    assert report["warnings"] == []
+    control = next(item for item in report["ports"] if item["port"] == "eno1")
+    assert control["hosts"] == ["lab-cp-1"]
+
+
+@pytest.mark.django_db
+def test_put_warns_about_a_port_no_collected_host_reports(network_workspace):
+    user, tenant, project, client = network_workspace
+    _machine(
+        tenant,
+        project,
+        "lab-cp-1",
+        [
+            {"name": "eno1", "pci_address": "0000:18:00.0", "mac": "aa:bb:cc:00:00:01"},
+            {"name": "eno3", "pci_address": "0000:18:00.1", "mac": "aa:bb:cc:00:00:03"},
+        ],
+        user=user,
+    )
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/infrastructure-networks/"
+    response = client.put(url, {"profile": _profile()}, format="json")
+    assert response.status_code == 200
+    report = response.data["port_inventory"]
+    assert report["ok"] is False
+    assert any(
+        "INFRA_NETWORK_PORT_NOT_COLLECTED" in warning for warning in report["warnings"]
+    )
+    missing = next(item for item in report["ports"] if item["port"] == "eno2")
+    assert missing["matched"] is False
+    assert missing["missing_on"] == ["lab-cp-1"]
+    assert response.data["warnings"] == report["warnings"]
+
+
+@pytest.mark.django_db
+def test_a_pci_named_port_matches_the_collected_pci_address(network_workspace):
+    user, tenant, project, client = network_workspace
+    _machine(
+        tenant,
+        project,
+        "lab-cp-1",
+        [
+            {"name": "enp55s0f0np0", "pci_address": "0000:3b:00.0", "mac": ""},
+        ],
+        user=user,
+    )
+    profile = _profile()
+    profile["networks"][0]["bond"]["interfaces"] = ["pci@0000:3b:00.0"]
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/infrastructure-networks/"
+    response = client.put(url, {"profile": profile}, format="json")
+    assert response.status_code == 200
+    report = response.data["port_inventory"]
+    declared = next(item for item in report["ports"] if item["port"] == "pci@0000:3b:00.0")
+    assert declared["matched"] is True
+    assert declared["hosts"] == ["lab-cp-1"]
