@@ -551,3 +551,47 @@ def test_a_check_reports_the_live_directory_even_between_backup_runs():
     assert body["newest"]["name"] == periodic
     assert body["restore_point"]["name"] == snapshot
     assert body["restore_point"]["listed"] is True
+
+
+@pytest.mark.django_db
+def test_a_failed_newest_run_is_not_hidden_behind_an_older_good_one():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    good = contract.backup_filename("lab", now=now - datetime.timedelta(hours=20))
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[good],
+        when=now - datetime.timedelta(hours=20),
+    )
+    failed = _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[],
+        when=now - datetime.timedelta(minutes=5),
+        status="failed",
+    )
+    failed.result = {
+        "ok": False,
+        "failure_code": "ETCD_BACKUP_DISK_LOW",
+        "detail": "need 512 MiB, 130 MiB free",
+    }
+    failed.save(update_fields=["result"])
+
+    response = client.get(URL.format(deployment.id))
+
+    body = response.data
+    # The disk still holds yesterday's snapshot, so newest/age are readable...
+    assert body["newest"]["name"] == good
+    # ...but the cluster is not healthy: the newest attempt failed.
+    assert body["ok"] is False
+    assert body["last_run_failed"] == "ETCD_BACKUP_DISK_LOW"
+    assert any(
+        finding["code"] == "ETCD_BACKUP_DISK_LOW" for finding in body["findings"]
+    )

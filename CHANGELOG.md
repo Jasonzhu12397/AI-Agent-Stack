@@ -25,6 +25,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- A failed newest backup attempt is visible: the state reports
+  `last_run_failed` and a `backup.last_run` finding instead of judging the
+  cluster healthy on an older snapshot, and the watchdog reports it.
 - A scheduler heartbeat: `queue_etcd_backups` writes one
   `cluster.etcd_backup.scheduler.run` event per tenant per hour bucket, the view
   reports `scheduler_last_run` / `scheduler_age_hours`, the Delivery table shows

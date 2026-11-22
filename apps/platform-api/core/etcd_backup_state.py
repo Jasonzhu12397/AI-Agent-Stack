@@ -107,6 +107,13 @@ NOT_RUN_FINDING = {
     "detail": "the scheduler has not reported a backup for this cluster",
 }
 
+#: A backup command that ended badly leaves the newest report on disk from an
+#: earlier run. Without this finding the panel and the watchdog would both call
+#: the cluster healthy on yesterday's snapshot while today's attempt has been
+#: failing every hour, which is the one failure mode nobody would notice.
+LAST_RUN_FAILED = "ETCD_BACKUP_LAST_RUN_FAILED"
+FAILED_STATUSES = frozenset({"failed", "cancelled"})
+
 #: An upgrade that reported its snapshot is the only place the platform learns
 #: about a restore point before the next recurring backup lists the directory.
 UPGRADE_ACTION = "cluster.kubernetes.version.upgrade"
@@ -324,6 +331,26 @@ def etcd_backup_state(
             "findings": report["findings"],
         }
     )
+    newest_run = runs[0] if runs else None
+    newest_result = (
+        newest_run.result if newest_run and isinstance(newest_run.result, dict) else {}
+    )
+    if newest_run is not None and (
+        newest_run.status in FAILED_STATUSES or newest_result.get("ok") is False
+    ):
+        code = newest_result.get("failure_code") or LAST_RUN_FAILED
+        detail = newest_run.error or newest_result.get("detail") or ""
+        state["findings"] = [
+            *state["findings"],
+            {
+                "name": "backup.last_run",
+                "ok": False,
+                "code": code,
+                "detail": detail or "the newest backup command did not finish",
+            },
+        ]
+        state["ok"] = False
+        state["last_run_failed"] = code
     if state.get("not_run_yet"):
         # A read-only check can describe the disk, but it cannot replace the
         # fact that no scheduled backup has ever reported: freshness is

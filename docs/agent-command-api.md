@@ -505,3 +505,14 @@ read-only view reports `scheduler_last_run` and `scheduler_age_hours`, and
 `SCHEDULER_SILENCE_HOURS` (2): old backups plus nothing queuing new ones is a
 different incident, with a different fix, than a cluster that simply has old
 backups.
+
+### When the newest attempt fails
+
+A failed run reports no listing, so the newest description of the directory
+still comes from an earlier, successful run and the cluster would look healthy
+while every hourly attempt has been failing. The state therefore also carries
+`last_run_failed` — the failure code of the newest backup command — appends a
+`backup.last_run` finding and clears `ok`. `check_etcd_backups` treats it as a
+problem code (`ETCD_BACKUP_LAST_RUN_FAILED` when the run produced no code of its
+own), so a disk that fills up is reported by the same watchdog that reports a
+stale file.

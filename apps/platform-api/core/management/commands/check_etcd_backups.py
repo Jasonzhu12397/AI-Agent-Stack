@@ -27,6 +27,7 @@ PROBLEM_CODES = frozenset(
         # Same symptom as STALE, different cause and different fix: the process
         # that takes backups is gone, so nothing will ever refresh this cluster.
         "ETCD_BACKUP_SCHEDULER_SILENT",
+        "ETCD_BACKUP_LAST_RUN_FAILED",
     }
 )
 SCHEDULER_SILENCE_HOURS = 2
