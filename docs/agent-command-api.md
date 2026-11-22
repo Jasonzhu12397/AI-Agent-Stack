@@ -538,3 +538,15 @@ after `STUCK_AFTER_HOURS` (6), the state reports `run_stuck_hours` and a
 `backup.queue` finding with `ETCD_BACKUP_RUN_STUCK`, and the watchdog reports it:
 the agent never claimed the lease, so waiting longer only delays the day the
 gap is noticed. A run inside the window is left alone.
+
+### Staging files are not allowed to pile up
+
+A save that dies mid-write, or a run whose process is killed outright, leaves a
+`*.db.partial` behind. Retention only ever looks at naming-valid snapshots, so
+nothing would delete it and it can be as large as the whole database. The
+executor therefore removes the staging file on a failed save or failed verify,
+keeps a verified file that failed only to be renamed (`staging_kept` names it),
+and, as part of `prepare`, sweeps staging files older than
+`PARTIAL_STALE_MINUTES` (24h) that sit directly in the backup directory —
+nothing outside it and nothing that is not a staging file is ever touched. The
+run reports what it swept in `swept_partials`.

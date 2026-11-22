@@ -31,6 +31,10 @@ from packages.agent_contracts.etcd_backup import (
 Runner = Callable[..., dict[str, Any]]
 
 STEP_TIMEOUT_SECONDS = 900
+#: A staging file older than this was not left by a run that is still going: it
+#: was left by a run whose process died, and no retention pass will ever look
+#: at it because it is not a snapshot.
+PARTIAL_STALE_MINUTES = 24 * 60
 ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
 
 
@@ -213,6 +217,50 @@ class EtcdBackupExecutor:
             )
         return entries
 
+    def _sweep_stale_partials(self, directory: str) -> list[str]:
+        """Remove staging files an earlier, killed run left behind.
+
+        Only files that match the staging suffix and are older than
+        ``PARTIAL_STALE_MINUTES`` are touched, and only paths that sit directly
+        in the backup directory: a sweep must never be able to delete anything
+        a backup would otherwise keep.
+        """
+
+        listing = self._runner(
+            self._pod_shell(
+                [
+                    "find",
+                    directory,
+                    "-maxdepth",
+                    "1",
+                    "-type",
+                    "f",
+                    "-name",
+                    "*.db.partial",
+                    "-mmin",
+                    f"+{PARTIAL_STALE_MINUTES}",
+                    "-print",
+                ]
+            ),
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        if not _ok(listing):
+            return []
+        removed = []
+        for line in str(listing.get("stdout") or "").splitlines():
+            path = line.strip()
+            if not path.endswith(".db.partial"):
+                continue
+            if path.rsplit("/", 1)[0] != directory.rstrip("/") or ".." in path:
+                continue
+            outcome = self._runner(
+                self._pod_shell(["rm", "-f", path]),
+                timeout=STEP_TIMEOUT_SECONDS,
+            )
+            if _ok(outcome):
+                removed.append(path.rsplit("/", 1)[-1])
+        return removed
+
     # ------------------------------------------------------------------ run
     def run(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
         """Take one snapshot, verify it, publish it, then prune old ones."""
@@ -234,6 +282,7 @@ class EtcdBackupExecutor:
         )
         if not self._finish(prepare, result):
             return self._failed("ETCD_BACKUP_PREPARE_FAILED", directory, request)
+        swept = self._sweep_stale_partials(directory)
 
         disk = self._step(
             2,
@@ -264,7 +313,11 @@ class EtcdBackupExecutor:
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not self._finish(save, result):
-            # A failed save must not reach retention: whatever exists stays.
+            # A save that died mid-write leaves a half-written .partial behind,
+            # as large as whatever it managed to dump. It is not a snapshot, so
+            # retention will never look at it: it would sit on the volume until
+            # the disk filled. Whatever existed before is untouched.
+            self._best_effort_remove(staging)
             return self._failed("ETCD_BACKUP_SAVE_FAILED", directory, request)
 
         verify = self._step(
@@ -294,7 +347,15 @@ class EtcdBackupExecutor:
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not self._finish(publish, result):
-            return self._failed("ETCD_BACKUP_PUBLISH_FAILED", directory, request)
+            # A rename that failed leaves the verified file under its staging
+            # name; it is still a usable snapshot, so it is kept rather than
+            # deleted, and the next run's sweep reports it as an orphan.
+            return self._failed(
+                "ETCD_BACKUP_PUBLISH_FAILED",
+                directory,
+                request,
+                staging_kept=staging,
+            )
 
         entries = snapshot_entries(
             self._list_directory(directory), cluster_name=request["cluster_name"]
@@ -345,7 +406,7 @@ class EtcdBackupExecutor:
             max_age_hours=request["max_age_hours"],
             now=stamp_now,
         )
-        return {
+        result = {
             "cluster_name": request["cluster_name"],
             "execution_mode": "execute",
             "backup": {
@@ -368,7 +429,9 @@ class EtcdBackupExecutor:
             "steps": self._steps,
             "failure_code": None,
             "performed_steps": [step["name"] for step in self._steps],
+            "swept_partials": swept,
         }
+        return result
 
     def status(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
         """Read-only: what backups exist and whether the newest one is fresh."""
@@ -458,7 +521,7 @@ class EtcdBackupExecutor:
         for step in self._steps:
             if step["status"] == "running":
                 step["status"] = "failed"
-        return {
+        result = {
             "cluster_name": request["cluster_name"],
             "directory": directory,
             "execution_mode": "execute",
@@ -473,6 +536,10 @@ class EtcdBackupExecutor:
             "failure_code": code,
             "performed_steps": [step["name"] for step in self._steps],
         }
+        # Callers pass what they measured so a failed report still explains
+        # itself; before this, the extras were accepted and silently dropped.
+        result.update(extra)
+        return result
 
 
 def validate_and_run(

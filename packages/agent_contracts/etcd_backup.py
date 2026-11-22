@@ -571,9 +571,15 @@ def simulation_plan(request: dict[str, Any], *, now: datetime | None = None) -> 
                 "sequence": 1,
                 "name": "prepare",
                 "commands": [
-                    f"kubectl -n kube-system exec <etcd-pod> -- mkdir -p {request['directory']}"
+                    f"kubectl -n kube-system exec <etcd-pod> -- mkdir -p {request['directory']}",
+                    "kubectl -n kube-system exec <etcd-pod> -- find <directory> -maxdepth 1 "
+                    "-name '*.db.partial' -mmin +1440 -print | xargs -r rm -f",
                 ],
-                "detail": "the etcd pod mounts the host backup directory at this path",
+                "detail": (
+                    "the etcd pod mounts the host backup directory at this path; "
+                    "staging files older than a day were left by a run that died "
+                    "and are removed, because retention never looks at them"
+                ),
             },
             {
                 "sequence": 2,

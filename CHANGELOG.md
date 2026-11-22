@@ -30,6 +30,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- Abandoned staging files are removed: a failed save or verify deletes its
+  `.partial`, a verified file that failed to be renamed is reported as
+  `staging_kept`, and `prepare` sweeps staging files older than 24h inside the
+  backup directory (`swept_partials`). Failure reports now also carry what was
+  measured (`verdict`) instead of dropping it.
 - A queued backup no agent ever ran is reported: after six hours the state
   reports `run_stuck_hours` and `ETCD_BACKUP_RUN_STUCK`, and the watchdog
   includes it in its problems.

@@ -214,6 +214,7 @@ class FakeRunner:
         self.files = list(files or [])
         self.db_size = db_size
         self.free_bytes = free_bytes
+        self.find_output = ""
 
     def __call__(self, argv, timeout=None):
         self.calls.append(list(argv))
@@ -227,6 +228,13 @@ class FakeRunner:
                 "stdout": json.dumps(
                     {"items": [{"metadata": {"name": "etcd-cp-0"}, "status": {"phase": "Running"}}]}
                 ),
+                "stderr": "",
+            }
+        if "find" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": self.find_output,
                 "stderr": "",
             }
         if "endpoint" in argv and "status" in argv:
@@ -299,13 +307,18 @@ def test_a_failed_save_never_reaches_retention():
     result = EtcdBackupExecutor(runner).run(request, now=NOW)
 
     assert result["failure_code"] == "ETCD_BACKUP_SAVE_FAILED"
+    assert result["directory"] == DEFAULT_DIRECTORY
     assert result["pruned"] == []
     assert [step["name"] for step in result["steps"]] == [
         "prepare",
         "disk_check",
         "snapshot_save",
     ]
-    assert not [call for call in runner.calls if "rm" in call]
+    # A save can die mid-write: the staging file is removed rather than left
+    # to sit on the volume forever, because retention only looks at snapshots.
+    removed = [call for call in runner.calls if "rm" in call]
+    assert removed, "the abandoned staging file must be removed"
+    assert ".partial" in removed[0][-1]
 
 
 def test_a_failed_verification_removes_the_partial_and_prunes_nothing():
@@ -534,6 +547,9 @@ def test_a_volume_too_small_for_the_database_plus_the_floor_is_refused():
     result = EtcdBackupExecutor(runner).run(_execute_request(), now=NOW)
 
     assert result["failure_code"] == "ETCD_BACKUP_DISK_LOW"
+    # The measurements travel with the failure, so the report says how short.
+    assert result["verdict"]["code"] == "ETCD_BACKUP_DISK_LOW"
+    assert result["verdict"]["free_bytes"] == 1024 * 1024 * 1024
     assert result["backup"] is None
     assert [step["name"] for step in result["steps"]] == ["prepare", "disk_check"]
     assert not [call for call in runner.calls if "snapshot" in call and "save" in call]
@@ -638,3 +654,39 @@ def test_a_healthy_assessment_names_the_file_a_rollback_would_use():
     )
     assert finding["ok"] is True
     assert finding["code"] == ""
+
+
+def test_a_failed_rename_keeps_the_verified_file_and_says_where_it_is():
+    request = _execute_request()
+    runner = FakeRunner(fail_on=" mv ", files=[])
+    result = EtcdBackupExecutor(runner).run(request, now=NOW)
+
+    assert result["failure_code"] == "ETCD_BACKUP_PUBLISH_FAILED"
+    # A verified snapshot under a staging name is still worth keeping, and the
+    # report names it so an operator can publish it by hand.
+    assert result["staging_kept"].endswith(".db.partial")
+    assert ".partial" in result["staging_kept"]
+
+
+def test_a_sweep_removes_abandoned_staging_files_and_nothing_else():
+    request = _execute_request()
+    keep = _name(2)
+    stale = f"{DEFAULT_DIRECTORY}/{partial_name(_name(30, cluster='other'))}"
+    shallow = f"{DEFAULT_DIRECTORY}/notes.db.partial"
+    runner = FakeRunner(files=[keep, stale, shallow])
+    runner.find_output = stale
+    result = EtcdBackupExecutor(runner).run(request, now=NOW)
+
+    assert result["swept_partials"] == [partial_name(_name(30, cluster="other"))]
+    removed = [call[-1] for call in runner.calls if "rm" in call]
+    assert removed == [stale]
+    assert keep not in removed
+
+
+def test_a_sweep_never_deletes_a_path_outside_the_directory():
+    runner = FakeRunner(files=[_name(2)])
+    runner.find_output = f"{DEFAULT_DIRECTORY}/../etc/passwd.db.partial"
+    result = EtcdBackupExecutor(runner).run(_execute_request(), now=NOW)
+
+    assert result["swept_partials"] == []
+    assert not [call for call in runner.calls if "rm" in call]
