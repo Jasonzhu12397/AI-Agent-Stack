@@ -101,6 +101,8 @@ class Command(BaseCommand):
                 "stale": state.get("stale"),
                 "restore_point": (state.get("restore_point") or {}).get("name"),
                 "scheduler_age_hours": state.get("scheduler_age_hours"),
+                "run_stuck_hours": state.get("run_stuck_hours"),
+                "last_run_failed": state.get("last_run_failed"),
                 "last_run_status": (state.get("last_run") or {}).get("status"),
             }
             clusters.append(entry)

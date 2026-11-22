@@ -590,3 +590,8 @@ and does not audit it as a problem. The Delivery table says so in words.
 `keep_count` counts recurring snapshots, not listing positions: pre-upgrade
 files above them in the newest-first listing must not consume those slots and
 cause a periodic backup inside the count to be deleted.
+
+The watchdog entry now also carries `last_run_failed` and `run_stuck_hours`, so
+a log line or a dashboard can tell a cluster with old backups (nothing queued),
+a cluster whose newest attempt failed, and a cluster with a command nobody ran,
+without re-reading the whole report.
