@@ -537,7 +537,9 @@ snapshot from the outside. When a backup command is still `queued`/`running`
 after `STUCK_AFTER_HOURS` (6), the state reports `run_stuck_hours` and a
 `backup.queue` finding with `ETCD_BACKUP_RUN_STUCK`, and the watchdog reports it:
 the agent never claimed the lease, so waiting longer only delays the day the
-gap is noticed. A run inside the window is left alone.
+gap is noticed. The question is asked of the table, not of the twelve-entry
+history window, so a command dropped long ago is still found. A run inside the
+window is left alone.
 
 ### Staging files are not allowed to pile up
 

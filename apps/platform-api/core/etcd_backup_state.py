@@ -338,20 +338,26 @@ def etcd_backup_state(
         }
     )
     newest_run = runs[0] if runs else None
-    # Scan every run in the window, not only the newest: a command that was
-    # dropped twelve hours ago is still evidence that an agent missed a lease,
-    # even if a later slot happened to be picked up.
+    # Asked of the table rather than of the history window: a command dropped
+    # twenty hours ago must still be found after fourteen later runs pushed it
+    # out of the twelve most recent ones.
     current = now or datetime.datetime.now(datetime.UTC)
-    stuck_run = None
-    waited = 0.0
-    for candidate in runs:
-        if candidate.status not in UNFINISHED_STATUSES:
-            continue
-        age_hours = (current - candidate.created_at).total_seconds() / 3600.0
-        if age_hours > STUCK_AFTER_HOURS:
-            stuck_run = candidate
-            waited = age_hours
-            break
+    stuck_cutoff = current - datetime.timedelta(hours=STUCK_AFTER_HOURS)
+    stuck_run = (
+        AgentCommand.objects.filter(
+            deployment=deployment,
+            command_type=contract.ACTION,
+            status__in=UNFINISHED_STATUSES,
+            created_at__lt=stuck_cutoff,
+        )
+        .order_by("created_at")
+        .first()
+    )
+    waited = (
+        (current - stuck_run.created_at).total_seconds() / 3600.0
+        if stuck_run is not None
+        else 0.0
+    )
     if stuck_run is not None:
         state["findings"] = [
             *state["findings"],

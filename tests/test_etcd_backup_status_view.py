@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from core.etcd_backup_state import etcd_backup_state
 from core.models import (
     AgentCommand,
     AgentNode,
@@ -672,3 +673,40 @@ def test_a_run_that_is_merely_in_flight_is_left_alone():
     body = response.data
     assert body["ok"] is True
     assert "run_stuck_hours" not in body
+
+
+@pytest.mark.django_db
+def test_a_stuck_command_beyond_the_history_window_is_still_found():
+    user, tenant, project, target, deployment, _ = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    stuck = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="run-ancient-stuck",
+        plan_hash="4" * 64,
+        deployment=deployment,
+    )
+    AgentCommand.objects.filter(pk=stuck.pk).update(
+        created_at=now - datetime.timedelta(hours=20)
+    )
+    for index in range(14):
+        _command(
+            tenant,
+            project,
+            target,
+            user,
+            deployment,
+            names=[contract.backup_filename("lab", now=now - datetime.timedelta(hours=index + 1))],
+            when=now - datetime.timedelta(hours=index + 1),
+        )
+
+    state = etcd_backup_state(deployment, now=now)
+
+    assert state["run_stuck_hours"] is not None
+    assert 19 < state["run_stuck_hours"] < 21
+    assert any(finding["code"] == "ETCD_BACKUP_RUN_STUCK" for finding in state["findings"])
