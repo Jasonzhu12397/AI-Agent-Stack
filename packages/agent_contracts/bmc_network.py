@@ -23,6 +23,7 @@ CONTROL_ROLES = ("provisioning", "control")
 CODE_OFF_NETWORK = "BMC_OFF_CONTROL_NETWORK"
 CODE_UNVERIFIABLE = "BMC_ADDRESS_UNVERIFIABLE"
 CODE_EMULATOR_OFF_NODE = "BMC_EMULATOR_NOT_ON_CONTROL_NODE"
+CODE_EMULATOR_PORT = "BMC_EMULATOR_PORT_NOT_PUBLISHED"
 CODE_UNAVAILABLE = "BMC_ADDRESS_UNAVAILABLE"
 
 
@@ -41,6 +42,40 @@ def bmc_endpoint_host(address: Any) -> str:
         return value.split("/", 1)[0]
     parts = urlsplit(value)
     return parts.hostname or ""
+
+
+def bmc_endpoint_port(address: Any) -> int | None:
+    """Return the port a BMC endpoint is addressed on, when it names one."""
+
+    if not isinstance(address, str) or not address.strip():
+        return None
+    value = address.strip()
+    if "://" not in value:
+        return None
+    try:
+        port = urlsplit(value).port
+    except ValueError:
+        return None
+    return port
+
+
+def emulated_bmc_ports(services: Any) -> list[int]:
+    """Ports the vbmc/sushy containers publish, read from the bootstrap spec."""
+
+    if not isinstance(services, dict):
+        return []
+    ports: list[int] = []
+    for name in ("vbmc", "sushy-tools"):
+        service = services.get(name)
+        container = service.get("container") if isinstance(service, dict) else None
+        entries = container.get("ports") if isinstance(container, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            port = entry.get("containerPort")
+            if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535:
+                ports.append(port)
+    return ports
 
 
 def control_subnets(plan: dict[str, Any]) -> list[ipaddress.IPv4Network]:
@@ -72,6 +107,7 @@ def bmc_network_findings(
     *,
     emulated_bmc: bool = False,
     node_ip: str | None = None,
+    emulated_ports: tuple[int, ...] = (),
 ) -> dict[str, Any]:
     """Judge every machine's BMC endpoint against the control network.
 
@@ -101,10 +137,19 @@ def bmc_network_findings(
             verdict["detail"] = "the BMC endpoint carries no host"
         elif emulated_bmc:
             # vbmc/sushy run with host networking on the EPH itself, so their
-            # endpoint has to be the control address the EPH owns.
+            # endpoint has to be the control address the EPH owns, on a port the
+            # container actually publishes. An address with the right host and
+            # a port nothing listens on is the same failure one layer later.
+            port = bmc_endpoint_port(item.get("bmc_address"))
             if node_ip and host != node_ip:
                 verdict["code"] = CODE_EMULATOR_OFF_NODE
                 verdict["detail"] = f"the emulator answers on {node_ip}, not {host}"
+            elif emulated_ports and port is not None and port not in emulated_ports:
+                verdict["code"] = CODE_EMULATOR_PORT
+                verdict["detail"] = (
+                    f"nothing publishes {host}:{port}; the emulators serve "
+                    + ", ".join(str(item) for item in emulated_ports)
+                )
         else:
             try:
                 address = ipaddress.IPv4Address(host)

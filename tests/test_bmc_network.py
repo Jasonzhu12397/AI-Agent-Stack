@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from packages.agent_contracts.bmc_network import (
     CODE_EMULATOR_OFF_NODE,
+    CODE_EMULATOR_PORT,
     CODE_OFF_NETWORK,
     CODE_UNAVAILABLE,
     CODE_UNVERIFIABLE,
     bmc_endpoint_host,
+    bmc_endpoint_port,
     bmc_network_findings,
     control_subnets,
+    emulated_bmc_ports,
 )
 from packages.agent_contracts.infra_networks import plan_infra_networks
 
@@ -140,3 +143,40 @@ def test_a_profile_without_a_control_subnet_blocks_the_judgement():
     plan = {**plan, "networks": kept}
     result = bmc_network_findings([{"name": "cp-1", "bmc_address": "10.0.0.5"}], plan)
     assert CODE_UNAVAILABLE in result["warnings"]
+
+def test_the_endpoint_port_is_read_when_the_address_names_one():
+    assert bmc_endpoint_port("redfish+https://172.18.0.3:8000/redfish/v1/Systems/1") == 8000
+    assert bmc_endpoint_port("redfish+https://172.18.0.21/redfish/v1/Systems/1") is None
+    assert bmc_endpoint_port("10.0.0.5") is None
+
+
+def test_emulator_ports_come_from_the_declared_services():
+    services = {
+        "vbmc": {"container": {"ports": [{"containerPort": 6240, "hostPort": 6240}]}},
+        "sushy-tools": {"container": {"ports": [{"containerPort": 8000, "hostPort": 8000}]}},
+    }
+    assert emulated_bmc_ports(services) == [6240, 8000]
+    assert emulated_bmc_ports(None) == []
+
+
+def test_an_emulated_endpoint_on_an_unpublished_port_is_reported():
+    plan = plan_infra_networks(_profile())
+    services = {"vbmc": {"container": {"ports": [{"containerPort": 6240}]}}}
+    result = bmc_network_findings(
+        [{"name": "vm-1", "bmc_address": "redfish+https://172.18.0.3:8001/redfish/v1/Systems/1"}],
+        plan,
+        emulated_bmc=True,
+        node_ip="172.18.0.3",
+        emulated_ports=tuple(emulated_bmc_ports(services)),
+    )
+    assert result["warnings"] == [f"vm-1: {CODE_EMULATOR_PORT}"]
+    assert "nothing publishes 172.18.0.3:8001" in result["machines"][0]["detail"]
+
+    published = bmc_network_findings(
+        [{"name": "vm-1", "bmc_address": "redfish+https://172.18.0.3:6240/redfish/v1/Systems/1"}],
+        plan,
+        emulated_bmc=True,
+        node_ip="172.18.0.3",
+        emulated_ports=(6240,),
+    )
+    assert published["ok"] is True

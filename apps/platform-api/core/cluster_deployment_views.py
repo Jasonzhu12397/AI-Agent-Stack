@@ -23,7 +23,10 @@ from packages.agent_contracts.infra_networks import (
     render_sriov_node_policies,
     network_spec_migration,
 )
-from packages.agent_contracts.bmc_network import bmc_network_findings
+from packages.agent_contracts.bmc_network import (
+    bmc_network_findings,
+    emulated_bmc_ports,
+)
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.storage_addon import (
     StorageAddonError,
@@ -357,6 +360,12 @@ def _declares_emulated_bmc(spec: dict[str, Any]) -> bool:
     return isinstance(services, dict) and "vbmc" in services
 
 
+def _emulated_bmc_ports(spec: dict[str, Any]) -> tuple[int, ...]:
+    registry = spec.get("local_registry")
+    services = registry.get("services") if isinstance(registry, dict) else None
+    return tuple(emulated_bmc_ports(services))
+
+
 def _validated_spec(request, *, infra_profile=None, project=None):
     spec = request.data.get("cluster_spec")
     if not isinstance(spec, dict):
@@ -507,6 +516,7 @@ def _validated_spec(request, *, infra_profile=None, project=None):
             fleet,
             plan,
             emulated_bmc=_declares_emulated_bmc(spec),
+            emulated_ports=_emulated_bmc_ports(spec),
         )
         network_defaults["bmc_network"] = bmc_network
         network_defaults["warnings"].extend(bmc_network["warnings"])

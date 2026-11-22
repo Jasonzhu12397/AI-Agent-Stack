@@ -20,7 +20,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.agent_contracts.bmc_network import bmc_network_findings
+from packages.agent_contracts.bmc_network import (
+    bmc_network_findings,
+    emulated_bmc_ports,
+)
 from packages.agent_contracts.infra_networks import (
     InfraNetworkError,
     plan_infra_networks,
@@ -224,11 +227,16 @@ def plan_fleet_request(payload: dict[str, Any]) -> dict[str, Any]:
             network_plan = plan_infra_networks(profile)
         except InfraNetworkError as exc:
             raise PlanningError(str(exc)) from exc
+        registry = payload.get("local_registry")
+        services = registry.get("services") if isinstance(registry, dict) else None
         evidence["bmc_network"] = bmc_network_findings(
             payload.get("fleet"),
             network_plan,
             emulated_bmc=payload.get("emulated_bmc") is True,
-            node_ip=payload.get("node_ip") if isinstance(payload.get("node_ip"), str) else None,
+            node_ip=payload.get("node_ip")
+            if isinstance(payload.get("node_ip"), str)
+            else None,
+            emulated_ports=tuple(emulated_bmc_ports(services)),
         )
     image_url = payload.get("image_url")
     control_plane_endpoint = payload.get("control_plane_endpoint")
