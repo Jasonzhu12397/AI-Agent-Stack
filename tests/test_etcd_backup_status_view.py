@@ -293,3 +293,110 @@ def test_the_view_reports_the_disk_floor_the_policy_sets():
     body = client.get(URL.format(deployment.id)).data
 
     assert body["policy"]["min_free_bytes"] == 1073741824
+
+
+@pytest.mark.django_db
+def test_the_restore_point_is_the_pre_upgrade_snapshot_even_when_a_backup_is_newer():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = timezone.now()
+    pre = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    periodic = contract.backup_filename("lab", now=now)
+    # The recurring backup ran later, but undoing the upgrade means putting the
+    # pre-upgrade file back: newer is not the same as the state before the change.
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[periodic, pre],
+        when=now,
+    )
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["newest"]["name"] == periodic
+    point = body["restore_point"]
+    assert point["name"] == pre
+    assert point["kind"] == "pre_upgrade"
+    assert point["listed"] is True
+    assert point["version"] == "v1.37.2"
+    assert point["path"] == "/var/lib/etcd/backups/" + pre
+    assert point["age_hours"] >= 0
+
+
+@pytest.mark.django_db
+def test_a_cluster_that_only_ever_backed_up_can_still_be_rolled_back_to_the_newest():
+    user, tenant, project, target, deployment, client = _workspace()
+    periodic = contract.backup_filename("lab", now=timezone.now())
+    _command(
+        tenant, project, target, user, deployment, names=[periodic], when=timezone.now()
+    )
+
+    point = client.get(URL.format(deployment.id)).data["restore_point"]
+
+    assert point["name"] == periodic
+    assert point["kind"] == "periodic"
+
+
+@pytest.mark.django_db
+def test_an_upgrade_reports_a_restore_point_before_the_next_backup_lists_the_directory():
+    user, tenant, project, target, deployment, client = _workspace()
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="upgrade-restore-point",
+        plan_hash="0" * 64,
+        deployment=deployment,
+        result={
+            "etcd_snapshot": {
+                "path": "/var/lib/etcd/backups/" + snapshot,
+                "verified": True,
+                "taken": True,
+            }
+        },
+    )
+
+    point = client.get(URL.format(deployment.id)).data["restore_point"]
+
+    assert point["name"] == snapshot
+    assert point["path"] == "/var/lib/etcd/backups/" + snapshot
+    assert point["listed"] is False
+
+
+@pytest.mark.django_db
+def test_an_unverified_or_unfinished_upgrade_offers_no_restore_point():
+    user, tenant, project, target, deployment, client = _workspace()
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    for key, status, verified in (
+        ("upgrade-failed", AgentCommand.Status.FAILED, True),
+        ("upgrade-unverified", AgentCommand.Status.SUCCEEDED, False),
+    ):
+        AgentCommand.objects.create(
+            tenant=tenant,
+            project=project,
+            node=target,
+            requested_by=user,
+            command_type="cluster.kubernetes.version.upgrade",
+            payload={"cluster_name": "lab"},
+            status=status,
+            idempotency_key=key,
+            plan_hash="0" * 64,
+            deployment=deployment,
+            result={
+                "etcd_snapshot": {
+                    "path": "/var/lib/etcd/backups/" + snapshot,
+                    "verified": verified,
+                    "taken": True,
+                }
+            },
+        )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["restore_point"] is None

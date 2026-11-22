@@ -1081,6 +1081,17 @@ export type EtcdBackupCommandSummary = {
   error: unknown;
 };
 
+export type EtcdRestorePoint = {
+  name: string;
+  kind: "periodic" | "pre_upgrade";
+  path: string;
+  listed: boolean;
+  taken_at: string;
+  age_hours: number;
+  size_bytes: number | null;
+  version: string | null;
+};
+
 export type EtcdBackupState = {
   deployment_id: string;
   cluster_name: string;
@@ -1099,6 +1110,7 @@ export type EtcdBackupState = {
     | { enabled: boolean; valid: false; error: { code: string; message: string } };
   last_run: EtcdBackupCommandSummary | null;
   history: EtcdBackupCommandSummary[];
+  restore_point: EtcdRestorePoint | null;
   newest: { name: string; taken_at?: string } | null;
   newest_age_hours: number | null;
   stale: boolean;

@@ -423,3 +423,19 @@ measure only. If either measurement cannot be read, the run fails with
 `ETCD_BACKUP_DISK_CHECK_FAILED`: a snapshot written into a nearly full etcd
 volume is worse than a snapshot that was skipped and reported, because the
 write itself is what fills the volume the live cluster still needs.
+
+### The restore point
+
+A rollback request must name the snapshot it restores, by absolute path — an
+operator restoring a cluster should not have to remember a file name. The
+read-only backup view therefore answers `restore_point`: the newest
+`pre_upgrade` snapshot, because that file describes the state immediately before
+the last change, falling back to the newest recurring backup on a cluster that
+was never upgraded. Each point carries `name`, `path`, `kind`, `version`,
+`age_hours`, `listed`.
+
+`listed` is what keeps the answer honest: `true` means a run read the file in
+the backup directory, `false` means the platform only knows about it from a
+`SUCCEEDED` upgrade command whose `etcd_snapshot` reported `verified: true`. A
+pending or failed upgrade never contributes a restore point, because the
+platform may not offer a file a command never proved it wrote.

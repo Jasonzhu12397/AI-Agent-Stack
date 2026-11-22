@@ -379,6 +379,34 @@ def public_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{k: v for k, v in entry.items() if not k.startswith("_")} for entry in entries]
 
 
+def restore_point(
+    entries: list[dict[str, Any]], *, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """The snapshot an operator would put back to undo the last change.
+
+    A pre-upgrade snapshot is taken immediately before a change and is the only
+    file that describes the state before it, so it wins over a recurring backup
+    even when the recurring one is newer. Falling back to the newest recurring
+    backup keeps this answer non-empty on a cluster that has never been upgraded.
+    """
+
+    current = now or datetime.now(UTC)
+    if not entries:
+        return None
+    pre_upgrade = [entry for entry in entries if _kind(entry) == "pre_upgrade"]
+    periodic = [entry for entry in entries if _kind(entry) == "periodic"]
+    entry = (pre_upgrade or periodic)[0]
+    taken_at = entry["_taken_at"]
+    return {
+        "name": entry["name"],
+        "kind": _kind(entry),
+        "taken_at": entry["taken_at"],
+        "age_hours": round((current - taken_at).total_seconds() / 3600.0, 3),
+        "size_bytes": entry.get("size_bytes"),
+        "version": entry.get("version"),
+    }
+
+
 def _kind(entry: Mapping[str, Any]) -> str:
     return str(entry.get("kind") or "periodic")
 
@@ -470,6 +498,7 @@ def assess(
             "pre_upgrade_count": len(pre_upgrade),
             "pre_upgrade": public_entries(pre_upgrade),
             "prunable": [],
+            "restore_point": None,
             "findings": findings,
             "ok": False,
         }
@@ -495,6 +524,20 @@ def assess(
         now=current,
         protect=protect,
     )
+    point = restore_point(entries, now=current)
+    findings.append(
+        {
+            "name": "backup.restore_point",
+            "ok": point is not None,
+            "code": "" if point else "ETCD_BACKUP_NO_RESTORE_POINT",
+            "detail": (
+                f"a rollback would restore {point['name']} ({point['kind']}, "
+                f"{point['age_hours']:.1f}h old)"
+                if point
+                else "no snapshot exists that a rollback could restore"
+            ),
+        }
+    )
     return {
         "count": len(periodic),
         "newest": {k: v for k, v in newest.items() if not k.startswith("_")},
@@ -505,6 +548,7 @@ def assess(
         "pre_upgrade_count": len(pre_upgrade),
         "pre_upgrade": public_entries(pre_upgrade),
         "prunable": public_entries(prunable),
+        "restore_point": point,
         "findings": findings,
         "ok": all(item["ok"] for item in findings),
     }

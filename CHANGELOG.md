@@ -31,6 +31,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   and fails closed with `ETCD_BACKUP_DISK_CHECK_FAILED` when either measurement
   cannot be read. The floor is policy (`kubernetes.etcd_backup_min_free_bytes`)
   and is editable from the policy dialog in GiB.
+- A `restore_point` on the read-only backup view: the newest pre-upgrade snapshot
+  (or, on a cluster never upgraded, the newest recurring backup) with its path,
+  kind, version, age and a `listed` flag that separates "a run saw this file"
+  from "only a succeeded upgrade reported it". The rollback form can fill its
+  snapshot path from it instead of asking an operator to recall a file name.
 - `check_etcd_backups`: reports every installed cluster with a missing, stale or
   never-run backup, writes a `cluster.etcd_backup.problem` audit event for each
   and exits non-zero, so a cron entry or monitoring probe can alarm without a

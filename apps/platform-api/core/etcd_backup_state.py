@@ -95,6 +95,64 @@ def store_policy(deployment: ClusterDeployment, values: dict[str, Any]) -> dict[
     return kubernetes
 
 
+#: An upgrade that reported its snapshot is the only place the platform learns
+#: about a restore point before the next recurring backup lists the directory.
+UPGRADE_ACTION = "cluster.kubernetes.version.upgrade"
+
+
+def _reported_restore_point(
+    deployment: ClusterDeployment, *, now: datetime.datetime | None = None
+) -> dict[str, Any] | None:
+    """The snapshot the newest settled upgrade says it took and verified.
+
+    A pending or failed upgrade is ignored: the platform may not offer a file a
+    command never proved it wrote.
+    """
+
+    command = (
+        AgentCommand.objects.filter(
+            deployment=deployment,
+            command_type=UPGRADE_ACTION,
+            status=AgentCommand.Status.SUCCEEDED,
+        )
+        .order_by("-created_at")
+        .only("result")
+        .first()
+    )
+    if command is None:
+        return None
+    result = command.result if isinstance(command.result, dict) else {}
+    snapshot = result.get("etcd_snapshot")
+    if not isinstance(snapshot, dict) or not snapshot.get("verified"):
+        return None
+    path = str(snapshot.get("path") or "").strip()
+    name = path.rsplit("/", 1)[-1]
+    entries = _entries_from([name], deployment.cluster_name)
+    if not entries:
+        return None
+    point = contract.restore_point(entries, now=now)
+    if not point:
+        return None
+    return {**point, "path": path, "listed": False}
+
+
+def _with_location(
+    point: dict[str, Any] | None,
+    *,
+    directory: str,
+    listed: bool,
+) -> dict[str, Any] | None:
+    """One shape for a restore point, whichever command taught us about it."""
+
+    if not point:
+        return None
+    return {
+        **point,
+        "path": f"{directory.rstrip('/')}/{point['name']}",
+        "listed": listed,
+    }
+
+
 def _entries_from(names: Any, cluster_name: str) -> list[dict[str, Any]]:
     """Rebuild contract entries from the file names a command reported."""
 
@@ -137,6 +195,7 @@ def etcd_backup_state(
     runs = [command for command in commands if command.command_type == contract.ACTION]
     state: dict[str, Any] = {
         "policy": policy,
+        "restore_point": None,
         "last_run": _command_summary(runs[0]) if runs else None,
         "history": [_command_summary(command) for command in commands],
         "newest": None,
@@ -163,6 +222,11 @@ def etcd_backup_state(
         ]
         return state
     if not runs:
+        state["restore_point"] = _with_location(
+            _reported_restore_point(deployment, now=now),
+            directory=policy.get("directory") or contract.DEFAULT_DIRECTORY,
+            listed=False,
+        )
         return state
 
     # Use the newest run that reported a directory listing: a failed run that
@@ -174,6 +238,7 @@ def etcd_backup_state(
             reported = command
             break
     if reported is None:
+        state["restore_point"] = _reported_restore_point(deployment, now=now)
         return state
 
     result = reported.result
@@ -203,6 +268,11 @@ def etcd_backup_state(
             "prunable": report["prunable"],
             "pre_upgrade_count": report["pre_upgrade_count"],
             "pre_upgrade": report["pre_upgrade"],
+            "restore_point": _with_location(
+                report["restore_point"] or _reported_restore_point(deployment, now=now),
+                directory=policy["directory"],
+                listed=bool(report["restore_point"]),
+            ),
             "findings": report["findings"],
         }
     )

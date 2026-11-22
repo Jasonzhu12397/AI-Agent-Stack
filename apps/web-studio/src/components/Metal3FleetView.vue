@@ -1024,6 +1024,18 @@ async function requestRecoveryReport(deployment: ClusterDeployment): Promise<voi
   }
 }
 
+function useRestorePoint(deployment: ClusterDeployment): void {
+  const point = backupStates.value[deployment.id]?.restore_point;
+  if (!point) {
+    return;
+  }
+  rollbackSnapshots.value[deployment.id] = point.path;
+  rollbackMessages.value[deployment.id] =
+    point.listed
+      ? "Restore point " + point.name + " filled in; review it before approving."
+      : "Restore point " + point.name + " filled in from the upgrade report; the next backup run will list it.";
+}
+
 async function requestRollback(deployment: ClusterDeployment): Promise<void> {
   const snapshot = (rollbackSnapshots.value[deployment.id] ?? "").trim();
   if (!deployment.target_node_id) {
@@ -1609,6 +1621,17 @@ onUnmounted(() => {
                   v-if="backupStates[scope.row.id].pre_upgrade_count"
                   class="fleet-version-current"
                 >pre-upgrade snapshots: {{ backupStates[scope.row.id].pre_upgrade_count }}</small>
+                <small
+                  v-if="backupStates[scope.row.id].restore_point"
+                  class="fleet-version-current"
+                >restore point: {{ backupStates[scope.row.id].restore_point?.name }}
+                  · {{ backupStates[scope.row.id].restore_point?.kind }}
+                  <el-button
+                    size="small"
+                    text
+                    @click="useRestorePoint(scope.row)"
+                  >Use for rollback</el-button>
+                </small>
                 <small
                   v-for="finding in backupStates[scope.row.id].findings.filter((item) => !item.ok)"
                   :key="scope.row.id + finding.code"

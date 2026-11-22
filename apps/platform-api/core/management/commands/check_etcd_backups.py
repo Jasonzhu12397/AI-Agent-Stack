@@ -62,6 +62,7 @@ class Command(BaseCommand):
                 "newest": (state.get("newest") or {}).get("name"),
                 "newest_age_hours": state.get("newest_age_hours"),
                 "stale": state.get("stale"),
+                "restore_point": (state.get("restore_point") or {}).get("name"),
                 "last_run_status": (state.get("last_run") or {}).get("status"),
             }
             clusters.append(entry)

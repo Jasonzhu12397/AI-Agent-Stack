@@ -13,6 +13,7 @@ from agent_contracts.etcd_backup import (
     backup_filename,
     parse_backup_name,
     partial_name,
+    restore_point,
     select_prunable,
     simulation_plan,
     snapshot_entries,
@@ -586,3 +587,54 @@ def test_the_contract_refuses_a_negative_disk_floor():
     with pytest.raises(EtcdBackupError) as error:
         validate_request({"cluster_name": "lab", "min_free_bytes": -1})
     assert error.value.code == "ETCD_BACKUP_DISK_POLICY_INVALID"
+
+
+def _entry(name: str, cluster: str = "edge-lab") -> dict:
+    return snapshot_entries([{"name": name}], cluster_name=cluster)[0]
+
+
+def test_the_restore_point_prefers_the_snapshot_taken_before_the_last_change():
+    pre = _entry("snapshot-pre-edge-lab-v1.34.1-20260101T000000Z.db")
+    periodic = _entry("edge-lab-20260102T000000Z.db")
+
+    point = restore_point([periodic, pre])
+
+    assert point["name"] == pre["name"]
+    assert point["kind"] == "pre_upgrade"
+    assert point["version"] == "v1.34.1"
+    assert point["age_hours"] > 0
+
+
+def test_a_cluster_never_upgraded_restores_from_its_newest_recurring_backup():
+    periodic = _entry("edge-lab-20260102T000000Z.db")
+
+    point = restore_point([periodic])
+
+    assert point["kind"] == "periodic"
+    assert point["version"] is None
+
+
+def test_without_any_snapshot_there_is_no_restore_point_and_the_assessment_says_so():
+    report = assess(
+        [], keep_count=2, keep_max_age_hours=8760, max_age_hours=26
+    )
+
+    assert restore_point([]) is None
+    assert report["restore_point"] is None
+    codes = {finding["code"] for finding in report["findings"]}
+    assert "ETCD_BACKUP_MISSING" in codes
+
+
+def test_a_healthy_assessment_names_the_file_a_rollback_would_use():
+    entries = [_entry("edge-lab-20260102T000000Z.db")]
+
+    report = assess(
+        entries, keep_count=2, keep_max_age_hours=8760, max_age_hours=8760
+    )
+
+    assert report["restore_point"]["name"] == entries[0]["name"]
+    finding = next(
+        item for item in report["findings"] if item["name"] == "backup.restore_point"
+    )
+    assert finding["ok"] is True
+    assert finding["code"] == ""
