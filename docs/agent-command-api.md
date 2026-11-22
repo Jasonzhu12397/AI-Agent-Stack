@@ -570,3 +570,12 @@ under `<key>:retry:<n>` instead of handing back the dead one, so an operator in
 the middle of an incident does not have to wait for the next hour. A live retry
 already covering the bucket is returned rather than duplicated, so double
 clicks stay idempotent.
+
+### Overrides and their defaults
+
+`queue_etcd_backups --directory/--keep-count/--keep-max-age-hours/
+--pre-upgrade-keep-max-age-hours/--min-free-bytes` default to "unset" rather
+than to 0, so a scheduler that passes no flag uses each deployment's own policy
+instead of silently resetting it; `--min-free-bytes 0` is still forwarded
+verbatim, because zero there means "measure the volume without refusing the
+backup".

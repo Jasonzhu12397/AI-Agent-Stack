@@ -66,11 +66,21 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true")
-        parser.add_argument("--directory", default="")
-        parser.add_argument("--keep-count", type=int, default=0)
-        parser.add_argument("--keep-max-age-hours", type=int, default=0)
-        parser.add_argument("--pre-upgrade-keep-max-age-hours", type=int, default=0)
-        parser.add_argument("--min-free-bytes", type=int, default=0)
+        # No default: an unset flag must not overwrite the deployment's own
+        # policy, and 0 is only meaningful where the contract defines it (an
+        # explicit min-free-bytes=0 means "measure, do not refuse").
+        parser.add_argument(
+            "--directory", default=None, help="override the backup directory"
+        )
+        parser.add_argument("--keep-count", type=int, default=None)
+        parser.add_argument("--keep-max-age-hours", type=int, default=None)
+        parser.add_argument("--pre-upgrade-keep-max-age-hours", type=int, default=None)
+        parser.add_argument(
+            "--min-free-bytes",
+            type=int,
+            default=None,
+            help="override the free-space floor; 0 measures without refusing",
+        )
 
     def handle(self, *args, **options):
         queued = []

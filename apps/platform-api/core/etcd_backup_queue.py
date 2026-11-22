@@ -93,8 +93,12 @@ def backup_payload(
     if protect:
         payload["protect"] = protect
     for field, value in (overrides or {}).items():
-        if value:
-            payload[field] = value
+        # Zero is a real policy (min_free_bytes=0 means measure only), so the
+        # test is for absence, not for truthiness; an unset CLI option arrives
+        # as None or as an empty string and means "leave the policy alone".
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        payload[field] = value
     request = validate_request(payload)
     if not request["protect"]:
         # The contract always reports the protect set, empty or not. An empty

@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- Scheduler overrides default to unset instead of 0 (an unset flag no longer
+  overwrites the deployment's policy), and an explicit `--min-free-bytes 0`
+  reaches the command as a real value.
 - A failed backup command no longer blocks the hour: a retry is queued under
   `<key>:retry:<n>`, while a live retry or a successful command is still
   returned instead of duplicated.

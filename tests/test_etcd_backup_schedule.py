@@ -325,3 +325,52 @@ def test_both_compose_files_ship_the_watchdog_and_only_defined_dependencies():
         for other_name, other in services.items():
             for dependency in other.get("depends_on") or {}:
                 assert dependency in services, f"{relative}: {other_name} -> {dependency}"
+
+
+@pytest.mark.django_db
+def test_an_override_of_zero_survives_because_zero_is_a_policy():
+    from core.etcd_backup_queue import backup_payload
+
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+
+    payload = backup_payload(deployment, {"min_free_bytes": 0})
+
+    assert payload["min_free_bytes"] == 0
+    # An override that was never given must still leave the default alone.
+    assert backup_payload(deployment)["min_free_bytes"] > 0
+
+
+@pytest.mark.django_db
+def test_an_explicit_zero_floor_reaches_the_scheduled_command():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(tenant, project, eph, target, user)
+
+    _run(min_free_bytes=0)
+
+    command = AgentCommand.objects.get(command_type=ACTION)
+    assert command.payload["min_free_bytes"] == 0
+
+
+@pytest.mark.django_db
+def test_an_unset_flag_leaves_the_spec_policy_untouched():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant,
+        project,
+        eph,
+        target,
+        user,
+        spec={
+            "kubernetes": {
+                "etcd_backup_keep_count": 12,
+                "etcd_backup_min_free_bytes": 1073741824,
+            }
+        },
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.get(command_type=ACTION).payload
+    assert payload["keep_count"] == 12
+    assert payload["min_free_bytes"] == 1073741824
