@@ -16,8 +16,9 @@ automated baseline, one offline image list and one release gate.
   `pyproject.toml`, exposed on `/api/v1/`, stamped into the release manifest and
   overridable with `AI_AGENT_STACK_VERSION` for stripped images.
 - `LICENSE` (Apache-2.0).
-- `docs/release-v1.0.0.md`: feature inventory, deploy paths, support matrix,
-  GA gate list and the items that still require a physical lab.
+- `docs/release-v1.0.0.zh-CN.md` and `docs/release-v1.0.0.en.md`: feature
+  inventory, deploy paths, support matrix, GA gate list and the items that still
+  require a physical lab, in Chinese and English.
 - `make verify` (ruff + pytest + frontend tests + frontend build) and
   `make version`.
 - `tests/test_dockerfile_packages.py`: every Python image must copy the whole

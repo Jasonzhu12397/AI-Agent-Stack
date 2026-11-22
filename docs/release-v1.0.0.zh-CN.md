@@ -1,9 +1,12 @@
-# AI Agent Stack 1.0.0 — 发布说明
+# AI Agent Stack 1.0.0 — 发布说明（简体中文）
+
+> 英文全文见 `docs/release-v1.0.0.en.md`。
 
 本版本把「AI Agent SaaS 平台」与「三个 Agent 的物理裸金属交付链」收成**一个可部署、带版本号、可追溯的产物**：一套代码、一个版本号、一份离线镜像清单、一条 fail-closed 发布门禁。
 
 - 版本号：`1.0.0`，单一来源是 `pyproject.toml`，由 `packages/version.py::project_version()` 读取；`/api/v1/`、发布清单、前端 `package.json` 全部一致。
 - 许可证：Apache-2.0（见 `LICENSE`）。
+- 双语：本文件为中文版，英文版为 `docs/release-v1.0.0.en.md`。
 - 变更历史：`CHANGELOG.md`（本版本条目）。
 - 本版本定位：**代码层 1.0**。自动化基线全绿；物理机验收项逐条列在 §6，未跑通前不勾选、不声称已验证。
 
