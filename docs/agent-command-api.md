@@ -215,13 +215,24 @@ that must equal `cluster_name`. Refusals are explicit:
 A stacked etcd is restored member by member instead of being refused. Restoring
 one member of a three-node cluster alone would break quorum, so the executor reads
 `member list --write-out=json` and ties every member to its control-plane node
-through the peer URL host and the etcd pod's `nodeName`. It then stages the
-snapshot on each remote host (`ssh` + `scp` over
-`KUBERNETES_UPGRADE_REMOTE_USER`), restores every member locally through
-`kubectl exec` (the admin kubeconfig reaches all pods, the remote hosts do not need
-`kubectl`), stops every kubelet before the first directory moves, swaps the
-restored data in, and starts the local kubelet first so the quorum re-forms in a
-known order. An unidentified local node or an unmatchable member blocks with
+through the peer URL host and the etcd pod's `nodeName`. A bracketed IPv6 peer URL
+(`https://[fd00::1]:2380`) resolves to the node's `fd00::1` instead of a truncated
+string. It then stages the snapshot on each remote host over
+`KUBERNETES_UPGRADE_REMOTE_USER`: `scp` as the login user into `/tmp`, then
+`sudo install -m 0444` into the root-owned etcd path and a readability probe, so
+the bytes never half-land in a directory the login user cannot write. Every
+member is restored locally through `kubectl exec` (the admin kubeconfig reaches
+all pods, the remote hosts do not need `kubectl`), every kubelet stops before the
+first directory move, the restored data is swapped in, and the local kubelet
+starts first so the quorum re-forms in a known order.
+
+Two preflight facts keep the restore from starting something it cannot finish.
+`rollback.snapshot.path` requires the snapshot to sit under `/var/lib/etcd`, the
+only host path the etcd static pod mounts - a file under `/var/backups` exists on
+the host and is invisible inside the pod, so it is refused before a kubelet stops.
+The snapshot verdict (`etcdctl snapshot status`) is taken once, on the member
+whose host holds the file; a remote member is not asked to read a path that only
+exists on this host. An unidentified local node or an unmatchable member blocks with
 `ROLLBACK_PREFLIGHT_BLOCKED` (`ROLLBACK_ETCD_MEMBER_UNMATCHED` detail) before
 anything is touched, and a missing remote executor reports
 `ROLLBACK_REMOTE_EXECUTOR_NOT_CONFIGURED`.

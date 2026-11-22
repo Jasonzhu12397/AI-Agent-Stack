@@ -11,9 +11,11 @@ binaries stay where they are and only the control-plane state is rolled back.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from packages.agent_contracts.kubernetes_rollback import (
     DEFAULT_ETCD_DATA_DIR,
@@ -179,6 +181,9 @@ class RollbackExecutor:
                 "Ready=True" if ready else "node is not Ready",
             )
         )
+        visible, visible_detail = self._snapshot_in_pod_path(request["snapshot_path"])
+        checks.append(self._check("rollback.snapshot.path", visible, visible_detail or
+            f"{request['snapshot_path']} is inside {DEFAULT_ETCD_DATA_DIR}"))
         status_argv = [
             *self._upgrade._etcdctl_argv(etcd_pod),
             "snapshot",
@@ -186,7 +191,11 @@ class RollbackExecutor:
             request["snapshot_path"],
             "--write-out=json",
         ]
-        verified = self._run(status_argv, timeout=60)
+        verified = (
+            self._run(status_argv, timeout=60)
+            if visible
+            else {"available": False, "returncode": 1, "stdout": "", "stderr": visible_detail}
+        )
         body = (verified.get("stdout") or "").strip()
         readable = self._ok(verified)
         hashed = readable and body.startswith("{") and "hash" in body
@@ -452,10 +461,12 @@ class RollbackExecutor:
                 continue
             peer_urls = entry.get("peerURLs")
             peer_url = str(peer_urls[0]) if isinstance(peer_urls, list) and peer_urls else ""
+            # ``urlsplit`` keeps a bracketed IPv6 address whole; splitting on
+            # the last colon would turn ``https://[fd00::1]:2380`` into
+            # ``[fd00::1``, which never matches a node address.
             host = ""
             if peer_url:
-                peer = peer_url.split("://", 1)[-1]
-                host = peer.rsplit(":", 1)[0]
+                host = urlsplit(peer_url).hostname or ""
             name = str(entry.get("name") or "")
             node = next(
                 (
@@ -507,6 +518,24 @@ class RollbackExecutor:
         )
         return self._preflight_node_check(member["node"], node)
 
+    @staticmethod
+    def _snapshot_in_pod_path(path: str) -> tuple[bool, str]:
+        """Whether the etcd pod can reach a host path at all.
+
+        The etcd static pod mounts the host data directory and nothing else, so
+        a snapshot stored anywhere else is readable on the host and invisible
+        inside the pod - the restore would fail after the kubelets are already
+        stopped. Saying so in preflight keeps that from happening.
+        """
+
+        mount = DEFAULT_ETCD_DATA_DIR.rstrip("/")
+        if not path.startswith(mount + "/"):
+            return False, (
+                f"{path} is outside {mount}, the only host path the etcd pod mounts; "
+                f"move the snapshot under {mount}/backups"
+            )
+        return True, ""
+
     def _preflight_node_check(self, name: str, node: dict[str, Any] | None) -> dict[str, Any]:
         conditions = ((node or {}).get("status") or {}).get("conditions") or []
         ready = any(
@@ -543,23 +572,57 @@ class RollbackExecutor:
         assessed["members"] = [dict(item) for item in members]
         for member in members:
             checks.append(self._member_ready_check(member, control_planes))
+        visible, visible_detail = self._snapshot_in_pod_path(request["snapshot_path"])
+        checks.append(
+            self._check(
+                "rollback.snapshot.path",
+                visible,
+                visible_detail
+                or f"{request['snapshot_path']} is inside {DEFAULT_ETCD_DATA_DIR}",
+            )
+        )
         for member in members:
-            result = self._run(
-                [
-                    *self._upgrade._etcdctl_argv(member["pod"]),
-                    "snapshot",
-                    "status",
-                    request["snapshot_path"],
-                    "--write-out=json",
-                ],
-                timeout=60,
+            if member["node"] != local_name:
+                # The snapshot lives on this host. Reading it from a remote pod
+                # in preflight could only fail, so the remote check proves the
+                # file is verified once, locally, and that the copy is staged
+                # when the restore actually runs.
+                checks.append(
+                    self._check(
+                        f"etcd.snapshot.readable/{member['node']}",
+                        True,
+                        f"{request['snapshot_path']} is staged on {member['node']} "
+                        "when the restore runs",
+                    )
+                )
+                continue
+            result = (
+                self._run(
+                    [
+                        *self._upgrade._etcdctl_argv(member["pod"]),
+                        "snapshot",
+                        "status",
+                        request["snapshot_path"],
+                        "--write-out=json",
+                    ],
+                    timeout=60,
+                )
+                if visible
+                else {
+                    "available": False,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": visible_detail,
+                }
             )
             body = (result.get("stdout") or "").strip()
             checks.append(
                 self._check(
                     f"etcd.snapshot.readable/{member['node']}",
                     self._ok(result),
-                    f"{request['snapshot_path']} is readable from {member['pod']}",
+                    f"{request['snapshot_path']} is readable from {member['pod']}"
+                    if self._ok(result)
+                    else f"{request['snapshot_path']} is missing or unreadable: {_output(result)}",
                 )
             )
             checks.append(
@@ -604,24 +667,31 @@ class RollbackExecutor:
         return assessed
 
     def _stage_snapshot(self, member: dict[str, str], snapshot: str, step: dict[str, Any]) -> bool:
-        """Make the snapshot readable inside the etcd pod on a remote member."""
+        """Copy the snapshot to a remote member's own etcd data path.
+
+        ``scp`` writes as the login user, so copying straight into
+        ``/var/lib/etcd`` (root-owned) fails halfway and leaves a partial file.
+        The file therefore lands in a per-user temporary path first and is
+        installed by ``sudo`` with the mode etcdctl expects.
+        """
 
         directory = snapshot.rsplit("/", 1)[0]
         target = self._ssh_target(member)
-        mkdir = ["ssh", "-o", "BatchMode=yes", target, "sudo", "mkdir", "-p", directory]
-        if not self._execute(step, mkdir, 60):
-            return False
-        if not self._execute(
-            step,
-            ["scp", "-o", "BatchMode=yes", snapshot, f"{target}:{snapshot}"],
-            STEP_TIMEOUT_SECONDS,
-        ):
-            return False
-        return self._execute(
-            step,
-            ["ssh", "-o", "BatchMode=yes", target, "sudo", "test", "-f", snapshot],
-            60,
-        )
+        staging = f"/tmp/{os.path.basename(snapshot)}"
+        steps: list[list[str]] = [
+            ["ssh", "-o", "BatchMode=yes", target, "sudo", "mkdir", "-p", directory],
+            ["scp", "-o", "BatchMode=yes", snapshot, f"{target}:{staging}"],
+            [
+                "ssh", "-o", "BatchMode=yes", target,
+                "sudo", "install", "-m", "0444", staging, snapshot,
+            ],
+            ["ssh", "-o", "BatchMode=yes", target, "sudo", "rm", "-f", staging],
+            ["ssh", "-o", "BatchMode=yes", target, "sudo", "test", "-r", snapshot],
+        ]
+        for argv in steps:
+            if not self._execute(step, argv, STEP_TIMEOUT_SECONDS):
+                return False
+        return True
 
     def _run_multi(self, request: dict[str, str], assessment: dict[str, Any]) -> dict[str, Any]:
         """Restore the same snapshot on every member of a stacked etcd.

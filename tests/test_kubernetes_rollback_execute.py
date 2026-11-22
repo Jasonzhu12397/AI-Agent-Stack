@@ -323,6 +323,33 @@ class MultiRollbackRunner:
         return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
 
 
+def test_the_snapshot_verdict_is_taken_where_the_file_lives(monkeypatch):
+    """A remote pod cannot read a file that only exists on this host."""
+
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = MultiRollbackRunner()
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    probes = [
+        call for call in runner.calls if "snapshot" in call and "status" in call
+    ]
+    assert len(probes) == 1
+    assert "etcd-cp-0" in probes[0]
+    readable = {
+        check["name"]: check
+        for check in assessed["checks"]
+        if check["name"].startswith("etcd.snapshot.readable")
+    }
+    assert set(readable) == {
+        "etcd.snapshot.readable/cp-0",
+        "etcd.snapshot.readable/cp-1",
+        "etcd.snapshot.readable/cp-2",
+    }
+    assert all(check["ok"] for check in readable.values())
+    assert "staged on cp-1" in readable["etcd.snapshot.readable/cp-1"]["detail"]
+
+
 def test_a_three_member_etcd_is_restored_member_by_member(monkeypatch):
     monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
     # Remote members are reached over ssh, so the executor's network hops are
@@ -342,9 +369,10 @@ def test_a_three_member_etcd_is_restored_member_by_member(monkeypatch):
         "kubelet_restart",
         "postflight",
     ]
-    # Six mutations (restore + existence check per member) plus, for the two
-    # remote members, the staging that makes the file readable in their pod.
-    assert len(result["steps"][1]["commands"]) == 12
+    # The local member contributes the restore and its existence check; each
+    # remote member also carries the copy that puts the snapshot on its own
+    # etcd data path (mkdir, scp, sudo install, cleanup, readability probe).
+    assert len(result["steps"][1]["commands"]) == 16
     # Every restore names the whole cluster and its own peer URL, so the three
     # members come up as one cluster instead of three unrelated clusters.
     restores = [call for call in runner.calls if "restore" in " ".join(call)]
@@ -357,6 +385,19 @@ def test_a_three_member_etcd_is_restored_member_by_member(monkeypatch):
     scp = [call for call in runner.calls if call[:1] == ["scp"]]
     assert len(scp) == 2
     assert all(REQUEST["snapshot_path"] in " ".join(call) for call in scp)
+    # scp writes as the login user, so the bytes land in /tmp first and reach
+    # the root-owned etcd path through sudo install.
+    assert all(call[-1].endswith(":/tmp/snapshot-pre-v1.34.1.db") for call in scp)
+    installs = [call for call in runner.calls if "install" in " ".join(call)]
+    assert len(installs) == 2
+    installed = "sudo install -m 0444 /tmp/snapshot-pre-v1.34.1.db"
+    assert all(installed in " ".join(call) for call in installs)
+    # The temporary copy is removed again on every remote host.
+    cleanups = [
+        call for call in runner.calls if "rm" in call and "-f" in call
+    ]
+    assert len(cleanups) == 2
+    assert all("/tmp/snapshot-pre-v1.34.1.db" in " ".join(call) for call in cleanups)
     # Every kubelet stops before the first directory moves.
     stops = [
         index
@@ -375,3 +416,94 @@ def test_a_three_member_etcd_is_restored_member_by_member(monkeypatch):
     assert len(starts) == 3
     # The local member starts first so the quorum forms in a known order.
     assert "cp-0" not in " ".join(runner.calls[starts[0]])
+
+
+def _ipv6_nodes():
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {
+                        "name": f"cp-{index}",
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "status": {
+                        "addresses": [
+                            {"type": "InternalIP", "address": f"fd00::1{index}"}
+                        ],
+                        "nodeInfo": {"kubeletVersion": "v1.34.1"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                }
+                for index in range(3)
+            ]
+        }
+    )
+
+
+def _ipv6_members():
+    return json.dumps(
+        {
+            "members": [
+                {"name": f"cp-{index}", "peerURLs": [f"https://[fd00::1{index}]:2380"]}
+                for index in range(3)
+            ]
+        }
+    )
+
+
+class Ipv6RollbackRunner(MultiRollbackRunner):
+    def __call__(self, argv, timeout=20, **kwargs):
+        if argv[:2] == ["kubectl", "get"] and "nodes" in argv:
+            self.calls.append(list(argv))
+            return {"available": True, "returncode": 0, "stdout": _ipv6_nodes(), "stderr": ""}
+        if "member" in argv and "list" in argv:
+            self.calls.append(list(argv))
+            return {"available": True, "returncode": 0, "stdout": _ipv6_members(), "stderr": ""}
+        return super().__call__(argv, timeout, **kwargs)
+
+
+def test_a_bracketed_ipv6_peer_url_still_matches_its_member(monkeypatch):
+    """``https://[fd00::1]:2380`` must resolve to the node's ``fd00::1``."""
+
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = Ipv6RollbackRunner()
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    assert assessed["blocked"] is False
+    members = assessed["members"]
+    assert [item["node"] for item in members] == ["cp-0", "cp-1", "cp-2"]
+    assert [item["address"] for item in members] == ["fd00::10", "fd00::11", "fd00::12"]
+    assert all(item["pod"] == f"etcd-{item['node']}" for item in members)
+
+
+def test_a_snapshot_outside_the_etcd_pod_mount_blocks_before_any_change():
+    """The etcd pod mounts /var/lib/etcd only; anywhere else cannot be read."""
+
+    runner = RollbackRunner()
+    request = dict(REQUEST)
+    request["snapshot_path"] = "/var/backups/etcd/snapshot-pre-v1.34.1.db"
+    assessed = RollbackExecutor(runner).assess(request)
+
+    assert assessed["blocked"] is True
+    path_check = next(
+        check for check in assessed["checks"] if check["name"] == "rollback.snapshot.path"
+    )
+    assert path_check["ok"] is False
+    assert "/var/lib/etcd" in path_check["detail"]
+    # Nothing probed the pod for a file it cannot see.
+    assert not [call for call in runner.calls if "snapshot" in call and "status" in call]
+
+
+def test_a_snapshot_inside_the_mount_is_probed_once(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = MultiRollbackRunner()
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    path_check = next(
+        check for check in assessed["checks"] if check["name"] == "rollback.snapshot.path"
+    )
+    assert path_check["ok"] is True
+    assert assessed["blocked"] is False
