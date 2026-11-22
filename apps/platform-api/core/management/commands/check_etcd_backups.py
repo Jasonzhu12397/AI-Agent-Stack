@@ -29,6 +29,7 @@ PROBLEM_CODES = frozenset(
         # that takes backups is gone, so nothing will ever refresh this cluster.
         "ETCD_BACKUP_SCHEDULER_SILENT",
         "ETCD_BACKUP_LAST_RUN_FAILED",
+        "ETCD_BACKUP_RUN_STUCK",
     }
 )
 SCHEDULER_SILENCE_HOURS = 2

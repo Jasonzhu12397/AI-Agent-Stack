@@ -112,6 +112,12 @@ NOT_RUN_FINDING = {
 #: the cluster healthy on yesterday's snapshot while today's attempt has been
 #: failing every hour, which is the one failure mode nobody would notice.
 LAST_RUN_FAILED = "ETCD_BACKUP_LAST_RUN_FAILED"
+#: A command queued for longer than this is not a slow backup, it is a command
+#: no agent ever picked up: the lease was never claimed, or the Target Agent is
+#: gone. Waiting longer would only delay the day the gap is noticed.
+RUN_STUCK = "ETCD_BACKUP_RUN_STUCK"
+STUCK_AFTER_HOURS = 6.0
+UNFINISHED_STATUSES = frozenset({"queued", "running", "cancel_requested"})
 FAILED_STATUSES = frozenset({"failed", "cancelled"})
 
 #: An upgrade that reported its snapshot is the only place the platform learns
@@ -332,6 +338,32 @@ def etcd_backup_state(
         }
     )
     newest_run = runs[0] if runs else None
+    # Scan every run in the window, not only the newest: a command that was
+    # dropped twelve hours ago is still evidence that an agent missed a lease,
+    # even if a later slot happened to be picked up.
+    current = now or datetime.datetime.now(datetime.UTC)
+    stuck_run = None
+    waited = 0.0
+    for candidate in runs:
+        if candidate.status not in UNFINISHED_STATUSES:
+            continue
+        age_hours = (current - candidate.created_at).total_seconds() / 3600.0
+        if age_hours > STUCK_AFTER_HOURS:
+            stuck_run = candidate
+            waited = age_hours
+            break
+    if stuck_run is not None:
+        state["findings"] = [
+            *state["findings"],
+            {
+                "name": "backup.queue",
+                "ok": False,
+                "code": RUN_STUCK,
+                "detail": f"queued {waited:.1f}h ago and no agent has finished it",
+            },
+        ]
+        state["ok"] = False
+        state["run_stuck_hours"] = round(waited, 3)
     newest_result = (
         newest_run.result if newest_run and isinstance(newest_run.result, dict) else {}
     )

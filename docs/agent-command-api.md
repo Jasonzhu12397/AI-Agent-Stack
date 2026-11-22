@@ -529,3 +529,12 @@ The report's `alert` field says `configured` / `delivered` / `reason`
 echoes the URL, which may carry a token. A healthy fleet is never paged; dry
 runs and `--no-alert` never page. Compose runs the probe hourly as
 `etcd-backup-watchdog`, next to the scheduler that takes the backups.
+
+### When the queue itself is the failure
+
+A command that was queued and never finished looks like yesterday's healthy
+snapshot from the outside. When a backup command is still `queued`/`running`
+after `STUCK_AFTER_HOURS` (6), the state reports `run_stuck_hours` and a
+`backup.queue` finding with `ETCD_BACKUP_RUN_STUCK`, and the watchdog reports it:
+the agent never claimed the lease, so waiting longer only delays the day the
+gap is noticed. A run inside the window is left alone.

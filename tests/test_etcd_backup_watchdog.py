@@ -106,7 +106,7 @@ def _run(**options):
 def _backup(tenant, project, target, deployment, user, *, hours_ago: float):
     when = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=hours_ago)
     name = contract.backup_filename("lab", now=when)
-    AgentCommand.objects.create(
+    command = AgentCommand.objects.create(
         tenant=tenant,
         project=project,
         node=target,
@@ -120,6 +120,8 @@ def _backup(tenant, project, target, deployment, user, *, hours_ago: float):
         deployment=deployment,
         finished_at=when,
     )
+    # The row is created now; its age is what the state reads, so it is set.
+    AgentCommand.objects.filter(pk=command.pk).update(created_at=when)
     return name
 
 
@@ -362,3 +364,30 @@ def test_a_healthy_fleet_is_never_paged(monkeypatch):
     assert error == ""
     assert posts == []
     assert report["alert"]["reason"] == "nothing_to_report"
+
+
+@pytest.mark.django_db
+def test_a_queued_command_nobody_ran_surfaces_as_its_own_problem():
+    tenant, project, target, deployment, user = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    _backup(tenant, project, target, deployment, user, hours_ago=1)
+    stuck = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="watchdog-stuck",
+        plan_hash="3" * 64,
+        deployment=deployment,
+    )
+    AgentCommand.objects.filter(pk=stuck.pk).update(
+        created_at=now - datetime.timedelta(hours=12)
+    )
+
+    report, error = _run()
+
+    assert error
+    assert report["problems"][0]["code"] == "ETCD_BACKUP_RUN_STUCK"

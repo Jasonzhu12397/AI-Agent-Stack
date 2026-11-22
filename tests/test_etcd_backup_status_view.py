@@ -595,3 +595,80 @@ def test_a_failed_newest_run_is_not_hidden_behind_an_older_good_one():
     assert any(
         finding["code"] == "ETCD_BACKUP_DISK_LOW" for finding in body["findings"]
     )
+
+
+@pytest.mark.django_db
+def test_a_command_nobody_picked_up_is_not_a_quiet_cluster():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    good = contract.backup_filename("lab", now=now - datetime.timedelta(hours=20))
+    earlier = _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[good],
+        when=now - datetime.timedelta(hours=20),
+    )
+    AgentCommand.objects.filter(pk=earlier.pk).update(
+        created_at=now - datetime.timedelta(hours=20)
+    )
+    stuck = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="run-stuck",
+        plan_hash="1" * 64,
+        deployment=deployment,
+    )
+    AgentCommand.objects.filter(pk=stuck.pk).update(
+        created_at=now - datetime.timedelta(hours=9)
+    )
+
+    response = client.get(URL.format(deployment.id))
+
+    body = response.data
+    assert body["ok"] is False
+    assert 8.5 < body["run_stuck_hours"] < 9.5
+    assert any(
+        finding["code"] == "ETCD_BACKUP_RUN_STUCK" for finding in body["findings"]
+    )
+
+
+@pytest.mark.django_db
+def test_a_run_that_is_merely_in_flight_is_left_alone():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    good = contract.backup_filename("lab", now=now - datetime.timedelta(hours=1))
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[good],
+        when=now - datetime.timedelta(hours=1),
+    )
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.RUNNING,
+        idempotency_key="run-flying",
+        plan_hash="2" * 64,
+        deployment=deployment,
+    )
+
+    response = client.get(URL.format(deployment.id))
+
+    body = response.data
+    assert body["ok"] is True
+    assert "run_stuck_hours" not in body

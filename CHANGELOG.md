@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A queued backup no agent ever ran is reported: after six hours the state
+  reports `run_stuck_hours` and `ETCD_BACKUP_RUN_STUCK`, and the watchdog
+  includes it in its problems.
 - A failed newest backup attempt is visible: the state reports
   `last_run_failed` and a `backup.last_run` finding instead of judging the
   cluster healthy on an older snapshot, and the watchdog reports it.
