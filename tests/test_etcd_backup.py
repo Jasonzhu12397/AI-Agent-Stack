@@ -298,3 +298,127 @@ def test_status_is_read_only_and_reports_the_age():
     assert report["newest"]["name"] == _name(2)
     assert report["newest_age_hours"] == pytest.approx(2.0)
     assert not [call for call in runner.calls if "save" in call or "rm" in call]
+
+
+# ------------------------------------------------- pre-upgrade snapshots
+
+
+def _pre_upgrade(*ages: int, cluster: str = "lab", version: str = "v1.37.2") -> list[dict]:
+    names = [
+        f"snapshot-pre-{cluster}-{version}-"
+        + (NOW - timedelta(hours=age)).strftime("%Y%m%dT%H%M%SZ")
+        + ".db"
+        for age in ages
+    ]
+    return snapshot_entries([{"name": name} for name in names], cluster_name=cluster)
+
+
+def test_a_pre_upgrade_snapshot_is_recognised_and_attributed():
+    entries = _pre_upgrade(10)
+    assert entries[0]["kind"] == "pre_upgrade"
+    assert entries[0]["cluster"] == "lab"
+    assert entries[0]["version"] == "v1.37.2"
+
+
+def test_an_older_pre_upgrade_name_without_a_cluster_is_still_this_nodes_file():
+    name = "snapshot-pre-v1.37.2-20261122T030000Z.db"
+    entries = snapshot_entries([{"name": name}], cluster_name="lab")
+    assert [entry["name"] for entry in entries] == [name]
+    assert entries[0]["kind"] == "pre_upgrade"
+    assert entries[0]["cluster"] == ""
+    assert entries[0]["version"] == "v1.37.2"
+
+
+def test_a_recurring_backup_is_never_confused_with_a_pre_upgrade_snapshot():
+    entries = snapshot_entries(
+        [{"name": _name(3)}, {"name": "snapshot-pre-lab-v1.37.2-20261122T000000Z.db"}],
+        cluster_name="lab",
+    )
+    assert [entry["kind"] for entry in entries] == ["periodic", "pre_upgrade"]
+
+
+def test_the_newest_pre_upgrade_snapshot_survives_any_age():
+    entries = _pre_upgrade(300, 400)
+    prunable = select_prunable(
+        entries,
+        keep_count=2,
+        keep_max_age_hours=5,
+        pre_upgrade_keep_max_age_hours=24,
+        now=NOW,
+    )
+    # The 300h file is the newest of its kind: a rollback of the last change
+    # would restore it, so it is never pruned. The 400h one is past 24h.
+    assert [item["name"] for item in prunable] == [entries[1]["name"]]
+
+
+def test_pre_upgrade_snapshots_older_than_their_policy_are_pruned():
+    entries = _pre_upgrade(30, 40, 50)
+    prunable = select_prunable(
+        entries,
+        keep_count=2,
+        keep_max_age_hours=5,
+        pre_upgrade_keep_max_age_hours=24,
+        now=NOW,
+    )
+    # Oldest first, and the 30h file is the newest of its kind so it stays.
+    assert [item["name"] for item in prunable] == [entries[2]["name"], entries[1]["name"]]
+
+
+def test_a_new_pre_upgrade_snapshot_is_never_pruned_and_protect_still_wins():
+    entries = _pre_upgrade(2, 48, 72)
+    prunable = select_prunable(
+        entries,
+        keep_count=2,
+        keep_max_age_hours=5,
+        pre_upgrade_keep_max_age_hours=24,
+        now=NOW,
+    )
+    assert entries[0]["name"] not in [item["name"] for item in prunable]
+    protected = select_prunable(
+        entries,
+        keep_count=2,
+        keep_max_age_hours=5,
+        pre_upgrade_keep_max_age_hours=24,
+        now=NOW,
+        protect=(entries[2]["name"],),
+    )
+    assert entries[2]["name"] not in [item["name"] for item in protected]
+
+
+def test_a_pre_upgrade_snapshot_alone_is_not_a_fresh_backup_set():
+    report = assess(
+        _pre_upgrade(1),
+        keep_count=2,
+        keep_max_age_hours=8760,
+        max_age_hours=26,
+        now=NOW,
+    )
+    assert report["ok"] is False
+    assert report["count"] == 0
+    assert report["pre_upgrade_count"] == 1
+    assert report["newest"] is None
+    assert report["findings"][0]["code"] == "ETCD_BACKUP_MISSING"
+
+
+def test_periodic_freshness_is_not_reported_from_a_pre_upgrade_snapshot():
+    entries = snapshot_entries(
+        [
+            {"name": _name(50)},
+            {"name": "snapshot-pre-lab-v1.37.2-20261122T020000Z.db"},
+        ],
+        cluster_name="lab",
+    )
+    report = assess(entries, keep_count=2, keep_max_age_hours=8760, max_age_hours=26, now=NOW)
+    assert report["newest"]["name"] == _name(50)
+    assert report["newest_age_hours"] == 50.0
+    assert report["pre_upgrade_count"] == 1
+    age = (NOW - datetime.fromisoformat(report["pre_upgrade"][0]["taken_at"])).total_seconds()
+    assert age == 3600.0
+
+
+def test_the_policy_carries_a_pre_upgrade_window():
+    request = validate_request({"cluster_name": "lab"})
+    assert request["pre_upgrade_keep_max_age_hours"] == 168
+    with pytest.raises(EtcdBackupError) as error:
+        validate_request({"cluster_name": "lab", "pre_upgrade_keep_max_age_hours": 0})
+    assert error.value.code == "ETCD_BACKUP_RETENTION_INVALID"

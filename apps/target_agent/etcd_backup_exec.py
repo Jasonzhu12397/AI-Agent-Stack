@@ -258,6 +258,7 @@ class EtcdBackupExecutor:
             entries,
             keep_count=request["keep_count"],
             keep_max_age_hours=request["keep_max_age_hours"],
+            pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             now=stamp_now,
         )
         removed_names = {item["name"] for item in prunable}
@@ -272,7 +273,8 @@ class EtcdBackupExecutor:
             or ["nothing to prune"],
             detail=(
                 f"keep {request['keep_count']} newest and anything younger than "
-                f"{request['keep_max_age_hours']}h"
+                f"{request['keep_max_age_hours']}h; pre-upgrade snapshots older than "
+                f"{request['pre_upgrade_keep_max_age_hours']}h except the newest"
             ),
         )
         removed = []
@@ -315,6 +317,8 @@ class EtcdBackupExecutor:
             "status": report["ok"],
             "findings": report["findings"],
             "count": report["count"],
+            "pre_upgrade_count": report["pre_upgrade_count"],
+            "pre_upgrade": report["pre_upgrade"],
             "steps": self._steps,
             "failure_code": None,
             "performed_steps": [step["name"] for step in self._steps],
@@ -331,6 +335,7 @@ class EtcdBackupExecutor:
             entries,
             keep_count=request["keep_count"],
             keep_max_age_hours=request["keep_max_age_hours"],
+            pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             max_age_hours=request["max_age_hours"],
             now=now,
         )

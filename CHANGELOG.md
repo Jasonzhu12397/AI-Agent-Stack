@@ -4,6 +4,28 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Pre-upgrade snapshots (`snapshot-pre-<version>-<stamp>.db`) were invisible to
+  the backup contract, so the recurring retention pass never pruned them and one
+  file piled up per upgrade forever. They are now recognised (both the new
+  `snapshot-pre-<cluster>-<version>-<stamp>.db` naming and the older file names
+  that carry no cluster), kept by their own
+  `pre_upgrade_keep_max_age_hours` window (default 168h), and the newest one is
+  never deleted because that is what an undo of the last change restores.
+- The upgrade executor writes the cluster name into the snapshot file name so a
+  file in the backup directory can be attributed to the cluster that owns it.
+
+### Changed
+
+- `queue_etcd_backups` honours the retention policy a deployment declares in
+  `spec.kubernetes` (`etcd_backup_keep_count`, `etcd_backup_keep_max_age_hours`,
+  `etcd_backup_pre_upgrade_keep_max_age_hours`, `etcd_backup_max_age_hours`,
+  `etcd_backup_directory`); command-line flags remain the override. A policy the
+  contract refuses is reported as a skip reason instead of being queued.
+
 ## [1.1.0] — 2026-11-22
 
 ### Added

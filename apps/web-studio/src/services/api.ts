@@ -1091,6 +1091,7 @@ export type EtcdBackupState = {
         directory: string;
         keep_count: number;
         keep_max_age_hours: number;
+        pre_upgrade_keep_max_age_hours: number;
         max_age_hours: number;
       }
     | { enabled: boolean; valid: false; error: { code: string; message: string } };
@@ -1102,6 +1103,8 @@ export type EtcdBackupState = {
   ok: boolean;
   count?: number;
   prunable?: string[];
+  pre_upgrade_count?: number;
+  pre_upgrade?: Array<{ name: string; version?: string; taken_at?: string }>;
   findings: Array<{ name: string; ok: boolean; code: string; detail: string }>;
 };
 

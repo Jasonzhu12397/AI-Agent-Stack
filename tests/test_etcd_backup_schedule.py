@@ -171,3 +171,67 @@ def test_both_compose_files_ship_the_scheduler():
         assert "queue_etcd_backups" in command[-1]
         assert "ETCD_BACKUP_INTERVAL_SECONDS" in command[-1]
         assert service["security_opt"] == ["no-new-privileges:true"]
+
+
+@pytest.mark.django_db
+def test_the_policy_a_deployment_declares_reaches_the_command():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant,
+        project,
+        eph,
+        target,
+        user,
+        spec={
+            "kubernetes": {
+                "etcd_backup_keep_count": 24,
+                "etcd_backup_keep_max_age_hours": 96,
+                "etcd_backup_pre_upgrade_keep_max_age_hours": 336,
+                "etcd_backup_directory": "/var/lib/etcd/backups/lab",
+            }
+        },
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert payload["keep_count"] == 24
+    assert payload["keep_max_age_hours"] == 96
+    assert payload["pre_upgrade_keep_max_age_hours"] == 336
+    assert payload["directory"] == "/var/lib/etcd/backups/lab"
+
+
+@pytest.mark.django_db
+def test_a_command_line_override_wins_over_the_spec():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant,
+        project,
+        eph,
+        target,
+        user,
+        spec={"kubernetes": {"etcd_backup_keep_count": 24}},
+    )
+
+    _run(keep_count=8)
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert payload["keep_count"] == 8
+
+
+@pytest.mark.django_db
+def test_a_spec_policy_the_contract_refuses_is_reported_instead_of_queued():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant,
+        project,
+        eph,
+        target,
+        user,
+        spec={"kubernetes": {"etcd_backup_keep_count": 1}},
+    )
+
+    report = _run()
+
+    assert report["queued"] == []
+    assert report["skipped"][0]["reason"] == "ETCD_BACKUP_RETENTION_INVALID"

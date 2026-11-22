@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -38,6 +39,32 @@ def payload_hash(command_type: str, payload: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+#: A deployment declares its policy in the spec; the scheduler is the one place
+#: that turns that declaration into a request. Keeping the names in one table
+#: means a new policy key cannot be honoured by the API but silently ignored here.
+SPEC_POLICY_KEYS = {
+    "directory": "etcd_backup_directory",
+    "keep_count": "etcd_backup_keep_count",
+    "keep_max_age_hours": "etcd_backup_keep_max_age_hours",
+    "pre_upgrade_keep_max_age_hours": "etcd_backup_pre_upgrade_keep_max_age_hours",
+    "max_age_hours": "etcd_backup_max_age_hours",
+}
+
+
+def spec_policy(kubernetes: Any) -> dict[str, Any]:
+    """Read the retention policy a deployment declares, ignoring empty values."""
+
+    if not isinstance(kubernetes, dict):
+        return {}
+    policy = {}
+    for field, key in SPEC_POLICY_KEYS.items():
+        value = kubernetes.get(key)
+        if value is None or value == "":
+            continue
+        policy[field] = value
+    return policy
+
+
 class Command(BaseCommand):
     help = "Queue cluster.kubernetes.backup.run for every installed Target cluster."
 
@@ -46,6 +73,7 @@ class Command(BaseCommand):
         parser.add_argument("--directory", default="")
         parser.add_argument("--keep-count", type=int, default=0)
         parser.add_argument("--keep-max-age-hours", type=int, default=0)
+        parser.add_argument("--pre-upgrade-keep-max-age-hours", type=int, default=0)
 
     def handle(self, *args, **options):
         queued = []
@@ -75,12 +103,17 @@ class Command(BaseCommand):
                 "execution_mode": "execute",
                 "confirm_cluster_name": deployment.cluster_name,
             }
-            if options["directory"]:
-                payload["directory"] = options["directory"]
-            if options["keep_count"]:
-                payload["keep_count"] = options["keep_count"]
-            if options["keep_max_age_hours"]:
-                payload["keep_max_age_hours"] = options["keep_max_age_hours"]
+            policy = spec_policy(kubernetes)
+            for field, value in policy.items():
+                payload[field] = value
+            for field, option in (
+                ("directory", "directory"),
+                ("keep_count", "keep_count"),
+                ("keep_max_age_hours", "keep_max_age_hours"),
+                ("pre_upgrade_keep_max_age_hours", "pre_upgrade_keep_max_age_hours"),
+            ):
+                if options[option]:
+                    payload[field] = options[option]
             try:
                 validate_request(payload)
             except ValueError as exc:

@@ -1544,6 +1544,10 @@ onUnmounted(() => {
                   · {{ backupAgeLabel(backupStates[scope.row.id]) }}
                 </small>
                 <small
+                  v-if="backupStates[scope.row.id].pre_upgrade_count"
+                  class="fleet-version-current"
+                >pre-upgrade snapshots: {{ backupStates[scope.row.id].pre_upgrade_count }}</small>
+                <small
                   v-for="finding in backupStates[scope.row.id].findings.filter((item) => !item.ok)"
                   :key="scope.row.id + finding.code"
                   class="readiness-blocked"

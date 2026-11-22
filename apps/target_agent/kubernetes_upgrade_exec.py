@@ -400,7 +400,7 @@ class UpgradeExecutor:
         ]
 
     def _take_etcd_snapshot(
-        self, pod: str, local_node: str, target: str
+        self, pod: str, local_node: str, target: str, cluster_name: str = ""
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Back up stacked etcd to a verified file before anything is upgraded.
 
@@ -413,7 +413,13 @@ class UpgradeExecutor:
         directory = os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip() or (
             DEFAULT_ETCD_SNAPSHOT_DIR
         )
-        name = f"snapshot-pre-{target}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.db"
+        # The cluster name belongs in the file name: the backup directory is
+        # pruned by the recurring backup job, and a file it cannot attribute to
+        # this cluster would either be deleted by mistake or never deleted at
+        # all. The target version stays so an operator can see what the
+        # snapshot protects.
+        owner = f"{cluster_name}-{target}" if cluster_name else target
+        name = f"snapshot-pre-{owner}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.db"
         path = f"{directory.rstrip('/')}/{name}"
         if not os.path.isabs(path) or ".." in path:
             return None, self._check(
@@ -525,7 +531,7 @@ class UpgradeExecutor:
         return str((pods[0].get("metadata") or {}).get("name") or "")
 
     def _etcd_snapshot_checks(
-        self, local_node: str, target: str
+        self, local_node: str, target: str, cluster_name: str = ""
     ) -> list[dict[str, Any]]:
         try:
             pods = self._etcd_pods()
@@ -595,7 +601,9 @@ class UpgradeExecutor:
                 self._check("etcd.snapshot", False, "no etcd pod name to run etcdctl in")
             ]
         self._etcd_pod = pod
-        snapshot, check = self._take_etcd_snapshot(pod, local_node, target)
+        snapshot, check = self._take_etcd_snapshot(
+            pod, local_node, target, cluster_name
+        )
         self._last_snapshot = snapshot
         return [check, *self._etcd_quorum_checks()]
 
@@ -679,7 +687,9 @@ class UpgradeExecutor:
             *self._handler_ready(nodes),
             *self._kubeadm_config_checks(request["current_version"]),
             *self._pod_disruption_checks(),
-            *self._etcd_snapshot_checks(local_node, request["target_version"]),
+            *self._etcd_snapshot_checks(
+                local_node, request["target_version"], request["cluster_name"]
+            ),
             *self._ssh_reachability_checks(remote_nodes or []),
         ]
         failed = [check for check in checks if not check["ok"]]

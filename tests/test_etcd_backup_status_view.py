@@ -104,6 +104,7 @@ def test_a_cluster_without_a_backup_says_so():
     assert body["last_run"] is None
     assert body["policy"]["valid"] is True
     assert body["policy"]["keep_count"] == contract.MIN_KEEP_COUNT
+    assert body["policy"]["pre_upgrade_keep_max_age_hours"] == 168
     assert body["findings"][0]["code"] == "ETCD_BACKUP_NOT_RUN_YET"
 
 

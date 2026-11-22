@@ -477,7 +477,11 @@ def test_stacked_etcd_is_backed_up_and_verified_before_the_upgrade():
     snapshot = result["etcd_snapshot"]
     assert snapshot["taken"] is True
     assert snapshot["verified"] is True
-    assert snapshot["path"].startswith("/var/lib/etcd/backups/snapshot-pre-v1.34.1-")
+    # The cluster name is part of the file name so the recurring backup job can
+    # attribute this file to this cluster and prune it when it is no longer needed.
+    assert snapshot["path"].startswith(
+        "/var/lib/etcd/backups/snapshot-pre-edge-lab-v1.34.1-"
+    )
     assert ["sudo", "mkdir", "-p", "/var/lib/etcd/backups"] in runner.calls
     saved = [call for call in runner.calls if "snapshot" in call and "save" in call]
     checked = [call for call in runner.calls if "snapshot" in call and "status" in call]

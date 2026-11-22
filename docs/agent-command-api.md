@@ -373,3 +373,14 @@ findings. A deployment with `kubernetes.etcd_backup: false` reports that the
 scheduler will not queue anything; a policy the contract refuses is reported as
 `valid: false` with the contract error code, so an operator sees a bad
 `etcd_backup_keep_count: 1` at config time instead of at 3 a.m.
+
+Pre-upgrade snapshots live in the same directory, and they are a second kind of
+file with a second duty: `snapshot-pre-<cluster>-<version>-<stamp>.db` is what an
+undo of the last change restores. Files written by older versions
+(`snapshot-pre-<version>-<stamp>.db`) are still recognised — they cannot name
+their cluster, but the directory belongs to a single Target node, so they are
+this cluster's files. They are kept by `pre_upgrade_keep_max_age_hours` (default
+168h, i.e. a week) and never by count; the newest pre-upgrade snapshot is never
+deleted regardless of age, because a rollback of the most recent change needs it.
+Recurring freshness is judged only on periodic backups: a pre-upgrade snapshot
+alone reports `ETCD_BACKUP_MISSING`, not a fresh backup set.

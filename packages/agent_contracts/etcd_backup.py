@@ -35,6 +35,7 @@ PAYLOAD_KEYS = frozenset(
         "directory",
         "keep_count",
         "keep_max_age_hours",
+        "pre_upgrade_keep_max_age_hours",
         "max_age_hours",
         "execution_mode",
         "confirm_cluster_name",
@@ -52,10 +53,23 @@ DEFAULT_MAX_AGE_HOURS = 26
 #: A snapshot written minutes ago must survive the same run that took it.
 MIN_AGE_HOURS = 1
 MAX_STALE_AGE_HOURS = 8760
+#: Pre-upgrade snapshots are a different kind of file with a different duty:
+#: they exist so a bad upgrade can be undone, so they may live for a week and
+#: the newest one is never deleted. Without a policy here they would accumulate
+#: one per upgrade forever and quietly fill the disk.
+DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS = 168
+MAX_PRE_UPGRADE_KEEP_MAX_AGE_HOURS = 8760
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DIRECTORY = re.compile(r"^/var/lib/etcd[A-Za-z0-9._/-]*$")
 _FILE = re.compile(r"^(?P<cluster>[a-z0-9][-a-z0-9.]*)-(?P<stamp>\d{8}T\d{6}Z)\.db$")
+#: The upgrade executor writes these before it changes a control plane. They
+#: carry the cluster name from this version on; older files only carry the
+#: target version, and are still recognised because the directory belongs to
+#: one Target node.
+_PRE_UPGRADE = re.compile(
+    r"^snapshot-pre-(?P<tail>[A-Za-z0-9][A-Za-z0-9._-]*)-(?P<stamp>\d{8}T\d{6}Z)\.db$"
+)
 
 
 class EtcdBackupError(ValueError):
@@ -135,6 +149,13 @@ def validate_request(
         high=MAX_KEEP_MAX_AGE_HOURS,
         default=MAX_KEEP_MAX_AGE_HOURS,
     )
+    pre_upgrade_age = _int(
+        payload.get("pre_upgrade_keep_max_age_hours"),
+        code="ETCD_BACKUP_RETENTION_INVALID",
+        low=1,
+        high=MAX_PRE_UPGRADE_KEEP_MAX_AGE_HOURS,
+        default=DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS,
+    )
     max_age = _int(
         payload.get("max_age_hours"),
         code="ETCD_BACKUP_STALENESS_INVALID",
@@ -147,6 +168,7 @@ def validate_request(
         "directory": directory.rstrip("/"),
         "keep_count": keep_count,
         "keep_max_age_hours": keep_age,
+        "pre_upgrade_keep_max_age_hours": pre_upgrade_age,
         "max_age_hours": max_age,
         "execution_mode": mode,
         "confirm_cluster_name": cluster if mode == "execute" else "",
@@ -188,6 +210,42 @@ def parse_backup_name(name: str, *, cluster_name: str = "") -> dict[str, str] | 
     }
 
 
+def parse_pre_upgrade_name(
+    name: str, *, cluster_name: str = ""
+) -> dict[str, Any] | None:
+    """Return an entry for a pre-upgrade snapshot, or ``None``.
+
+    The current naming is ``snapshot-pre-<cluster>-<target version>-<stamp>.db``.
+    Files written by older versions are ``snapshot-pre-<target version>-<stamp>.db``:
+    they cannot name their cluster, but the backup directory belongs to one
+    Target node, so they are still this cluster's files. Legacy files are
+    reported with ``cluster: ""`` instead of being guessed at.
+    """
+
+    match = _PRE_UPGRADE.fullmatch(name)
+    if not match:
+        return None
+    tail = match.group("tail")
+    stamp = match.group("stamp")
+    try:
+        taken_at = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    cluster = ""
+    version = tail
+    if cluster_name and tail.startswith(cluster_name + "-") and len(tail) > len(cluster_name) + 1:
+        cluster = cluster_name
+        version = tail[len(cluster_name) + 1 :]
+    return {
+        "name": name,
+        "cluster": cluster,
+        "version": version,
+        "stamp": stamp,
+        "taken_at": taken_at.isoformat(),
+        "kind": "pre_upgrade",
+    }
+
+
 def _as_time(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=UTC)
@@ -217,6 +275,10 @@ def snapshot_entries(entries: Any, *, cluster_name: str = "") -> list[dict[str, 
             continue
         name = str(item.get("name") or "").strip()
         parsed = parse_backup_name(name, cluster_name=cluster_name)
+        if parsed:
+            parsed = {**parsed, "kind": "periodic"}
+        else:
+            parsed = parse_pre_upgrade_name(name, cluster_name=cluster_name)
         if not parsed:
             continue
         taken_at = _as_time(parsed["taken_at"])
@@ -241,37 +303,55 @@ def public_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{k: v for k, v in entry.items() if not k.startswith("_")} for entry in entries]
 
 
+def _kind(entry: Mapping[str, Any]) -> str:
+    return str(entry.get("kind") or "periodic")
+
+
 def select_prunable(
     entries: list[dict[str, Any]],
     *,
     keep_count: int,
     keep_max_age_hours: int,
+    pre_upgrade_keep_max_age_hours: int = DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS,
     now: datetime | None = None,
     protect: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Return the entries a run may delete, oldest first.
 
+    Recurring backups are kept by count and by age. Pre-upgrade snapshots are
+    kept by age only, minus the newest one: the newest pre-upgrade snapshot is
+    what a rollback of the last change would restore, so it outlives the policy.
     ``entries`` must be sorted newest first (see :func:`snapshot_entries`).
     """
 
     current = now or datetime.now(UTC)
     keep_age = timedelta(hours=keep_max_age_hours)
+    pre_upgrade_age = timedelta(hours=pre_upgrade_keep_max_age_hours)
     min_age = timedelta(hours=MIN_AGE_HOURS)
     keep = max(1, keep_count)
     protected = set(protect)
     prunable = []
+    seen_pre_upgrade = 0
     for index, entry in enumerate(entries):
         taken_at = entry.get("_taken_at")
         if taken_at is None:
             continue
-        if index < keep:
-            continue
         if entry["name"] in protected:
             continue
         age = current - taken_at
-        if age < keep_age:
-            continue
         if age < min_age:
+            continue
+        if _kind(entry) == "pre_upgrade":
+            seen_pre_upgrade += 1
+            if seen_pre_upgrade == 1:
+                continue
+            if age < pre_upgrade_age:
+                continue
+            prunable.append(entry)
+            continue
+        if index < keep:
+            continue
+        if age < keep_age:
             continue
         prunable.append(entry)
     prunable.sort(key=lambda entry: entry["_taken_at"])
@@ -284,20 +364,26 @@ def assess(
     keep_count: int,
     keep_max_age_hours: int,
     max_age_hours: int,
+    pre_upgrade_keep_max_age_hours: int = DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS,
     now: datetime | None = None,
     protect: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Describe whether this cluster has a usable, fresh backup set."""
 
     current = now or datetime.now(UTC)
+    periodic = [entry for entry in entries if _kind(entry) == "periodic"]
+    pre_upgrade = [entry for entry in entries if _kind(entry) == "pre_upgrade"]
     findings: list[dict[str, Any]] = []
-    if not entries:
+    if not periodic:
         findings.append(
             {
                 "name": "backup.newest",
                 "ok": False,
                 "code": "ETCD_BACKUP_MISSING",
-                "detail": "no snapshot of this cluster exists in the backup directory",
+                "detail": (
+                    "no recurring backup of this cluster exists in the backup "
+                    "directory; a pre-upgrade snapshot only protects one change"
+                ),
             }
         )
         return {
@@ -305,11 +391,13 @@ def assess(
             "newest": None,
             "newest_age_hours": None,
             "oldest": None,
+            "pre_upgrade_count": len(pre_upgrade),
+            "pre_upgrade": public_entries(pre_upgrade),
             "prunable": [],
             "findings": findings,
             "ok": False,
         }
-    newest = entries[0]
+    newest = periodic[0]
     newest_at = newest["_taken_at"]
     newest_age = (current - newest_at).total_seconds() / 3600.0
     findings.append(
@@ -327,16 +415,19 @@ def assess(
         entries,
         keep_count=keep_count,
         keep_max_age_hours=keep_max_age_hours,
+        pre_upgrade_keep_max_age_hours=pre_upgrade_keep_max_age_hours,
         now=current,
         protect=protect,
     )
     return {
-        "count": len(entries),
+        "count": len(periodic),
         "newest": {k: v for k, v in newest.items() if not k.startswith("_")},
         "newest_age_hours": round(newest_age, 3),
         "oldest": {
-            k: v for k, v in entries[-1].items() if not k.startswith("_")
+            k: v for k, v in periodic[-1].items() if not k.startswith("_")
         },
+        "pre_upgrade_count": len(pre_upgrade),
+        "pre_upgrade": public_entries(pre_upgrade),
         "prunable": public_entries(prunable),
         "findings": findings,
         "ok": all(item["ok"] for item in findings),
@@ -392,8 +483,10 @@ def simulation_plan(request: dict[str, Any], *, now: datetime | None = None) -> 
                 ],
                 "detail": (
                     f"keep {request['keep_count']} newest files and anything younger "
-                    f"than {request['keep_max_age_hours']}h; never the newest, never a "
-                    "snapshot an approved rollback references"
+                    f"than {request['keep_max_age_hours']}h; pre-upgrade snapshots "
+                    f"older than {request['pre_upgrade_keep_max_age_hours']}h except "
+                    "the newest one; never the newest, never a snapshot an approved "
+                    "rollback references"
                 ),
             },
         ],

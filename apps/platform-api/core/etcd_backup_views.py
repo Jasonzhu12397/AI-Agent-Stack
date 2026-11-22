@@ -34,6 +34,10 @@ def _policy(deployment: ClusterDeployment) -> dict[str, Any]:
         payload["keep_count"] = kubernetes["etcd_backup_keep_count"]
     if kubernetes.get("etcd_backup_keep_max_age_hours") is not None:
         payload["keep_max_age_hours"] = kubernetes["etcd_backup_keep_max_age_hours"]
+    if kubernetes.get("etcd_backup_pre_upgrade_keep_max_age_hours") is not None:
+        payload["pre_upgrade_keep_max_age_hours"] = kubernetes[
+            "etcd_backup_pre_upgrade_keep_max_age_hours"
+        ]
     if kubernetes.get("etcd_backup_max_age_hours") is not None:
         payload["max_age_hours"] = kubernetes["etcd_backup_max_age_hours"]
     payload["execution_mode"] = "execute"
@@ -52,6 +56,7 @@ def _policy(deployment: ClusterDeployment) -> dict[str, Any]:
         "directory": request["directory"],
         "keep_count": request["keep_count"],
         "keep_max_age_hours": request["keep_max_age_hours"],
+        "pre_upgrade_keep_max_age_hours": request["pre_upgrade_keep_max_age_hours"],
         "max_age_hours": request["max_age_hours"],
     }
 
@@ -147,6 +152,7 @@ def etcd_backup_state(
         entries,
         keep_count=policy["keep_count"],
         keep_max_age_hours=policy["keep_max_age_hours"],
+        pre_upgrade_keep_max_age_hours=policy["pre_upgrade_keep_max_age_hours"],
         max_age_hours=policy["max_age_hours"],
         now=now,
     )
@@ -160,6 +166,8 @@ def etcd_backup_state(
             "ok": report["ok"],
             "count": report["count"],
             "prunable": report["prunable"],
+            "pre_upgrade_count": report["pre_upgrade_count"],
+            "pre_upgrade": report["pre_upgrade"],
             "findings": report["findings"],
         }
     )
