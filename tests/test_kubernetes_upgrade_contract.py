@@ -91,3 +91,29 @@ def test_execute_mode_is_a_valid_request_mode():
     request = validate_request(_payload(execution_mode="execute"))
 
     assert request["execution_mode"] == "execute"
+
+
+def test_a_snapshot_directory_under_the_mounted_data_directory_is_accepted():
+    request = validate_request(
+        _payload(snapshot_directory="/var/lib/etcd/backups-lab/")
+    )
+
+    assert request["snapshot_directory"] == "/var/lib/etcd/backups-lab"
+
+
+@pytest.mark.parametrize(
+    "directory",
+    ["backups", "/etc/kubernetes/backups", "/var/lib/etcd/../etc", "/var/lib/etcd"],
+)
+def test_a_snapshot_directory_the_etcd_pod_cannot_read_is_refused(directory):
+    with pytest.raises(KubernetesUpgradeError) as excinfo:
+        validate_request(_payload(snapshot_directory=directory))
+
+    assert excinfo.value.code == "SNAPSHOT_DIRECTORY_INVALID"
+
+
+def test_an_unknown_upgrade_payload_key_is_still_refused():
+    with pytest.raises(KubernetesUpgradeError) as excinfo:
+        validate_request(_payload(snapshot_dir="/var/lib/etcd/backups"))
+
+    assert excinfo.value.code == "PAYLOAD_INVALID"

@@ -45,6 +45,19 @@ def spec_policy(kubernetes: Any) -> dict[str, Any]:
     return policy
 
 
+def policy_directory(deployment: ClusterDeployment) -> str:
+    """The snapshot directory this deployment declares, or "".
+
+    The upgrade writes the snapshot an operator rolls back to. If it writes to a
+    different directory than the one the recurring backup prunes, retention can
+    never see the file: it would be both impossible to prune and impossible to
+    find when it is needed. One deployment therefore has one directory.
+    """
+
+    directory = spec_policy((deployment.spec or {}).get("kubernetes")).get("directory")
+    return str(directory or "").strip()
+
+
 def protected_names(deployment: ClusterDeployment) -> list[str]:
     """Snapshot files a pending or completed rollback of this cluster still needs.
 

@@ -64,7 +64,17 @@ class FakeRunner:
     """A cluster that reports the new kubelet version once kubeadm applied it."""
 
     def __init__(
-        self, *, nodes, fail_on=(), upgraded=None, peer_upgraded=None, fail_when=None
+        self,
+        *,
+        nodes,
+        fail_on=(),
+        upgraded=None,
+        peer_upgraded=None,
+        fail_when=None,
+        db_size=131072,
+        free_bytes=20 * 1024**3,
+        free_stdout=None,
+        status_stdout=None,
     ):
         self.calls = []
         self._nodes = nodes
@@ -72,9 +82,46 @@ class FakeRunner:
         self._peer_upgraded = dict(peer_upgraded or {})
         self._fail_on = tuple(fail_on)
         self._fail_when = fail_when
+        self._db_size = db_size
+        self._free_bytes = free_bytes
+        self._free_stdout = free_stdout
+        self._status_stdout = status_stdout
 
     def __call__(self, argv, timeout=20, **kwargs):
         self.calls.append(list(argv))
+        if "endpoint" in argv and "status" in argv:
+            # The upgrade reads the live database size before it writes a
+            # snapshot: a snapshot that does not fit is not a backup.
+            if self._status_stdout is not None:
+                return {
+                    "available": True,
+                    "returncode": 0,
+                    "stdout": self._status_stdout,
+                    "stderr": "",
+                }
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"Header": {"dbSize": self._db_size}}]),
+                "stderr": "",
+            }
+        if argv[:1] == ["sudo"] and "df" in argv:
+            if self._free_stdout is not None:
+                return {
+                    "available": True,
+                    "returncode": 0,
+                    "stdout": self._free_stdout,
+                    "stderr": "",
+                }
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": (
+                    "Filesystem 1B-blocks Used Available Capacity Mounted on\n"
+                    f"/dev/sda1 1000000000 1 {self._free_bytes} 1% /var/lib/etcd\n"
+                ),
+                "stderr": "",
+            }
         if "snapshot" in argv and "status" in argv:
             return {
                 "available": True,
@@ -410,6 +457,23 @@ def _nodes_with(node_overrides, *, config_version="v1.33.4", pdb=None, etcd=Fals
             }
         if argv[:3] == ["kubeadm", "upgrade", "apply"]:
             return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        if "endpoint" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"Header": {"dbSize": 131072}}]),
+                "stderr": "",
+            }
+        if argv[:1] == ["sudo"] and "df" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": (
+                    "Filesystem 1B-blocks Used Available Capacity Mounted on\n"
+                    "/dev/sda1 1000000000 1 21474836480 1% /var/lib/etcd\n"
+                ),
+                "stderr": "",
+            }
         if "snapshot" in argv and "status" in argv:
             return {
                 "available": True,
@@ -801,3 +865,76 @@ def test_a_node_above_the_target_is_skipped(monkeypatch):
         for call in runner.calls
         if call[:3] in (["kubeadm", "upgrade", "apply"], ["kubeadm", "upgrade", "node"])
     ]
+
+
+def test_a_snapshot_that_does_not_fit_the_volume_blocks_the_upgrade():
+    # A 5 GiB database on a volume with 5 GiB free: the snapshot plus the
+    # 512 MiB floor does not fit, so writing it would fill the volume the live
+    # cluster is still writing to.
+    healthy = _nodes_with(_raw_nodes(), etcd=True)
+    calls = []
+
+    def runner(argv, timeout=20, **kwargs):
+        if "endpoint" in argv and "status" in argv:
+            calls.append(list(argv))
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"Header": {"dbSize": 5 * 1024**3}}]),
+                "stderr": "",
+            }
+        if argv[:1] == ["sudo"] and "df" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": (
+                    "Filesystem 1B-blocks Used Available Capacity Mounted on\n"
+                    f"/dev/sda1 1000000000 1 {5 * 1024**3} 1% /var/lib/etcd\n"
+                ),
+                "stderr": "",
+            }
+        if "snapshot" in argv and "save" in argv:
+            calls.append(list(argv))
+        return healthy(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] is not None
+    assert result["etcd_snapshot"] is None
+    assert not [call for call in calls if "save" in call]
+    snapshot_check = next(
+        check
+        for check in result["preflight"]["checks"]
+        if check["name"] == "etcd.snapshot"
+    )
+    assert "ETCD_BACKUP_DISK_LOW" in snapshot_check["detail"]
+
+
+def test_a_volume_that_cannot_be_measured_refuses_to_take_a_snapshot():
+    healthy = _nodes_with(_raw_nodes(), etcd=True)
+
+    def runner(argv, timeout=20, **kwargs):
+        if "endpoint" in argv and "status" in argv:
+            return {"available": True, "returncode": 0, "stdout": "not json", "stderr": ""}
+        return healthy(argv, timeout=timeout, **kwargs)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["etcd_snapshot"] is None
+    snapshot_check = next(
+        check
+        for check in result["preflight"]["checks"]
+        if check["name"] == "etcd.snapshot"
+    )
+    assert "ETCD_BACKUP_DISK_CHECK_FAILED" in snapshot_check["detail"]
+
+
+def test_the_snapshot_is_written_where_the_request_says_retention_looks():
+    runner = _nodes_with(_raw_nodes(), etcd=True)
+    request = {**REQUEST, "snapshot_directory": "/var/lib/etcd/backups-labcache"}
+
+    result = UpgradeExecutor(runner).run(request)
+
+    assert result["etcd_snapshot"]["path"].startswith(
+        "/var/lib/etcd/backups-labcache/snapshot-pre-edge-lab-v1.34.1-"
+    )

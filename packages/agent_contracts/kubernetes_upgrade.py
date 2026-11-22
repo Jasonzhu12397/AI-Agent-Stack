@@ -20,8 +20,35 @@ SUPPORTED_MINORS: tuple[str, ...] = ("v1.33", "v1.34", "v1.35", "v1.36")
 EXECUTION_MODES: tuple[str, ...] = ("simulation", "execute")
 
 PAYLOAD_KEYS = frozenset(
-    {"cluster_name", "current_version", "target_version", "execution_mode"}
+    {
+        "cluster_name",
+        "current_version",
+        "target_version",
+        "execution_mode",
+        # Where the pre-upgrade snapshot is written. Optional: without it the
+        # executor falls back to its environment and then to the backup
+        # contract's default, but when the platform knows a policy directory it
+        # must pass it, or the recurring backup job will never see the snapshot.
+        "snapshot_directory",
+    }
 )
+#: The only host path the etcd pod mounts, so the only place a snapshot it
+#: writes is visible to the restore that reads it back.
+ETCD_MOUNT = "/var/lib/etcd"
+
+
+def snapshot_directory_problem(directory: str) -> str:
+    """Why a snapshot directory will not work, or ""."""
+
+    if not directory:
+        return ""
+    if not directory.startswith("/"):
+        return "snapshot_directory must be absolute"
+    if ".." in directory.split("/"):
+        return "snapshot_directory must not contain .."
+    if not directory.startswith(ETCD_MOUNT + "/"):
+        return f"snapshot_directory must be under {ETCD_MOUNT}"
+    return ""
 
 _VERSION = re.compile(r"^v1\.\d+(?:\.\d+)?$")
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
@@ -83,10 +110,16 @@ def validate_request(
 
     if not isinstance(payload, dict):
         raise KubernetesUpgradeError("PAYLOAD_INVALID", "payload must be an object")
-    if set(payload) != PAYLOAD_KEYS:
+    unknown = sorted(set(payload) - PAYLOAD_KEYS)
+    if unknown:
         raise KubernetesUpgradeError(
-            "PAYLOAD_INVALID",
-            "payload must contain exactly " + ", ".join(sorted(PAYLOAD_KEYS)),
+            "PAYLOAD_INVALID", "unknown payload keys: " + ", ".join(unknown)
+        )
+    required = {"cluster_name", "current_version", "target_version", "execution_mode"}
+    missing = sorted(required - set(payload))
+    if missing:
+        raise KubernetesUpgradeError(
+            "PAYLOAD_INVALID", "payload must contain " + ", ".join(missing)
         )
     name = payload.get("cluster_name")
     if not isinstance(name, str) or not _NAME.match(name):
@@ -122,12 +155,19 @@ def validate_request(
             "EXECUTION_MODE_UNSUPPORTED",
             "execution_mode must be one of " + ", ".join(EXECUTION_MODES),
         )
-    return {
+    directory = str(payload.get("snapshot_directory") or "").strip()
+    problem = snapshot_directory_problem(directory)
+    if problem:
+        raise KubernetesUpgradeError("SNAPSHOT_DIRECTORY_INVALID", problem)
+    request = {
         "cluster_name": name,
         "current_version": current,
         "target_version": target,
         "execution_mode": mode,
     }
+    if directory:
+        request["snapshot_directory"] = directory.rstrip("/")
+    return request
 
 
 def readiness_report(

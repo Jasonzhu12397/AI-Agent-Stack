@@ -39,6 +39,7 @@ REMOTE_USER_ENV = "KUBERNETES_UPGRADE_REMOTE_USER"
 LOCAL_NODE_ENV = "KUBERNETES_UPGRADE_LOCAL_NODE"
 ETCD_SNAPSHOT_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT"
 ETCD_SNAPSHOT_DIR_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR"
+ETCD_SNAPSHOT_MIN_FREE_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MIN_FREE_BYTES"
 DEFAULT_ETCD_SNAPSHOT_DIR = "/var/lib/etcd/backups"
 ETCD_SNAPSHOT_MAX_AGE_ENV = "KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MAX_AGE_HOURS"
 DEFAULT_ETCD_SNAPSHOT_MAX_AGE_HOURS = 24.0
@@ -67,6 +68,48 @@ class UpgradeExecutionError(ValueError):
         super().__init__(code)
         self.code = code
         self.detail = detail
+
+
+def _db_size_from(stdout: Any) -> int | None:
+    from target_agent.etcd_backup_exec import _db_size
+
+    return _db_size({"returncode": 0, "stdout": stdout})
+
+
+def _free_bytes_from(stdout: Any) -> int | None:
+    """Read the available bytes out of ``df -PB1``.
+
+    The upgrade measures the host filesystem with ``sudo df``, not the view
+    inside the etcd pod, so this parses the output directly: the fourth column
+    of the first line that looks like a mounted filesystem. A header, a
+    continuation line or a wrapped device name is skipped rather than guessed
+    at.
+    """
+
+    for line in str(stdout or "").splitlines():
+        fields = line.split()
+        if len(fields) < 4 or not fields[0].startswith(("/", "overlay", "tmpfs")):
+            continue
+        if fields[3].isdigit():
+            return int(fields[3])
+    return None
+
+
+def _snapshot_min_free_bytes() -> int:
+    from packages.agent_contracts.etcd_backup import (
+        DEFAULT_MIN_FREE_BYTES,
+        MAX_MIN_FREE_BYTES,
+        MIN_FREE_BYTES_FLOOR,
+    )
+
+    raw = os.environ.get(ETCD_SNAPSHOT_MIN_FREE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MIN_FREE_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MIN_FREE_BYTES
+    return max(MIN_FREE_BYTES_FLOOR, min(MAX_MIN_FREE_BYTES, value))
 
 
 def _output(result: dict[str, Any], limit: int = 2000) -> str:
@@ -399,8 +442,31 @@ class UpgradeExecutor:
             f"--key={self.ETCD_PKI_DIR}/server.key",
         ]
 
+    def _snapshot_directory(self, request: dict[str, Any] | None = None) -> str:
+        """Where to write the snapshot, in the order that keeps the file findable.
+
+        The request wins, because the platform knows the retention policy this
+        cluster declares. Next the environment, then the backup contract's
+        default. All three are one directory as far as the backup job is
+        concerned, which is what makes the pre-upgrade file visible to retention
+        and to a rollback.
+        """
+
+        requested = str((request or {}).get("snapshot_directory") or "").strip()
+        if requested:
+            return requested.rstrip("/")
+        return (
+            os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip().rstrip("/")
+            or DEFAULT_ETCD_SNAPSHOT_DIR
+        )
+
     def _take_etcd_snapshot(
-        self, pod: str, local_node: str, target: str, cluster_name: str = ""
+        self,
+        pod: str,
+        local_node: str,
+        target: str,
+        cluster_name: str = "",
+        directory: str = "",
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Back up stacked etcd to a verified file before anything is upgraded.
 
@@ -410,9 +476,7 @@ class UpgradeExecutor:
         a snapshot that cannot be read is not a backup.
         """
 
-        directory = os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip() or (
-            DEFAULT_ETCD_SNAPSHOT_DIR
-        )
+        directory = directory or self._snapshot_directory()
         # The cluster name belongs in the file name: the backup directory is
         # pruned by the recurring backup job, and a file it cannot attribute to
         # this cluster would either be deleted by mistake or never deleted at
@@ -433,6 +497,11 @@ class UpgradeExecutor:
                 "etcd.snapshot",
                 False,
                 f"cannot create {directory}: " + (_output(mkdir) or "mkdir failed"),
+            )
+        verdict = self._snapshot_disk_verdict(pod, directory)
+        if not verdict["ok"]:
+            return None, self._check(
+                "etcd.snapshot", False, f"{verdict['code']}: {verdict['detail']}"
             )
         save = self._runner(
             [*self._etcdctl_argv(pod), "snapshot", "save", path],
@@ -458,6 +527,48 @@ class UpgradeExecutor:
         return snapshot, self._check(
             "etcd.snapshot", True, f"took {path} and verified it"
         )
+
+    def _snapshot_disk_verdict(self, pod: str, directory: str) -> dict[str, Any]:
+        """Can this volume hold one more snapshot of the database it holds?
+
+        An upgrade is the worst moment to fill the etcd volume: the snapshot
+        exists so that a failed upgrade can be undone, and a volume the cluster
+        cannot write to takes the cluster down before the rollback is possible.
+        Measurements that cannot be read refuse the upgrade, because guessing
+        here is what turns a low disk warning into an outage.
+        """
+
+        from packages.agent_contracts.etcd_backup import disk_verdict
+
+        floor = _snapshot_min_free_bytes()
+        status = self._runner(
+            [*self._etcdctl_argv(pod), "endpoint", "status", "--write-out=json"],
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        if not status.get("available", True) or status.get("returncode") != 0:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "detail": "cannot read the database size from endpoint status",
+            }
+        db_size = _db_size_from(status.get("stdout"))
+        free = self._runner(
+            ["sudo", "df", "-PB1", directory], timeout=STEP_TIMEOUT_SECONDS
+        )
+        if not free.get("available", True) or free.get("returncode") != 0:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "detail": f"cannot read the free space of {directory}",
+            }
+        free_bytes = _free_bytes_from(free.get("stdout"))
+        if db_size is None or free_bytes is None:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "detail": f"cannot parse the size of {directory} or the database",
+            }
+        return disk_verdict(db_size, free_bytes, min_free_bytes=floor)
 
     def _etcd_quorum_healthy(self, pod: str) -> tuple[bool, str]:
         """One non-waiting read of cluster-wide etcd health."""
@@ -531,7 +642,11 @@ class UpgradeExecutor:
         return str((pods[0].get("metadata") or {}).get("name") or "")
 
     def _etcd_snapshot_checks(
-        self, local_node: str, target: str, cluster_name: str = ""
+        self,
+        local_node: str,
+        target: str,
+        cluster_name: str = "",
+        directory: str = "",
     ) -> list[dict[str, Any]]:
         try:
             pods = self._etcd_pods()
@@ -602,7 +717,7 @@ class UpgradeExecutor:
             ]
         self._etcd_pod = pod
         snapshot, check = self._take_etcd_snapshot(
-            pod, local_node, target, cluster_name
+            pod, local_node, target, cluster_name, directory or self._snapshot_directory()
         )
         self._last_snapshot = snapshot
         return [check, *self._etcd_quorum_checks()]
@@ -688,7 +803,10 @@ class UpgradeExecutor:
             *self._kubeadm_config_checks(request["current_version"]),
             *self._pod_disruption_checks(),
             *self._etcd_snapshot_checks(
-                local_node, request["target_version"], request["cluster_name"]
+                local_node,
+                request["target_version"],
+                request["cluster_name"],
+                self._snapshot_directory(request),
             ),
             *self._ssh_reachability_checks(remote_nodes or []),
         ]
@@ -936,7 +1054,7 @@ class UpgradeExecutor:
         performed.append("postflight")
         return self._result(request, steps, performed, None)
 
-    def report_recovery(self, target: str = "") -> dict[str, Any]:
+    def report_recovery(self, target: str = "", directory: str = "") -> dict[str, Any]:
         """Read-only state of a cluster that may or may not have upgraded.
 
         Nothing here mutates: it lists every node with the version it actually
@@ -944,8 +1062,8 @@ class UpgradeExecutor:
         stacked etcd members and the snapshots the upgrade path already wrote.
         """
 
-        snapshot_dir = os.environ.get(ETCD_SNAPSHOT_DIR_ENV, "").strip() or (
-            DEFAULT_ETCD_SNAPSHOT_DIR
+        snapshot_dir = self._snapshot_directory(
+            {"snapshot_directory": directory} if directory else None
         )
         try:
             nodes = self._nodes()

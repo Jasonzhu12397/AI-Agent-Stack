@@ -58,6 +58,7 @@ from packages.agent_contracts.machine_lifecycle import (
 )
 from core.audit import record_audit_event
 from core.fleet_inspection import sync_fleet_inspections_quietly
+from core.etcd_backup_policy import policy_directory
 from core.models import (
     AgentCommand,
     AgentMachine,
@@ -114,6 +115,21 @@ MUTATING_COMMANDS = {
     # backups have to run without a person watching.
     "cluster.kubernetes.backup.run",
 }
+def _policy_snapshot_directory(node) -> str:
+    """The snapshot directory the deployment behind this node declares."""
+
+    deployment = (
+        ClusterDeployment.objects.filter(
+            project=node.project,
+            cluster_name=node.cluster_name,
+            status=ClusterDeployment.Status.SUCCEEDED,
+        )
+        .order_by("-updated_at")
+        .first()
+    )
+    return policy_directory(deployment) if deployment is not None else ""
+
+
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
@@ -2503,6 +2519,13 @@ class AgentNodeCommandListCreateView(APIView):
                     {"detail": "Kubernetes version changes require a Target Cluster Agent."},
                     status=400,
                 )
+            if isinstance(payload, dict) and not payload.get("snapshot_directory"):
+                # The pre-upgrade snapshot has to land where the recurring
+                # backup prunes, or retention cannot see it and a rollback
+                # cannot find it. The deployment declares that directory.
+                directory = _policy_snapshot_directory(node)
+                if directory:
+                    payload = {**payload, "snapshot_directory": directory}
             try:
                 validate_kubernetes_upgrade(payload, cluster_name=node.cluster_name)
             except KubernetesUpgradeError as exc:

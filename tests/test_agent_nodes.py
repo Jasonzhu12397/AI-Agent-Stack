@@ -2755,3 +2755,86 @@ def test_kubernetes_rollback_is_rejected_before_queueing_when_the_request_is_uns
     assert unconfirmed.data["code"] == "ROLLBACK_CONFIRMATION_MISMATCH"
     queued = AgentCommand.objects.filter(command_type="cluster.kubernetes.version.rollback")
     assert not queued.exists()
+
+
+@pytest.mark.django_db
+def test_an_upgrade_command_carries_the_snapshot_directory_the_deployment_declares(
+    node_workspace,
+):
+    user, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    node = AgentNode.objects.get(pk=enrolled.data["id"])
+    eph = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="eph-for-directory",
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash="e" * 64,
+    )
+    from core.models import ClusterDeployment
+
+    ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=eph,
+        target_node=node,
+        requested_by=user,
+        cluster_name="edge-lab",
+        kubernetes_version="v1.34.3",
+        idempotency_key="directory-policy",
+        status=ClusterDeployment.Status.SUCCEEDED,
+        spec={"kubernetes": {"etcd_backup_directory": "/var/lib/etcd/backups-lab"}},
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{node.id}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.35",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-snapshot-directory",
+    )
+
+    assert response.status_code == 202
+    command = AgentCommand.objects.get(pk=response.data["id"])
+    # The pre-upgrade snapshot has to land where the recurring backup prunes,
+    # so the platform fills the directory the deployment declares.
+    assert command.payload["snapshot_directory"] == "/var/lib/etcd/backups-lab"
+
+
+@pytest.mark.django_db
+def test_an_upgrade_without_a_declared_directory_keeps_the_agent_default(node_workspace):
+    _, tenant, project, client = node_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "version-target", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {
+                "cluster_name": "edge-lab",
+                "current_version": "v1.34.2",
+                "target_version": "v1.35",
+                "execution_mode": "simulation",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="k8s-version-default-directory",
+    )
+
+    assert response.status_code == 202
+    command = AgentCommand.objects.get(pk=response.data["id"])
+    assert "snapshot_directory" not in command.payload

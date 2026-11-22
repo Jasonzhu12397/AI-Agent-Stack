@@ -23,6 +23,17 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   view shows the protected set. A rollback that failed or was cancelled stops
   protecting its file.
 
+### Fixed
+
+- The pre-upgrade snapshot and the recurring backup could write to two different
+  directories, so retention could not see the upgrade's file and a rollback
+  could not find it. The upgrade request now carries `snapshot_directory`
+  (filled by the platform from `kubernetes.etcd_backup_directory`, validated to
+  be under `/var/lib/etcd`), and the executor measures the database against the
+  volume's free space before writing: a snapshot that does not fit is refused
+  with `ETCD_BACKUP_DISK_LOW` before the node changes, and an unreadable
+  measurement refuses with `ETCD_BACKUP_DISK_CHECK_FAILED`.
+
 ### Added
 
 - A disk check between `prepare` and the save: the run reads `dbSize` from

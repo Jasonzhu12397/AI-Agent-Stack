@@ -461,3 +461,24 @@ no approval and is deduplicated on a ten-minute bucket
 too — `reported_by` / `reported_at` say which command produced the listing it is
 describing — but a read-only check never replaces the `ETCD_BACKUP_NOT_RUN_YET`
 finding: freshness is claimed by runs, not by someone looking.
+
+### One directory for every snapshot of a cluster
+
+A pre-upgrade snapshot exists so a failed upgrade can be undone, and it is the
+same kind of file the recurring backup prunes. If the upgrade wrote to a
+different directory, retention would never see it and a rollback would not
+find it. The upgrade request therefore accepts an optional
+`snapshot_directory`: the platform fills it from the deployment's
+`kubernetes.etcd_backup_directory`, the Target Agent falls back to
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_DIR` and then to the backup contract default.
+The directory must be under `/var/lib/etcd`, the only host path the etcd pod
+mounts (`SNAPSHOT_DIRECTORY_INVALID` otherwise), because a snapshot the pod
+cannot read is not a backup.
+
+Before writing it, the upgrade measures the live database
+(`etcdctl endpoint status`) against the free space of that volume (`df -PB1`).
+When the database plus a 512 MiB floor (overridable with
+`KUBERNETES_UPGRADE_ETCD_SNAPSHOT_MIN_FREE_BYTES`) does not fit, the upgrade is
+refused with `ETCD_BACKUP_DISK_LOW` before anything on the node changes; an
+unreadable measurement refuses with `ETCD_BACKUP_DISK_CHECK_FAILED`. Filling the
+etcd volume during an upgrade is how a rollback becomes impossible.
