@@ -20,6 +20,7 @@ import {
   getClusterDeploymentEtcdBackup,
   runClusterDeploymentEtcdBackup,
   setClusterDeploymentEtcdBackupPolicy,
+  type EtcdBackupCommandSummary,
   type EtcdBackupState,
   getProjects,
   getTenants,
@@ -97,6 +98,8 @@ const backupStates = ref<Record<string, EtcdBackupState>>({});
 const backupBusy = ref<string | null>(null);
 const backupMessages = ref<Record<string, string>>({});
 const backupPolicyVisible = ref(false);
+const backupHistoryVisible = ref(false);
+const backupHistoryDeployment = ref<ClusterDeployment | null>(null);
 const backupPolicyDeployment = ref<ClusterDeployment | null>(null);
 const backupPolicySaving = ref(false);
 const backupPolicyError = ref("");
@@ -740,6 +743,19 @@ function upgradeReadinessCommand(deployment: ClusterDeployment): AgentCommand | 
 function upgradeReadinessOutput(deployment: ClusterDeployment): Record<string, unknown> | null {
   const command = upgradeReadinessCommand(deployment);
   return command && command.result ? command.result : null;
+}
+
+function openBackupHistory(deployment: ClusterDeployment): void {
+  backupHistoryDeployment.value = deployment;
+  backupHistoryVisible.value = true;
+  if (!backupStates.value[deployment.id]) {
+    void loadEtcdBackup(deployment);
+  }
+}
+
+function backupHistoryRows(): Array<EtcdBackupCommandSummary> {
+  const deployment = backupHistoryDeployment.value;
+  return deployment ? (backupStates.value[deployment.id]?.history ?? []) : [];
 }
 
 function openBackupPolicy(deployment: ClusterDeployment) {
@@ -1623,6 +1639,11 @@ onUnmounted(() => {
               <el-button
                 size="small"
                 text
+                @click="openBackupHistory(scope.row)"
+              >History</el-button>
+              <el-button
+                size="small"
+                text
                 @click="openBackupPolicy(scope.row)"
               >Policy</el-button>
               <el-button
@@ -2075,6 +2096,44 @@ onUnmounted(() => {
         <el-button size="small" type="primary" :loading="bmhIngestBusy" @click="ingestBmhInventory">
           Ingest
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="backupHistoryVisible" title="etcd Backup History" width="820px">
+      <p class="fleet-version-current">
+        The newest {{ backupHistoryRows().length }} runs the Target Agent reported for
+        {{ backupHistoryDeployment?.cluster_name }}. A run that failed before it listed
+        the directory says nothing about what is on disk.
+      </p>
+      <el-table :data="backupHistoryRows()" size="small" class="task-table">
+        <el-table-column label="Requested" min-width="150">
+          <template #default="scope">{{ formatTime(scope.row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column prop="status" label="Status" min-width="100">
+          <template #default="scope">
+            <el-tag
+              :type="scope.row.status === 'succeeded' ? 'success' : scope.row.status === 'failed' ? 'danger' : 'info'"
+              size="small"
+            >{{ scope.row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Snapshot" min-width="220" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.backup?.name || "—" }}</template>
+        </el-table-column>
+        <el-table-column label="Kept" prop="count" min-width="70" />
+        <el-table-column label="Pruned" min-width="70">
+          <template #default="scope">{{ scope.row.pruned.length }}</template>
+        </el-table-column>
+        <el-table-column label="Failure" min-width="200" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.failure_code || "—" }}</template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button size="small" @click="backupHistoryVisible = false">Close</el-button>
+        <el-button
+          size="small"
+          @click="backupHistoryDeployment && loadEtcdBackup(backupHistoryDeployment)"
+        >Refresh</el-button>
       </template>
     </el-dialog>
 
