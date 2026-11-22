@@ -39,6 +39,7 @@ PAYLOAD_KEYS = frozenset(
         "max_age_hours",
         "execution_mode",
         "confirm_cluster_name",
+        "protect",
     }
 )
 
@@ -89,6 +90,36 @@ def _int(value: Any, *, code: str, low: int, high: int, default: int | None) -> 
     return value
 
 
+def _protect_names(value: Any, *, cluster_name: str) -> tuple[str, ...]:
+    """Names a caller is holding, e.g. a snapshot a rollback will restore.
+
+    Only bare file names are accepted: a caller may not point the retention
+    pass at a path outside the backup directory, and a name that is not one of
+    the two snapshot kinds means nothing here.
+    """
+
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise EtcdBackupError("ETCD_BACKUP_PROTECT_INVALID", "protect must be a list")
+    names = []
+    for item in value:
+        name = str(item or "").strip()
+        if not name or "/" in name or ".." in name:
+            raise EtcdBackupError(
+                "ETCD_BACKUP_PROTECT_INVALID", "protect entries must be bare file names"
+            )
+        if (
+            parse_backup_name(name, cluster_name=cluster_name) is None
+            and parse_pre_upgrade_name(name, cluster_name=cluster_name) is None
+        ):
+            raise EtcdBackupError(
+                "ETCD_BACKUP_PROTECT_INVALID", f"{name} is not a snapshot of this cluster"
+            )
+        names.append(name)
+    return tuple(sorted(set(names)))
+
+
 def validate_request(
     payload: Any, *, cluster_name: str | None = None
 ) -> dict[str, Any]:
@@ -135,6 +166,7 @@ def validate_request(
     problem = snapshot_pod_path_problem(directory.rstrip("/") + "/placeholder.db")
     if problem:
         raise EtcdBackupError("ETCD_BACKUP_DIRECTORY_INVALID", problem)
+    protect = _protect_names(payload.get("protect"), cluster_name=cluster)
     keep_count = _int(
         payload.get("keep_count"),
         code="ETCD_BACKUP_RETENTION_INVALID",
@@ -172,6 +204,7 @@ def validate_request(
         "max_age_hours": max_age,
         "execution_mode": mode,
         "confirm_cluster_name": cluster if mode == "execute" else "",
+        "protect": protect,
     }
 
 

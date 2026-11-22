@@ -260,6 +260,7 @@ class EtcdBackupExecutor:
             keep_max_age_hours=request["keep_max_age_hours"],
             pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             now=stamp_now,
+            protect=tuple(request.get("protect") or ()),
         )
         removed_names = {item["name"] for item in prunable}
         retained = [entry for entry in entries if entry["name"] not in removed_names]
@@ -338,6 +339,7 @@ class EtcdBackupExecutor:
             pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             max_age_hours=request["max_age_hours"],
             now=now,
+            protect=tuple(request.get("protect") or ()),
         )
         return {
             "cluster_name": request["cluster_name"],

@@ -77,7 +77,7 @@ def test_execute_needs_the_cluster_name_echoed_back():
 
 def test_an_unknown_key_is_refused_instead_of_ignored():
     with pytest.raises(EtcdBackupError) as error:
-        validate_request({"cluster_name": "lab", "protect": ["x.db"]})
+        validate_request({"cluster_name": "lab", "retention": "forever"})
     assert error.value.code == "ETCD_BACKUP_PAYLOAD_INVALID"
 
 
@@ -422,3 +422,57 @@ def test_the_policy_carries_a_pre_upgrade_window():
     with pytest.raises(EtcdBackupError) as error:
         validate_request({"cluster_name": "lab", "pre_upgrade_keep_max_age_hours": 0})
     assert error.value.code == "ETCD_BACKUP_RETENTION_INVALID"
+
+
+# ------------------------------------------------------------- protect set
+
+
+def test_protect_accepts_names_of_this_cluster_and_returns_them_sorted():
+    request = validate_request(
+        {
+            "cluster_name": "lab",
+            "protect": [
+                "snapshot-pre-lab-v1.37.2-20261122T000000Z.db",
+                "lab-20261122T010000Z.db",
+                "lab-20261122T010000Z.db",
+            ],
+        }
+    )
+    assert request["protect"] == (
+        "lab-20261122T010000Z.db",
+        "snapshot-pre-lab-v1.37.2-20261122T000000Z.db",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "../lab-20261122T010000Z.db",
+        "/var/lib/etcd/backups/lab-20261122T010000Z.db",
+        "notes.txt",
+        "other-20261122T010000Z.db",
+    ],
+)
+def test_protect_refuses_anything_that_is_not_a_bare_snapshot_name(value):
+    with pytest.raises(EtcdBackupError) as error:
+        validate_request({"cluster_name": "lab", "protect": [value]})
+    assert error.value.code == "ETCD_BACKUP_PROTECT_INVALID"
+
+
+def test_a_run_never_prunes_a_snapshot_it_was_told_to_hold():
+    held = _name(200)
+    request = _execute_request(
+        keep_count=2,
+        keep_max_age_hours=5,
+        pre_upgrade_keep_max_age_hours=5,
+        protect=[held],
+    )
+    runner = FakeRunner(files=[_name(4), _name(5), held])
+
+    result = EtcdBackupExecutor(runner).run(request, now=NOW)
+
+    assert held not in result["pruned"]
+    assert held in [entry["name"] for entry in result["kept"]]
+    assert not [
+        call for call in runner.calls if "rm" in call and held in call
+    ]

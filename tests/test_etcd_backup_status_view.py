@@ -181,3 +181,25 @@ def test_a_stranger_cannot_see_the_deployment_at_all():
     response = client.get(URL.format(deployment.id))
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_the_view_shows_which_snapshots_a_rollback_is_holding():
+    user, tenant, project, target, deployment, client = _workspace()
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={"snapshot_path": "/var/lib/etcd/backups/" + snapshot},
+        status=AgentCommand.Status.RUNNING,
+        idempotency_key="view-protect",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["policy"]["protect"] == [snapshot]

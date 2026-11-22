@@ -384,3 +384,11 @@ this cluster's files. They are kept by `pre_upgrade_keep_max_age_hours` (default
 deleted regardless of age, because a rollback of the most recent change needs it.
 Recurring freshness is judged only on periodic backups: a pre-upgrade snapshot
 alone reports `ETCD_BACKUP_MISSING`, not a fresh backup set.
+
+Retention is safe by construction only if it knows what is being held. The
+scheduler reads the snapshot a rollback of this cluster still refers to (any
+rollback command that did not fail or get cancelled), passes its bare file name
+as `protect`, and the contract refuses anything that is not a bare snapshot name
+of this cluster — a caller cannot point the pruning pass at a path, and cannot
+protect a file that does not belong here. The read-only view reports the same
+set, so "why was this file kept?" has an answer on the screen.

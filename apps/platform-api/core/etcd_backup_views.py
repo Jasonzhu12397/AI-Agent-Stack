@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.cluster_deployment_views import _can_edit_project
+from core.etcd_backup_policy import protected_names, spec_policy
 from core.models import AgentCommand, ClusterDeployment, ProjectMembership
 from packages.agent_contracts import etcd_backup as contract
 
@@ -27,21 +28,15 @@ def _policy(deployment: ClusterDeployment) -> dict[str, Any]:
     """The backup policy this deployment declares, or the contract defaults."""
 
     kubernetes = (deployment.spec or {}).get("kubernetes") or {}
-    payload = {"cluster_name": deployment.cluster_name}
-    if kubernetes.get("etcd_backup_directory"):
-        payload["directory"] = kubernetes["etcd_backup_directory"]
-    if kubernetes.get("etcd_backup_keep_count") is not None:
-        payload["keep_count"] = kubernetes["etcd_backup_keep_count"]
-    if kubernetes.get("etcd_backup_keep_max_age_hours") is not None:
-        payload["keep_max_age_hours"] = kubernetes["etcd_backup_keep_max_age_hours"]
-    if kubernetes.get("etcd_backup_pre_upgrade_keep_max_age_hours") is not None:
-        payload["pre_upgrade_keep_max_age_hours"] = kubernetes[
-            "etcd_backup_pre_upgrade_keep_max_age_hours"
-        ]
-    if kubernetes.get("etcd_backup_max_age_hours") is not None:
-        payload["max_age_hours"] = kubernetes["etcd_backup_max_age_hours"]
-    payload["execution_mode"] = "execute"
-    payload["confirm_cluster_name"] = deployment.cluster_name
+    payload = {
+        "cluster_name": deployment.cluster_name,
+        "execution_mode": "execute",
+        "confirm_cluster_name": deployment.cluster_name,
+    }
+    payload.update(spec_policy(kubernetes))
+    protect = protected_names(deployment)
+    if protect:
+        payload["protect"] = protect
     try:
         request = contract.validate_request(payload, cluster_name=deployment.cluster_name)
     except contract.EtcdBackupError as exc:
@@ -58,6 +53,7 @@ def _policy(deployment: ClusterDeployment) -> dict[str, Any]:
         "keep_max_age_hours": request["keep_max_age_hours"],
         "pre_upgrade_keep_max_age_hours": request["pre_upgrade_keep_max_age_hours"],
         "max_age_hours": request["max_age_hours"],
+        "protect": list(request["protect"]),
     }
 
 
@@ -154,6 +150,7 @@ def etcd_backup_state(
         keep_max_age_hours=policy["keep_max_age_hours"],
         pre_upgrade_keep_max_age_hours=policy["pre_upgrade_keep_max_age_hours"],
         max_age_hours=policy["max_age_hours"],
+        protect=tuple(policy["protect"]),
         now=now,
     )
     state.update(

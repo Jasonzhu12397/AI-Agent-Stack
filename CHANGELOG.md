@@ -18,6 +18,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The upgrade executor writes the cluster name into the snapshot file name so a
   file in the backup directory can be attributed to the cluster that owns it.
 
+- A rollback holds the snapshot it will restore: the scheduler passes that file
+  name as `protect` so the retention pass can never delete it, and the read-only
+  view shows the protected set. A rollback that failed or was cancelled stops
+  protecting its file.
+
 ### Changed
 
 - `queue_etcd_backups` honours the retention policy a deployment declares in

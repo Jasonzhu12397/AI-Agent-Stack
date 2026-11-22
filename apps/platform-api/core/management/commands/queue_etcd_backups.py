@@ -15,12 +15,12 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Any
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
+from core.etcd_backup_policy import protected_names, spec_policy
 from core.models import AgentCommand, AgentNode, ClusterDeployment
 from packages.agent_contracts.etcd_backup import ACTION, validate_request
 
@@ -37,32 +37,6 @@ def payload_hash(command_type: str, payload: dict) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-#: A deployment declares its policy in the spec; the scheduler is the one place
-#: that turns that declaration into a request. Keeping the names in one table
-#: means a new policy key cannot be honoured by the API but silently ignored here.
-SPEC_POLICY_KEYS = {
-    "directory": "etcd_backup_directory",
-    "keep_count": "etcd_backup_keep_count",
-    "keep_max_age_hours": "etcd_backup_keep_max_age_hours",
-    "pre_upgrade_keep_max_age_hours": "etcd_backup_pre_upgrade_keep_max_age_hours",
-    "max_age_hours": "etcd_backup_max_age_hours",
-}
-
-
-def spec_policy(kubernetes: Any) -> dict[str, Any]:
-    """Read the retention policy a deployment declares, ignoring empty values."""
-
-    if not isinstance(kubernetes, dict):
-        return {}
-    policy = {}
-    for field, key in SPEC_POLICY_KEYS.items():
-        value = kubernetes.get(key)
-        if value is None or value == "":
-            continue
-        policy[field] = value
-    return policy
 
 
 class Command(BaseCommand):
@@ -103,6 +77,9 @@ class Command(BaseCommand):
                 "execution_mode": "execute",
                 "confirm_cluster_name": deployment.cluster_name,
             }
+            protect = protected_names(deployment)
+            if protect:
+                payload["protect"] = protect
             policy = spec_policy(kubernetes)
             for field, value in policy.items():
                 payload[field] = value

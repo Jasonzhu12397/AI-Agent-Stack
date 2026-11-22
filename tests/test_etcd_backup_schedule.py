@@ -235,3 +235,54 @@ def test_a_spec_policy_the_contract_refuses_is_reported_instead_of_queued():
 
     assert report["queued"] == []
     assert report["skipped"][0]["reason"] == "ETCD_BACKUP_RETENTION_INVALID"
+
+
+@pytest.mark.django_db
+def test_a_rollback_still_to_be_run_protects_its_snapshot_from_pruning():
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={"cluster_name": "lab", "snapshot_path": "/var/lib/etcd/backups/" + snapshot},
+        status=AgentCommand.Status.QUEUED,
+        idempotency_key="rollback-open",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert payload["protect"] == [snapshot]
+
+
+@pytest.mark.django_db
+def test_a_failed_rollback_stops_holding_its_snapshot():
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={
+            "snapshot_path": (
+                "/var/lib/etcd/backups/snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+            )
+        },
+        status=AgentCommand.Status.FAILED,
+        idempotency_key="rollback-failed",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert "protect" not in payload
