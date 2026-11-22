@@ -102,7 +102,6 @@ services:
       - no-new-privileges:true
     depends_on:
       api: {condition: service_healthy}
-      postgres: {condition: service_healthy}
   worker:
     build:
       context: ..

@@ -304,3 +304,24 @@ def test_a_declared_disk_floor_reaches_the_command():
 
     payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
     assert payload["min_free_bytes"] == 2 * 1024 * 1024 * 1024
+
+
+def test_both_compose_files_ship_the_watchdog_and_only_defined_dependencies():
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    for relative in ("deploy/docker-compose.yml", "deploy/docker-compose.cloud.yml"):
+        document = yaml.safe_load((root / relative).read_text())
+        services = document["services"]
+        service = services["etcd-backup-watchdog"]
+        assert "check_etcd_backups" in service["command"][-1]
+        assert service["security_opt"] == ["no-new-privileges:true"]
+        # A depends_on that names a service this file does not define makes the
+        # whole project invalid: docker compose refuses to start anything.
+        for dependency in service.get("depends_on") or {}:
+            assert dependency in services, f"{relative}: undefined {dependency}"
+        for other_name, other in services.items():
+            for dependency in other.get("depends_on") or {}:
+                assert dependency in services, f"{relative}: {other_name} -> {dependency}"
