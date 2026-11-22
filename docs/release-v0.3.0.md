@@ -100,11 +100,11 @@ tools/metal3_release_run.py          # 一键跑完全部阶段并封发布清�
 
 | 项目 | 结果 |
 | --- | --- |
-| pytest 全量 | 1660 passed / 15 skipped |
+| pytest 全量 | 1666 passed / 15 skipped |
 | ruff 全库 | All checks passed |
 | 前端 `npm test` | 36 pass / 0 fail |
 | 前端 `npm run build` | 成功（仅有既有 chunk 体积告警） |
-| CI（GitHub Actions，含 kind + Metal3 CRD 集成） | success |
+| CI（GitHub Actions，含 Compose 全栈冒烟、kind + Metal3 CRD 集成） | success |
 
 ## 4. 待物理机验证清单（本版**未**声称已验证）
 
