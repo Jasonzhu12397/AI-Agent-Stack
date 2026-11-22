@@ -16,6 +16,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from core.audit import record_audit_event
+from core.etcd_backup_alert import deliver
 from core.etcd_backup_state import etcd_backup_state
 from core.models import AuditEvent, ClusterDeployment
 
@@ -44,6 +45,11 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--no-audit", action="store_true")
+        parser.add_argument(
+            "--no-alert",
+            action="store_true",
+            help="report the problems but do not POST them to the alert webhook",
+    )
         parser.add_argument(
             "--repeat-after-hours",
             type=float,
@@ -161,6 +167,11 @@ class Command(BaseCommand):
             "clusters": clusters,
             "problems": problems,
         }
+        if options["no_alert"] or options["dry_run"]:
+            # A dry run is a rehearsal: it must not page anyone.
+            report["alert"] = {"configured": False, "delivered": False, "reason": "skipped"}
+        else:
+            report["alert"] = deliver(report)
         self.stdout.write(json.dumps(report, ensure_ascii=False))
         if problems:
             listed = ", ".join(

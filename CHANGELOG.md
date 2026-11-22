@@ -25,6 +25,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- Alerting: `check_etcd_backups` POSTs its problems to
+  `ETCD_BACKUP_ALERT_WEBHOOK` (one JSON body with a readable summary, no page for
+  a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
+  without echoing the target, and compose runs it hourly as
+  `etcd-backup-watchdog`.
 - A failed newest backup attempt is visible: the state reports
   `last_run_failed` and a `backup.last_run` finding instead of judging the
   cluster healthy on an older snapshot, and the watchdog reports it.

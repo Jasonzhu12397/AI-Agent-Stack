@@ -303,3 +303,62 @@ def test_fresh_backups_are_quiet_even_when_the_scheduler_has_never_reported():
 
     assert error == ""
     assert report["problems"] == []
+
+
+@pytest.mark.django_db
+def test_a_problem_is_paged_once_and_the_report_says_whether_it_was(monkeypatch):
+    monkeypatch.setenv("ETCD_BACKUP_ALERT_WEBHOOK", "https://hooks.example/etcd")
+    posts = []
+
+    def sender(url, body, timeout):
+        posts.append((url, body))
+        return 200
+
+    monkeypatch.setattr("core.etcd_backup_alert._post", sender)
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=100)
+
+    report, error = _run()
+
+    assert error
+    assert len(posts) == 1
+    assert report["alert"]["delivered"] is True
+    assert json.loads(posts[0][1])["problems"][0]["code"] == "ETCD_BACKUP_STALE"
+
+
+@pytest.mark.django_db
+def test_a_dry_run_and_an_opt_out_never_page(monkeypatch):
+    monkeypatch.setenv("ETCD_BACKUP_ALERT_WEBHOOK", "https://hooks.example/etcd")
+    posts = []
+    monkeypatch.setattr(
+        "core.etcd_backup_alert._post", lambda url, body, timeout: posts.append(url) or 200
+    )
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=100)
+
+    dry, error = _run(dry_run=True)
+    assert error
+    assert posts == []
+    assert dry["alert"]["reason"] == "skipped"
+
+    opted_out, error = _run(no_alert=True)
+    assert error
+    assert posts == []
+    assert opted_out["alert"]["reason"] == "skipped"
+
+
+@pytest.mark.django_db
+def test_a_healthy_fleet_is_never_paged(monkeypatch):
+    monkeypatch.setenv("ETCD_BACKUP_ALERT_WEBHOOK", "https://hooks.example/etcd")
+    posts = []
+    monkeypatch.setattr(
+        "core.etcd_backup_alert._post", lambda url, body, timeout: posts.append(url) or 200
+    )
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=1)
+
+    report, error = _run()
+
+    assert error == ""
+    assert posts == []
+    assert report["alert"]["reason"] == "nothing_to_report"

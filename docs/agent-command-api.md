@@ -516,3 +516,16 @@ while every hourly attempt has been failing. The state therefore also carries
 problem code (`ETCD_BACKUP_LAST_RUN_FAILED` when the run produced no code of its
 own), so a disk that fills up is reported by the same watchdog that reports a
 stale file.
+
+### Reaching a human
+
+An audit event and a non-zero exit are enough for CI but wake nobody. When
+`ETCD_BACKUP_ALERT_WEBHOOK` is set, every `check_etcd_backups` run that found at
+least one problem POSTs one JSON body (`kind: etcd_backup_problem`, the readable
+`text`, and the problems with their codes, newest snapshot and scheduler age) to
+that URL, with `ETCD_BACKUP_ALERT_TIMEOUT_SECONDS` (default 10) as the timeout.
+The report's `alert` field says `configured` / `delivered` / `reason`
+(`no_webhook`, `nothing_to_report`, `send_failed`, `http_status`) and never
+echoes the URL, which may carry a token. A healthy fleet is never paged; dry
+runs and `--no-alert` never page. Compose runs the probe hourly as
+`etcd-backup-watchdog`, next to the scheduler that takes the backups.

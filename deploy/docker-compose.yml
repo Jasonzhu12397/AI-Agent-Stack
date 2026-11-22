@@ -84,6 +84,31 @@ services:
     depends_on:
       api: {condition: service_healthy}
       postgres: {condition: service_healthy}
+  etcd-backup-watchdog:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${AI_AGENT_PLATFORM_IMAGE:-ai-agent-platform:local}
+    env_file: [../.env]
+    environment:
+      DATABASE_URL: postgresql://agent:agent_dev_password@postgres:5432/agent_stack
+      REDIS_URL: redis://redis:6379/0
+      ETCD_BACKUP_WATCHDOG_INTERVAL_SECONDS: ${ETCD_BACKUP_WATCHDOG_INTERVAL_SECONDS:-3600}
+      ETCD_BACKUP_ALERT_WEBHOOK: ${ETCD_BACKUP_ALERT_WEBHOOK:-}
+    command:
+      - sh
+      - -c
+      - >-
+        while true; do
+        python apps/platform-api/manage.py check_etcd_backups || true;
+        sleep "$${ETCD_BACKUP_WATCHDOG_INTERVAL_SECONDS}";
+        done
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api: {condition: service_healthy}
+      postgres: {condition: service_healthy}
   worker:
     build:
       context: ..
