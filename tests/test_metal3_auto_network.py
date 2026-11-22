@@ -340,10 +340,12 @@ def test_verified_host_links_come_from_the_recorded_profile(tmp_path):
     (tmp_path / metal3_deploy.NETWORK_PROFILE_FILE).write_text(
         yaml.safe_dump(profile), encoding="utf-8"
     )
+    # The EPH carries the control link, the PXE VLAN on it and the data bond;
+    # a storage VLAN it never joins is not checked against it.
     assert metal3_deploy._recorded_host_links(tmp_path) == (
         "bond_control",
-        "bond_data",
         "bond_control.70",
+        "bond_data",
     )
     # Nothing recorded means nothing is claimed as required.
     empty = tmp_path / "empty"

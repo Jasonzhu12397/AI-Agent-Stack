@@ -288,7 +288,7 @@ def _recorded_host_links(out_dir: Path) -> tuple[str, ...]:
     try:
         profile = yaml.safe_load(path.read_text(encoding="utf-8"))
         plan = infra_networks.plan_infra_networks(profile)
-        return tuple(infra_networks.required_host_links(plan))
+        return tuple(infra_networks.eph_host_links(plan))
     except (infra_networks.InfraNetworkError, yaml.YAMLError) as exc:
         sys.stderr.write(f"WARNING: cannot derive host links from {path}: {exc}\n")
         return ()

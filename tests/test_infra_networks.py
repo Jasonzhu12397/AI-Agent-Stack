@@ -316,3 +316,13 @@ def test_required_host_links_match_the_rendered_network_data():
     data = render_role_network_data(plan, "worker")
     rendered = {item["id"] for key in ("bonds", "vlans") for item in data["links"].get(key, [])}
     assert set(links) == rendered
+
+def test_eph_host_links_skip_segments_the_provisioning_host_never_joins():
+    plan = plan_infra_networks(_pxe_profile())
+    assert infra.eph_host_links(plan) == [
+        "bond_control",
+        "bond_control.70",
+        "bond_data",
+    ]
+    # The storage VLAN is on the data bond but is not part of the EPH stack.
+    assert "bond_data.3220" not in infra.eph_host_links(plan)

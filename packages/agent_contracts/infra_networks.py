@@ -470,6 +470,30 @@ def role_links(plan: dict[str, Any], host_role: str) -> list[dict[str, Any]]:
     }
 
 
+def eph_host_links(plan: dict[str, Any]) -> list[str]:
+    """Return the links the provisioning host (the EPH itself) must carry.
+
+    The EPH is not one of the machines cloud-init provisions: it runs the
+    control-plane link, the PXE/provisioning VLAN stacked on it and — when the
+    profile declares one — the data bond. Checking a storage VLAN the EPH never
+    joins would fail a healthy host, so the host check uses this list while the
+    baremetal hosts are covered by their own networkData.
+    """
+
+    links: list[str] = []
+    for role in ("control", "provisioning", "data"):
+        network = network_by_role(plan, role)
+        if network is None or not network.get("enabled", True):
+            continue
+        try:
+            link = network_link_id(plan, network)
+        except InfraNetworkError:
+            continue
+        if link not in links:
+            links.append(link)
+    return links
+
+
 def required_host_links(plan: dict[str, Any]) -> list[str]:
     """Return every host link the rendered plan needs on a machine.
 
