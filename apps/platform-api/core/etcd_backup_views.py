@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 
 from core.audit import record_audit_event
 from core.cluster_deployment_views import _can_edit_project
-from core.etcd_backup_queue import queue_backup
+from core.etcd_backup_queue import queue_backup, queue_status
 from core.etcd_backup_state import POLICY_FIELDS, etcd_backup_state, store_policy
 from core.models import ClusterDeployment, ProjectMembership
 
@@ -142,6 +142,51 @@ class ClusterDeploymentEtcdBackupRunView(APIView):
                 "status": command.status,
                 "created": created,
                 "code": "" if created else "ETCD_BACKUP_ALREADY_QUEUED",
+            },
+            status=202,
+        )
+
+
+class ClusterDeploymentEtcdBackupCheckView(APIView):
+    """Ask the cluster what is actually on its backup disk, right now.
+
+    The panel otherwise knows only what the last run reported. A read-only check
+    costs one pod exec and answers the question an operator has after changing
+    policy: does the directory look the way the platform thinks it does.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        deployment, error = _deployment_or_error(request, deployment_id)
+        if error is not None:
+            return error
+        command, created, reason = queue_status(deployment, requested_by=request.user)
+        if command is None:
+            return Response(
+                {"detail": _reason_detail(reason), "code": _reason_code(reason)},
+                status=409,
+            )
+        record_audit_event(
+            request,
+            deployment.tenant,
+            "cluster.etcd_backup.check.requested",
+            "cluster_deployment",
+            deployment.id,
+            project=deployment.project,
+            metadata={
+                "cluster_name": deployment.cluster_name,
+                "command_id": str(command.id),
+                "created": created,
+            },
+        )
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "command_id": str(command.id),
+                "status": command.status,
+                "created": created,
+                "code": "" if created else "ETCD_BACKUP_CHECK_ALREADY_QUEUED",
             },
             status=202,
         )

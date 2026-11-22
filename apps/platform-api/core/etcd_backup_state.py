@@ -95,6 +95,13 @@ def store_policy(deployment: ClusterDeployment, values: dict[str, Any]) -> dict[
     return kubernetes
 
 
+NOT_RUN_FINDING = {
+    "name": "backup.command",
+    "ok": False,
+    "code": "ETCD_BACKUP_NOT_RUN_YET",
+    "detail": "the scheduler has not reported a backup for this cluster",
+}
+
 #: An upgrade that reported its snapshot is the only place the platform learns
 #: about a restore point before the next recurring backup lists the directory.
 UPGRADE_ACTION = "cluster.kubernetes.version.upgrade"
@@ -153,15 +160,35 @@ def _with_location(
     }
 
 
+def _listing(result: dict[str, Any]) -> list[Any]:
+    """The directory listing a command reported, whichever shape it used.
+
+    A backup run reports what it kept; a read-only status command reports every
+    entry it saw. The status answer is the better evidence, so it wins when both
+    exist, and either is enough to place a restore point.
+    """
+
+    entries = result.get("entries")
+    if isinstance(entries, list) and entries:
+        return entries
+    kept = result.get("kept")
+    if isinstance(kept, list):
+        return kept
+    backup = result.get("backup")
+    if isinstance(backup, dict) and backup.get("name"):
+        return [backup["name"]]
+    return []
+
+
 def _entries_from(names: Any, cluster_name: str) -> list[dict[str, Any]]:
     """Rebuild contract entries from the file names a command reported."""
 
     if not isinstance(names, list):
         return []
-    return contract.snapshot_entries(
-        [{"name": str(name)} for name in names if isinstance(name, str)],
-        cluster_name=cluster_name,
-    )
+    items = [
+        item if isinstance(item, dict) else {"name": str(item)} for item in names
+    ]
+    return contract.snapshot_entries(items, cluster_name=cluster_name)
 
 
 def _command_summary(command: AgentCommand) -> dict[str, Any]:
@@ -202,14 +229,7 @@ def etcd_backup_state(
         "newest_age_hours": None,
         "stale": True,
         "ok": False,
-        "findings": [
-            {
-                "name": "backup.command",
-                "ok": False,
-                "code": "ETCD_BACKUP_NOT_RUN_YET",
-                "detail": "the scheduler has not reported a backup for this cluster",
-            }
-        ],
+        "findings": [dict(NOT_RUN_FINDING)],
     }
     if not policy.get("valid"):
         state["findings"] = [
@@ -222,19 +242,18 @@ def etcd_backup_state(
         ]
         return state
     if not runs:
-        state["restore_point"] = _with_location(
-            _reported_restore_point(deployment, now=now),
-            directory=policy.get("directory") or contract.DEFAULT_DIRECTORY,
-            listed=False,
-        )
-        return state
+        # No backup command has reported yet, but a read-only check may still
+        # have listed the directory: keep the "not run yet" finding and let the
+        # rest of this function describe what the check saw.
+        state["not_run_yet"] = True
 
-    # Use the newest run that reported a directory listing: a failed run that
-    # died before listing says nothing about what is on disk.
+    # Use the newest report that listed the directory: a failed run that died
+    # before listing says nothing about what is on disk, and a read-only status
+    # command that just read it says more than an older backup run.
     reported = None
-    for command in runs:
+    for command in commands:
         result = command.result if isinstance(command.result, dict) else {}
-        if isinstance(result.get("kept"), list) or isinstance(result.get("backup"), dict):
+        if _listing(result):
             reported = command
             break
     if reported is None:
@@ -243,10 +262,7 @@ def etcd_backup_state(
 
     result = reported.result
     cluster_name = deployment.cluster_name
-    entries = _entries_from(result.get("kept"), cluster_name)
-    backup = result.get("backup")
-    if not entries and isinstance(backup, dict) and backup.get("name"):
-        entries = _entries_from([backup["name"]], cluster_name)
+    entries = _entries_from(_listing(result), cluster_name)
     report = contract.assess(
         entries,
         keep_count=policy["keep_count"],
@@ -258,6 +274,10 @@ def etcd_backup_state(
     )
     state.update(
         {
+            "reported_by": reported.command_type,
+            "reported_at": (
+                reported.finished_at.isoformat() if reported.finished_at else None
+            ),
             "newest": report["newest"],
             "newest_age_hours": report["newest_age_hours"],
             "stale": any(
@@ -276,6 +296,12 @@ def etcd_backup_state(
             "findings": report["findings"],
         }
     )
+    if state.get("not_run_yet"):
+        # A read-only check can describe the disk, but it cannot replace the
+        # fact that no scheduled backup has ever reported: freshness is
+        # claimed by runs, never by a manual look.
+        state["findings"] = [*report["findings"], dict(NOT_RUN_FINDING)]
+        state["ok"] = False
     return state
 
 

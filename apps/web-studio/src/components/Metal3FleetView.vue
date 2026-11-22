@@ -17,6 +17,7 @@ import {
   verifyFleetMachineNetwork,
   getProjectAgentCommands,
   getClusterDeployments,
+  checkClusterDeploymentEtcdBackup,
   getClusterDeploymentEtcdBackup,
   runClusterDeploymentEtcdBackup,
   setClusterDeploymentEtcdBackupPolicy,
@@ -799,6 +800,22 @@ async function saveBackupPolicy() {
       cause instanceof Error ? cause.message : "Unable to save the backup policy.";
   } finally {
     backupPolicySaving.value = false;
+  }
+}
+
+async function checkEtcdBackupNow(deployment: ClusterDeployment) {
+  backupBusy.value = deployment.id;
+  backupMessages.value[deployment.id] = "";
+  try {
+    const result = await checkClusterDeploymentEtcdBackup(deployment.id);
+    backupMessages.value[deployment.id] = result.created
+      ? "Read-only check queued as command " + result.command_id + "; reload Backups once it finishes."
+      : "A check was already queued in this ten-minute window: command " + result.command_id + ".";
+  } catch (cause) {
+    backupMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to queue a backup check.";
+  } finally {
+    backupBusy.value = null;
   }
 }
 
@@ -1644,6 +1661,12 @@ onUnmounted(() => {
               <el-button
                 size="small"
                 text
+                :loading="backupBusy === scope.row.id"
+                @click="checkEtcdBackupNow(scope.row)"
+              >Check now</el-button>
+              <el-button
+                size="small"
+                text
                 @click="openBackupPolicy(scope.row)"
               >Policy</el-button>
               <el-button
@@ -1666,6 +1689,11 @@ onUnmounted(() => {
                   v-if="backupStates[scope.row.id].pre_upgrade_count"
                   class="fleet-version-current"
                 >pre-upgrade snapshots: {{ backupStates[scope.row.id].pre_upgrade_count }}</small>
+                <small
+                  v-if="backupStates[scope.row.id].reported_by"
+                  class="fleet-version-current"
+                >last report: {{ backupStates[scope.row.id].reported_by }}
+                  · {{ formatTime(backupStates[scope.row.id].reported_at || null) }}</small>
                 <small
                   v-if="backupStates[scope.row.id].restore_point"
                   class="fleet-version-current"

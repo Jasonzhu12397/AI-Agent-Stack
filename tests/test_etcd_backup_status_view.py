@@ -494,3 +494,60 @@ def test_a_stranger_cannot_queue_a_backup():
     client.force_authenticate(user=stranger)
 
     assert client.post(RUN_URL.format(deployment.id)).status_code == 404
+
+
+CHECK_URL = "/api/v1/cluster-deployments/{}/etcd-backup/check/"
+
+
+@pytest.mark.django_db
+def test_an_operator_can_ask_the_cluster_what_is_on_disk_without_writing():
+    _, tenant, project, target, deployment, client = _workspace()
+
+    response = client.post(CHECK_URL.format(deployment.id))
+
+    assert response.status_code == 202
+    command = AgentCommand.objects.get(pk=response.data["command_id"])
+    assert command.command_type == contract.STATUS_ACTION
+    assert command.node_id == target.id
+    assert command.status == AgentCommand.Status.QUEUED
+
+
+@pytest.mark.django_db
+def test_two_checks_inside_one_bucket_ask_the_cluster_once():
+    _, _, _, _, deployment, client = _workspace()
+
+    first = client.post(CHECK_URL.format(deployment.id)).data
+    second = client.post(CHECK_URL.format(deployment.id)).data
+
+    assert second["command_id"] == first["command_id"]
+    assert second["code"] == "ETCD_BACKUP_CHECK_ALREADY_QUEUED"
+    assert AgentCommand.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_a_check_reports_the_live_directory_even_between_backup_runs():
+    _, tenant, project, target, deployment, client = _workspace()
+    now = timezone.now()
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    periodic = contract.backup_filename("lab", now=now)
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=deployment.requested_by,
+        command_type=contract.STATUS_ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="status-report",
+        plan_hash="0" * 64,
+        result={"entries": [{"name": periodic}, {"name": snapshot}]},
+        deployment=deployment,
+        finished_at=now,
+    )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["reported_by"] == contract.STATUS_ACTION
+    assert body["newest"]["name"] == periodic
+    assert body["restore_point"]["name"] == snapshot
+    assert body["restore_point"]["listed"] is True

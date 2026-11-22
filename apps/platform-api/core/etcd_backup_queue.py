@@ -18,7 +18,12 @@ from django.db import transaction
 
 from core.etcd_backup_policy import protected_names, spec_policy
 from core.models import AgentCommand, AgentNode, ClusterDeployment
-from packages.agent_contracts.etcd_backup import ACTION, EtcdBackupError, validate_request
+from packages.agent_contracts.etcd_backup import (
+    ACTION,
+    STATUS_ACTION,
+    EtcdBackupError,
+    validate_request,
+)
 
 #: Why this deployment may not be backed up right now, as a stable code. Empty
 #: when it may.
@@ -38,6 +43,19 @@ def payload_hash(command_type: str, payload: dict) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def status_bucket(now: datetime | None = None) -> str:
+    """A ten-minute bucket for read-only checks.
+
+    A status command only reads the directory, but running it for every click
+    would still put a pod exec on the control plane each time. Ten minutes is
+    short enough for an operator watching a run and long enough to absorb
+    double clicks.
+    """
+
+    current = now or datetime.now(UTC)
+    return f"{current.strftime('%Y%m%dT%H')}{current.minute // 10}"
 
 
 def unqueueable_reason(deployment: ClusterDeployment) -> str:
@@ -80,6 +98,45 @@ def backup_payload(
         # protect.
         request.pop("protect")
     return request
+
+
+def queue_status(
+    deployment: ClusterDeployment,
+    *,
+    now: datetime | None = None,
+    requested_by: Any = None,
+) -> tuple[AgentCommand | None, bool, str]:
+    """Queue a read-only check of the backup directory.
+
+    No approval and no lease: the command reads files and reports, so it is
+    always safe to run and it is the only way to learn the truth about disk
+    between two backup runs.
+    """
+
+    reason = unqueueable_reason(deployment)
+    if reason:
+        return None, False, reason
+    try:
+        payload = backup_payload(deployment)
+    except EtcdBackupError as exc:
+        return None, False, exc.code
+    key = f"etcd-backup-status:{deployment.id}:{status_bucket(now)}"
+    with transaction.atomic():
+        command, created = AgentCommand.objects.get_or_create(
+            tenant=deployment.tenant,
+            idempotency_key=key,
+            defaults={
+                "project": deployment.project,
+                "node": deployment.target_node,
+                "requested_by": requested_by or deployment.requested_by,
+                "command_type": STATUS_ACTION,
+                "payload": payload,
+                "status": AgentCommand.Status.QUEUED,
+                "plan_hash": payload_hash(STATUS_ACTION, payload),
+                "deployment": deployment,
+            },
+        )
+    return command, created, ""
 
 
 def queue_backup(

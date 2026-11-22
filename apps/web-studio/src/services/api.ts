@@ -1111,6 +1111,8 @@ export type EtcdBackupState = {
   last_run: EtcdBackupCommandSummary | null;
   history: EtcdBackupCommandSummary[];
   restore_point: EtcdRestorePoint | null;
+  reported_by?: string;
+  reported_at?: string | null;
   newest: { name: string; taken_at?: string } | null;
   newest_age_hours: number | null;
   stale: boolean;
@@ -1139,6 +1141,15 @@ export type EtcdBackupRunResult = {
   created: boolean;
   code: string;
 };
+
+export function checkClusterDeploymentEtcdBackup(
+  deploymentId: string,
+): Promise<EtcdBackupRunResult> {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/etcd-backup/check/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
 
 export function runClusterDeploymentEtcdBackup(
   deploymentId: string,

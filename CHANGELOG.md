@@ -31,6 +31,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   and fails closed with `ETCD_BACKUP_DISK_CHECK_FAILED` when either measurement
   cannot be read. The floor is policy (`kubernetes.etcd_backup_min_free_bytes`)
   and is editable from the policy dialog in GiB.
+- `POST .../etcd-backup/check/` and a Check now button: queue the read-only
+  `cluster.kubernetes.backup.status` command (ten-minute bucket) so an operator
+  can learn what is actually on the disk between two runs. The read-only view
+  now consumes status listings as well as run listings and reports
+  `reported_by` / `reported_at`, while keeping `ETCD_BACKUP_NOT_RUN_YET` when no
+  scheduled run has ever reported.
 - A `restore_point` on the read-only backup view: the newest pre-upgrade snapshot
   (or, on a cluster never upgraded, the newest recurring backup) with its path,
   kind, version, age and a `listed` flag that separates "a run saw this file"

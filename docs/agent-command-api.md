@@ -450,3 +450,14 @@ existing command and `created: false` (`ETCD_BACKUP_ALREADY_QUEUED`), because a
 second snapshot of unchanged data is not a second backup. A cluster whose
 `kubernetes.etcd_backup` is false, or that has no Target Agent, is refused with
 `409` and `ETCD_BACKUP_DISABLED` / `ETCD_BACKUP_NO_TARGET_AGENT`.
+
+### Checking the disk without writing to it
+
+`POST /api/v1/cluster-deployments/<id>/etcd-backup/check/` queues the read-only
+`cluster.kubernetes.backup.status` command: it lists the directory and reports
+every entry, so an operator can see the truth between two backup runs. It needs
+no approval and is deduplicated on a ten-minute bucket
+(`ETCD_BACKUP_CHECK_ALREADY_QUEUED`). The read-only view consumes those results
+too — `reported_by` / `reported_at` say which command produced the listing it is
+describing — but a read-only check never replaces the `ETCD_BACKUP_NOT_RUN_YET`
+finding: freshness is claimed by runs, not by someone looking.
