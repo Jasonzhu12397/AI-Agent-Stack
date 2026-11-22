@@ -507,3 +507,49 @@ def test_a_snapshot_inside_the_mount_is_probed_once(monkeypatch):
     )
     assert path_check["ok"] is True
     assert assessed["blocked"] is False
+
+
+class NoPasswordSudoRunner(MultiRollbackRunner):
+    """A lab where ssh works but remote sudo still asks for a password."""
+
+    def __call__(self, argv, timeout=20, **kwargs):
+        if argv[:1] == ["ssh"] and "sudo" in argv and "-n" in argv:
+            self.calls.append(list(argv))
+            return {
+                "available": True,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "sudo: a password is required\n",
+            }
+        return super().__call__(argv, timeout, **kwargs)
+
+
+def test_remote_sudo_that_needs_a_password_blocks_the_rollback(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = NoPasswordSudoRunner()
+    assessed = RollbackExecutor(runner).assess(REQUEST)
+
+    assert assessed["blocked"] is True
+    sudo_checks = [
+        check for check in assessed["checks"] if check["name"].startswith("ssh.sudo/")
+    ]
+    assert [check["name"] for check in sudo_checks] == ["ssh.sudo/cp-1", "ssh.sudo/cp-2"]
+    assert all(check["ok"] is False for check in sudo_checks)
+    assert "NOPASSWD" in sudo_checks[0]["detail"]
+    # Nothing was stopped or moved: the refusal happened in preflight.
+    assert not [call for call in runner.calls if "systemctl" in " ".join(call)]
+
+
+def test_the_local_member_needs_no_ssh_at_all(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = MultiRollbackRunner()
+    RollbackExecutor(runner).assess(REQUEST)
+
+    reachable = [
+        call for call in runner.calls
+        if call[:1] == ["ssh"] and "sudo" not in call
+    ]
+    hosts = [call[-2] for call in reachable]
+    assert hosts == ["operator@10.0.0.11", "operator@10.0.0.12"]

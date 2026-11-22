@@ -650,7 +650,16 @@ class RollbackExecutor:
                 )
             )
         else:
-            checks.extend(self._upgrade._ssh_reachability_checks(control_planes))
+            # Only the peers are reached over ssh; this host runs its own
+            # commands directly, so it must not require an ssh server at all.
+            by_name = {
+                self._upgrade._node_name(node): node for node in control_planes
+            }
+            checks.extend(
+                self._upgrade._ssh_reachability_checks(
+                    [by_name[item["node"]] for item in remote if item["node"] in by_name]
+                )
+            )
         if request["execution_mode"] == "execute":
             confirmed = request.get("confirm_cluster_name") == request["cluster_name"]
             checks.append(

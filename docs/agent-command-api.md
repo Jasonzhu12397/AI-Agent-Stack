@@ -226,6 +226,12 @@ all pods, the remote hosts do not need `kubectl`), every kubelet stops before th
 first directory move, the restored data is swapped in, and the local kubelet
 starts first so the quorum re-forms in a known order.
 
+Every remote hop is proven twice in preflight: `ssh.reachable` answers, and
+`ssh.sudo` shows `sudo -n true` works, because a sudoers entry that asks for a
+password returns immediately under `BatchMode=yes` and would strand a cluster
+whose kubelets were already stopped. The same pair guards the upgrade path, so
+neither operation starts on a host it cannot finish on.
+
 Two preflight facts keep the restore from starting something it cannot finish.
 `rollback.snapshot.path` requires the snapshot to sit under `/var/lib/etcd`, the
 only host path the etcd static pod mounts - a file under `/var/backups` exists on

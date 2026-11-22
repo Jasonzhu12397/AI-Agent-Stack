@@ -611,6 +611,36 @@ class UpgradeExecutor:
                     "ssh accepted" if ok else _output(result) or "ssh was refused",
                 )
             )
+            if not ok:
+                continue
+            # Every remote step runs unattended under sudo; a sudoers entry that
+            # asks for a password fails at once over BatchMode and would strand a
+            # half-upgraded cluster, so it is a preflight fact too.
+            sudo = self._runner(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=5",
+                    f"{self._remote_user}@{address}",
+                    "sudo",
+                    "-n",
+                    "true",
+                ],
+                timeout=30,
+            )
+            sudo_ok = sudo.get("available", True) and sudo.get("returncode") == 0
+            checks.append(
+                self._check(
+                    f"ssh.sudo/{name}",
+                    sudo_ok,
+                    "passwordless sudo works over ssh"
+                    if sudo_ok
+                    else "remote sudo needs a password; add a NOPASSWD entry for "
+                    f"{self._remote_user}: {_output(sudo)}",
+                )
+            )
         return checks
 
     def _preflight(
