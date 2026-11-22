@@ -4,7 +4,7 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] — 2026-11-22
 
 ### Added
 
@@ -23,6 +23,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   the Target Cluster Delivery table: declared retention policy, newest snapshot
   and its age, staleness, prunable files and contract findings, all read from
   what commands already reported.
+- `docs/release-v1.1.0.zh-CN.md` and `docs/release-v1.1.0.en.md`: bilingual notes
+  for this release.
 
 ## [1.0.0] — 2026-11-22
 
