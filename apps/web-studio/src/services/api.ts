@@ -1132,6 +1132,23 @@ export type EtcdBackupPolicyInput = {
   enabled?: boolean;
 };
 
+export type EtcdBackupRunResult = {
+  deployment_id: string;
+  command_id: string;
+  status: string;
+  created: boolean;
+  code: string;
+};
+
+export function runClusterDeploymentEtcdBackup(
+  deploymentId: string,
+): Promise<EtcdBackupRunResult> {
+  return request(
+    "/api/v1/cluster-deployments/" + deploymentId + "/etcd-backup/run/",
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 export function setClusterDeploymentEtcdBackupPolicy(
   deploymentId: string,
   policy: EtcdBackupPolicyInput,

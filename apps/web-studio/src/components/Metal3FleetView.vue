@@ -18,6 +18,7 @@ import {
   getProjectAgentCommands,
   getClusterDeployments,
   getClusterDeploymentEtcdBackup,
+  runClusterDeploymentEtcdBackup,
   setClusterDeploymentEtcdBackupPolicy,
   type EtcdBackupState,
   getProjects,
@@ -782,6 +783,23 @@ async function saveBackupPolicy() {
       cause instanceof Error ? cause.message : "Unable to save the backup policy.";
   } finally {
     backupPolicySaving.value = false;
+  }
+}
+
+async function runEtcdBackupNow(deployment: ClusterDeployment) {
+  backupBusy.value = deployment.id;
+  backupMessages.value[deployment.id] = "";
+  try {
+    const result = await runClusterDeploymentEtcdBackup(deployment.id);
+    backupMessages.value[deployment.id] = result.created
+      ? "Backup queued as command " + result.command_id + "."
+      : "This hour is already covered by command " + result.command_id + "; no second snapshot was taken.";
+    await loadEtcdBackup(deployment);
+  } catch (cause) {
+    backupMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to queue a backup.";
+  } finally {
+    backupBusy.value = null;
   }
 }
 
@@ -1607,6 +1625,12 @@ onUnmounted(() => {
                 text
                 @click="openBackupPolicy(scope.row)"
               >Policy</el-button>
+              <el-button
+                size="small"
+                text
+                :loading="backupBusy === scope.row.id"
+                @click="runEtcdBackupNow(scope.row)"
+              >Back up now</el-button>
               <template v-if="backupStates[scope.row.id]">
                 <el-tag
                   :type="backupStates[scope.row.id].stale ? 'warning' : 'success'"

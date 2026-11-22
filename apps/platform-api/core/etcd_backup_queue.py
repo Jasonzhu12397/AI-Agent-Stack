@@ -1,0 +1,123 @@
+"""One place that turns a deployment into a queued backup command.
+
+Two callers queue backups: the hourly scheduler command, and an operator who
+wants one now. They must agree on the payload, on what makes a cluster
+unqueueable, and above all on the idempotency key: if the scheduler already
+queued this hour, pressing "back up now" should hand back that command rather
+than take a second snapshot of the same data.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import UTC, datetime
+from typing import Any
+
+from django.db import transaction
+
+from core.etcd_backup_policy import protected_names, spec_policy
+from core.models import AgentCommand, AgentNode, ClusterDeployment
+from packages.agent_contracts.etcd_backup import ACTION, EtcdBackupError, validate_request
+
+#: Why this deployment may not be backed up right now, as a stable code. Empty
+#: when it may.
+NO_TARGET = "no_target_agent"
+DISABLED = "disabled"
+
+
+def hour_bucket(now: datetime | None = None) -> str:
+    return (now or datetime.now(UTC)).strftime("%Y%m%dT%H")
+
+
+def payload_hash(command_type: str, payload: dict) -> str:
+    encoded = json.dumps(
+        {"command_type": command_type, "payload": payload},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def unqueueable_reason(deployment: ClusterDeployment) -> str:
+    """Why this deployment cannot back up, or "" when it can."""
+
+    spec = deployment.spec if isinstance(deployment.spec, dict) else {}
+    kubernetes = spec.get("kubernetes")
+    if isinstance(kubernetes, dict) and kubernetes.get("etcd_backup") is False:
+        return DISABLED
+    node = deployment.target_node
+    if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+        return NO_TARGET
+    return ""
+
+
+def backup_payload(
+    deployment: ClusterDeployment, overrides: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The request a backup run would receive, validated by the contract."""
+
+    spec = deployment.spec if isinstance(deployment.spec, dict) else {}
+    kubernetes = spec.get("kubernetes")
+    payload: dict[str, Any] = {
+        "cluster_name": deployment.cluster_name,
+        "execution_mode": "execute",
+        "confirm_cluster_name": deployment.cluster_name,
+    }
+    payload.update(spec_policy(kubernetes))
+    protect = protected_names(deployment)
+    if protect:
+        payload["protect"] = protect
+    for field, value in (overrides or {}).items():
+        if value:
+            payload[field] = value
+    request = validate_request(payload)
+    if not request["protect"]:
+        # The contract always reports the protect set, empty or not. An empty
+        # key in the command payload would change the plan hash that
+        # idempotency compares, so it is dropped when there is nothing to
+        # protect.
+        request.pop("protect")
+    return request
+
+
+def queue_backup(
+    deployment: ClusterDeployment,
+    *,
+    now: datetime | None = None,
+    overrides: dict[str, Any] | None = None,
+    requested_by: Any = None,
+) -> tuple[AgentCommand | None, bool, str]:
+    """Queue one backup for this deployment, at most once per hour bucket.
+
+    Returns the command, whether this call created it, and the reason nothing
+    was queued. A backup needs no approval: it writes a file and prunes by
+    policy, and a backup that waits for a human is not a backup.
+    """
+
+    reason = unqueueable_reason(deployment)
+    if reason:
+        return None, False, reason
+    node = deployment.target_node
+    try:
+        payload = backup_payload(deployment, overrides)
+    except EtcdBackupError as exc:
+        return None, False, exc.code
+    key = f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
+    with transaction.atomic():
+        command, created = AgentCommand.objects.get_or_create(
+            tenant=deployment.tenant,
+            idempotency_key=key,
+            defaults={
+                "project": deployment.project,
+                "node": node,
+                "requested_by": requested_by or deployment.requested_by,
+                "command_type": ACTION,
+                "payload": payload,
+                "status": AgentCommand.Status.QUEUED,
+                "plan_hash": payload_hash(ACTION, payload),
+                "deployment": deployment,
+            },
+        )
+    return command, created, ""

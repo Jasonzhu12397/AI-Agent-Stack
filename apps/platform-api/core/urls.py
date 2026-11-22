@@ -65,6 +65,7 @@ from core.cluster_deployment_views import (
 )
 from core.etcd_backup_views import (
     ClusterDeploymentEtcdBackupPolicyView,
+    ClusterDeploymentEtcdBackupRunView,
     ClusterDeploymentEtcdBackupView,
 )
 from core.metal3_lab_views import Metal3LabWorkflowView
@@ -231,6 +232,11 @@ urlpatterns = [
         "api/v1/cluster-deployments/<uuid:deployment_id>/",
         ClusterDeploymentDetailView.as_view(),
         name="cluster-deployment-detail",
+    ),
+    path(
+        "api/v1/cluster-deployments/<uuid:deployment_id>/etcd-backup/run/",
+        ClusterDeploymentEtcdBackupRunView.as_view(),
+        name="cluster-deployment-etcd-backup-run",
     ),
     path(
         "api/v1/cluster-deployments/<uuid:deployment_id>/etcd-backup/",

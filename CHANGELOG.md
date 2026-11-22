@@ -36,6 +36,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   kind, version, age and a `listed` flag that separates "a run saw this file"
   from "only a succeeded upgrade reported it". The rollback form can fill its
   snapshot path from it instead of asking an operator to recall a file name.
+- `POST .../etcd-backup/run/` and a "Back up now" button: an operator can queue
+  a run without waiting for the hourly tick. The scheduler and the button share
+  one queueing module and one idempotency key, so an hour the scheduler already
+  covered returns that command (`ETCD_BACKUP_ALREADY_QUEUED`) instead of taking
+  a second snapshot. `ETCD_BACKUP_DISABLED` / `ETCD_BACKUP_NO_TARGET_AGENT`
+  refuse it with 409.
 - `check_etcd_backups`: reports every installed cluster with a missing, stale or
   never-run backup, writes a `cluster.etcd_backup.problem` audit event for each
   and exits non-zero, so a cron entry or monitoring probe can alarm without a

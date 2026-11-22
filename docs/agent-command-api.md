@@ -439,3 +439,14 @@ the backup directory, `false` means the platform only knows about it from a
 `SUCCEEDED` upgrade command whose `etcd_snapshot` reported `verified: true`. A
 pending or failed upgrade never contributes a restore point, because the
 platform may not offer a file a command never proved it wrote.
+
+### Backing up on demand
+
+`POST /api/v1/cluster-deployments/<id>/etcd-backup/run/` queues one run now,
+for an operator who is about to do something risky rather than waiting for the
+hourly tick. It needs no approval and answers `202` with the command id and
+`created`; pressing it again inside the same hour answers `202` with the
+existing command and `created: false` (`ETCD_BACKUP_ALREADY_QUEUED`), because a
+second snapshot of unchanged data is not a second backup. A cluster whose
+`kubernetes.etcd_backup` is false, or that has no Target Agent, is refused with
+`409` and `ETCD_BACKUP_DISABLED` / `ETCD_BACKUP_NO_TARGET_AGENT`.

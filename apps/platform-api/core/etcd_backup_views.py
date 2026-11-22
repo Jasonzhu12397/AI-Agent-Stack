@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 
 from core.audit import record_audit_event
 from core.cluster_deployment_views import _can_edit_project
+from core.etcd_backup_queue import queue_backup
 from core.etcd_backup_state import POLICY_FIELDS, etcd_backup_state, store_policy
 from core.models import ClusterDeployment, ProjectMembership
 
@@ -96,6 +97,70 @@ class ClusterDeploymentEtcdBackupPolicyView(APIView):
                 **etcd_backup_state(deployment),
             }
         )
+
+
+class ClusterDeploymentEtcdBackupRunView(APIView):
+    """Queue one backup now, because an operator is about to do something.
+
+    A backup needs no approval, so this queues a command and reports it. It
+    shares the hourly bucket with the scheduler: pressing the button in an hour
+    the scheduler already covered returns that command instead of taking a
+    second snapshot of unchanged data.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, deployment_id):
+        deployment, error = _deployment_or_error(request, deployment_id)
+        if error is not None:
+            return error
+        command, created, reason = queue_backup(
+            deployment, requested_by=request.user
+        )
+        if command is None:
+            return Response(
+                {"detail": _reason_detail(reason), "code": _reason_code(reason)},
+                status=409,
+            )
+        record_audit_event(
+            request,
+            deployment.tenant,
+            "cluster.etcd_backup.run.requested",
+            "cluster_deployment",
+            deployment.id,
+            project=deployment.project,
+            metadata={
+                "cluster_name": deployment.cluster_name,
+                "command_id": str(command.id),
+                "created": created,
+            },
+        )
+        return Response(
+            {
+                "deployment_id": str(deployment.id),
+                "command_id": str(command.id),
+                "status": command.status,
+                "created": created,
+                "code": "" if created else "ETCD_BACKUP_ALREADY_QUEUED",
+            },
+            status=202,
+        )
+
+
+def _reason_code(reason: str) -> str:
+    """A stable code for the refusal, whichever layer refused it."""
+
+    if reason.startswith("ETCD_BACKUP_"):
+        return reason
+    return f"ETCD_BACKUP_{reason.upper()}"
+
+
+def _reason_detail(reason: str) -> str:
+    if reason == "no_target_agent":
+        return "this deployment has no Target Agent to run the backup"
+    if reason == "disabled":
+        return "backups are switched off for this cluster"
+    return f"the backup request was refused: {reason}"
 
 
 def policy_keys_only(data) -> bool:

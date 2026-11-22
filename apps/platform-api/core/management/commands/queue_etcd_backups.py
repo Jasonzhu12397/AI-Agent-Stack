@@ -12,31 +12,13 @@ spec declares ``kubernetes.etcd_backup` false.
 
 from __future__ import annotations
 
-import hashlib
 import json
-from datetime import UTC, datetime
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
 from django.utils import timezone
 
-from core.etcd_backup_policy import protected_names, spec_policy
-from core.models import AgentCommand, AgentNode, ClusterDeployment
-from packages.agent_contracts.etcd_backup import ACTION, validate_request
-
-
-def hour_bucket(now: datetime | None = None) -> str:
-    return (now or datetime.now(UTC)).strftime("%Y%m%dT%H")
-
-
-def payload_hash(command_type: str, payload: dict) -> str:
-    encoded = json.dumps(
-        {"command_type": command_type, "payload": payload},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+from core.etcd_backup_queue import hour_bucket, queue_backup, unqueueable_reason
+from core.models import ClusterDeployment
 
 
 class Command(BaseCommand):
@@ -61,67 +43,33 @@ class Command(BaseCommand):
             .order_by("id")
         )
         bucket = hour_bucket()
+        overrides = {
+            "directory": options["directory"],
+            "keep_count": options["keep_count"],
+            "keep_max_age_hours": options["keep_max_age_hours"],
+            "pre_upgrade_keep_max_age_hours": options["pre_upgrade_keep_max_age_hours"],
+            "min_free_bytes": options["min_free_bytes"],
+        }
         for deployment in deployments:
-            spec = deployment.spec if isinstance(deployment.spec, dict) else {}
-            kubernetes = spec.get("kubernetes") if isinstance(spec, dict) else None
-            if isinstance(kubernetes, dict) and kubernetes.get("etcd_backup") is False:
-                skipped.append({"deployment_id": str(deployment.id), "reason": "disabled"})
-                continue
-            node = deployment.target_node
-            if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
-                skipped.append(
-                    {"deployment_id": str(deployment.id), "reason": "no_target_agent"}
-                )
-                continue
-            payload = {
-                "cluster_name": deployment.cluster_name,
-                "execution_mode": "execute",
-                "confirm_cluster_name": deployment.cluster_name,
-            }
-            protect = protected_names(deployment)
-            if protect:
-                payload["protect"] = protect
-            policy = spec_policy(kubernetes)
-            for field, value in policy.items():
-                payload[field] = value
-            for field, option in (
-                ("directory", "directory"),
-                ("keep_count", "keep_count"),
-                ("keep_max_age_hours", "keep_max_age_hours"),
-                ("pre_upgrade_keep_max_age_hours", "pre_upgrade_keep_max_age_hours"),
-                ("min_free_bytes", "min_free_bytes"),
-            ):
-                if options[option]:
-                    payload[field] = options[option]
-            try:
-                validate_request(payload)
-            except ValueError as exc:
-                skipped.append(
-                    {
-                        "deployment_id": str(deployment.id),
-                        "reason": getattr(exc, "code", "invalid_request"),
-                    }
-                )
-                continue
-            key = f"etcd-backup:{deployment.id}:{bucket}"
             if options["dry_run"]:
-                queued.append({"deployment_id": str(deployment.id), "command_id": None})
+                # A dry run must not write, but it must still say why a cluster
+                # would be skipped, so it reports the same reasons.
+                reason = unqueueable_reason(deployment)
+                if reason:
+                    skipped.append(
+                        {"deployment_id": str(deployment.id), "reason": reason}
+                    )
+                else:
+                    queued.append(
+                        {"deployment_id": str(deployment.id), "command_id": None}
+                    )
                 continue
-            with transaction.atomic():
-                command, created = AgentCommand.objects.get_or_create(
-                    tenant=deployment.tenant,
-                    idempotency_key=key,
-                    defaults={
-                        "project": deployment.project,
-                        "node": node,
-                        "requested_by": deployment.requested_by,
-                        "command_type": ACTION,
-                        "payload": payload,
-                        "status": AgentCommand.Status.QUEUED,
-                        "plan_hash": payload_hash(ACTION, payload),
-                        "deployment": deployment,
-                    },
-                )
+            command, created, reason = queue_backup(
+                deployment, overrides=overrides
+            )
+            if reason:
+                skipped.append({"deployment_id": str(deployment.id), "reason": reason})
+                continue
             queued.append(
                 {
                     "deployment_id": str(deployment.id),

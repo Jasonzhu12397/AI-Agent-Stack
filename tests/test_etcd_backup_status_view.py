@@ -400,3 +400,97 @@ def test_an_unverified_or_unfinished_upgrade_offers_no_restore_point():
     body = client.get(URL.format(deployment.id)).data
 
     assert body["restore_point"] is None
+
+
+RUN_URL = "/api/v1/cluster-deployments/{}/etcd-backup/run/"
+
+
+@pytest.mark.django_db
+def test_an_operator_can_queue_a_backup_now_without_an_approval():
+    _, tenant, project, target, deployment, client = _workspace()
+
+    response = client.post(RUN_URL.format(deployment.id))
+
+    assert response.status_code == 202
+    assert response.data["created"] is True
+    assert response.data["status"] == AgentCommand.Status.QUEUED
+    command = AgentCommand.objects.get(pk=response.data["command_id"])
+    assert command.command_type == contract.ACTION
+    assert command.node_id == target.id
+    assert command.payload["cluster_name"] == "lab"
+    assert command.status == AgentCommand.Status.QUEUED
+
+
+@pytest.mark.django_db
+def test_pressing_back_up_now_twice_in_one_hour_takes_one_snapshot():
+    _, tenant, project, _, deployment, client = _workspace()
+
+    first = client.post(RUN_URL.format(deployment.id)).data
+    second = client.post(RUN_URL.format(deployment.id)).data
+
+    assert second["command_id"] == first["command_id"]
+    assert second["created"] is False
+    assert second["code"] == "ETCD_BACKUP_ALREADY_QUEUED"
+    assert AgentCommand.objects.filter(command_type=contract.ACTION).count() == 1
+
+
+@pytest.mark.django_db
+def test_an_operator_run_carries_the_same_policy_and_protection_the_scheduler_would():
+    user, tenant, project, target, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup_keep_count": 12}}
+    deployment.save(update_fields=["spec"])
+    snapshot = "snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={"snapshot_path": "/var/lib/etcd/backups/" + snapshot},
+        status=AgentCommand.Status.RUNNING,
+        idempotency_key="protect-on-manual-run",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    command = AgentCommand.objects.get(
+        pk=client.post(RUN_URL.format(deployment.id)).data["command_id"]
+    )
+
+    assert command.payload["keep_count"] == 12
+    assert command.payload["protect"] == [snapshot]
+
+
+@pytest.mark.django_db
+def test_a_cluster_with_backups_switched_off_cannot_be_backed_up_on_demand():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup": False}}
+    deployment.save(update_fields=["spec"])
+
+    response = client.post(RUN_URL.format(deployment.id))
+
+    assert response.status_code == 409
+    assert response.data["code"] == "ETCD_BACKUP_DISABLED"
+    assert AgentCommand.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_a_cluster_without_a_target_agent_cannot_be_backed_up_on_demand():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.target_node = None
+    deployment.save(update_fields=["target_node"])
+
+    response = client.post(RUN_URL.format(deployment.id))
+
+    assert response.status_code == 409
+    assert response.data["code"] == "ETCD_BACKUP_NO_TARGET_AGENT"
+
+
+@pytest.mark.django_db
+def test_a_stranger_cannot_queue_a_backup():
+    _, _, _, _, deployment, _ = _workspace()
+    stranger = get_user_model().objects.create_user(username="status-stranger", password="x")
+    client = APIClient()
+    client.force_authenticate(user=stranger)
+
+    assert client.post(RUN_URL.format(deployment.id)).status_code == 404
