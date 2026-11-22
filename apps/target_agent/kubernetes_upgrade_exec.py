@@ -149,11 +149,27 @@ class UpgradeExecutor:
         return str(((node.get("status") or {}).get("nodeInfo") or {}).get("kubeletVersion") or "")
 
     @staticmethod
-    def _on_target(version: str, target: str) -> bool:
-        """Whether a node already reports the target minor (retry-safe skip)."""
+    def _version_triplet(version: str) -> tuple[int, int, int] | None:
+        match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", (version or "").strip())
+        if not match:
+            return None
+        return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
-        prefix = ".".join(target.split(".")[:2])
-        return bool(version) and version.startswith(prefix)
+    @classmethod
+    def _on_target(cls, version: str, target: str) -> bool:
+        """Whether a node already runs at least the requested version.
+
+        Comparing minors only treated ``v1.34.0`` as done when the request
+        asked for ``v1.34.3``: a patch release an operator explicitly named was
+        never installed and the run reported success. The whole triplet is
+        compared, so a node is skipped only when it is at or above the target.
+        """
+
+        node = cls._version_triplet(version)
+        wanted = cls._version_triplet(target)
+        if node is None or wanted is None:
+            return False
+        return node >= wanted
 
     def _local_control_plane(self, names: list[str]) -> str:
         """Which control plane this agent runs beside.

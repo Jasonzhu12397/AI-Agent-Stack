@@ -756,3 +756,44 @@ def test_a_supplied_snapshot_outside_the_etcd_mount_blocks_with_the_fix_named(
     assert not [
         call for call in runner.calls if "snapshot" in call and "status" in call
     ]
+
+
+def test_a_node_on_a_lower_patch_is_not_treated_as_done(monkeypatch):
+    """v1.34.0 must not satisfy a request for v1.34.3."""
+
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    nodes = _nodes(
+        ("cp-0", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.10", "v1.34.0"),
+        ("w-0", {}, "10.0.0.20", "v1.34.0"),
+    )
+    runner = FakeRunner(nodes=nodes)
+    request = dict(REQUEST)
+    result = UpgradeExecutor(runner).run(request)
+
+    assert result["already_at_target"] is False
+    assert [
+        call for call in runner.calls if call[:3] == ["kubeadm", "upgrade", "apply"]
+    ] == [["kubeadm", "upgrade", "apply", "-y", request["target_version"]]]
+    assert ["kubectl", "drain", "w-0", "--ignore-daemonsets", "--delete-emptydir-data",
+            "--timeout=15m"] in runner.calls
+
+
+def test_a_node_above_the_target_is_skipped(monkeypatch):
+    """A host already past the requested patch keeps running what it has."""
+
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    nodes = _nodes(
+        ("cp-0", {"node-role.kubernetes.io/control-plane": ""}, "10.0.0.10", "v1.34.9"),
+        ("w-0", {}, "10.0.0.20", "v1.34.9"),
+    )
+    runner = FakeRunner(nodes=nodes)
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["already_at_target"] is True
+    assert result["upgrade_performed"] is False
+    # `kubeadm upgrade plan` is a read-only preflight and still runs.
+    assert not [
+        call
+        for call in runner.calls
+        if call[:3] in (["kubeadm", "upgrade", "apply"], ["kubeadm", "upgrade", "node"])
+    ]

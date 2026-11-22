@@ -285,6 +285,8 @@ class RollbackExecutor:
         if assessment["control_planes"] > 1:
             return self._run_multi(request, assessment)
         etcd_pod = assessment["etcd_pod"]
+        self._local_name = str(assessment.get("control_plane") or "")
+        local_target = [{"node": self._local_name}] if self._local_name else []
 
         self._restore_dir = restore_dir_for(request)
         self._member_backup = member_backup_for(self._restore_dir)
@@ -347,14 +349,17 @@ class RollbackExecutor:
         # the operator still has the pre-rollback member on disk.
         stop_kubelet = ["sudo", "systemctl", "stop", "kubelet"]
         if not self._execute(steps[2], stop_kubelet, STEP_TIMEOUT_SECONDS):
-            return self._result(
-                request, steps, preflight, performed, "ROLLBACK_KUBELET_STOP_FAILED"
+            steps[2]["detail"] = "the kubelet did not stop; the data directory was not touched"
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_KUBELET_STOP_FAILED",
+                targets=local_target,
             )
         old_member = f"{DEFAULT_ETCD_DATA_DIR}/member"
         move_old = ["sudo", "mv", old_member, self._member_backup]
         if not self._execute(steps[2], move_old, STEP_TIMEOUT_SECONDS):
-            return self._result(
-                request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED"
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED",
+                targets=local_target,
             )
         if not self._execute(
             steps[2],
@@ -370,21 +375,26 @@ class RollbackExecutor:
                 f"restored member could not be moved in; old data kept at "
                 f"{self._member_backup}"
             )
-            return self._result(request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED")
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED",
+                targets=local_target,
+            )
         steps[2]["status"] = "succeeded"
         performed.append("data_swap")
 
         start_kubelet = ["sudo", "systemctl", "start", "kubelet"]
         if not self._execute(steps[3], start_kubelet, STEP_TIMEOUT_SECONDS):
-            return self._result(
-                request, steps, preflight, performed, "ROLLBACK_KUBELET_START_FAILED"
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_KUBELET_START_FAILED",
+                targets=local_target,
             )
         api_ok, api_detail = self._wait_for_api()
         steps[3]["detail"] = api_detail
         if not api_ok:
             steps[3]["status"] = "failed"
-            return self._result(
-                request, steps, preflight, performed, "ROLLBACK_API_UNAVAILABLE"
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_API_UNAVAILABLE",
+                targets=local_target,
             )
         steps[3]["status"] = "succeeded"
         performed.append("kubelet_restart")
@@ -810,6 +820,7 @@ class RollbackExecutor:
         stop_order = [item for item in members if item["node"] != local_name] + [
             item for item in members if item["node"] == local_name
         ]
+        stopped: list[dict[str, str]] = []
         for member in stop_order:
             if not self._execute(
                 steps[2],
@@ -819,9 +830,14 @@ class RollbackExecutor:
                 ),
                 STEP_TIMEOUT_SECONDS,
             ):
-                return self._result(
-                    request, steps, preflight, performed, "ROLLBACK_KUBELET_STOP_FAILED"
+                steps[2]["detail"] = (
+                    f"{member['node']}: the kubelet did not stop; no data was swapped"
                 )
+                return self._fail(
+                    request, steps, preflight, performed, "ROLLBACK_KUBELET_STOP_FAILED",
+                    targets=stopped,
+                )
+            stopped.append(member)
         old_member = f"{DEFAULT_ETCD_DATA_DIR}/member"
         for member in members:
             local = member["node"] == local_name
@@ -832,9 +848,10 @@ class RollbackExecutor:
                 ),
                 STEP_TIMEOUT_SECONDS,
             ):
-                self._restore_swapped(swapped)
-                return self._result(
-                    request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED"
+                steps[2]["detail"] = f"{member['node']}: the live data could not be moved aside"
+                return self._fail(
+                    request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED",
+                    targets=stopped, swapped=swapped,
                 )
             if not self._execute(
                 steps[2],
@@ -854,13 +871,13 @@ class RollbackExecutor:
                     ),
                     STEP_TIMEOUT_SECONDS,
                 )
-                self._restore_swapped(swapped)
                 steps[2]["detail"] = (
                     f"{member['node']}: restored member could not be moved in; "
                     f"old data kept at {self._member_backup}"
                 )
-                return self._result(
-                    request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED"
+                return self._fail(
+                    request, steps, preflight, performed, "ROLLBACK_SWAP_FAILED",
+                    targets=stopped, swapped=swapped,
                 )
             swapped.append(member)
         steps[2]["status"] = "succeeded"
@@ -869,24 +886,24 @@ class RollbackExecutor:
         start_order = [item for item in members if item["node"] == local_name] + [
             item for item in members if item["node"] != local_name
         ]
+        start_failed: list[str] = []
         for member in start_order:
-            if not self._execute(
-                steps[3],
-                self._on_member(
-                    member, ["sudo", "systemctl", "start", "kubelet"],
-                    local=member["node"] == local_name,
-                ),
-                STEP_TIMEOUT_SECONDS,
-            ):
-                return self._result(
-                    request, steps, preflight, performed, "ROLLBACK_KUBELET_START_FAILED"
-                )
+            if not self._start_kubelet(steps[3], member):
+                start_failed.append(member["node"])
+        if start_failed:
+            steps[3]["status"] = "failed"
+            steps[3]["detail"] = "kubelet did not start on " + ", ".join(start_failed)
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_KUBELET_START_FAILED",
+                targets=stopped,
+            )
         api_ok, api_detail = self._wait_for_api()
         steps[3]["detail"] = api_detail
         if not api_ok:
             steps[3]["status"] = "failed"
-            return self._result(
-                request, steps, preflight, performed, "ROLLBACK_API_UNAVAILABLE"
+            return self._fail(
+                request, steps, preflight, performed, "ROLLBACK_API_UNAVAILABLE",
+                targets=stopped,
             )
         steps[3]["status"] = "succeeded"
         performed.append("kubelet_restart")
@@ -898,7 +915,7 @@ class RollbackExecutor:
         steps[4]["detail"] = health_detail
         if not healthy:
             steps[4]["status"] = "failed"
-            return self._result(
+            return self._fail(
                 request, steps, preflight, performed, "ROLLBACK_POSTFLIGHT_FAILED"
             )
         try:
@@ -906,7 +923,7 @@ class RollbackExecutor:
         except RollbackExecutionError as error:
             steps[4]["status"] = "failed"
             steps[4]["detail"] = error.detail
-            return self._result(
+            return self._fail(
                 request, steps, preflight, performed, "ROLLBACK_POSTFLIGHT_FAILED"
             )
         steps[4]["commands"].append("kubectl get nodes -o json")
@@ -922,6 +939,84 @@ class RollbackExecutor:
         return self._result(
             request, steps, preflight, performed, None, versions=versions
         )
+
+    def _fail(
+        self,
+        request: dict[str, str],
+        steps: list[dict[str, Any]],
+        preflight: dict[str, Any],
+        performed: list[str],
+        failure: str,
+        *,
+        targets: list[dict[str, str]] = (),
+        swapped: list[dict[str, str]] = (),
+    ) -> dict[str, Any]:
+        """Return the refusal *and* put the cluster back into a running state.
+
+        A failed rollback must not leave kubelets stopped: the operator asked for
+        the old data back, and an etcd data directory that was already swapped
+        has to be restored before the kubelet starts against it. Both are tried
+        here, and what happened is reported instead of being left implicit.
+        """
+
+        if swapped:
+            self._restore_swapped(swapped)
+        started: list[str] = []
+        restart_failed: list[str] = []
+        order = [item for item in targets if item["node"] == self._local_name] + [
+            item for item in targets if item["node"] != self._local_name
+        ]
+        for member in order:
+            argv = self._on_member(
+                member,
+                ["sudo", "systemctl", "start", "kubelet"],
+                local=member["node"] == self._local_name,
+            )
+            result = self._run(argv, timeout=STEP_TIMEOUT_SECONDS)
+            if self._ok(result):
+                started.append(member["node"])
+            else:
+                restart_failed.append(member["node"])
+        api_ok, api_detail = self._wait_for_api()
+        result = self._result(request, steps, preflight, performed, failure)
+        result["recovery"] = {
+            "members_restored": [item["node"] for item in swapped],
+            "kubelets_started": started,
+            "kubelets_not_started": restart_failed,
+            "api_reachable": api_ok,
+            "detail": api_detail,
+            "next_step": (
+                "inspect the failed step, then start the kubelets listed in "
+                "kubelets_not_started by hand"
+                if restart_failed
+                else (
+                    "the kubelets are running but the apiserver does not answer; "
+                    "check etcd health and the kubelet logs on the members that "
+                    "were restarted with new data"
+                    if not api_ok
+                    else "the cluster is running on the pre-rollback data"
+                )
+            ),
+        }
+        return result
+
+    def _start_kubelet(self, step: dict[str, Any], member: dict[str, str]) -> bool:
+        """Start one kubelet without letting it overwrite the step verdict.
+
+        In a restart loop one failure must not mark the whole step failed while
+        the rest are still being started, so the command is recorded and the
+        caller decides the outcome.
+        """
+
+        argv = self._on_member(
+            member,
+            ["sudo", "systemctl", "start", "kubelet"],
+            local=member["node"] == self._local_name,
+        )
+        command = " ".join(argv)
+        if command not in step["commands"]:
+            step["commands"].append(command)
+        return self._ok(self._run(argv, timeout=STEP_TIMEOUT_SECONDS))
 
     def _restore_swapped(self, members: list[dict[str, str]]) -> None:
         """Put the pre-rollback member directory back on already-swapped members."""

@@ -553,3 +553,61 @@ def test_the_local_member_needs_no_ssh_at_all(monkeypatch):
     ]
     hosts = [call[-2] for call in reachable]
     assert hosts == ["operator@10.0.0.11", "operator@10.0.0.12"]
+
+
+def test_a_failed_swap_puts_the_kubelet_back():
+    """The old data is restored *and* the kubelet is running again."""
+
+    runner = RollbackRunner(fail_on=("sudo mv /var/lib/etcd/member /var/lib/etcd/member.pre",))
+    result = RollbackExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "ROLLBACK_SWAP_FAILED"
+    recovery = result["recovery"]
+    assert recovery["kubelets_started"] == ["cp-0"]
+    assert recovery["kubelets_not_started"] == []
+    assert recovery["api_reachable"] is True
+    assert recovery["next_step"] == "the cluster is running on the pre-rollback data"
+    # The restart happened after the failure, and the data was never left half moved.
+    start = [call for call in runner.calls if call[:3] == ["sudo", "systemctl", "start"]]
+    assert start == [["sudo", "systemctl", "start", "kubelet"]]
+
+
+def test_an_api_that_stays_down_still_reports_a_restarted_kubelet():
+    runner = RollbackRunner(api_after_start=False)
+    result = RollbackExecutor(runner, api_wait_attempts=1).run(REQUEST)
+
+    assert result["failure_code"] == "ROLLBACK_API_UNAVAILABLE"
+    assert result["recovery"]["kubelets_started"] == ["cp-0"]
+    assert result["recovery"]["api_reachable"] is False
+    # The operator is told what to do instead of being left with a stopped kubelet.
+    assert "apiserver does not answer" in result["recovery"]["next_step"]
+
+
+class OneStartFailsRunner(MultiRollbackRunner):
+    """A cluster where one member's kubelet refuses to come back."""
+
+    def __call__(self, argv, timeout=20, **kwargs):
+        if "systemctl start kubelet" in " ".join(argv) and "10.0.0.12" in " ".join(argv):
+            self.calls.append(list(argv))
+            return {"available": True, "returncode": 1, "stdout": "", "stderr": "job failed"}
+        return super().__call__(argv, timeout=timeout, **kwargs)
+
+
+def test_every_member_is_started_before_a_failure_is_reported(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = OneStartFailsRunner()
+    result = RollbackExecutor(runner, api_wait_attempts=1).run(REQUEST)
+
+    assert result["failure_code"] == "ROLLBACK_KUBELET_START_FAILED"
+    starts = [
+        call for call in runner.calls if "systemctl start kubelet" in " ".join(call)
+    ]
+    # Two attempts for every member: the ordered start and the recovery retry.
+    for address in ("10.0.0.11", "10.0.0.12"):
+        assert len([call for call in starts if address in " ".join(call)]) >= 2
+    assert len(starts) >= 4
+    recovery = result["recovery"]
+    assert recovery["kubelets_not_started"] == ["cp-2"]
+    assert set(recovery["kubelets_started"]) == {"cp-0", "cp-1"}
+    assert "start the kubelets" in recovery["next_step"]

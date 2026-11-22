@@ -163,9 +163,12 @@ Every node that will be reached over ssh must first pass `ssh.reachable/<node>`:
 preflight, because the local control plane is upgraded before the first remote
 hop, and an ssh failure after that leaves the cluster half upgraded.
 
-Nodes already reporting the target minor are skipped with a
+Nodes already at or above the target are skipped with a
 `<node>: already on <version>, skipped` note, so a retry after a mid-run failure
-does not repeat `kubeadm upgrade apply` or re-ssh into nodes that are done.
+does not repeat `kubeadm upgrade apply` or re-ssh into nodes that are done. The
+comparison is on the full `major.minor.patch` triple, not on the minor alone: a
+node on `v1.34.0` is not "already on" `v1.34.3`, because the kubeadm patch it
+still needs would otherwise never be installed while the run reported success.
 A retry of an upgrade that already finished changes nothing and says so:
 every node already on the target minor is skipped (workers are not drained
 again, `kubeadm upgrade apply` is not repeated), the run reports
@@ -260,11 +263,27 @@ result names where the data is kept.
 Package downgrades are out of scope: kubeadm has no supported downgrade path, so
 the binaries stay where they are and only control-plane state is restored.
 
+A rollback that fails part way does not leave the cluster down. Every failure
+path - the kubelet refusing to stop, the directory moves, a start that does not
+come up, an apiserver that never answers - runs the same recovery: previously
+swapped directories are moved back, and every member whose kubelet was stopped
+is started again, local members first. The result then carries `recovery` with
+`members_restored`, `kubelets_started`, `kubelets_not_started`, `api_reachable`
+and a `next_step` that names what a human still has to do, so a failed attempt
+either lands on the pre-rollback data with a running kubelet or states exactly
+which node is still down.
+
 Before anyone approves a rollback, `metal3_acceptance.py rollback` answers the
 same question read-only on a real cluster: one control plane, the node Ready, the
 snapshot readable from inside the etcd pod and its hash verifiable, etcd healthy.
 It shells `kubectl` only, never `sudo`, and the lab workflow runs it when
 `rollback_snapshot` is passed to the manual dispatch.
+
+The evidence file it writes (`evidence/rollback.json`, uploaded with the rest of
+`evidence/`) carries `members` for a stacked etcd so the approver sees which node
+and peer URL each restore targets, and `steps` with the same five stages and
+commands the executor would run. The approval decision is therefore made against
+the mutations themselves, not only against a pass/fail summary.
 
 ## Provisioning network defaults are derived, never borrowed
 

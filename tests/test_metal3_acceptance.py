@@ -214,8 +214,66 @@ def test_rollback_readiness_turns_executor_checks_into_evidence(monkeypatch, tmp
     payload = json.loads(out.read_text())
     assert payload["kind"] == "metal3-rollback-readiness"
     assert payload["status"] == "pass"
-    assert payload["control_plan\nes"] if False else payload["control_planes"] == 1
+    assert payload["control_planes"] == 1
     assert [check["name"] for check in payload["checks"]] == [
         "cluster.control_plane.count",
         "etcd.snapshot.verified",
     ]
+    assert payload["local_node"] == "cp-0"
+    # The approver sees the exact five stages before approving anything.
+    assert [step["name"] for step in payload["steps"]] == [
+        "preflight",
+        "etcd_restore",
+        "data_swap",
+        "kubelet_restart",
+        "postflight",
+    ]
+
+
+def test_rollback_evidence_lists_every_member_of_a_stacked_etcd(monkeypatch, tmp_path):
+    from target_agent import kubernetes_rollback_exec
+
+    assessed = {
+        "control_planes": 3,
+        "control_plane": "",
+        "etcd_pod": "",
+        "refusal": "",
+        "blocked": False,
+        "local_node": "cp-0",
+        "members": [
+            {"name": "cp-0", "node": "cp-0", "pod": "etcd-cp-0",
+             "peer_url": "https://10.0.0.10:2380", "address": "10.0.0.10"},
+            {"name": "cp-1", "node": "cp-1", "pod": "etcd-cp-1",
+             "peer_url": "https://10.0.0.11:2380", "address": "10.0.0.11"},
+            {"name": "cp-2", "node": "cp-2", "pod": "etcd-cp-2",
+             "peer_url": "https://10.0.0.12:2380", "address": "10.0.0.12"},
+        ],
+        "checks": [
+            {"name": "cluster.control_plane.count", "ok": True, "detail": "3 control plane(s)"},
+        ],
+    }
+    monkeypatch.setattr(
+        kubernetes_rollback_exec.RollbackExecutor,
+        "assess",
+        lambda self, request: assessed,
+    )
+    out = tmp_path / "rollback.json"
+    code = metal3_acceptance.main(
+        [
+            "rollback",
+            "--kubeconfig",
+            str(tmp_path / "target.kubeconfig"),
+            "--snapshot",
+            "/var/lib/etcd/backups/snapshot-pre-v1.34.1.db",
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(out.read_text())
+    assert [item["node"] for item in payload["members"]] == ["cp-0", "cp-1", "cp-2"]
+    assert payload["members"][1]["peer_url"] == "https://10.0.0.11:2380"
+    restore = next(step for step in payload["steps"] if step["name"] == "etcd_restore")
+    # One restore per member, each naming its own member and peer URL.
+    assert sum(1 for command in restore["commands"] if "--initial-cluster=" in command) == 3

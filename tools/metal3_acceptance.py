@@ -492,6 +492,8 @@ def command_rollback(args) -> int:
         RollbackExecutor,
     )
 
+    from packages.agent_contracts.kubernetes_rollback import simulation_plan
+
     request = {
         "cluster_name": args.cluster_name or "lab",
         "snapshot_path": args.snapshot,
@@ -520,6 +522,7 @@ def command_rollback(args) -> int:
         "control_plane": assessed["control_plane"],
         "etcd_pod": assessed["etcd_pod"],
         "refusal": assessed["refusal"],
+        "local_node": assessed.get("local_node", assessed.get("control_plane", "")),
         # A stacked etcd is restored member by member, so the evidence names
         # every member the restore would touch and where it lives.
         "members": [
@@ -532,6 +535,11 @@ def command_rollback(args) -> int:
             for item in assessed.get("members", [])
         ],
         "checks": checks,
+        # The approver reads the mutations here before approving the rollback,
+        # so the evidence carries the same step plan the executor would run.
+        "steps": simulation_plan(
+            request, members=tuple(assessed.get("members") or ())
+        )["steps"],
         "status": overall_status(checks),
     }
     if args.out:
