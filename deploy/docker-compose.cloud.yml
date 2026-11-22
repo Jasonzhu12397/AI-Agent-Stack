@@ -48,6 +48,36 @@ services:
       retries: 10
       start_period: 60s
 
+  etcd-backup-scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${AI_AGENT_API_IMAGE:-ai-agent-api:local}
+    env_file:
+      - ../.env.cloud
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      ETCD_BACKUP_INTERVAL_SECONDS: ${ETCD_BACKUP_INTERVAL_SECONDS:-3600}
+    command:
+      - sh
+      - -c
+      - >-
+        while true; do
+        python apps/platform-api/manage.py queue_etcd_backups || true;
+        sleep "$${ETCD_BACKUP_INTERVAL_SECONDS}";
+        done
+    networks:
+      - default
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api:
+        condition: service_healthy
+
   worker:
     build:
       context: ..

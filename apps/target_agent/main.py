@@ -14,6 +14,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from packages.agent_contracts.etcd_backup import (
+    ACTION as BACKUP_ACTION,
+)
+from packages.agent_contracts.etcd_backup import (
+    STATUS_ACTION as BACKUP_STATUS_ACTION,
+)
+from packages.agent_contracts.etcd_backup import (
+    EtcdBackupError,
+)
+from packages.agent_contracts.etcd_backup import (
+    validate_request as validate_etcd_backup,
+)
 from packages.agent_contracts.host_network_observe import HostNetworkObserveError
 from packages.agent_contracts.host_network_probe import collect_local_host_networks
 from packages.agent_contracts.kubernetes_rollback import (
@@ -55,6 +67,7 @@ from packages.agent_transport import (
 
 from .capi_pivot import execute_capi_pivot
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
+from .etcd_backup_exec import EtcdBackupExecutor
 from .handoff import (
     HandoffError,
     HandoffPhase,
@@ -1590,6 +1603,86 @@ def execute(
                 "output": {},
                 "side_effects": False,
             }
+    if action == BACKUP_ACTION:
+        try:
+            backup_request = validate_etcd_backup(
+                command.get("payload", {}),
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+        except EtcdBackupError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        if backup_request["execution_mode"] != "execute":
+            from packages.agent_contracts.etcd_backup import (
+                simulation_plan as backup_simulation_plan,
+            )
+
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": backup_simulation_plan(backup_request),
+                "side_effects": False,
+            }
+        executor = EtcdBackupExecutor(_run_read_only)
+        try:
+            backup_result = executor.run(backup_request)
+        except Exception as exc:  # the executor names its own refusals
+            code = getattr(exc, "code", "ETCD_BACKUP_EXECUTION_FAILED")
+            detail = getattr(exc, "detail", str(exc))
+            return {
+                "status": "blocked",
+                "error_code": code,
+                "output": {"detail": detail},
+                "side_effects": False,
+            }
+        if backup_result["failure_code"]:
+            return {
+                "status": "failed",
+                "error_code": backup_result["failure_code"],
+                "output": backup_result,
+                "side_effects": True,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": backup_result,
+            "side_effects": True,
+        }
+    if action == BACKUP_STATUS_ACTION:
+        try:
+            status_request = validate_etcd_backup(
+                command.get("payload", {}),
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+        except EtcdBackupError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
+        executor = EtcdBackupExecutor(_run_read_only)
+        try:
+            report = executor.status(status_request)
+        except Exception as exc:
+            code = getattr(exc, "code", "ETCD_BACKUP_STATUS_FAILED")
+            detail = getattr(exc, "detail", str(exc))
+            return {
+                "status": "blocked",
+                "error_code": code,
+                "output": {"detail": detail},
+                "side_effects": False,
+            }
+        return {
+            "status": "succeeded" if report["ok"] else "failed",
+            "error_code": None if report["ok"] else "ETCD_BACKUP_STALE",
+            "output": report,
+            "side_effects": False,
+        }
     if action == READINESS_ACTION:
         # Read-only: reports which upgrade variables are present and whether the
         # binaries exist. It never echoes a value and never touches the cluster.

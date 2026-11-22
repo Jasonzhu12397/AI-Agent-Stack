@@ -330,3 +330,35 @@ profile and records it as `network-profile.yaml` in the output directory. `verif
 then derives the host links to check from the recorded profile instead of a
 hand-written list, so the links that are verified are exactly the bonds and VLAN
 interfaces cloud-init brings up (`--required-link` remains available to override).
+
+## etcd backups run unattended, and pruning is part of the backup
+
+`cluster.kubernetes.backup.run` takes an `etcdctl snapshot save` of the etcd
+static Pod into `/var/lib/etcd/backups/<cluster_name>-<yyyyMMddTHHMMSSZ>.db`. It
+writes to `<name>.partial` first and only renames after `snapshot status`
+verifies the file, so a listing never shows a truncated backup. A failed verify
+removes the partial file and stops before retention, which means a broken backup
+never causes an old good one to be deleted.
+
+Retention is expressed in the request, not in a config file, so the scheduler is
+the single place that decides policy: `keep_count` (default 12, floor 2, ceiling
+168), `keep_max_age_hours` (default 8760, i.e. count-only unless a caller asks
+otherwise) and `max_age_hours` (default 26, used only to flag staleness). The
+pruner never deletes the newest file, never deletes a file younger than
+`MIN_AGE_HOURS` (1) and never deletes a file in the caller's `protect` set, so a
+snapshot a rollback is holding stays put.
+
+`execute` requires `confirm_cluster_name` echoing `cluster_name` and needs no
+human approval: a backup that waits for a person is not a backup. It is still a
+mutating command, so it takes a lease and runs at most once.
+`cluster.kubernetes.backup.status` is read-only and answers with the newest
+backup name, its age in hours, the prunable set and a `ETCD_BACKUP_STALE` /
+`ETCD_BACKUP_MISSING` finding, which is what a monitoring check should poll.
+
+Nothing calls the run command by hand. `queue_etcd_backups` walks every
+`ClusterDeployment` in `succeeded` with a Target Agent and queues one command per
+hour bucket, idempotent per cluster, skipping clusters whose spec carries
+`kubernetes.etcd_backup: false`. `deploy/docker-compose.yml` and
+`deploy/docker-compose.cloud.yml` ship an `etcd-backup-scheduler` service that
+runs it every `ETCD_BACKUP_INTERVAL_SECONDS` (default 3600). An external cron may
+run the same command instead; the hour bucket keeps duplicate runs harmless.

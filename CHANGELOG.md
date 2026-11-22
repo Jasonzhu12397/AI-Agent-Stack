@@ -4,6 +4,22 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Unattended etcd backups: `cluster.kubernetes.backup.run` writes
+  `etcdctl snapshot save` into `/var/lib/etcd/backups/<cluster>-<UTC>.db` through a
+  `.partial` file that only becomes visible after `snapshot status` verifies it,
+  then prunes by count and by age while never deleting the newest backup, never
+  deleting anything younger than one hour and never deleting a snapshot a
+  rollback is holding. `cluster.kubernetes.backup.status` reports the newest
+  backup without touching anything.
+- `queue_etcd_backups` management command and an `etcd-backup-scheduler` compose
+  service: every succeeded Target cluster gets one backup command per hour bucket,
+  idempotent per cluster, skipping a cluster whose spec sets
+  `kubernetes.etcd_backup: false` or that has no Target Agent.
+
 ## [1.0.0] — 2026-11-22
 
 The first release that is deployable as a product: the SaaS Agent platform and

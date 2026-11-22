@@ -109,6 +109,10 @@ MUTATING_COMMANDS = {
     "target.eph.cleanup",
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
+    # A recurring snapshot writes files on the host, so it is treated as
+    # mutating for lease/at-most-once purposes, but it needs no human approval:
+    # backups have to run without a person watching.
+    "cluster.kubernetes.backup.run",
 }
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
