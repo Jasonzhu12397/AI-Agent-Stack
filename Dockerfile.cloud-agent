@@ -5,8 +5,9 @@ COPY pyproject.toml README.md ./
 COPY apps/platform-api ./apps/platform-api
 COPY apps/worker ./apps/worker
 COPY apps/__init__.py ./apps/__init__.py
-COPY packages/__init__.py ./packages/__init__.py
-COPY packages/agent_contracts ./packages/agent_contracts
+# The whole shared package tree ships, not a hand-listed subset: a new module
+# under packages/ must never break an image that forgot to copy it.
+COPY packages ./packages
 RUN pip install .
 CMD ["python", "-m", "worker_app.main"]
 USER 10001:10001
