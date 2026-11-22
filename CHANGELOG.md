@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A failed backup command no longer blocks the hour: a retry is queued under
+  `<key>:retry:<n>`, while a live retry or a successful command is still
+  returned instead of duplicated.
 - The pre-upgrade snapshot is staged: written as `*.db.partial`, verified there,
   and renamed only afterwards; a failed save or verify deletes it so an
   unreadable file can never be offered as a restore point.

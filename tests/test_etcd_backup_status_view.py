@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from unittest.mock import patch
 
 import pytest
 from core.etcd_backup_state import etcd_backup_state
@@ -710,3 +711,61 @@ def test_a_stuck_command_beyond_the_history_window_is_still_found():
     assert state["run_stuck_hours"] is not None
     assert 19 < state["run_stuck_hours"] < 21
     assert any(finding["code"] == "ETCD_BACKUP_RUN_STUCK" for finding in state["findings"])
+
+
+@pytest.mark.django_db
+def test_a_failed_command_does_not_block_a_retry_in_the_same_hour():
+    user, tenant, project, target, deployment, client = _workspace()
+    dead = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.FAILED,
+        idempotency_key=f"etcd-backup:{deployment.id}:20261123T02",
+        plan_hash="5" * 64,
+        deployment=deployment,
+    )
+    # Freeze the bucket so the key the view builds is the one above.
+    url = f"/api/v1/cluster-deployments/{deployment.id}/etcd-backup/run/"
+    with patch("core.etcd_backup_queue.hour_bucket", return_value="20261123T02"):
+        first = client.post(url)
+        second = client.post(url)
+
+    assert first.status_code == 202
+    assert first.data["created"] is True
+    assert first.data["code"] == ""
+    assert first.data["command_id"] != str(dead.id)
+    # The retry itself is idempotent: a double click returns the same command.
+    assert second.data["created"] is False
+    assert second.data["command_id"] == first.data["command_id"]
+    assert (
+        AgentCommand.objects.filter(deployment=deployment, status="queued").count() == 1
+    )
+
+
+@pytest.mark.django_db
+def test_a_live_command_in_the_hour_still_wins_over_a_retry():
+    user, tenant, project, target, deployment, client = _workspace()
+    live = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key=f"etcd-backup:{deployment.id}:20261123T02",
+        plan_hash="6" * 64,
+        deployment=deployment,
+    )
+
+    url = f"/api/v1/cluster-deployments/{deployment.id}/etcd-backup/run/"
+    with patch("core.etcd_backup_queue.hour_bucket", return_value="20261123T02"):
+        response = client.post(url)
+
+    assert response.data["created"] is False
+    assert response.data["command_id"] == str(live.id)
+    assert response.data["code"] == "ETCD_BACKUP_ALREADY_QUEUED"

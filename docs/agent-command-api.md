@@ -560,3 +560,13 @@ save or to read back is deleted, so a corrupt snapshot can never carry a real
 snapshot name and be offered as a restore point by the next listing; a rename
 that fails leaves the verified `.partial` in place and blocks the upgrade with
 its path in the detail.
+
+### A dead command does not block the hour
+
+The hourly idempotency key stops two snapshots of the same data, but it must not
+stop a retry: when the command for this bucket already ended `failed` or
+`cancelled`, `POST .../etcd-backup/run/` (and the scheduler) queue a new command
+under `<key>:retry:<n>` instead of handing back the dead one, so an operator in
+the middle of an incident does not have to wait for the next hour. A live retry
+already covering the bucket is returned rather than duplicated, so double
+clicks stay idempotent.
