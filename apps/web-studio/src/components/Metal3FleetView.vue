@@ -17,6 +17,8 @@ import {
   verifyFleetMachineNetwork,
   getProjectAgentCommands,
   getClusterDeployments,
+  getClusterDeploymentEtcdBackup,
+  type EtcdBackupState,
   getProjects,
   getTenants,
   getLabWorkflow,
@@ -87,6 +89,11 @@ const selectedKubernetesVersions = ref<Record<string, string>>({});
 // still needs approval before the Agent runs anything.
 const selectedUpgradeModes = ref<Record<string, "simulation" | "execute">>({});
 const upgradeModes = ["simulation", "execute"] as const;
+// Backups run on the platform scheduler; this panel only reads what the
+// Target Agent reported, so an operator can see the newest snapshot and its age.
+const backupStates = ref<Record<string, EtcdBackupState>>({});
+const backupBusy = ref<string | null>(null);
+const backupMessages = ref<Record<string, string>>({});
 const readinessBusy = ref<string | null>(null);
 const readinessMessages = ref<Record<string, string>>({});
 const recoveryBusy = ref<string | null>(null);
@@ -719,6 +726,28 @@ function upgradeReadinessCommand(deployment: ClusterDeployment): AgentCommand | 
 function upgradeReadinessOutput(deployment: ClusterDeployment): Record<string, unknown> | null {
   const command = upgradeReadinessCommand(deployment);
   return command && command.result ? command.result : null;
+}
+
+async function loadEtcdBackup(deployment: ClusterDeployment) {
+  backupBusy.value = deployment.id;
+  backupMessages.value[deployment.id] = "";
+  try {
+    backupStates.value[deployment.id] = await getClusterDeploymentEtcdBackup(deployment.id);
+  } catch (cause) {
+    backupMessages.value[deployment.id] =
+      cause instanceof Error ? cause.message : "Unable to read the backup state.";
+  } finally {
+    backupBusy.value = null;
+  }
+}
+
+function backupAgeLabel(state: EtcdBackupState | undefined): string {
+  if (!state || state.newest_age_hours === null || state.newest_age_hours === undefined) {
+    return "no snapshot yet";
+  }
+  if (state.newest_age_hours < 1) return "minutes old";
+  if (state.newest_age_hours < 48) return state.newest_age_hours.toFixed(1) + "h old";
+  return (state.newest_age_hours / 24).toFixed(1) + "d old";
 }
 
 async function checkUpgradeReadiness(deployment: ClusterDeployment): Promise<void> {
@@ -1496,6 +1525,33 @@ onUnmounted(() => {
         <div class="fleet-panel-heading"><h3>Target Cluster Delivery</h3><span>{{ deployments.length }} WORKFLOWS</span></div>
         <el-table :data="deployments" size="small" class="task-table">
           <el-table-column prop="cluster_name" label="Cluster" min-width="150" />
+          <el-table-column label="etcd Backups" min-width="240">
+            <template #default="scope">
+              <el-button
+                size="small"
+                text
+                :loading="backupBusy === scope.row.id"
+                @click="loadEtcdBackup(scope.row)"
+              >Backups</el-button>
+              <template v-if="backupStates[scope.row.id]">
+                <el-tag
+                  :type="backupStates[scope.row.id].stale ? 'warning' : 'success'"
+                  size="small"
+                  effect="plain"
+                >{{ backupStates[scope.row.id].stale ? "stale" : "fresh" }}</el-tag>
+                <small class="fleet-version-current">
+                  {{ backupStates[scope.row.id].newest?.name || "no snapshot yet" }}
+                  · {{ backupAgeLabel(backupStates[scope.row.id]) }}
+                </small>
+                <small
+                  v-for="finding in backupStates[scope.row.id].findings.filter((item) => !item.ok)"
+                  :key="scope.row.id + finding.code"
+                  class="readiness-blocked"
+                >{{ finding.code }}: {{ finding.detail }}</small>
+              </template>
+              <small v-if="backupMessages[scope.row.id]" class="readiness-blocked">{{ backupMessages[scope.row.id] }}</small>
+            </template>
+          </el-table-column>
           <el-table-column label="Kubernetes Version" min-width="310">
             <template #default="scope">
               <div class="fleet-version-control">

@@ -1,0 +1,182 @@
+"""The platform answer to "when did this cluster last back up?"."""
+
+from __future__ import annotations
+
+import datetime
+
+import pytest
+from core.models import (
+    AgentCommand,
+    AgentNode,
+    ClusterDeployment,
+    Project,
+    ProjectMembership,
+    Tenant,
+    TenantMembership,
+)
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from packages.agent_contracts import etcd_backup as contract
+
+URL = "/api/v1/cluster-deployments/{}/etcd-backup/"
+
+
+def _workspace():
+    user = get_user_model().objects.create_user(username="status-admin", password="x")
+    tenant = Tenant.objects.create(name="Status tenant", slug="status-tenant")
+    TenantMembership.objects.create(
+        tenant=tenant, user=user, role=TenantMembership.Role.OWNER
+    )
+    project = Project.objects.create(tenant=tenant, name="Status project", slug="status-project")
+    ProjectMembership.objects.create(
+        project=project, user=user, role=ProjectMembership.Role.ADMIN
+    )
+    eph = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="eph-status",
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash="e" * 64,
+    )
+    target = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-status",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        credential_hash="t" * 64,
+    )
+    deployment = ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=eph,
+        target_node=target,
+        requested_by=user,
+        cluster_name="lab",
+        kubernetes_version="v1.37.2",
+        idempotency_key="status-key",
+        status=ClusterDeployment.Status.SUCCEEDED,
+        spec={},
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return user, tenant, project, target, deployment, client
+
+
+def _command(tenant, project, target, user, deployment, *, names, when, status="succeeded"):
+    hours_ago = (timezone.now() - when).total_seconds() / 3600
+    result = {
+        "backup": {"name": names[0], "verified": True} if names else None,
+        "kept": names,
+        "count": len(names),
+        "failure_code": None,
+        "cluster_name": "lab",
+    }
+    return AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.ACTION,
+        payload={"cluster_name": "lab"},
+        status=status,
+        idempotency_key=f"run-{hours_ago:.2f}",
+        plan_hash="0" * 64,
+        result=result,
+        deployment=deployment,
+        finished_at=when,
+    )
+
+
+@pytest.mark.django_db
+def test_a_cluster_without_a_backup_says_so():
+    _, _, _, _, deployment, client = _workspace()
+
+    response = client.get(URL.format(deployment.id))
+
+    assert response.status_code == 200
+    body = response.data
+    assert body["ok"] is False
+    assert body["stale"] is True
+    assert body["last_run"] is None
+    assert body["policy"]["valid"] is True
+    assert body["policy"]["keep_count"] == contract.MIN_KEEP_COUNT
+    assert body["findings"][0]["code"] == "ETCD_BACKUP_NOT_RUN_YET"
+
+
+@pytest.mark.django_db
+def test_a_fresh_backup_is_not_stale_and_the_policy_comes_from_the_spec():
+    user, tenant, project, target, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup_keep_count": 12}}
+    deployment.save(update_fields=["spec"])
+    now = datetime.datetime.now(datetime.UTC)
+    name = contract.backup_filename("lab", now=now - datetime.timedelta(hours=2))
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[name],
+        when=now - datetime.timedelta(hours=2),
+    )
+
+    response = client.get(URL.format(deployment.id))
+
+    body = response.data
+    assert body["policy"]["keep_count"] == 12
+    assert body["newest"]["name"] == name
+    assert 1.5 < body["newest_age_hours"] < 2.5
+    assert body["stale"] is False
+    assert body["ok"] is True
+    assert body["prunable"] == []
+
+
+@pytest.mark.django_db
+def test_an_old_backup_is_reported_stale_and_still_usable():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    name = contract.backup_filename("lab", now=now - datetime.timedelta(hours=50))
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[name],
+        when=now - datetime.timedelta(hours=50),
+    )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["stale"] is True
+    assert body["newest"]["name"] == name
+    assert any(item["code"] == "ETCD_BACKUP_STALE" for item in body["findings"])
+
+
+@pytest.mark.django_db
+def test_an_invalid_policy_is_reported_before_any_backup_runs():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup_keep_count": 1}}
+    deployment.save(update_fields=["spec"])
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["policy"]["valid"] is False
+    assert body["policy"]["error"]["code"] == "ETCD_BACKUP_RETENTION_INVALID"
+    assert body["findings"][0]["code"] == "ETCD_BACKUP_RETENTION_INVALID"
+
+
+@pytest.mark.django_db
+def test_a_stranger_cannot_see_the_deployment_at_all():
+    _, tenant, project, _, deployment, _ = _workspace()
+    outsider = get_user_model().objects.create_user(username="outsider", password="x")
+    client = APIClient()
+    client.force_authenticate(user=outsider)
+
+    response = client.get(URL.format(deployment.id))
+
+    assert response.status_code == 404

@@ -362,3 +362,14 @@ hour bucket, idempotent per cluster, skipping clusters whose spec carries
 `deploy/docker-compose.cloud.yml` ship an `etcd-backup-scheduler` service that
 runs it every `ETCD_BACKUP_INTERVAL_SECONDS` (default 3600). An external cron may
 run the same command instead; the hour bucket keeps duplicate runs harmless.
+
+`GET /api/v1/cluster-deployments/<deployment_id>/etcd-backup/` answers the same
+question from the platform side without touching the cluster: the policy this
+deployment declares (`kubernetes.etcd_backup`, `etcd_backup_keep_count`,
+`etcd_backup_keep_max_age_hours`, `etcd_backup_max_age_hours`,
+`etcd_backup_directory`, all validated by the backup contract), the newest
+reported snapshot and its age, whether it is stale, the prunable set and the
+findings. A deployment with `kubernetes.etcd_backup: false` reports that the
+scheduler will not queue anything; a policy the contract refuses is reported as
+`valid: false` with the contract error code, so an operator sees a bad
+`etcd_backup_keep_count: 1` at config time instead of at 3 a.m.

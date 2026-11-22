@@ -1069,6 +1069,48 @@ export function syncClusterDeploymentEphPreflight(
   );
 }
 
+export type EtcdBackupCommandSummary = {
+  command_id: string;
+  status: string;
+  created_at: string | null;
+  finished_at: string | null;
+  backup: { name?: string; path?: string; verified?: boolean; taken_at?: string } | null;
+  pruned: string[];
+  count: number | null;
+  failure_code: string | null;
+  error: unknown;
+};
+
+export type EtcdBackupState = {
+  deployment_id: string;
+  cluster_name: string;
+  policy:
+    | {
+        enabled: boolean;
+        valid: true;
+        directory: string;
+        keep_count: number;
+        keep_max_age_hours: number;
+        max_age_hours: number;
+      }
+    | { enabled: boolean; valid: false; error: { code: string; message: string } };
+  last_run: EtcdBackupCommandSummary | null;
+  history: EtcdBackupCommandSummary[];
+  newest: { name: string; taken_at?: string } | null;
+  newest_age_hours: number | null;
+  stale: boolean;
+  ok: boolean;
+  count?: number;
+  prunable?: string[];
+  findings: Array<{ name: string; ok: boolean; code: string; detail: string }>;
+};
+
+export function getClusterDeploymentEtcdBackup(
+  deploymentId: string,
+): Promise<EtcdBackupState> {
+  return request("/api/v1/cluster-deployments/" + deploymentId + "/etcd-backup/");
+}
+
 export function getClusterDeployments(
   tenantId: string,
   projectId: string,

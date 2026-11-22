@@ -19,6 +19,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   service: every succeeded Target cluster gets one backup command per hour bucket,
   idempotent per cluster, skipping a cluster whose spec sets
   `kubernetes.etcd_backup: false` or that has no Target Agent.
+- `GET /api/v1/cluster-deployments/<id>/etcd-backup/` and a Backups column on
+  the Target Cluster Delivery table: declared retention policy, newest snapshot
+  and its age, staleness, prunable files and contract findings, all read from
+  what commands already reported.
 
 ## [1.0.0] — 2026-11-22
 
