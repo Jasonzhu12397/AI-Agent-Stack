@@ -436,7 +436,8 @@ def select_prunable(
     protected = set(protect)
     prunable = []
     seen_pre_upgrade = 0
-    for index, entry in enumerate(entries):
+    seen_periodic = 0
+    for entry in entries:
         taken_at = entry.get("_taken_at")
         if taken_at is None:
             continue
@@ -453,7 +454,11 @@ def select_prunable(
                 continue
             prunable.append(entry)
             continue
-        if index < keep:
+        # keep_count counts recurring snapshots, not positions in the whole
+        # listing: a few recent pre-upgrade files must not use up the slots and
+        # cause a periodic backup inside the count to be deleted.
+        seen_periodic += 1
+        if seen_periodic <= keep:
             continue
         if age < keep_age:
             continue

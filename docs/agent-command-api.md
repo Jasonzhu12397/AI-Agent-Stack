@@ -586,3 +586,7 @@ A deployment whose spec sets `kubernetes.etcd_backup: false` reports
 `enabled: false` with no findings, instead of painting "never backed up" over an
 intentional choice; the watchdog keeps reporting `ETCD_BACKUP_DISABLED` for it
 and does not audit it as a problem. The Delivery table says so in words.
+
+`keep_count` counts recurring snapshots, not listing positions: pre-upgrade
+files above them in the newest-first listing must not consume those slots and
+cause a periodic backup inside the count to be deleted.

@@ -690,3 +690,29 @@ def test_a_sweep_never_deletes_a_path_outside_the_directory():
 
     assert result["swept_partials"] == []
     assert not [call for call in runner.calls if "rm" in call]
+
+
+def test_pre_upgrade_snapshots_do_not_use_up_the_recurring_keep_count():
+    now = NOW
+    periodic = [
+        {"name": backup_filename("lab", now=now - timedelta(hours=2))},
+        {"name": backup_filename("lab", now=now - timedelta(hours=3))},
+        {"name": backup_filename("lab", now=now - timedelta(hours=4))},
+    ]
+    pre = [
+        {"name": f"snapshot-pre-lab-v1.38.0-{stamp}.db"}
+        for stamp in ("20261121T230000Z", "20261121T220000Z")
+    ]
+    entries = snapshot_entries(
+        [*pre, *periodic], cluster_name="lab"
+    )
+
+    prunable = select_prunable(
+        entries, keep_count=2, keep_max_age_hours=1, pre_upgrade_keep_max_age_hours=1000
+    )
+
+    # Two newest recurring snapshots stay even though two pre-upgrade files sit
+    # above them in the listing; only the third periodic file may go.
+    names = [entry["name"] for entry in prunable]
+    assert periodic[0]["name"] not in names
+    assert periodic[1]["name"] not in names
