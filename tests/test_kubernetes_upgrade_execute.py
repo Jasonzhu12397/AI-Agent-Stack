@@ -535,7 +535,13 @@ def test_an_unreadable_etcd_list_blocks_the_upgrade():
 
 
 def test_a_supplied_snapshot_is_reused_instead_of_taking_a_new_one(monkeypatch, tmp_path):
-    supplied = tmp_path / "etcd.db"
+    # The file must live where the etcd pod can read it; the lab's mount is
+    # /var/lib/etcd, so the test points the rule at its own directory.
+    from packages.agent_contracts import kubernetes_rollback
+
+    monkeypatch.setattr(kubernetes_rollback, "DEFAULT_ETCD_DATA_DIR", str(tmp_path))
+    supplied = tmp_path / "backups" / "etcd.db"
+    supplied.parent.mkdir(parents=True, exist_ok=True)
     supplied.write_bytes(b"snapshot")
     monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(supplied))
     runner = _nodes_with(_raw_nodes(), etcd=True)
@@ -558,7 +564,11 @@ def test_a_supplied_snapshot_is_reused_instead_of_taking_a_new_one(monkeypatch, 
 
 
 def test_a_supplied_snapshot_that_does_not_verify_blocks_the_upgrade(monkeypatch, tmp_path):
-    supplied = tmp_path / "etcd.db"
+    from packages.agent_contracts import kubernetes_rollback
+
+    monkeypatch.setattr(kubernetes_rollback, "DEFAULT_ETCD_DATA_DIR", str(tmp_path))
+    supplied = tmp_path / "backups" / "etcd.db"
+    supplied.parent.mkdir(parents=True, exist_ok=True)
     supplied.write_bytes(b"not a snapshot")
     monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(supplied))
     base = _nodes_with(_raw_nodes(), etcd=True)
@@ -725,3 +735,24 @@ def test_workers_already_on_the_target_are_not_drained_and_upgraded_again(monkey
     assert "every control plane already runs v1.34.1" in result["upgrade_steps"][1]["detail"]
     assert result["upgrade_steps"][2]["status"] == "skipped"
     assert "every worker already on v1.34.1" in result["upgrade_steps"][2]["detail"]
+
+
+def test_a_supplied_snapshot_outside_the_etcd_mount_blocks_with_the_fix_named(
+    monkeypatch, tmp_path,
+):
+    supplied = tmp_path / "elsewhere" / "etcd.db"
+    supplied.parent.mkdir(parents=True, exist_ok=True)
+    supplied.write_bytes(b"snapshot")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_ETCD_SNAPSHOT", str(supplied))
+    runner = _nodes_with(_raw_nodes(), etcd=True)
+
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
+    failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
+    assert "/var/lib/etcd" in failed["etcd.snapshot"]["detail"]
+    assert "move the snapshot under /var/lib/etcd/backups" in failed["etcd.snapshot"]["detail"]
+    # No pod probe was attempted for a file the pod cannot see.
+    assert not [
+        call for call in runner.calls if "snapshot" in call and "status" in call
+    ]

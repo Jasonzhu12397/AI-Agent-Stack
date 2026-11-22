@@ -201,7 +201,10 @@ looking degraded.
 A reused `KUBERNETES_UPGRADE_ETCD_SNAPSHOT` is verified the way a fresh one is:
 the run reads it with `etcdctl snapshot status` inside the etcd pod, so a file
 that exists but cannot be restored blocks the upgrade instead of passing on its
-mtime.
+mtime. The same rule as the rollback decides which paths that probe can reach:
+the etcd static pod mounts `/var/lib/etcd` only, so a supplied snapshot stored
+elsewhere is refused in preflight with the path it should be moved to, instead of
+failing inside the pod with a bare "no such file".
 
 ## Rollback restores the snapshot and keeps the old data
 

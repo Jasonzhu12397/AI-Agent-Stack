@@ -86,6 +86,24 @@ def validate_request(
 DEFAULT_ETCD_DATA_DIR = "/var/lib/etcd"
 
 
+def snapshot_pod_path_problem(path: str) -> str:
+    """Why the etcd pod cannot read a snapshot stored at ``path``, or "".
+
+    The etcd static pod mounts the host data directory and nothing else. A
+    snapshot anywhere else exists on the host and is invisible inside the pod,
+    so the restore that reads it there fails after the cluster has already been
+    touched. The upgrade and the rollback both ask this one question.
+    """
+
+    mount = DEFAULT_ETCD_DATA_DIR.rstrip("/")
+    if path.startswith(mount + "/"):
+        return ""
+    return (
+        f"{path} is outside {mount}, the only host path the etcd pod mounts; "
+        f"move the snapshot under {mount}/backups"
+    )
+
+
 def planned_steps(
     request: dict[str, str],
     *,

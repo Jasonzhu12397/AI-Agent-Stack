@@ -54,6 +54,12 @@ DRAIN_TIMEOUT_SECONDS = 900
 RunCommand = Callable[..., dict[str, Any]]
 
 
+def _snapshot_path_problem(path: str) -> str:
+    from packages.agent_contracts.kubernetes_rollback import snapshot_pod_path_problem
+
+    return snapshot_pod_path_problem(path)
+
+
 class UpgradeExecutionError(ValueError):
     """Raised before any durable change when the run cannot be started."""
 
@@ -521,6 +527,9 @@ class UpgradeExecutor:
                         "etcd.snapshot", False, f"{supplied} is not readable"
                     )
                 ]
+            problem = _snapshot_path_problem(supplied)
+            if problem:
+                return [self._check("etcd.snapshot", False, problem)]
             max_age = _snapshot_max_age_hours()
             taken = age_hours <= max_age
             # A file that exists is not a snapshot that can be restored: the

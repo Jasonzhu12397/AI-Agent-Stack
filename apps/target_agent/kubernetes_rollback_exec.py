@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from packages.agent_contracts.kubernetes_rollback import (
     DEFAULT_ETCD_DATA_DIR,
     planned_steps,
+    snapshot_pod_path_problem,
 )
 
 from .kubernetes_upgrade_exec import UpgradeExecutionError, UpgradeExecutor, _output
@@ -522,19 +523,12 @@ class RollbackExecutor:
     def _snapshot_in_pod_path(path: str) -> tuple[bool, str]:
         """Whether the etcd pod can reach a host path at all.
 
-        The etcd static pod mounts the host data directory and nothing else, so
-        a snapshot stored anywhere else is readable on the host and invisible
-        inside the pod - the restore would fail after the kubelets are already
-        stopped. Saying so in preflight keeps that from happening.
+        Delegates to the rule the upgrade path also uses, so the two operations
+        cannot disagree about which paths are readable inside the pod.
         """
 
-        mount = DEFAULT_ETCD_DATA_DIR.rstrip("/")
-        if not path.startswith(mount + "/"):
-            return False, (
-                f"{path} is outside {mount}, the only host path the etcd pod mounts; "
-                f"move the snapshot under {mount}/backups"
-            )
-        return True, ""
+        problem = snapshot_pod_path_problem(path)
+        return (not problem, problem)
 
     def _preflight_node_check(self, name: str, node: dict[str, Any] | None) -> dict[str, Any]:
         conditions = ((node or {}).get("status") or {}).get("conditions") or []
