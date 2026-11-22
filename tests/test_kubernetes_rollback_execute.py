@@ -9,10 +9,7 @@ from agent_contracts.kubernetes_rollback import (
     simulation_plan,
     validate_request,
 )
-from target_agent.kubernetes_rollback_exec import (
-    RollbackExecutionError,
-    RollbackExecutor,
-)
+from target_agent.kubernetes_rollback_exec import RollbackExecutor
 
 REQUEST = {
     "cluster_name": "edge-lab",
@@ -136,12 +133,20 @@ def test_a_single_control_plane_is_restored_and_the_old_data_kept():
     assert stop < order[0]
 
 
-def test_a_multi_control_plane_cluster_is_refused_before_anything_is_touched():
+def test_a_multi_control_plane_cluster_blocks_when_the_local_node_is_unknown(monkeypatch):
+    # A stacked etcd is restored member by member, which needs to know which
+    # member this agent owns; without that nothing is touched.
+    monkeypatch.delenv("KUBERNETES_UPGRADE_LOCAL_NODE", raising=False)
     runner = RollbackRunner(nodes=_nodes("v1.34.1", "v1.34.1", "v1.34.1"))
 
-    with pytest.raises(RollbackExecutionError) as raised:
-        RollbackExecutor(runner).run(REQUEST)
-    assert raised.value.code == "ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED"
+    result = RollbackExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "ROLLBACK_PREFLIGHT_BLOCKED"
+    assert result["rolled_back"] is False
+    assert any(
+        check["name"] == "local.node" and not check["ok"]
+        for check in result["preflight"]["checks"]
+    )
     assert not [call for call in runner.calls if call[:1] == ["sudo"]]
 
 
@@ -221,16 +226,19 @@ def test_assessment_is_read_only_and_names_the_refusal():
     assert not [call for call in runner.calls if "restore" in call]
 
 
-def test_assessment_reports_three_control_planes_without_touching_them():
+def test_assessment_reports_three_control_planes_without_touching_them(monkeypatch):
+    monkeypatch.delenv("KUBERNETES_UPGRADE_LOCAL_NODE", raising=False)
     runner = RollbackRunner(nodes=_nodes("v1.34.1", "v1.34.1", "v1.34.1"))
     assessed = RollbackExecutor(runner).assess(REQUEST)
 
     assert assessed["control_planes"] == 3
-    assert assessed["refusal"] == "ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED"
+    assert assessed["refusal"] == ""
     assert assessed["blocked"] is True
     assert [check["name"] for check in assessed["checks"]] == [
-        "cluster.control_plane.count"
+        "cluster.control_plane.count",
+        "local.node",
     ]
+    assert not [call for call in runner.calls if call[:1] == ["sudo"]]
 
 
 def test_a_step_never_lists_the_same_command_twice():
@@ -241,3 +249,129 @@ def test_a_step_never_lists_the_same_command_twice():
         assert len(step["commands"]) == len(set(step["commands"]))
     assert "sudo systemctl start kubelet" in result["steps"][3]["commands"]
     assert "sudo systemctl stop kubelet" in result["steps"][2]["commands"]
+
+def _multi_nodes():
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {
+                        "name": f"cp-{index}",
+                        "labels": {"node-role.kubernetes.io/control-plane": ""},
+                    },
+                    "status": {
+                        "addresses": [{"type": "InternalIP", "address": f"10.0.0.1{index}"}],
+                        "nodeInfo": {"kubeletVersion": "v1.34.1"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                }
+                for index in range(3)
+            ]
+        }
+    )
+
+
+def _multi_pods():
+    return json.dumps(
+        {
+            "items": [
+                {"metadata": {"name": f"etcd-cp-{index}"}, "spec": {"nodeName": f"cp-{index}"}}
+                for index in range(3)
+            ]
+        }
+    )
+
+
+def _multi_members():
+    return json.dumps(
+        {
+            "members": [
+                {
+                    "name": f"cp-{index}",
+                    "peerURLs": [f"https://10.0.0.1{index}:2380"],
+                }
+                for index in range(3)
+            ]
+        }
+    )
+
+
+class MultiRollbackRunner:
+    """Records every call and answers the way a three-member cluster would."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv, timeout=20, **kwargs):
+        self.calls.append(list(argv))
+        joined = " ".join(argv)
+        if argv[:2] == ["kubectl", "get"] and "nodes" in argv:
+            return {"available": True, "returncode": 0, "stdout": _multi_nodes(), "stderr": ""}
+        if "component=etcd" in joined:
+            return {"available": True, "returncode": 0, "stdout": _multi_pods(), "stderr": ""}
+        if "member" in argv and "list" in argv:
+            return {"available": True, "returncode": 0, "stdout": _multi_members(), "stderr": ""}
+        if "snapshot" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": '{"hash":"abc","revision":42}',
+                "stderr": "",
+            }
+        if "health" in argv:
+            return {"available": True, "returncode": 0, "stdout": "healthy", "stderr": ""}
+        return {"available": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+
+
+def test_a_three_member_etcd_is_restored_member_by_member(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_UPGRADE_LOCAL_NODE", "cp-0")
+    # Remote members are reached over ssh, so the executor's network hops are
+    # explicit: staging the snapshot, the restore, both moves, the kubelet.
+    monkeypatch.setenv("REMOTE_USER", "operator")
+    monkeypatch.setenv("KUBERNETES_UPGRADE_REMOTE_USER", "operator")
+    runner = MultiRollbackRunner()
+
+    result = RollbackExecutor(runner, api_wait_attempts=1).run(REQUEST)
+
+    assert result["failure_code"] is None
+    assert result["rolled_back"] is True
+    assert result["performed_steps"] == [
+        "preflight",
+        "etcd_restore",
+        "data_swap",
+        "kubelet_restart",
+        "postflight",
+    ]
+    # Six mutations (restore + existence check per member) plus, for the two
+    # remote members, the staging that makes the file readable in their pod.
+    assert len(result["steps"][1]["commands"]) == 12
+    # Every restore names the whole cluster and its own peer URL, so the three
+    # members come up as one cluster instead of three unrelated clusters.
+    restores = [call for call in runner.calls if "restore" in " ".join(call)]
+    assert len(restores) == 3
+    assert all("--initial-cluster=" in " ".join(call) for call in restores)
+    # Every restore runs locally through kubectl exec against that member's pod;
+    # the remote hosts only receive the snapshot and the directory swap.
+    assert all(call[:1] == ["kubectl"] for call in restores)
+    assert all(f"etcd-cp-{index}" in call for index, call in enumerate(restores))
+    scp = [call for call in runner.calls if call[:1] == ["scp"]]
+    assert len(scp) == 2
+    assert all(REQUEST["snapshot_path"] in " ".join(call) for call in scp)
+    # Every kubelet stops before the first directory moves.
+    stops = [
+        index
+        for index, call in enumerate(runner.calls)
+        if "systemctl" in " ".join(call) and "stop" in " ".join(call)
+    ]
+    swaps = [index for index, call in enumerate(runner.calls) if "mv" in " ".join(call)]
+    assert min(stops) < min(swaps)
+    assert len(stops) == 3
+    assert len([call for call in runner.calls if "stop kubelet" in " ".join(call)]) == 3
+    starts = [
+        index
+        for index, call in enumerate(runner.calls)
+        if "systemctl" in " ".join(call) and "start" in " ".join(call)
+    ]
+    assert len(starts) == 3
+    # The local member starts first so the quorum forms in a known order.
+    assert "cp-0" not in " ".join(runner.calls[starts[0]])

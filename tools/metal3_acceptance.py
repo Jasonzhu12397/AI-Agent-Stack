@@ -520,6 +520,17 @@ def command_rollback(args) -> int:
         "control_plane": assessed["control_plane"],
         "etcd_pod": assessed["etcd_pod"],
         "refusal": assessed["refusal"],
+        # A stacked etcd is restored member by member, so the evidence names
+        # every member the restore would touch and where it lives.
+        "members": [
+            {
+                "name": item["name"],
+                "node": item["node"],
+                "pod": item["pod"],
+                "peer_url": item["peer_url"],
+            }
+            for item in assessed.get("members", [])
+        ],
         "checks": checks,
         "status": overall_status(checks),
     }

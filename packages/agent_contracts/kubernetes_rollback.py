@@ -87,13 +87,25 @@ DEFAULT_ETCD_DATA_DIR = "/var/lib/etcd"
 
 
 def planned_steps(
-    request: dict[str, str], *, restore_dir: str = ""
+    request: dict[str, str],
+    *,
+    restore_dir: str = "",
+    members: tuple[dict[str, str], ...] = (),
 ) -> list[dict[str, Any]]:
-    """Every step with the commands it would run, derived from one request."""
+    """Every step with the commands it would run, derived from one request.
+
+    ``members`` describes a stacked etcd with more than one control plane: each
+    entry carries the member name, the node it runs on, the etcd pod on that
+    node and its peer URL. With one member (or none) the plan is the local
+    single-node sequence; with several, every mutation is listed per member so
+    the plan says exactly which node is touched.
+    """
 
     restore = restore_dir or f"{DEFAULT_ETCD_DATA_DIR}/rollback-<utc>"
     member_backup = f"{DEFAULT_ETCD_DATA_DIR}/member.pre-rollback-<utc>"
     etcd_pod = "<etcd-pod>"
+    if len(members) > 1:
+        return _multi_member_steps(request, restore, member_backup, members)
     return [
         {
             "sequence": 1,
@@ -154,7 +166,105 @@ def planned_steps(
     ]
 
 
-def simulation_plan(request: dict[str, str]) -> dict[str, Any]:
+def _initial_cluster(members: tuple[dict[str, str], ...]) -> str:
+    return ",".join(f"{item['name']}={item['peer_url']}" for item in members)
+
+
+def _member_step_preflight(members: tuple[dict[str, str], ...], snapshot: str) -> list[str]:
+    commands = [
+        "kubectl get nodes -o json",
+        "kubectl -n kube-system get pods -l component=etcd -o json",
+    ]
+    for item in members:
+        commands.append(
+            f"kubectl -n kube-system exec {item['pod']} -- etcdctl snapshot status "
+            f"{snapshot} --write-out=json"
+        )
+    return commands
+
+
+def _multi_member_steps(
+    request: dict[str, str],
+    restore: str,
+    member_backup: str,
+    members: tuple[dict[str, str], ...],
+) -> list[dict[str, Any]]:
+    """One plan for a stacked etcd: every member is restored from the same file.
+
+    Restoring a single member of a stacked etcd leaves the cluster with data
+    that disagrees with its peers, so the snapshot is put back on all of them,
+    their data directories are swapped while every kubelet is stopped, and they
+    are started one at a time so the quorum comes up in a known order.
+    """
+
+    cluster = _initial_cluster(members)
+    restore_commands: list[str] = []
+    swap_commands: list[str] = []
+    for item in members:
+        restore_commands.append(
+            f"kubectl -n kube-system exec {item['pod']} -- etcdctl snapshot restore "
+            f"{request['snapshot_path']} --data-dir={restore} --name={item['name']} "
+            f"--initial-cluster={cluster} "
+            f"--initial-advertise-peer-urls={item['peer_url']}"
+        )
+        restore_commands.append(f"sudo test -d {restore}/member")
+        swap_commands.append(f"sudo mv {DEFAULT_ETCD_DATA_DIR}/member {member_backup}")
+        swap_commands.append(f"sudo mv {restore}/member {DEFAULT_ETCD_DATA_DIR}/member")
+    stop_all = ["sudo systemctl stop kubelet"]
+    start_commands = ["sudo systemctl start kubelet", "kubectl get nodes -o json"]
+    return [
+        {
+            "sequence": 1,
+            "name": "preflight",
+            "status": "not_started",
+            "commands": _member_step_preflight(members, request["snapshot_path"]),
+            "exit_code": None,
+            "detail": "",
+        },
+        {
+            "sequence": 2,
+            "name": "etcd_restore",
+            "status": "not_started",
+            "commands": restore_commands,
+            "exit_code": None,
+            "detail": "",
+        },
+        {
+            "sequence": 3,
+            "name": "data_swap",
+            "status": "not_started",
+            "commands": [*stop_all, *swap_commands],
+            "exit_code": None,
+            "detail": "",
+        },
+        {
+            "sequence": 4,
+            "name": "kubelet_restart",
+            "status": "not_started",
+            "commands": start_commands,
+            "exit_code": None,
+            "detail": "",
+        },
+        {
+            "sequence": 5,
+            "name": "postflight",
+            "status": "not_started",
+            "commands": [
+                "kubectl get nodes -o json",
+                "kubectl -n kube-system exec <etcd-pod> -- etcdctl "
+                "--endpoints=https://127.0.0.1:2379 endpoint health --cluster",
+            ],
+            "exit_code": None,
+            "detail": "",
+        },
+    ]
+
+
+def simulation_plan(
+    request: dict[str, str],
+    *,
+    members: tuple[dict[str, str], ...] = (),
+) -> dict[str, Any]:
     """The same steps the executor would run, without touching anything."""
 
     return {
@@ -166,7 +276,7 @@ def simulation_plan(request: dict[str, str]) -> dict[str, Any]:
         "rolled_back": False,
         "requires_manual_execution": True,
         "performed_steps": [],
-        "steps": planned_steps(request),
+        "steps": planned_steps(request, members=members),
         "preflight": {"checks": [], "blocked": None},
         "failure_code": None,
     }

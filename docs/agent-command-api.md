@@ -212,10 +212,19 @@ that must equal `cluster_name`. Refusals are explicit:
 `ROLLBACK_CONFIRMATION_MISMATCH`, `ROLLBACK_SNAPSHOT_PATH_INVALID`,
 `ROLLBACK_CLUSTER_NAME_MISMATCH`, `ROLLBACK_EXECUTION_MODE_INVALID`.
 
-The executor refuses `ROLLBACK_MULTI_CONTROL_PLANE_UNSUPPORTED`: restoring a single
-member of a stacked etcd breaks the quorum, and this agent does not coordinate the
-all-member restore a three-control-plane cluster needs. It runs only on a cluster
-with exactly one control plane.
+A stacked etcd is restored member by member instead of being refused. Restoring
+one member of a three-node cluster alone would break quorum, so the executor reads
+`member list --write-out=json` and ties every member to its control-plane node
+through the peer URL host and the etcd pod's `nodeName`. It then stages the
+snapshot on each remote host (`ssh` + `scp` over
+`KUBERNETES_UPGRADE_REMOTE_USER`), restores every member locally through
+`kubectl exec` (the admin kubeconfig reaches all pods, the remote hosts do not need
+`kubectl`), stops every kubelet before the first directory moves, swaps the
+restored data in, and starts the local kubelet first so the quorum re-forms in a
+known order. An unidentified local node or an unmatchable member blocks with
+`ROLLBACK_PREFLIGHT_BLOCKED` (`ROLLBACK_ETCD_MEMBER_UNMATCHED` detail) before
+anything is touched, and a missing remote executor reports
+`ROLLBACK_REMOTE_EXECUTOR_NOT_CONFIGURED`.
 
 `execute` is approval-gated like the upgrade, and it proceeds only when its
 preflight passes: the node is Ready, the snapshot file exists, `etcdctl snapshot
