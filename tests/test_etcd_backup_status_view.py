@@ -769,3 +769,18 @@ def test_a_live_command_in_the_hour_still_wins_over_a_retry():
     assert response.data["created"] is False
     assert response.data["command_id"] == str(live.id)
     assert response.data["code"] == "ETCD_BACKUP_ALREADY_QUEUED"
+
+
+@pytest.mark.django_db
+def test_a_cluster_switched_off_says_so_instead_of_never_backed_up():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup": False}}
+    deployment.save(update_fields=["spec"])
+
+    response = client.get(URL.format(deployment.id))
+
+    body = response.data
+    assert body["enabled"] is False
+    assert body["ok"] is False
+    assert body["findings"] == []
+    assert "not_run_yet" not in body

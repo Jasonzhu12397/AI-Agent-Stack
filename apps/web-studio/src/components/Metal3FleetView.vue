@@ -1685,7 +1685,11 @@ onUnmounted(() => {
                 :loading="backupBusy === scope.row.id"
                 @click="runEtcdBackupNow(scope.row)"
               >Back up now</el-button>
-              <template v-if="backupStates[scope.row.id]">
+              <small
+                v-if="backupStates[scope.row.id] && backupStates[scope.row.id].enabled === false"
+                class="fleet-version-current"
+              >etcd backups are switched off for this cluster by policy</small>
+              <template v-if="backupStates[scope.row.id] && backupStates[scope.row.id].enabled !== false">
                 <el-tag
                   :type="backupStates[scope.row.id].stale ? 'warning' : 'success'"
                   size="small"

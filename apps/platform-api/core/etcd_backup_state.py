@@ -282,6 +282,16 @@ def etcd_backup_state(
             }
         ]
         return state
+    if policy.get("enabled") is False:
+        # Switched off on purpose is not a broken backup: the panel says so
+        # instead of painting "never backed up" over an intentional choice.
+        state["enabled"] = False
+        state["ok"] = False
+        state["stale"] = True
+        state["findings"] = []
+        state["restore_point"] = _reported_restore_point(deployment, now=now)
+        return state
+    state["enabled"] = True
     if not runs:
         # No backup command has reported yet, but a read-only check may still
         # have listed the directory: keep the "not run yet" finding and let the

@@ -1113,6 +1113,9 @@ export type EtcdBackupState = {
   restore_point: EtcdRestorePoint | null;
   reported_by?: string;
   reported_at?: string | null;
+  enabled?: boolean;
+  last_run_failed?: string | null;
+  run_stuck_hours?: number | null;
   scheduler_last_run?: string | null;
   scheduler_age_hours?: number | null;
   newest: { name: string; taken_at?: string } | null;

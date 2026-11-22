@@ -579,3 +579,10 @@ than to 0, so a scheduler that passes no flag uses each deployment's own policy
 instead of silently resetting it; `--min-free-bytes 0` is still forwarded
 verbatim, because zero there means "measure the volume without refusing the
 backup".
+
+### Switched off on purpose
+
+A deployment whose spec sets `kubernetes.etcd_backup: false` reports
+`enabled: false` with no findings, instead of painting "never backed up" over an
+intentional choice; the watchdog keeps reporting `ETCD_BACKUP_DISABLED` for it
+and does not audit it as a problem. The Delivery table says so in words.
