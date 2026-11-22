@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+node_modules
+apps/web-studio/dist
+evidence
+tests

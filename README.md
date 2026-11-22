@@ -4,6 +4,8 @@ A **multi-tenant, multi-Agent AI SaaS platform** for building, publishing, orche
 
 AI Agent Stack is not a single chatbot or a collection of disconnected Agent demos. It combines a SaaS application runtime for AI Agents with an infrastructure runtime that can turn approved physical servers into a working Kubernetes control plane and data plane.
 
+**Current release: `v1.0.0`** — see [docs/release-v1.0.0.md](docs/release-v1.0.0.md), [CHANGELOG.md](CHANGELOG.md) and [LICENSE](LICENSE) (Apache-2.0).
+
 ## Platform overview
 
 | SaaS capability | What the platform provides | Current state |
