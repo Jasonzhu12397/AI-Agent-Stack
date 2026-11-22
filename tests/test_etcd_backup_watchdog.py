@@ -173,3 +173,68 @@ def test_the_watchdog_reads_the_last_report_and_does_not_guess_beyond_it():
     # reports what the cluster said, and does not invent a state it cannot see.
     assert report["clusters"][0]["ok"] is True
     assert error == ""
+
+
+def _events(deployment, event_type):
+    return AuditEvent.objects.filter(
+        tenant=deployment.tenant,
+        event_type=event_type,
+        resource_id=str(deployment.id),
+    )
+
+
+@pytest.mark.django_db
+def test_a_problem_that_persists_is_audited_once_not_once_per_probe():
+    _, _, _, deployment, _ = _workspace()
+
+    for _ in range(3):
+        _report, error = _run()
+        assert error
+
+    assert _events(deployment, "cluster.etcd_backup.problem").count() == 1
+
+
+@pytest.mark.django_db
+def test_a_changed_problem_is_audited_again_because_it_is_news():
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=100)
+    _report, error = _run()
+    assert error
+    _events(deployment, "cluster.etcd_backup.problem").get()
+
+    # The backup history disappearing turns "stale" into "never ran": a
+    # different failure, so the chain has to record it.
+    AgentCommand.objects.all().delete()
+    _report, error = _run()
+    assert error
+
+    assert _events(deployment, "cluster.etcd_backup.problem").count() == 2
+
+
+@pytest.mark.django_db
+def test_repeat_after_hours_zero_audits_every_run():
+    _, _, _, deployment, _ = _workspace()
+
+    for _ in range(2):
+        _report, error = _run(**{"repeat_after_hours": 0})
+        assert error
+
+    assert _events(deployment, "cluster.etcd_backup.problem").count() == 2
+
+
+@pytest.mark.django_db
+def test_a_cluster_that_recovers_gets_one_event_that_says_so():
+    tenant, project, target, deployment, user = _workspace()
+    _report, error = _run()
+    assert error
+
+    _backup(tenant, project, target, deployment, user, hours_ago=1)
+    report, error = _run()
+
+    assert error == ""
+    assert report["problems"] == []
+    recovered = _events(deployment, "cluster.etcd_backup.recovered").get()
+    assert recovered.metadata["previous_code"] == "ETCD_BACKUP_NOT_RUN_YET"
+    # A second clean probe does not celebrate the same recovery twice.
+    _run()
+    assert _events(deployment, "cluster.etcd_backup.recovered").count() == 1
