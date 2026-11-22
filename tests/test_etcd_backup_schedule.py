@@ -286,3 +286,21 @@ def test_a_failed_rollback_stops_holding_its_snapshot():
 
     payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
     assert "protect" not in payload
+
+
+@pytest.mark.django_db
+def test_a_declared_disk_floor_reaches_the_command():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant,
+        project,
+        eph,
+        target,
+        user,
+        spec={"kubernetes": {"etcd_backup_min_free_bytes": 2 * 1024 * 1024 * 1024}},
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert payload["min_free_bytes"] == 2 * 1024 * 1024 * 1024

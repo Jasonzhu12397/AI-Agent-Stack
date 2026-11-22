@@ -99,10 +99,12 @@ const backupPolicyVisible = ref(false);
 const backupPolicyDeployment = ref<ClusterDeployment | null>(null);
 const backupPolicySaving = ref(false);
 const backupPolicyError = ref("");
+const GIB = 1024 * 1024 * 1024;
 const backupPolicyForm = ref({
   keep_count: 2,
   keep_max_age_hours: 8760,
   pre_upgrade_keep_max_age_hours: 168,
+  min_free_gib: 0.5,
   enabled: true,
 });
 const readinessBusy = ref<string | null>(null);
@@ -749,6 +751,7 @@ function openBackupPolicy(deployment: ClusterDeployment) {
     keep_max_age_hours: policy && policy.valid ? policy.keep_max_age_hours : 8760,
     pre_upgrade_keep_max_age_hours:
       policy && policy.valid ? policy.pre_upgrade_keep_max_age_hours : 168,
+    min_free_gib: policy && policy.valid ? policy.min_free_bytes / GIB : 0.5,
     enabled: policy ? policy.enabled : true,
   };
   backupPolicyVisible.value = true;
@@ -762,7 +765,16 @@ async function saveBackupPolicy() {
   try {
     backupStates.value[deployment.id] = await setClusterDeploymentEtcdBackupPolicy(
       deployment.id,
-      backupPolicyForm.value,
+      {
+        keep_count: backupPolicyForm.value.keep_count,
+        keep_max_age_hours: backupPolicyForm.value.keep_max_age_hours,
+        pre_upgrade_keep_max_age_hours:
+          backupPolicyForm.value.pre_upgrade_keep_max_age_hours,
+        // The API speaks bytes; the dialog speaks GiB, because that is the unit
+        // an operator thinks in when they decide how much room to leave.
+        min_free_bytes: Math.round(backupPolicyForm.value.min_free_gib * GIB),
+        enabled: backupPolicyForm.value.enabled,
+      },
     );
     backupPolicyVisible.value = false;
   } catch (cause) {
@@ -2045,6 +2057,18 @@ onUnmounted(() => {
             :min="1"
             :max="8760"
           />
+        </el-form-item>
+        <el-form-item label="Free space floor (GiB)">
+          <el-input-number
+            v-model="backupPolicyForm.min_free_gib"
+            :min="0"
+            :max="1024"
+            :step="0.5"
+            :precision="1"
+          />
+          <small class="fleet-version-current">
+            A run refuses to start when the database plus this floor does not fit.
+          </small>
         </el-form-item>
       </el-form>
       <small v-if="backupPolicyError" class="readiness-blocked">{{ backupPolicyError }}</small>

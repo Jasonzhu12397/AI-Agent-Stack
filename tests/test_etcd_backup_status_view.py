@@ -282,3 +282,14 @@ def test_the_policy_endpoint_needs_a_body():
 
     assert response.status_code == 400
     assert response.data["code"] == "policy_empty"
+
+
+@pytest.mark.django_db
+def test_the_view_reports_the_disk_floor_the_policy_sets():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup_min_free_bytes": 1073741824}}
+    deployment.save(update_fields=["spec"])
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["policy"]["min_free_bytes"] == 1073741824

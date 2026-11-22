@@ -412,3 +412,14 @@ save something the executor would reject: a bad `keep_count` comes back as
 `max_age_hours`, `directory`, `enabled`) are accepted; any other key is refused
 with `policy_fields_only` rather than silently dropped, and every accepted change
 is audited as `cluster.etcd_backup.policy.updated`.
+
+A snapshot has to fit next to the database it copies. Between `prepare` and
+`snapshot_save` the run measures the live database with `etcdctl endpoint status`
+and the free space of the backup directory with `df -PB1`, and refuses to write
+anything when `dbSize + min_free_bytes` does not fit
+(`ETCD_BACKUP_DISK_LOW`). `min_free_bytes` defaults to 512MiB, is settable per
+cluster as `kubernetes.etcd_backup_min_free_bytes` and can be lowered to 0 to
+measure only. If either measurement cannot be read, the run fails with
+`ETCD_BACKUP_DISK_CHECK_FAILED`: a snapshot written into a nearly full etcd
+volume is worse than a snapshot that was skipped and reported, because the
+write itself is what fills the volume the live cluster still needs.

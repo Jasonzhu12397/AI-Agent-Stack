@@ -48,6 +48,7 @@ class Command(BaseCommand):
         parser.add_argument("--keep-count", type=int, default=0)
         parser.add_argument("--keep-max-age-hours", type=int, default=0)
         parser.add_argument("--pre-upgrade-keep-max-age-hours", type=int, default=0)
+        parser.add_argument("--min-free-bytes", type=int, default=0)
 
     def handle(self, *args, **options):
         queued = []
@@ -88,6 +89,7 @@ class Command(BaseCommand):
                 ("keep_count", "keep_count"),
                 ("keep_max_age_hours", "keep_max_age_hours"),
                 ("pre_upgrade_keep_max_age_hours", "pre_upgrade_keep_max_age_hours"),
+                ("min_free_bytes", "min_free_bytes"),
             ):
                 if options[option]:
                     payload[field] = options[option]

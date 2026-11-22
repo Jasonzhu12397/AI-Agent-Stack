@@ -40,6 +40,7 @@ PAYLOAD_KEYS = frozenset(
         "execution_mode",
         "confirm_cluster_name",
         "protect",
+        "min_free_bytes",
     }
 )
 
@@ -60,6 +61,13 @@ MAX_STALE_AGE_HOURS = 8760
 #: one per upgrade forever and quietly fill the disk.
 DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS = 168
 MAX_PRE_UPGRADE_KEEP_MAX_AGE_HOURS = 8760
+#: The backup directory lives on the etcd data volume. A snapshot roughly the
+#: size of the live database has to fit next to the database, or the save fails
+#: halfway and the volume is left full for the cluster that is still running.
+#: This is the floor of free space a run insists on before it writes anything.
+DEFAULT_MIN_FREE_BYTES = 512 * 1024 * 1024
+MIN_FREE_BYTES_FLOOR = 0
+MAX_MIN_FREE_BYTES = 1024 * 1024 * 1024 * 1024
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DIRECTORY = re.compile(r"^/var/lib/etcd[A-Za-z0-9._/-]*$")
@@ -88,6 +96,33 @@ def _int(value: Any, *, code: str, low: int, high: int, default: int | None) -> 
     if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
         raise EtcdBackupError(code, f"must be an integer between {low} and {high}")
     return value
+
+
+def disk_verdict(
+    db_size_bytes: int, free_bytes: int, *, min_free_bytes: int
+) -> dict[str, Any]:
+    """Decide whether a snapshot fits, before anything is written.
+
+    ``required`` is one copy of the database plus the floor: a run needs room
+    for the file it is about to write and room to keep operating afterwards.
+    """
+
+    db_size = max(0, int(db_size_bytes))
+    free = max(0, int(free_bytes))
+    required = db_size + max(0, int(min_free_bytes))
+    ok = free >= required
+    return {
+        "ok": ok,
+        "db_size_bytes": db_size,
+        "free_bytes": free,
+        "required_bytes": required,
+        "min_free_bytes": max(0, int(min_free_bytes)),
+        "code": "" if ok else "ETCD_BACKUP_DISK_LOW",
+        "detail": (
+            f"{free} byte(s) free, {required} required "
+            f"(database {db_size} + floor {max(0, int(min_free_bytes))})"
+        ),
+    }
 
 
 def _protect_names(value: Any, *, cluster_name: str) -> tuple[str, ...]:
@@ -167,6 +202,13 @@ def validate_request(
     if problem:
         raise EtcdBackupError("ETCD_BACKUP_DIRECTORY_INVALID", problem)
     protect = _protect_names(payload.get("protect"), cluster_name=cluster)
+    min_free = _int(
+        payload.get("min_free_bytes"),
+        code="ETCD_BACKUP_DISK_POLICY_INVALID",
+        low=MIN_FREE_BYTES_FLOOR,
+        high=MAX_MIN_FREE_BYTES,
+        default=DEFAULT_MIN_FREE_BYTES,
+    )
     keep_count = _int(
         payload.get("keep_count"),
         code="ETCD_BACKUP_RETENTION_INVALID",
@@ -205,6 +247,7 @@ def validate_request(
         "execution_mode": mode,
         "confirm_cluster_name": cluster if mode == "execute" else "",
         "protect": protect,
+        "min_free_bytes": min_free,
     }
 
 
@@ -482,24 +525,46 @@ def simulation_plan(request: dict[str, Any], *, now: datetime | None = None) -> 
         "steps": [
             {
                 "sequence": 1,
+                "name": "prepare",
+                "commands": [
+                    f"kubectl -n kube-system exec <etcd-pod> -- mkdir -p {request['directory']}"
+                ],
+                "detail": "the etcd pod mounts the host backup directory at this path",
+            },
+            {
+                "sequence": 2,
+                "name": "disk_check",
+                "commands": [
+                    "kubectl -n kube-system exec <etcd-pod> -- etcdctl endpoint status "
+                    "--write-out=json",
+                    f"kubectl -n kube-system exec <etcd-pod> -- df -PB1 {request['directory']}",
+                ],
+                "detail": (
+                    "refuse the run when the database plus the "
+                    f"{request['min_free_bytes']} byte floor do not fit; a snapshot "
+                    "written into a nearly full etcd volume is worse than no snapshot"
+                ),
+            },
+            {
+                "sequence": 3,
                 "name": "snapshot_save",
                 "commands": [
                     f"kubectl -n kube-system exec <etcd-pod> -- etcdctl snapshot save "
                     f"{request['directory']}/{partial_name(name)}",
                 ],
-                "detail": "",
+                "detail": "written as a partial file so it never looks published",
             },
             {
-                "sequence": 2,
+                "sequence": 4,
                 "name": "snapshot_verify",
                 "commands": [
                     f"kubectl -n kube-system exec <etcd-pod> -- etcdctl snapshot status "
                     f"{request['directory']}/{partial_name(name)} --write-out=json",
                 ],
-                "detail": "",
+                "detail": "a snapshot that cannot be read is not a backup",
             },
             {
-                "sequence": 3,
+                "sequence": 5,
                 "name": "snapshot_publish",
                 "commands": [
                     f"kubectl -n kube-system exec <etcd-pod> -- mv "
@@ -508,7 +573,7 @@ def simulation_plan(request: dict[str, Any], *, now: datetime | None = None) -> 
                 "detail": "rename only after the snapshot verified",
             },
             {
-                "sequence": 4,
+                "sequence": 6,
                 "name": "retention",
                 "commands": [
                     f"kubectl -n kube-system exec <etcd-pod> -- rm -f "

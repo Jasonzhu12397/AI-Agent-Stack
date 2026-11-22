@@ -25,6 +25,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- A disk check between `prepare` and the save: the run reads `dbSize` from
+  `endpoint status` and free space from `df`, refuses to write when the database
+  plus `min_free_bytes` (default 512MiB, `ETCD_BACKUP_DISK_LOW`) does not fit,
+  and fails closed with `ETCD_BACKUP_DISK_CHECK_FAILED` when either measurement
+  cannot be read. The floor is policy (`kubernetes.etcd_backup_min_free_bytes`)
+  and is editable from the policy dialog in GiB.
 - `check_etcd_backups`: reports every installed cluster with a missing, stale or
   never-run backup, writes a `cluster.etcd_backup.problem` audit event for each
   and exits non-zero, so a cron entry or monitoring probe can alarm without a

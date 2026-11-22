@@ -1093,6 +1093,8 @@ export type EtcdBackupState = {
         keep_max_age_hours: number;
         pre_upgrade_keep_max_age_hours: number;
         max_age_hours: number;
+        min_free_bytes: number;
+        protect: string[];
       }
     | { enabled: boolean; valid: false; error: { code: string; message: string } };
   last_run: EtcdBackupCommandSummary | null;
@@ -1113,6 +1115,7 @@ export type EtcdBackupPolicyInput = {
   keep_max_age_hours?: number;
   pre_upgrade_keep_max_age_hours?: number;
   max_age_hours?: number;
+  min_free_bytes?: number;
   directory?: string;
   enabled?: boolean;
 };

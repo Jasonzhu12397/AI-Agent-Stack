@@ -177,10 +177,20 @@ def test_the_file_name_is_a_utc_stamp_that_parses_back():
 def test_the_plan_says_rename_happens_only_after_verification():
     plan = simulation_plan(validate_request({"cluster_name": "lab"}), now=NOW)
     names = [step["name"] for step in plan["steps"]]
-    assert names == ["snapshot_save", "snapshot_verify", "snapshot_publish", "retention"]
+    assert names == [
+        "prepare",
+        "disk_check",
+        "snapshot_save",
+        "snapshot_verify",
+        "snapshot_publish",
+        "retention",
+    ]
     publish = next(step for step in plan["steps"] if step["name"] == "snapshot_publish")
     assert "mv" in publish["commands"][0]
-    assert ".partial" in plan["steps"][0]["commands"][0]
+    save = next(step for step in plan["steps"] if step["name"] == "snapshot_save")
+    assert ".partial" in save["commands"][0]
+    # The disk check is a step of its own, before anything is written.
+    assert names.index("disk_check") < names.index("snapshot_save")
     assert plan["approval_required"] is False
 
 
@@ -188,12 +198,21 @@ def test_the_plan_says_rename_happens_only_after_verification():
 
 
 class FakeRunner:
-    """Answers the four kubectl calls a backup run makes."""
+    """Answers the etcd pod calls a backup run makes."""
 
-    def __init__(self, *, fail_on: str = "", files: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on: str = "",
+        files: list[str] | None = None,
+        db_size: int = 8 * 1024 * 1024,
+        free_bytes: int = 4 * 1024 * 1024 * 1024,
+    ) -> None:
         self.calls: list[list[str]] = []
         self.fail_on = fail_on
         self.files = list(files or [])
+        self.db_size = db_size
+        self.free_bytes = free_bytes
 
     def __call__(self, argv, timeout=None):
         self.calls.append(list(argv))
@@ -206,6 +225,23 @@ class FakeRunner:
                 "returncode": 0,
                 "stdout": json.dumps(
                     {"items": [{"metadata": {"name": "etcd-cp-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "stderr": "",
+            }
+        if "endpoint" in argv and "status" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps([{"Header": {"dbSize": self.db_size}}]),
+                "stderr": "",
+            }
+        if "df" in argv:
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": (
+                    "Filesystem 1B-blocks Used Available Capacity Mounted on\n"
+                    f"/dev/sda1 {self.free_bytes + 10} 10 {self.free_bytes} 1% /var\n"
                 ),
                 "stderr": "",
             }
@@ -236,7 +272,14 @@ def test_a_run_saves_verifies_renames_and_only_then_prunes():
     result = EtcdBackupExecutor(runner).run(request, now=NOW)
 
     steps = [step["name"] for step in result["steps"]]
-    assert steps == ["prepare", "snapshot_save", "snapshot_verify", "snapshot_publish", "retention"]
+    assert steps == [
+        "prepare",
+        "disk_check",
+        "snapshot_save",
+        "snapshot_verify",
+        "snapshot_publish",
+        "retention",
+    ]
     assert result["backup"]["verified"] is True
     assert result["backup"]["name"] == "lab-20261122T030000Z.db"
     path_parts = set(result["backup"]["path"].split("/"))
@@ -256,7 +299,11 @@ def test_a_failed_save_never_reaches_retention():
 
     assert result["failure_code"] == "ETCD_BACKUP_SAVE_FAILED"
     assert result["pruned"] == []
-    assert [step["name"] for step in result["steps"]] == ["prepare", "snapshot_save"]
+    assert [step["name"] for step in result["steps"]] == [
+        "prepare",
+        "disk_check",
+        "snapshot_save",
+    ]
     assert not [call for call in runner.calls if "rm" in call]
 
 
@@ -476,3 +523,66 @@ def test_a_run_never_prunes_a_snapshot_it_was_told_to_hold():
     assert not [
         call for call in runner.calls if "rm" in call and held in call
     ]
+
+
+# --------------------------------------------------------------- disk check
+
+
+def test_a_volume_too_small_for_the_database_plus_the_floor_is_refused():
+    runner = FakeRunner(db_size=8 * 1024 * 1024 * 1024, free_bytes=1024 * 1024 * 1024)
+    result = EtcdBackupExecutor(runner).run(_execute_request(), now=NOW)
+
+    assert result["failure_code"] == "ETCD_BACKUP_DISK_LOW"
+    assert result["backup"] is None
+    assert [step["name"] for step in result["steps"]] == ["prepare", "disk_check"]
+    assert not [call for call in runner.calls if "snapshot" in call and "save" in call]
+    assert not [call for call in runner.calls if "rm" in call]
+
+
+def test_enough_room_for_the_database_plus_the_floor_is_allowed():
+    runner = FakeRunner(db_size=1024 * 1024 * 1024, free_bytes=2 * 1024 * 1024 * 1024)
+    result = EtcdBackupExecutor(runner).run(
+        _execute_request(min_free_bytes=512 * 1024 * 1024), now=NOW
+    )
+
+    assert result["failure_code"] is None
+    assert result["backup"]["verified"] is True
+
+
+def test_the_floor_is_policy_and_zero_means_measure_only():
+    request = validate_request({"cluster_name": "lab", "min_free_bytes": 0})
+    runner = FakeRunner(db_size=1024 * 1024, free_bytes=1024 * 1024)
+    result = EtcdBackupExecutor(runner).run(request, now=NOW)
+    assert result["failure_code"] is None
+
+
+def test_a_database_size_that_cannot_be_read_blocks_the_run_instead_of_guessing():
+    class NoStatusRunner(FakeRunner):
+        def __call__(self, argv, timeout=None):
+            if "endpoint" in argv and "status" in argv and "snapshot" not in argv:
+                return {"available": True, "returncode": 1, "stdout": "", "stderr": "denied"}
+            return super().__call__(argv, timeout=timeout)
+
+    runner = NoStatusRunner()
+    result = EtcdBackupExecutor(runner).run(_execute_request(), now=NOW)
+
+    assert result["failure_code"] == "ETCD_BACKUP_DISK_CHECK_FAILED"
+    assert not [call for call in runner.calls if "snapshot" in call and "save" in call]
+
+
+def test_an_unreadable_free_space_blocks_the_run():
+    class NoDfRunner(FakeRunner):
+        def __call__(self, argv, timeout=None):
+            if "df" in argv:
+                return {"available": True, "returncode": 1, "stdout": "", "stderr": "no df"}
+            return super().__call__(argv, timeout=timeout)
+
+    result = EtcdBackupExecutor(NoDfRunner()).run(_execute_request(), now=NOW)
+
+    assert result["failure_code"] == "ETCD_BACKUP_DISK_CHECK_FAILED"
+
+
+def test_the_contract_refuses_a_negative_disk_floor():
+    with pytest.raises(EtcdBackupError) as error:
+        validate_request({"cluster_name": "lab", "min_free_bytes": -1})
+    assert error.value.code == "ETCD_BACKUP_DISK_POLICY_INVALID"

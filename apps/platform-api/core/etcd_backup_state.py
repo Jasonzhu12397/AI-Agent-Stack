@@ -48,6 +48,7 @@ def backup_policy(deployment: ClusterDeployment) -> dict[str, Any]:
         "keep_max_age_hours": request["keep_max_age_hours"],
         "pre_upgrade_keep_max_age_hours": request["pre_upgrade_keep_max_age_hours"],
         "max_age_hours": request["max_age_hours"],
+        "min_free_bytes": request["min_free_bytes"],
         "protect": list(request["protect"]),
     }
 
@@ -60,6 +61,7 @@ POLICY_FIELDS = {
     "pre_upgrade_keep_max_age_hours": "etcd_backup_pre_upgrade_keep_max_age_hours",
     "max_age_hours": "etcd_backup_max_age_hours",
     "directory": "etcd_backup_directory",
+    "min_free_bytes": "etcd_backup_min_free_bytes",
 }
 
 

@@ -21,6 +21,7 @@ from packages.agent_contracts.etcd_backup import (
     EtcdBackupError,
     assess,
     backup_filename,
+    disk_verdict,
     partial_name,
     public_entries,
     select_prunable,
@@ -49,6 +50,33 @@ def _output(result: dict[str, Any]) -> str:
 
 def _ok(result: dict[str, Any]) -> bool:
     return result.get("available", True) and result.get("returncode") == 0
+
+
+def _db_size(result: dict[str, Any]) -> int | None:
+    """Read ``dbSize`` out of ``etcdctl endpoint status --write-out=json``.
+
+    The payload is a list of member statuses; any member answers with the
+    cluster-wide database size, so the first well-formed one is enough.
+    """
+
+    if not _ok(result):
+        return None
+    body = str(result.get("stdout") or "").strip()
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    items = parsed if isinstance(parsed, list) else [parsed]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        header = item.get("Header") if isinstance(item.get("Header"), dict) else item
+        size = header.get("dbSize")
+        if isinstance(size, int) and size >= 0:
+            return size
+    return None
 
 
 class EtcdBackupExecutor:
@@ -207,8 +235,25 @@ class EtcdBackupExecutor:
         if not self._finish(prepare, result):
             return self._failed("ETCD_BACKUP_PREPARE_FAILED", directory, request)
 
-        save = self._step(
+        disk = self._step(
             2,
+            "disk_check",
+            [
+                "kubectl -n kube-system exec <etcd-pod> -- etcdctl endpoint status "
+                "--write-out=json",
+                f"kubectl -n kube-system exec <etcd-pod> -- df -PB1 {directory}",
+            ],
+            detail="measure the live database and the free space before writing",
+        )
+        verdict = self._disk_verdict(directory, request)
+        disk["detail"] = verdict["detail"]
+        if not verdict["ok"]:
+            return self._failed(verdict["code"], directory, request, verdict=verdict)
+        disk["status"] = "succeeded"
+        disk["exit_code"] = 0
+
+        save = self._step(
+            3,
             "snapshot_save",
             [
                 f"kubectl -n kube-system exec <etcd-pod> -- etcdctl snapshot save {staging}"
@@ -223,7 +268,7 @@ class EtcdBackupExecutor:
             return self._failed("ETCD_BACKUP_SAVE_FAILED", directory, request)
 
         verify = self._step(
-            3,
+            4,
             "snapshot_verify",
             [
                 "kubectl -n kube-system exec <etcd-pod> -- etcdctl snapshot status "
@@ -239,7 +284,7 @@ class EtcdBackupExecutor:
             return self._failed("ETCD_BACKUP_VERIFY_FAILED", directory, request)
 
         publish = self._step(
-            4,
+            5,
             "snapshot_publish",
             [f"kubectl -n kube-system exec <etcd-pod> -- mv {staging} {final}"],
             detail="rename only after the snapshot verified",
@@ -265,7 +310,7 @@ class EtcdBackupExecutor:
         removed_names = {item["name"] for item in prunable}
         retained = [entry for entry in entries if entry["name"] not in removed_names]
         retention = self._step(
-            5,
+            6,
             "retention",
             [
                 f"kubectl -n kube-system exec <etcd-pod> -- rm -f {item['name']}"
@@ -352,8 +397,63 @@ class EtcdBackupExecutor:
     def _best_effort_remove(self, path: str) -> None:
         self._runner(self._pod_shell(["rm", "-f", path]), timeout=60)
 
+    def _disk_verdict(self, directory: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Ask the live database its size and the volume its free space.
+
+        Both answers come from the etcd pod: the size from ``endpoint status``
+        and the free space from ``df``. If either cannot be read the run does not
+        guess - a snapshot written into a nearly full volume is worse than a
+        snapshot that was skipped and reported.
+        """
+
+        status = self._runner(
+            [*self._etcdctl_argv(), "endpoint", "status", "--write-out=json"],
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        db_size = _db_size(status)
+        if db_size is None:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "detail": (
+                    "cannot read the database size from endpoint status: "
+                    + (_output(status) or "no output")
+                ),
+                "db_size_bytes": None,
+                "free_bytes": None,
+                "required_bytes": None,
+            }
+        free = self._free_bytes(directory)
+        if free is None:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "detail": f"cannot read free space in {directory}",
+                "db_size_bytes": db_size,
+                "free_bytes": None,
+                "required_bytes": None,
+            }
+        return disk_verdict(
+            db_size, free, min_free_bytes=request.get("min_free_bytes", 0)
+        )
+
+    def _free_bytes(self, directory: str) -> int | None:
+        listing = self._runner(
+            self._pod_shell(["df", "-PB1", directory]),
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        if not _ok(listing):
+            return None
+        for line in str(listing.get("stdout") or "").splitlines():
+            fields = line.split()
+            if len(fields) < 4 or not fields[0].startswith(("/", "overlay", "tmpfs")):
+                continue
+            if fields[3].isdigit():
+                return int(fields[3])
+        return None
+
     def _failed(
-        self, code: str, directory: str, request: dict[str, Any]
+        self, code: str, directory: str, request: dict[str, Any], **extra: Any
     ) -> dict[str, Any]:
         for step in self._steps:
             if step["status"] == "running":

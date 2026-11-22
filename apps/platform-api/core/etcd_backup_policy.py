@@ -21,6 +21,7 @@ SPEC_POLICY_KEYS = {
     "keep_max_age_hours": "etcd_backup_keep_max_age_hours",
     "pre_upgrade_keep_max_age_hours": "etcd_backup_pre_upgrade_keep_max_age_hours",
     "max_age_hours": "etcd_backup_max_age_hours",
+    "min_free_bytes": "etcd_backup_min_free_bytes",
 }
 
 #: A rollback that ended this way no longer holds the snapshot it named.
