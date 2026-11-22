@@ -8,13 +8,16 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 41426913466](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41426913466), commit `6660ae8e32508ddf543f029b28f994eb6aa03ccb`, completed successfully across Python, Vue and Compose jobs. Pytest: 103 passed. Ruff, Django checks, migration drift check, PostgreSQL migrations, Vue production build and Compose API/Web/Worker smoke tests passed. This run includes node enrollment, command approval/expiry, renewable command leases, read-only Kubernetes access, dynamic CAPI/Metal3 API discovery, typed Metal3 cluster-plan validation, persisted EPH preflight → cluster-plan orchestration, Vue dashboard, dual-agent console and Integration Hub registry/installation metadata. Documentation-only updates after this commit are undergoing CI.
+[GitHub Actions run 44979582251](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/44979582251), commit `20a807fd`, is the `v1.0.0` baseline:
 
-[Durable worker run 41409745762](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41409745762), commit `287fe2daab5470a7326f2b2f1320e60f9cc62a23`, passed with 36 tests.
+- Pytest: **1666 passed, 15 skipped** (four shards, all green).
+- Ruff, Django checks, migration drift detection, PostgreSQL migrations and mTLS ingress: passed.
+- Compose full-stack smoke (API + Worker + Web + PostgreSQL + Redis build, start and probe): passed.
+- Metal3 and SR-IOV CRD integration against a real kind cluster: passed.
+- Vue unit tests (36) and production build: passed.
+- Agent images (cloud-control, cloud, eph, target, platform API): built.
 
-[Session authentication run 41408491282](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41408491282), commit `7bc5cb4f33b0911f2648b5302e557c694cd0863e`, passed with 28 tests. [Membership administration run 41408139658](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41408139658) passed with 26 tests.
-
-[Membership administration run 41408139658](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41408139658), commit `a5629956683bd5a246149b786e67c8a4b1bd1862`, passed with 26 tests before the authentication endpoints were added.
+The version reported by `/api/v1/`, `pyproject.toml`, `apps/web-studio/package.json` and the release manifest is asserted to be one value by `tests/test_health.py` and `tests/test_metal3_release_evidence.py`.
 
 ## Django + Vue migration
 
