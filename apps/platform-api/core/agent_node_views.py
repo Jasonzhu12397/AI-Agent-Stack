@@ -59,6 +59,7 @@ from packages.agent_contracts.machine_lifecycle import (
 from core.audit import record_audit_event
 from core.fleet_inspection import sync_fleet_inspections_quietly
 from core.etcd_backup_policy import policy_directory
+from core.etcd_backup_queue import queue_backup
 from core.models import (
     AgentCommand,
     AgentMachine,
@@ -129,6 +130,14 @@ def _policy_snapshot_directory(node) -> str:
     )
     return policy_directory(deployment) if deployment is not None else ""
 
+
+#: Commands that change a cluster. Once one of them really ran, the cluster's
+#: newest snapshot describes a state that no longer exists, so a fresh backup is
+#: queued rather than waiting up to an hour for the scheduler.
+POST_CHANGE_BACKUP_COMMANDS = {
+    "cluster.kubernetes.version.upgrade": "upgrade_performed",
+    "cluster.kubernetes.version.rollback": "rolled_back",
+}
 
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
@@ -466,6 +475,23 @@ def _validate_kubernetes_upgrade_result(command, result):
         ):
             return "Kubernetes upgrade plan stages must remain ordered and unexecuted."
     return None
+
+
+def _changed_the_cluster(command) -> bool:
+    """True when this succeeded command really changed the cluster.
+
+    A simulation succeeds without touching anything, and a backup taken after a
+    simulation would record the same state again. The command's own result has
+    to say the change happened before a backup is queued for it.
+    """
+
+    if command.status != AgentCommand.Status.SUCCEEDED:
+        return False
+    proof = POST_CHANGE_BACKUP_COMMANDS.get(command.command_type)
+    if not proof:
+        return False
+    result = command.result if isinstance(command.result, dict) else {}
+    return result.get(proof) is True
 
 
 def _payload_hash(command_type, payload):
@@ -3115,6 +3141,12 @@ class AgentRuntimeResultView(APIView):
                                 "updated_at",
                             ]
                         )
+        if _changed_the_cluster(command) and command.deployment is not None:
+            # The run that just changed the cluster made every existing
+            # snapshot describe a past state. Take one now, in the same
+            # transaction as the result, so "changed the cluster" and "has a
+            # snapshot of the result" cannot drift apart.
+            queue_backup(command.deployment, requested_by=command.requested_by)
         return Response(
             {
                 "id": str(command.id),

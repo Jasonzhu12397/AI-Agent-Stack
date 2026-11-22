@@ -482,3 +482,14 @@ When the database plus a 512 MiB floor (overridable with
 refused with `ETCD_BACKUP_DISK_LOW` before anything on the node changes; an
 unreadable measurement refuses with `ETCD_BACKUP_DISK_CHECK_FAILED`. Filling the
 etcd volume during an upgrade is how a rollback becomes impossible.
+
+### A change is followed by a backup
+
+Once a command that changes a cluster succeeds, every snapshot on the volume
+describes a state that no longer exists. The runtime result endpoint therefore
+queues a backup in the same transaction that records the result, using the
+deployment the command belongs to. It only does so when the command's own result
+proves the change happened: an upgrade needs `upgrade_performed: true`, a
+rollback needs `rolled_back: true`. A simulation succeeds without touching the
+cluster and queues nothing. The hourly idempotency key still applies, so a change
+inside an hour the scheduler already covered does not take a second snapshot.

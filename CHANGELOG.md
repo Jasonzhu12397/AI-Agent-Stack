@@ -23,6 +23,13 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   view shows the protected set. A rollback that failed or was cancelled stops
   protecting its file.
 
+### Added
+
+- A backup is queued automatically after a command that really changed the
+  cluster (a successful upgrade with `upgrade_performed: true`, a rollback with
+  `rolled_back: true`), in the same transaction that records the result. A
+  simulation queues nothing, and the hourly idempotency key still applies.
+
 ### Fixed
 
 - The pre-upgrade snapshot and the recurring backup could write to two different

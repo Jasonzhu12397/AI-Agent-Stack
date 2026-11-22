@@ -2838,3 +2838,79 @@ def test_an_upgrade_without_a_declared_directory_keeps_the_agent_default(node_wo
     assert response.status_code == 202
     command = AgentCommand.objects.get(pk=response.data["id"])
     assert "snapshot_directory" not in command.payload
+
+
+def _command_status_and_result(command_type, status, result):
+    class _Command:
+        pass
+
+    command = _Command()
+    command.command_type = command_type
+    command.status = status
+    command.result = result
+    return command
+
+
+def test_a_real_upgrade_queues_a_backup_of_the_result():
+    from core.agent_node_views import _changed_the_cluster
+
+    assert _changed_the_cluster(
+        _command_status_and_result(
+            "cluster.kubernetes.version.upgrade",
+            AgentCommand.Status.SUCCEEDED,
+            {"upgrade_performed": True},
+        )
+    )
+
+
+def test_a_simulated_upgrade_does_not_queue_a_backup_of_unchanged_state():
+    from core.agent_node_views import _changed_the_cluster
+
+    assert not _changed_the_cluster(
+        _command_status_and_result(
+            "cluster.kubernetes.version.upgrade",
+            AgentCommand.Status.SUCCEEDED,
+            {"upgrade_performed": False, "upgrade_simulated": True},
+        )
+    )
+
+
+def test_a_real_rollback_queues_a_backup_of_the_restored_state():
+    from core.agent_node_views import _changed_the_cluster
+
+    assert _changed_the_cluster(
+        _command_status_and_result(
+            "cluster.kubernetes.version.rollback",
+            AgentCommand.Status.SUCCEEDED,
+            {"rolled_back": True},
+        )
+    )
+
+
+def test_a_simulated_rollback_does_not_queue_a_backup():
+    from core.agent_node_views import _changed_the_cluster
+
+    assert not _changed_the_cluster(
+        _command_status_and_result(
+            "cluster.kubernetes.version.rollback",
+            AgentCommand.Status.SUCCEEDED,
+            {"rolled_back": False, "rollback_simulated": True},
+        )
+    )
+
+
+def test_a_failed_change_and_an_unrelated_command_queue_nothing():
+    from core.agent_node_views import _changed_the_cluster
+
+    assert not _changed_the_cluster(
+        _command_status_and_result(
+            "cluster.kubernetes.version.upgrade",
+            AgentCommand.Status.FAILED,
+            {"upgrade_performed": True},
+        )
+    )
+    assert not _changed_the_cluster(
+        _command_status_and_result(
+            "node.health", AgentCommand.Status.SUCCEEDED, {"upgrade_performed": True}
+        )
+    )
