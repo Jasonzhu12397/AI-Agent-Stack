@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- The pre-upgrade snapshot is staged: written as `*.db.partial`, verified there,
+  and renamed only afterwards; a failed save or verify deletes it so an
+  unreadable file can never be offered as a restore point.
 - Abandoned staging files are removed: a failed save or verify deletes its
   `.partial`, a verified file that failed to be renamed is reported as
   `staging_kept`, and `prepare` sweeps staging files older than 24h inside the

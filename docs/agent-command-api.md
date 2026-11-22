@@ -550,3 +550,11 @@ and, as part of `prepare`, sweeps staging files older than
 `PARTIAL_STALE_MINUTES` (24h) that sit directly in the backup directory —
 nothing outside it and nothing that is not a staging file is ever touched. The
 run reports what it swept in `swept_partials`.
+
+The pre-upgrade snapshot follows the same discipline: it is saved as
+`snapshot-pre-<cluster>-<target>-<stamp>.db.partial`, read back with
+`snapshot status`, and only then renamed with `sudo mv`. A file that fails to
+save or to read back is deleted, so a corrupt snapshot can never carry a real
+snapshot name and be offered as a restore point by the next listing; a rename
+that fails leaves the verified `.partial` in place and blocks the upgrade with
+its path in the detail.

@@ -485,6 +485,10 @@ class UpgradeExecutor:
         owner = f"{cluster_name}-{target}" if cluster_name else target
         name = f"snapshot-pre-{owner}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.db"
         path = f"{directory.rstrip('/')}/{name}"
+        # Written under a staging name and renamed only after it reads back: an
+        # unreadable file with a snapshot's real name would be offered as a
+        # restore point by every later listing, which is worse than no file.
+        staging = f"{path}.partial"
         if not os.path.isabs(path) or ".." in path:
             return None, self._check(
                 "etcd.snapshot",
@@ -504,29 +508,47 @@ class UpgradeExecutor:
                 "etcd.snapshot", False, f"{verdict['code']}: {verdict['detail']}"
             )
         save = self._runner(
-            [*self._etcdctl_argv(pod), "snapshot", "save", path],
+            [*self._etcdctl_argv(pod), "snapshot", "save", staging],
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not save.get("available", True) or save.get("returncode") != 0:
+            self._remove_quietly(staging)
             return None, self._check(
                 "etcd.snapshot",
                 False,
                 f"snapshot save failed on {local_node}: " + (_output(save) or "no output"),
             )
         status = self._runner(
-            [*self._etcdctl_argv(pod), "snapshot", "status", path],
+            [*self._etcdctl_argv(pod), "snapshot", "status", staging],
             timeout=STEP_TIMEOUT_SECONDS,
         )
         if not status.get("available", True) or status.get("returncode") != 0:
+            self._remove_quietly(staging)
             return None, self._check(
                 "etcd.snapshot",
                 False,
-                f"snapshot {path} is not readable: " + (_output(status) or "no output"),
+                f"snapshot {staging} is not readable: " + (_output(status) or "no output"),
+            )
+        publish = self._runner(["sudo", "mv", staging, path], timeout=60)
+        if publish.get("returncode") != 0:
+            return None, self._check(
+                "etcd.snapshot",
+                False,
+                f"verified snapshot {staging} could not be renamed: "
+                + (_output(publish) or "mv failed"),
             )
         snapshot = {"path": path, "verified": True, "taken": True}
         return snapshot, self._check(
             "etcd.snapshot", True, f"took {path} and verified it"
         )
+
+    def _remove_quietly(self, path: str) -> None:
+        """Delete a staging file; a failure here must not hide the real error."""
+
+        try:
+            self._runner(["sudo", "rm", "-f", path], timeout=60)
+        except Exception:  # noqa: BLE001 - best effort cleanup
+            return
 
     def _snapshot_disk_verdict(self, pod: str, directory: str) -> dict[str, Any]:
         """Can this volume hold one more snapshot of the database it holds?

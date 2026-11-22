@@ -549,8 +549,11 @@ def test_stacked_etcd_is_backed_up_and_verified_before_the_upgrade():
     assert ["sudo", "mkdir", "-p", "/var/lib/etcd/backups"] in runner.calls
     saved = [call for call in runner.calls if "snapshot" in call and "save" in call]
     checked = [call for call in runner.calls if "snapshot" in call and "status" in call]
-    assert saved and saved[0][-1] == snapshot["path"]
-    assert checked and checked[0][-1] == snapshot["path"]
+    # The file is staged as *.partial, read back there, and only renamed once it
+    # verifies: nothing unreadable ever carries a snapshot's real name.
+    assert saved and saved[0][-1] == snapshot["path"] + ".partial"
+    assert checked and checked[0][-1] == snapshot["path"] + ".partial"
+    assert ["sudo", "mv", snapshot["path"] + ".partial", snapshot["path"]] in runner.calls
     etcd_check = next(
         check for check in result["preflight"]["checks"] if check["name"] == "etcd.snapshot"
     )
@@ -575,8 +578,10 @@ def test_a_snapshot_that_cannot_be_saved_blocks_the_upgrade():
 
 def test_a_snapshot_that_cannot_be_read_back_blocks_the_upgrade():
     base = _nodes_with(_raw_nodes(), etcd=True)
+    calls = []
 
     def runner(argv, timeout=20, **kwargs):
+        calls.append(list(argv))
         if "snapshot" in argv and "status" in argv:
             return {"available": True, "returncode": 1, "stdout": "", "stderr": "bad file"}
         return base(argv, timeout=timeout, **kwargs)
@@ -586,6 +591,8 @@ def test_a_snapshot_that_cannot_be_read_back_blocks_the_upgrade():
     assert result["failure_code"] == "UPGRADE_PREFLIGHT_BLOCKED"
     failed = {check["name"]: check for check in result["preflight"]["checks"] if not check["ok"]}
     assert "bad file" in failed["etcd.snapshot"]["detail"]
+    removed = [call for call in calls if call[:2] == ["sudo", "rm"]]
+    assert removed and removed[0][-1].endswith(".db.partial")
 
 
 def test_an_unreadable_etcd_list_blocks_the_upgrade():
