@@ -493,3 +493,15 @@ proves the change happened: an upgrade needs `upgrade_performed: true`, a
 rollback needs `rolled_back: true`. A simulation succeeds without touching the
 cluster and queues nothing. The hourly idempotency key still applies, so a change
 inside an hour the scheduler already covered does not take a second snapshot.
+
+### Is the scheduler still alive?
+
+A scheduler that dies looks exactly like a scheduler between ticks until the
+backups are old enough to look stale, so `queue_etcd_backups` writes one
+`cluster.etcd_backup.scheduler.run` event per tenant per hour bucket. The
+read-only view reports `scheduler_last_run` and `scheduler_age_hours`, and
+`check_etcd_backups` upgrades a stale or never-run cluster to
+`ETCD_BACKUP_SCHEDULER_SILENT` when no heartbeat arrived for
+`SCHEDULER_SILENCE_HOURS` (2): old backups plus nothing queuing new ones is a
+different incident, with a different fix, than a cluster that simply has old
+backups.

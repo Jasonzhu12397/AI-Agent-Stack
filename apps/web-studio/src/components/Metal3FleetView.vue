@@ -849,6 +849,16 @@ async function loadEtcdBackup(deployment: ClusterDeployment) {
   }
 }
 
+function backupAgeHoursLabel(hours: number | null): string {
+  if (hours === null) {
+    return "never";
+  }
+  if (hours < 1) {
+    return Math.round(hours * 60) + " min ago";
+  }
+  return hours.toFixed(1) + " h ago";
+}
+
 function backupAgeLabel(state: EtcdBackupState | undefined): string {
   if (!state || state.newest_age_hours === null || state.newest_age_hours === undefined) {
     return "no snapshot yet";
@@ -1689,6 +1699,14 @@ onUnmounted(() => {
                   v-if="backupStates[scope.row.id].pre_upgrade_count"
                   class="fleet-version-current"
                 >pre-upgrade snapshots: {{ backupStates[scope.row.id].pre_upgrade_count }}</small>
+                <small
+                  v-if="backupStates[scope.row.id].scheduler_last_run"
+                  class="fleet-version-current"
+                >scheduler last ran {{ backupAgeHoursLabel(backupStates[scope.row.id].scheduler_age_hours ?? null) }}</small>
+                <small
+                  v-else
+                  class="readiness-blocked"
+                >scheduler has never reported; backups are only as fresh as the last manual run</small>
                 <small
                   v-if="backupStates[scope.row.id].reported_by"
                   class="fleet-version-current"

@@ -12,7 +12,7 @@ import datetime
 from typing import Any
 
 from core.etcd_backup_policy import protected_names, spec_policy
-from core.models import AgentCommand, ClusterDeployment
+from core.models import AgentCommand, AuditEvent, ClusterDeployment
 from packages.agent_contracts import etcd_backup as contract
 
 #: How many commands are kept as history for the panel.
@@ -94,6 +94,11 @@ def store_policy(deployment: ClusterDeployment, values: dict[str, Any]) -> dict[
     deployment.save(update_fields=["spec"])
     return kubernetes
 
+
+SCHEDULER_EVENT = "cluster.etcd_backup.scheduler.run"
+#: The scheduler runs hourly; two silent hours is a scheduler that stopped, not
+#: a scheduler between ticks.
+DEFAULT_SCHEDULER_SILENCE_HOURS = 2
 
 NOT_RUN_FINDING = {
     "name": "backup.command",
@@ -180,6 +185,21 @@ def _listing(result: dict[str, Any]) -> list[Any]:
     return []
 
 
+def _scheduler_last_run(deployment: ClusterDeployment) -> datetime.datetime | None:
+    """When the hourly scheduler last said it was alive, for this tenant."""
+
+    return (
+        AuditEvent.objects.filter(
+            tenant=deployment.tenant,
+            event_type=SCHEDULER_EVENT,
+            resource_type="etcd_backup_scheduler",
+        )
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+
+
 def _entries_from(names: Any, cluster_name: str) -> list[dict[str, Any]]:
     """Rebuild contract entries from the file names a command reported."""
 
@@ -220,9 +240,17 @@ def etcd_backup_state(
         ).order_by("-created_at")[:HISTORY_LIMIT]
     )
     runs = [command for command in commands if command.command_type == contract.ACTION]
+    scheduler_at = _scheduler_last_run(deployment)
+    scheduler_age = (
+        (now or datetime.datetime.now(datetime.UTC)) - scheduler_at
+    ).total_seconds() / 3600.0 if scheduler_at else None
     state: dict[str, Any] = {
         "policy": policy,
         "restore_point": None,
+        "scheduler_last_run": scheduler_at.isoformat() if scheduler_at else None,
+        "scheduler_age_hours": (
+            round(scheduler_age, 3) if scheduler_age is not None else None
+        ),
         "last_run": _command_summary(runs[0]) if runs else None,
         "history": [_command_summary(command) for command in commands],
         "newest": None,

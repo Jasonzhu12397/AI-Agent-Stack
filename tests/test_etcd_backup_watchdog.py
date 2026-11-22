@@ -62,7 +62,35 @@ def _workspace():
         status=ClusterDeployment.Status.SUCCEEDED,
         spec={},
     )
+    # The scheduler is alive in this workspace: without a heartbeat every
+    # cluster would be reported as scheduler-silent, which is a different fact.
+    _beat(tenant)
     return tenant, project, target, deployment, user
+
+
+def _scheduler_events(tenant):
+    return AuditEvent.objects.filter(
+        tenant=tenant, event_type="cluster.etcd_backup.scheduler.run"
+    )
+
+
+def _beat(tenant, *, hours_ago: float = 0) -> None:
+    from core.audit import record_audit_event
+
+    record_audit_event(
+        None,
+        tenant,
+        "cluster.etcd_backup.scheduler.run",
+        "etcd_backup_scheduler",
+        "",
+        outcome=AuditEvent.Outcome.SUCCESS,
+        metadata={"bucket": "test"},
+    )
+    if hours_ago:
+        event = _scheduler_events(tenant).first()
+        AuditEvent.objects.filter(pk=event.pk).update(
+            created_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=hours_ago)
+        )
 
 
 def _run(**options):
@@ -238,3 +266,40 @@ def test_a_cluster_that_recovers_gets_one_event_that_says_so():
     # A second clean probe does not celebrate the same recovery twice.
     _run()
     assert _events(deployment, "cluster.etcd_backup.recovered").count() == 1
+
+
+@pytest.mark.django_db
+def test_old_backups_with_a_silent_scheduler_name_the_scheduler():
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=100)
+    _scheduler_events(tenant).delete()
+    _beat(tenant, hours_ago=5)
+
+    report, error = _run()
+
+    assert error
+    assert report["clusters"][0]["code"] == "ETCD_BACKUP_SCHEDULER_SILENT"
+    assert report["clusters"][0]["scheduler_age_hours"] >= 5
+
+
+@pytest.mark.django_db
+def test_old_backups_with_a_live_scheduler_stay_stale():
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=100)
+
+    report, error = _run()
+
+    assert error
+    assert report["clusters"][0]["code"] == "ETCD_BACKUP_STALE"
+
+
+@pytest.mark.django_db
+def test_fresh_backups_are_quiet_even_when_the_scheduler_has_never_reported():
+    tenant, project, target, deployment, user = _workspace()
+    _scheduler_events(tenant).delete()
+    _backup(tenant, project, target, deployment, user, hours_ago=1)
+
+    report, error = _run()
+
+    assert error == ""
+    assert report["problems"] == []

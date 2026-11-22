@@ -25,6 +25,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- A scheduler heartbeat: `queue_etcd_backups` writes one
+  `cluster.etcd_backup.scheduler.run` event per tenant per hour bucket, the view
+  reports `scheduler_last_run` / `scheduler_age_hours`, the Delivery table shows
+  it, and `check_etcd_backups` reports `ETCD_BACKUP_SCHEDULER_SILENT` (rather
+  than plain staleness) when old backups are combined with no heartbeat for two
+  hours.
 - A backup is queued automatically after a command that really changed the
   cluster (a successful upgrade with `upgrade_performed: true`, a rollback with
   `rolled_back: true`), in the same transaction that records the result. A

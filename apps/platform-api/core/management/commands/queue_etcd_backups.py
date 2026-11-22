@@ -17,8 +17,48 @@ import json
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from core.audit import record_audit_event
 from core.etcd_backup_queue import hour_bucket, queue_backup, unqueueable_reason
-from core.models import ClusterDeployment
+from core.models import AuditEvent, ClusterDeployment, Tenant
+
+SCHEDULER_EVENT = "cluster.etcd_backup.scheduler.run"
+
+
+def _record_heartbeat(bucket: str, queued: list, skipped: list) -> None:
+    """Say that the scheduler is alive, once per hour bucket.
+
+    A scheduler that dies is invisible: the panel keeps showing the last backup
+    it took, and nobody learns that nothing is queued any more until the backups
+    are old enough to look stale. One marker per hour is enough to tell "quiet
+    because nothing changed" from "quiet because the process is gone".
+    """
+
+    for tenant in Tenant.objects.all():
+        event = (
+            AuditEvent.objects.filter(
+                tenant=tenant,
+                event_type=SCHEDULER_EVENT,
+                resource_type="etcd_backup_scheduler",
+            )
+            .only("metadata")
+            .first()
+        )
+        metadata = event.metadata if event and isinstance(event.metadata, dict) else {}
+        if metadata.get("bucket") == bucket:
+            continue
+        record_audit_event(
+            None,
+            tenant,
+            SCHEDULER_EVENT,
+            "etcd_backup_scheduler",
+            "",
+            outcome=AuditEvent.Outcome.SUCCESS,
+            metadata={
+                "bucket": bucket,
+                "queued": len(queued),
+                "skipped": len(skipped),
+            },
+        )
 
 
 class Command(BaseCommand):
@@ -77,6 +117,8 @@ class Command(BaseCommand):
                     "created": created,
                 }
             )
+        if not options["dry_run"]:
+            _record_heartbeat(bucket, queued, skipped)
         self.stdout.write(
             json.dumps(
                 {

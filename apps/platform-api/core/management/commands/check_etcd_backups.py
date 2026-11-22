@@ -20,8 +20,16 @@ from core.etcd_backup_state import etcd_backup_state
 from core.models import AuditEvent, ClusterDeployment
 
 PROBLEM_CODES = frozenset(
-    {"ETCD_BACKUP_MISSING", "ETCD_BACKUP_STALE", "ETCD_BACKUP_NOT_RUN_YET"}
+    {
+        "ETCD_BACKUP_MISSING",
+        "ETCD_BACKUP_STALE",
+        "ETCD_BACKUP_NOT_RUN_YET",
+        # Same symptom as STALE, different cause and different fix: the process
+        # that takes backups is gone, so nothing will ever refresh this cluster.
+        "ETCD_BACKUP_SCHEDULER_SILENT",
+    }
 )
+SCHEDULER_SILENCE_HOURS = 2
 PROBLEM_EVENT = "cluster.etcd_backup.problem"
 RECOVERED_EVENT = "cluster.etcd_backup.recovered"
 #: A problem that persists is written once, not once per probe: an audit chain
@@ -69,6 +77,12 @@ class Command(BaseCommand):
                     if not finding["ok"] and finding["code"]
                 ]
                 code = codes[0] if codes else ""
+                age = state.get("scheduler_age_hours")
+                if code in {"ETCD_BACKUP_STALE", "ETCD_BACKUP_NOT_RUN_YET"} and (
+                    age is None or age > SCHEDULER_SILENCE_HOURS
+                ):
+                    # The backups are old *and* nothing is queuing new ones.
+                    code = "ETCD_BACKUP_SCHEDULER_SILENT"
             entry = {
                 "deployment_id": str(deployment.id),
                 "cluster_name": deployment.cluster_name,
@@ -78,6 +92,7 @@ class Command(BaseCommand):
                 "newest_age_hours": state.get("newest_age_hours"),
                 "stale": state.get("stale"),
                 "restore_point": (state.get("restore_point") or {}).get("name"),
+                "scheduler_age_hours": state.get("scheduler_age_hours"),
                 "last_run_status": (state.get("last_run") or {}).get("status"),
             }
             clusters.append(entry)
