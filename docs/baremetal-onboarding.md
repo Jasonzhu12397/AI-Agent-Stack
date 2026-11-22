@@ -90,3 +90,28 @@ labels on the acceptance job, the `needs` gate on `ready == 'true'`, the dispatc
 inputs and the required secret names. The Fleet Inventory shows this as the lab
 workflow tag; secret presence is reported as `not_observable` on purpose,
 because the platform cannot see GitHub secrets.
+
+## Bonded control path and the VLAN that boots
+
+The reference lab reaches every machine over one bonded control path. `bond_control`
+carries the untagged control address (management, BMC virtual media, the Live ISO
+and the control plane), and VLAN 70 (`sdi_semc`) stacks on that same bond as the
+provisioning network. Everything the firmware and the installer touch therefore
+rides the control members; the data bond is a separate fabric for storage and
+tenant traffic.
+
+Two consequences are enforced in code, not in the profile editor:
+
+* A profile may name the VLAN segment by its sub-interface (`bond_control.70`).
+  `plan_infra_networks` stores the base link and derives `<base>.<vlan>` itself,
+  so networkData, the PXE port resolver and the host link check all name the same
+  interface, and the sub-interface is never emitted as a bare physical NIC.
+* A role that joins only a VLAN (storage, SR-IOV) still gets the bond and its
+  members rendered in its networkData. nmstate cannot bring up a VLAN over a link
+  it was not told to create, and a worker that boots with a missing bond is a
+  provisioning failure that only shows up after the install.
+
+`pxe_boot_ports` walks one VLAN hop back to the physical members, because a bond
+and a VLAN are assembled by the OS and firmware PXE can boot only from a member
+NIC. `boot_mac_from_inventory` then picks the MAC of those members from the PXE
+inventory, so `bootMACAddress` never has to be typed into the UI.

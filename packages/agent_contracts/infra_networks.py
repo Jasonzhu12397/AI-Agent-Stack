@@ -182,6 +182,18 @@ def network_link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
     return f"{base}.{network['vlan']}"
 
 
+def _base_link(plan: dict[str, Any], base: str) -> dict[str, Any] | None:
+    """Return the bond or physical interface a VLAN stacks on to, if declared."""
+
+    for network in plan["networks"]:
+        bond = network.get("bond")
+        if bond and bond["name"] == base:
+            return bond
+        if network.get("interface") == base:
+            return {"name": base, "interfaces": [base], "mode": ""}
+    return None
+
+
 def _link_ports(plan: dict[str, Any], link: str) -> list[str]:
     for network in plan["networks"]:
         bond = network.get("bond")
@@ -190,6 +202,35 @@ def _link_ports(plan: dict[str, Any], link: str) -> list[str]:
         if network.get("interface") == link:
             return [link]
     return []
+
+
+def _vlan_subinterface(plan: dict[str, Any], name: str) -> str:
+    """Return the base of ``<base>.<vlan>`` when ``name`` is such a sub-interface.
+
+    A profile may name the VLAN interface (``bond_control.70``) as the segment's
+    interface. That is an OS-built link: firmware PXE cannot boot from it, so
+    any caller that needs a physical port must walk back to the base. A NIC named
+    ``pci@0000:3b:00.0`` also contains dots and must not be mistaken for one.
+    """
+
+    declared = {network["vlan"] for network in plan["networks"] if network.get("vlan")}
+    tail = name.rsplit(".", 1)
+    if len(tail) != 2 or not tail[1].isdigit() or int(tail[1]) not in declared:
+        return ""
+    return tail[0]
+
+
+def _physical_ports(plan: dict[str, Any], link: str) -> list[str]:
+    """Return the physical member ports behind a link, following one VLAN hop."""
+
+    ports = _link_ports(plan, link)
+    base = _vlan_subinterface(plan, link) if ports == [link] else ""
+    if base:
+        ports = _link_ports(plan, base)
+    member = [
+        port for port in ports if not (port != link and _vlan_subinterface(plan, port))
+    ]
+    return member or ports
 
 
 def pxe_boot_ports(plan: dict[str, Any]) -> list[str]:
@@ -213,7 +254,7 @@ def pxe_boot_ports(plan: dict[str, Any]) -> list[str]:
         base = vlan_base_link(plan, network)
     else:
         raise InfraNetworkError("INFRA_NETWORK_INTERFACE_INVALID")
-    ports = _link_ports(plan, base)
+    ports = _physical_ports(plan, base)
     if not ports:
         raise InfraNetworkError("INFRA_NETWORK_PXE_PORT_REQUIRED")
     return ports
@@ -292,6 +333,14 @@ def _network(value: Any, index: int) -> dict[str, Any]:
     direct_interface = None
     if bond is None:
         declared_interface = value.get("interface")
+        if declared_interface is not None and isinstance(declared_interface, str) and vlan:
+            # A VLAN segment may be declared by its sub-interface name
+            # (``bond_control.70``). The contract stores the base and derives
+            # ``<base>.<vlan>`` itself, so every consumer — networkData, the boot
+            # port resolver, the host link check — names the same interface.
+            suffix = f".{vlan}"
+            if declared_interface.endswith(suffix):
+                declared_interface = declared_interface[: -len(suffix)]
         # A VLAN may inherit its base link at render time (its own data bond or
         # the primary link), so only an untagged network must name one.
         if declared_interface is not None or vlan is None:
@@ -454,6 +503,28 @@ def role_links(plan: dict[str, Any], host_role: str) -> list[dict[str, Any]]:
         link = network_link_id(plan, network)
         if link in seen:
             continue
+        if base not in seen:
+            # A host role often joins only the VLAN (storage, SR-IOV) while the
+            # bond that carries it is declared by another role. nmstate cannot
+            # bring up a VLAN over a link it was not told to create, so the base
+            # is rendered here with its members instead of failing at boot.
+            definition = _base_link(plan, base)
+            if definition is None:
+                raise InfraNetworkError("INFRA_NETWORK_BASE_INTERFACE_UNDEFINED")
+            for interface in definition["interfaces"]:
+                if interface not in seen:
+                    ethernets.append({"type": "phy", "id": interface})
+                    seen.add(interface)
+            if definition["mode"]:
+                bonds.append(
+                    {
+                        "type": "bond",
+                        "id": base,
+                        "bondMode": definition["mode"],
+                        "interfaces": list(definition["interfaces"]),
+                    }
+                )
+            seen.add(base)
         vlans.append(
             {
                 "type": "vlan",

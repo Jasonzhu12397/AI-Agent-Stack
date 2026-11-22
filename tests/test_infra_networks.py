@@ -429,3 +429,70 @@ def test_a_pci_named_port_matches_the_bare_pci_address():
     )
     assert asserted["matched"] is True
     assert asserted["hosts"] == ["lab-cp-1"]
+
+
+def test_a_vlan_only_role_still_renders_the_bond_it_stacks_on():
+    profile = _profile()
+    storage = next(
+        net for net in profile["networks"] if net["role"] == "storage-internal"
+    )
+    # The storage segment joins the data bond, but this role is not given the
+    # data network itself; nmstate still needs the bond and its members.
+    storage["host_roles"] = ["storage"]
+    storage["vlan"] = 3608
+    plan = plan_infra_networks(profile)
+
+    data = infra.render_role_network_data(plan, "worker")
+    assert "bond_data" in [bond["id"] for bond in data["links"].get("bonds", [])]
+
+    storage_data = infra.render_role_network_data(plan, "storage")
+    ids = [item["id"] for item in storage_data["links"]["bonds"]]
+    assert "bond_data" in ids
+    physical = [item["id"] for item in storage_data["links"]["ethernets"]]
+    assert "ens1f0" in physical
+    assert "ens1f1" in physical
+
+
+def _with_provisioning(profile: dict) -> dict:
+    """The reference lab boots over VLAN 70 stacked on the control bond."""
+
+    profile["networks"].append(
+        {
+            "name": "sdi-semc",
+            "role": "provisioning",
+            "vlan": 70,
+            "cidr": "172.18.37.0/24",
+            "gateway_ipv4": "172.18.37.1",
+            "ip_pools": [
+                {"start": "172.18.37.10", "end": "172.18.37.99", "prefix": 24}
+            ],
+            "host_roles": ["control_plane", "worker"],
+        }
+    )
+    return profile
+
+
+def test_a_vlan_declared_by_its_sub_interface_renders_as_a_vlan():
+    profile = _with_provisioning(_profile())
+    provisioning = next(
+        net for net in profile["networks"] if net["role"] == "provisioning"
+    )
+    provisioning["interface"] = "bond_control.70"
+    plan = plan_infra_networks(profile)
+    data = infra.render_role_network_data(plan, "worker")
+    vlan_ids = [item["id"] for item in data["links"]["vlans"]]
+    assert "bond_control.70" in vlan_ids
+    # The sub-interface is never emitted as a bare physical NIC.
+    assert "bond_control.70" not in [
+        item["id"] for item in data["links"]["ethernets"]
+    ]
+
+
+def test_pxe_ports_resolve_a_dotted_vlan_interface_to_its_members():
+    profile = _with_provisioning(_profile())
+    provisioning = next(
+        net for net in profile["networks"] if net["role"] == "provisioning"
+    )
+    provisioning["interface"] = "bond_control.70"
+    plan = plan_infra_networks(profile)
+    assert infra.pxe_boot_ports(plan) == ["eno1", "eno2"]
