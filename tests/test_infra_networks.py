@@ -496,3 +496,24 @@ def test_pxe_ports_resolve_a_dotted_vlan_interface_to_its_members():
     provisioning["interface"] = "bond_control.70"
     plan = plan_infra_networks(profile)
     assert infra.pxe_boot_ports(plan) == ["eno1", "eno2"]
+
+
+def test_a_data_bond_can_be_named_by_the_pci_addresses_pxe_reported():
+    profile = _profile()
+    data = next(net for net in profile["networks"] if net["role"] == "data")
+    data["pci_addresses"] = ["0000:3b:00.0", "0000:3b:00.1"]
+    del data["bond"]["interfaces"]
+    plan = plan_infra_networks(profile)
+    bond = next(
+        item for item in infra.role_links(plan, "worker")["bonds"] if item["id"] == "bond_data"
+    )
+    assert bond["interfaces"] == ["pci@0000:3b:00.0", "pci@0000:3b:00.1"]
+
+
+def test_a_bond_with_neither_ports_nor_pci_addresses_is_refused():
+    profile = _profile()
+    data = next(net for net in profile["networks"] if net["role"] == "data")
+    del data["bond"]["interfaces"]
+    with pytest.raises(infra.InfraNetworkError) as error:
+        plan_infra_networks(profile)
+    assert error.value.code == "INFRA_NETWORK_BOND_INTERFACES_INVALID"

@@ -182,6 +182,18 @@ def network_link_id(plan: dict[str, Any], network: dict[str, Any]) -> str:
     return f"{base}.{network['vlan']}"
 
 
+def _declared_pci(value: Any) -> list[str]:
+    """Return the PCI addresses a network declares, normalized to lower case."""
+
+    if not isinstance(value, list):
+        return []
+    return [
+        item.lower()
+        for item in value
+        if isinstance(item, str) and _PCI.fullmatch(item.lower())
+    ]
+
+
 def _base_link(plan: dict[str, Any], base: str) -> dict[str, Any] | None:
     """Return the bond or physical interface a VLAN stacks on to, if declared."""
 
@@ -310,6 +322,13 @@ def _network(value: Any, index: int) -> dict[str, Any]:
             raise InfraNetworkError("INFRA_NETWORK_BOND_INVALID")
         bond_name = _interface(bond.get("name"), "INFRA_NETWORK_BOND_NAME_INVALID")
         interfaces = bond.get("interfaces")
+        if interfaces in (None, []) and _declared_pci(value.get("pci_addresses")):
+            # A data bond may be described by the PCI addresses the profile
+            # declares (collected from PXE) instead of kernel names, so the UI
+            # never asks the operator to type them. The address is the port.
+            interfaces = [
+                f"pci@{address}" for address in _declared_pci(value.get("pci_addresses"))
+            ]
         if (
             not isinstance(interfaces, list)
             or not 1 <= len(interfaces) <= 8

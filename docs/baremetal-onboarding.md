@@ -115,3 +115,9 @@ Two consequences are enforced in code, not in the profile editor:
 and a VLAN are assembled by the OS and firmware PXE can boot only from a member
 NIC. `boot_mac_from_inventory` then picks the MAC of those members from the PXE
 inventory, so `bootMACAddress` never has to be typed into the UI.
+
+A data bond may also be described by the PCI addresses PXE reported, with no
+interface list at all: `bond.interfaces` then derives as `pci@<address>` for each
+declared address, so the operator never retypes kernel names that the inventory
+already knows. A bond with neither ports nor PCI addresses is still refused, so
+the template can never render a bond with no members.
