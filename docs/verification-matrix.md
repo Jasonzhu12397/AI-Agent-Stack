@@ -8,14 +8,16 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 45015159500](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45015159500), commit `cc970a71`, is the `v1.1.0` baseline (the `v1.0.0` baseline was [run 44979582251](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/44979582251), commit `20a807fd`):
+[GitHub Actions run 45032629443](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45032629443), commit `dfddd41d`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
 
-- Pytest: **1699 passed, 15 skipped** (four shards, all green).
+- Pytest: **1757 passed, 15 skipped** (four shards, all green).
 - Ruff, Django checks, migration drift detection, PostgreSQL migrations and mTLS ingress: passed.
 - Compose full-stack smoke (API + Worker + Web + PostgreSQL + Redis build, start and probe): passed.
 - Metal3 and SR-IOV CRD integration against a real kind cluster: passed.
 - Vue unit tests (36) and production build: passed.
 - Agent images (cloud-control, cloud, eph, target, platform API): built.
+
+The `v1.1.0` release baseline remains [run 45015159500](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45015159500), commit `cc970a71`, with 1699 passed; the `v1.0.0` baseline was [run 44979582251](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/44979582251), commit `20a807fd`.
 
 The version reported by `/api/v1/`, `pyproject.toml`, `apps/web-studio/package.json` and the release manifest is asserted to be one value by `tests/test_health.py` and `tests/test_metal3_release_evidence.py`.
 
