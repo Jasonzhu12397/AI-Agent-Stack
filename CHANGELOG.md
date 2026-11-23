@@ -30,6 +30,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- `enabled` must be a boolean: a policy request carrying `"false"` is refused with
+  `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
+  `bool("false")`, and a hand-edited spec value is reported and skipped rather
+  than guessed.
 - The verification matrix points at run 45090647438 (`ac42474d`, 1814 passed).
 - A restore point reported only by an upgrade is labelled `listed: false` in the
   Delivery table, so its path is not mistaken for a file a listing has seen.

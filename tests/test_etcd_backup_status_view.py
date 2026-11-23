@@ -911,3 +911,32 @@ def test_a_failed_upgrade_still_reports_the_snapshot_it_took():
     # failed upgrade is exactly when the pre-upgrade file matters.
     assert body["restore_point"]["name"] == name
     assert body["restore_point"]["path"] == f"/var/lib/etcd/backups/{name}"
+
+
+@pytest.mark.django_db
+def test_switching_backups_off_accepts_booleans_only():
+    user, tenant, project, target, deployment, client = _workspace()
+    url = f"/api/v1/cluster-deployments/{deployment.id}/etcd-backup/policy/"
+
+    refused = client.post(url, {"enabled": "false"}, format="json")
+    assert refused.status_code == 400
+    assert refused.data["code"] == "ETCD_BACKUP_ENABLED_INVALID"
+    deployment.refresh_from_db()
+    assert (deployment.spec or {}).get("kubernetes", {}).get("etcd_backup") is None
+
+    accepted = client.post(url, {"enabled": False}, format="json")
+    assert accepted.status_code == 200
+    assert accepted.data["enabled"] is False
+
+
+@pytest.mark.django_db
+def test_a_hand_edited_switch_is_reported_as_invalid_not_guessed():
+    _, _, _, _, deployment, client = _workspace()
+    deployment.spec = {"kubernetes": {"etcd_backup": "false"}}
+    deployment.save(update_fields=["spec"])
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body["policy"]["valid"] is False
+    assert body["policy"]["error"]["code"] == "ETCD_BACKUP_ENABLED_INVALID"
+    assert body["findings"][0]["code"] == "ETCD_BACKUP_ENABLED_INVALID"

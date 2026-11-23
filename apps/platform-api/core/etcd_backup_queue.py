@@ -16,7 +16,7 @@ from typing import Any
 
 from django.db import transaction
 
-from core.etcd_backup_policy import protected_names, spec_policy
+from core.etcd_backup_policy import enabled_switch, protected_names, spec_policy
 from core.models import AgentCommand, AgentNode, ClusterDeployment
 from packages.agent_contracts.etcd_backup import (
     ACTION,
@@ -68,7 +68,12 @@ def unqueueable_reason(deployment: ClusterDeployment) -> str:
 
     spec = deployment.spec if isinstance(deployment.spec, dict) else {}
     kubernetes = spec.get("kubernetes")
-    if isinstance(kubernetes, dict) and kubernetes.get("etcd_backup") is False:
+    try:
+        switch = enabled_switch(kubernetes)
+    except EtcdBackupError as exc:
+        # Never guess whether a hand-edited value means on or off.
+        return exc.code
+    if switch is False:
         return DISABLED
     node = deployment.target_node
     if node is None or node.node_type != AgentNode.NodeType.TARGET_CLUSTER:

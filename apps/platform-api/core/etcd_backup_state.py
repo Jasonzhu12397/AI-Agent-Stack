@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from core.etcd_backup_policy import protected_names, spec_policy
+from core.etcd_backup_policy import enabled_switch, protected_names, spec_policy
 from core.models import AgentCommand, AuditEvent, ClusterDeployment
 from packages.agent_contracts import etcd_backup as contract
 
@@ -23,6 +23,14 @@ def backup_policy(deployment: ClusterDeployment) -> dict[str, Any]:
     """The backup policy this deployment declares, or the contract defaults."""
 
     kubernetes = (deployment.spec or {}).get("kubernetes") or {}
+    try:
+        enabled = enabled_switch(kubernetes)
+    except contract.EtcdBackupError as exc:
+        return {
+            "enabled": True,
+            "valid": False,
+            "error": {"code": exc.code, "message": str(exc)},
+        }
     payload = {
         "cluster_name": deployment.cluster_name,
         "execution_mode": "execute",
@@ -41,7 +49,7 @@ def backup_policy(deployment: ClusterDeployment) -> dict[str, Any]:
             "error": {"code": exc.code, "message": str(exc)},
         }
     return {
-        "enabled": kubernetes.get("etcd_backup") is not False,
+        "enabled": True if enabled is None else enabled,
         "valid": True,
         "directory": request["directory"],
         "keep_count": request["keep_count"],
@@ -77,7 +85,15 @@ def store_policy(deployment: ClusterDeployment, values: dict[str, Any]) -> dict[
         if field in values:
             kubernetes[key] = values[field]
     if "enabled" in values:
-        kubernetes["etcd_backup"] = bool(values["enabled"])
+        enabled = values["enabled"]
+        if not isinstance(enabled, bool):
+            # bool("false") is True: accepting a string here would silently
+            # switch backups back on when an operator asked to switch them off.
+            raise contract.EtcdBackupError(
+                "ETCD_BACKUP_ENABLED_INVALID",
+                "enabled must be true or false, not a string or a number",
+            )
+        kubernetes["etcd_backup"] = enabled
     request_payload = {
         "cluster_name": deployment.cluster_name,
         "execution_mode": "execute",

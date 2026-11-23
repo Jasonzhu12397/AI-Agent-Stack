@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.models import AgentCommand, ClusterDeployment
+from packages.agent_contracts.etcd_backup import EtcdBackupError
 from packages.agent_contracts.kubernetes_rollback import ACTION as ROLLBACK_ACTION
 
 #: ``spec.kubernetes`` keys that carry retention policy, mapped to the request
@@ -33,6 +34,28 @@ ROLLBACK_ENDED = (
     AgentCommand.Status.FAILED,
     AgentCommand.Status.CANCELLED,
 )
+
+
+def enabled_switch(kubernetes: Any) -> bool | None:
+    """The on/off switch a spec declares, refusing values that are not a bool.
+
+    A spec edited by hand can carry "false", or 0, or "no". Interpreting those
+    would need a guess, and either guess is wrong half the time: backups either
+    run when they were switched off or stop when they were left on. The caller
+    is told the value is unusable so it can say so instead of guessing.
+    """
+
+    if not isinstance(kubernetes, dict):
+        return None
+    if "etcd_backup" not in kubernetes:
+        return None
+    value = kubernetes["etcd_backup"]
+    if isinstance(value, bool):
+        return value
+    raise EtcdBackupError(
+        "ETCD_BACKUP_ENABLED_INVALID",
+        "spec.kubernetes.etcd_backup must be true or false",
+    )
 
 
 def spec_policy(kubernetes: Any) -> dict[str, Any]:

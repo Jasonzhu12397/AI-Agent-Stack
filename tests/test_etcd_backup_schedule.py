@@ -403,3 +403,17 @@ def test_a_succeeded_rollback_releases_the_snapshot_it_restored_from():
     # directory never shrinks.
     payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
     assert "protect" not in payload
+
+
+@pytest.mark.django_db
+def test_a_hand_edited_switch_is_skipped_with_its_own_code():
+    user, tenant, project, eph, target = _workspace()
+    _deployment(
+        tenant, project, eph, target, user, spec={"kubernetes": {"etcd_backup": 0}}
+    )
+
+    report = _run()
+
+    assert report["queued"] == []
+    assert report["skipped"][0]["reason"] == "ETCD_BACKUP_ENABLED_INVALID"
+    assert not AgentCommand.objects.filter(command_type=ACTION).exists()

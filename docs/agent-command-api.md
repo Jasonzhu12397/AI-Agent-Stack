@@ -607,3 +607,9 @@ A restore point the platform only learned from an upgrade report carries
 `listed: false`, and the Delivery table says so next to it: the file was verified
 when it was written, but no later directory listing has seen it, so an operator
 knows to check the path before using it.
+
+The on/off switch is read strictly: `spec.kubernetes.etcd_backup` must be a JSON
+boolean. A hand-edited `"false"`, `0` or `"no"` is reported as
+`ETCD_BACKUP_ENABLED_INVALID` by the view and the watchdog, and the scheduler
+skips the cluster under that code instead of guessing — `bool("false")` is
+`True`, and either guess switches backups the wrong way half the time.
