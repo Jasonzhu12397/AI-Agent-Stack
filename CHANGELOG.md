@@ -8,6 +8,14 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- The etcd backup scheduler heartbeat was recorded once per tenant, so one
+  queued cluster lent its freshness to every other cluster in that tenant:
+  agentless, policy-disabled and never-queued clusters looked evaluated, and the
+  watchdog could not tell a stopped scheduler from a quiet hour. The heartbeat
+  is now written per deployment, carrying the cluster's own evaluation outcome
+  (`queued` with its command id, or `skipped` with its reason), and the state
+  reader trusts only that deployment's own record; legacy tenant-level rows are
+  ignored on read.
 - Pre-upgrade snapshots (`snapshot-pre-<version>-<stamp>.db`) were invisible to
   the backup contract, so the recurring retention pass never pruned them and one
   file piled up per upgrade forever. They are now recognised (both the new

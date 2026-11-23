@@ -227,13 +227,20 @@ def _listing(result: dict[str, Any]) -> list[Any]:
 
 
 def _scheduler_last_run(deployment: ClusterDeployment) -> datetime.datetime | None:
-    """When the hourly scheduler last said it was alive, for this tenant."""
+    """When the hourly scheduler last evaluated this cluster, on its own record.
+
+    The heartbeat is written per deployment, so only a record that names this
+    deployment counts. Older tenant-level rows (empty ``resource_id``) never
+    match: they are tolerated as history, but they must not lend this cluster
+    freshness they did not earn.
+    """
 
     return (
         AuditEvent.objects.filter(
             tenant=deployment.tenant,
             event_type=SCHEDULER_EVENT,
             resource_type="etcd_backup_scheduler",
+            resource_id=str(deployment.id),
         )
         .order_by("-created_at")
         .values_list("created_at", flat=True)

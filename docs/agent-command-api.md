@@ -497,14 +497,33 @@ inside an hour the scheduler already covered does not take a second snapshot.
 ### Is the scheduler still alive?
 
 A scheduler that dies looks exactly like a scheduler between ticks until the
-backups are old enough to look stale, so `queue_etcd_backups` writes one
-`cluster.etcd_backup.scheduler.run` event per tenant per hour bucket. The
-read-only view reports `scheduler_last_run` and `scheduler_age_hours`, and
-`check_etcd_backups` upgrades a stale or never-run cluster to
-`ETCD_BACKUP_SCHEDULER_SILENT` when no heartbeat arrived for
-`SCHEDULER_SILENCE_HOURS` (2): old backups plus nothing queuing new ones is a
-different incident, with a different fix, than a cluster that simply has old
-backups.
+backups are old enough to look stale, so `queue_etcd_backups` records one
+`cluster.etcd_backup.scheduler.run` event **per deployment per hour bucket**.
+The event names the cluster it evaluated: `resource_type` is
+`etcd_backup_scheduler`, `resource_id` is the deployment id, and the metadata
+carries:
+
+- `bucket`: the hour bucket the evaluation belongs to (`YYYYMMDDTHH`);
+- `result`: `queued` when the backup command for this cluster was queued this
+  bucket, or `skipped` when the cluster was left alone on purpose;
+- `reason`: the skip code (`disabled`, `no_target_agent`, or a contract
+  validation code) when `result` is `skipped`; absent for `queued`;
+- `command_id`: the queued backup command id when `result` is `queued`;
+- `cluster_name`: the cluster the record describes.
+
+A skipped cluster still gets its own record: being skipped by policy is an
+evaluation outcome, not a silent scheduler. The record is idempotent per bucket —
+a second pass in the same hour adds nothing — and `--dry-run` writes none.
+
+The read-only view reports `scheduler_last_run` and `scheduler_age_hours` from
+that deployment's own record only; a record written for another cluster in the
+same tenant never counts. Older tenant-level rows (empty `resource_id`) are
+ignored on read: they do not raise, but neither do they lend freshness to a
+cluster the scheduler never evaluated. `check_etcd_backups` upgrades a stale or
+never-run cluster to `ETCD_BACKUP_SCHEDULER_SILENT` when no record for *this*
+cluster arrived for `SCHEDULER_SILENCE_HOURS` (2): old backups plus nothing
+queuing new ones is a different incident, with a different fix, than a cluster
+that simply has old backups.
 
 ### When the newest attempt fails
 
