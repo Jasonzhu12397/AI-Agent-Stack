@@ -177,7 +177,12 @@ PLUGIN_HTTP_ALLOWED_HOSTS = [
     for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
     if value.strip()
 ]
-PLUGIN_CREDENTIAL_RESOLVER = os.getenv("PLUGIN_CREDENTIAL_RESOLVER", "").strip()
+PLUGIN_CREDENTIAL_RESOLVER = os.getenv(
+    "PLUGIN_CREDENTIAL_RESOLVER", "core.plugin_credentials.resolve"
+).strip()
+PLUGIN_CREDENTIAL_ENV_PREFIX = os.getenv(
+    "PLUGIN_CREDENTIAL_ENV_PREFIX", "PLUGIN_SECRET_"
+).strip()
 BMC_CREDENTIAL_RESOLVER = os.getenv("BMC_CREDENTIAL_RESOLVER", "").strip()
 BMC_VAULT_ADDR = os.getenv("BMC_VAULT_ADDR", "").strip()
 BMC_VAULT_TOKEN = os.getenv("BMC_VAULT_TOKEN", "").strip()

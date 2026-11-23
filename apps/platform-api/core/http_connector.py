@@ -7,6 +7,13 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from core.plugin_credentials import (
+    CredentialAccessDeniedError,
+    CredentialError,
+    CredentialInvalidShapeError,
+    CredentialReferenceInvalidError,
+    CredentialResolverNotConfiguredError,
+)
 from core.tool_router import ToolContext, ToolExecutionError
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -66,22 +73,28 @@ def _resolve_auth(context):
     if context.connection_auth_type == "none":
         return {}, None
     if not context.credential_ref:
-        raise ToolExecutionError("Connector credential reference is missing.")
+        raise CredentialReferenceInvalidError("Connector credential reference is missing.")
     resolver_path = getattr(settings, "PLUGIN_CREDENTIAL_RESOLVER", "")
     if not resolver_path:
-        raise ToolExecutionError("No credential resolver is configured for this connector.")
+        raise CredentialResolverNotConfiguredError(
+            "No credential resolver is configured for this connector."
+        )
     try:
         resolver = import_string(resolver_path)
         credential = resolver(context.credential_ref)
+    except CredentialError:
+        raise
     except Exception:
-        raise ToolExecutionError("Connector credential could not be resolved.") from None
+        raise CredentialAccessDeniedError("Connector credential could not be resolved.") from None
     if not isinstance(credential, dict):
-        raise ToolExecutionError("Credential resolver returned an invalid credential.")
+        raise CredentialInvalidShapeError("Credential resolver returned an invalid credential.")
     credential_type = credential.get("type")
     if credential_type == "bearer":
         token = credential.get("token")
         if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
-            raise ToolExecutionError("Credential resolver returned an invalid bearer token.")
+            raise CredentialInvalidShapeError(
+                "Credential resolver returned an invalid bearer token."
+            )
         return {"Authorization": "Bearer " + token}, None
     if credential_type == "header":
         name = credential.get("name")
@@ -95,7 +108,9 @@ def _resolve_auth(context):
             or "\r" in value
             or name.lower() in {"host", "content-length", "transfer-encoding"}
         ):
-            raise ToolExecutionError("Credential resolver returned an invalid header credential.")
+            raise CredentialInvalidShapeError(
+                "Credential resolver returned an invalid header credential."
+            )
         return {name: value}, None
     if credential_type == "query":
         name = credential.get("name")
@@ -108,9 +123,13 @@ def _resolve_auth(context):
             or len(value) > 4096
             or any(ord(char) < 32 for char in value)
         ):
-            raise ToolExecutionError("Credential resolver returned an invalid query credential.")
+            raise CredentialInvalidShapeError(
+                "Credential resolver returned an invalid query credential."
+            )
         return {}, (name, value)
-    raise ToolExecutionError("Credential resolver returned an unsupported credential type.")
+    raise CredentialInvalidShapeError(
+        "Credential resolver returned an unsupported credential type."
+    )
 
 
 def _resolve_auth_headers(context):
