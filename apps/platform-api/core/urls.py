@@ -1,5 +1,5 @@
 # ruff: noqa: I001
-from django.urls import path
+from django.urls import include, path
 
 from core.audit_views import (
     AuditEventListView,
@@ -594,4 +594,5 @@ urlpatterns = [
         ModelTestView.as_view(),
         name="model-test",
     ),
+    path("", include("core.data_controls_urls")),
 ]
