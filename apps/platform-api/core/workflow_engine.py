@@ -11,7 +11,18 @@ from django.utils import timezone
 
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.rag_runtime import RagRuntimeError, retrieve_context
+from core.agent_capability_router import (
+    CAPABILITY_DISABLED,
+    CAPABILITY_NOT_INSTALLED,
+    CapabilityResolutionError,
+    invoke_capability,
+)
+from core.plugin_agent_binding import (
+    BINDING_VERSION_MISMATCH,
+    MARKETPLACE_AGENT_KIND,
+)
 from core.models import (
+    AgentPluginInstallation,
     AgentVersion,
     AuditEvent,
     KnowledgeBase,
@@ -25,7 +36,7 @@ from core.models import (
 )
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
-from core.tool_router import ToolExecutionError, ToolRouter
+from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 from core.token_budget import (
     TenantTokenBudgetExceeded,
     reserve_tenant_tokens,
@@ -88,6 +99,14 @@ class WorkflowApprovalPending(Exception):
     def __init__(self, node_id):
         super().__init__(node_id)
         self.node_id = node_id
+
+
+class MarketplaceAgentExecutionError(WorkflowValidationError):
+    """A bound marketplace agent failed; ``code`` mirrors the router failure codes."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 def validate_workflow_definition(definition):
@@ -212,6 +231,16 @@ def validate_workflow_definition(definition):
                 raise WorkflowValidationError(
                     f"Agent node {node_id} agent_version_id must be a UUID."
                 ) from exc
+            capability = config.get("capability")
+            if capability is not None and not isinstance(capability, str):
+                raise WorkflowValidationError(
+                    f"Agent node {node_id} capability must be a string."
+                )
+            arguments = config.get("arguments")
+            if arguments is not None and not isinstance(arguments, dict):
+                raise WorkflowValidationError(
+                    f"Agent node {node_id} arguments must be an object."
+                )
             instructions = config.get("instructions", "")
             if not isinstance(instructions, str) or len(instructions) > 4000:
                 raise WorkflowValidationError(
@@ -546,6 +575,22 @@ def validate_model_references(graph, tenant, project):
                     "A workflow agent node references an unavailable agent version."
                 )
             snapshot = agent_version.config_snapshot
+            if snapshot.get("kind") == MARKETPLACE_AGENT_KIND:
+                capability = snapshot.get("capability")
+                if not isinstance(capability, str) or not capability:
+                    raise WorkflowValidationError(
+                        "A bound marketplace agent snapshot is missing its capability."
+                    )
+                configured = config.get("capability")
+                if configured is not None and configured != capability:
+                    raise WorkflowValidationError(
+                        "Workflow agent node capability does not match the bound "
+                        "marketplace agent version."
+                    )
+                # Active-state and version checks happen at node execution so
+                # an install that is later disabled or uninstalled fails as a
+                # recorded step instead of aborting the whole run upfront.
+                continue
             try:
                 model = ModelConfig.objects.select_related("provider").get(
                     pk=snapshot["model_config_id"],
@@ -671,6 +716,147 @@ def _value_text(value):
     if value is None:
         return ""
     return json.dumps(value, ensure_ascii=False)
+
+
+def _marketplace_arguments(node, state, snapshot):
+    """Resolve capability arguments from static config, a source node, or input."""
+
+    config = node["config"]
+    arguments = dict(config.get("arguments", {}))
+    arguments_from = config.get("arguments_from")
+    if arguments_from:
+        source = state.get(arguments_from)
+        if not isinstance(source, dict):
+            raise WorkflowValidationError(
+                "Marketplace agent arguments_from must reference a node that "
+                "returned an object."
+            )
+        return source
+    source_value = _step_input(node, state)
+    if isinstance(source_value, dict):
+        return {**arguments, **source_value}
+    if source_value is not None:
+        arguments.setdefault("input", _value_text(source_value))
+    return arguments
+
+
+def _execute_marketplace_agent(
+    node, state, agent_version, snapshot, tenant, project, task, workflow_run
+):
+    """Dispatch a bound marketplace capability through the capability router.
+
+    Every failure path -- uninstalled, disabled, auth required, unsupported
+    protocol, in-flight uninstall, invocation failure or a pinned version
+    mismatch -- surfaces as a :class:`MarketplaceAgentExecutionError` carrying
+    the stable failure code. The engine never fabricates an empty success
+    result when the capability cannot be reached.
+    """
+
+    installation_id = snapshot.get("installation_id")
+    capability = snapshot.get("capability")
+    installation = (
+        AgentPluginInstallation.objects.filter(pk=installation_id)
+        .select_related("plugin")
+        .first()
+    )
+    if installation is None:
+        raise MarketplaceAgentExecutionError(
+            CAPABILITY_NOT_INSTALLED,
+            "The bound agent installation no longer exists.",
+        )
+    installation.refresh_from_db()
+    installation.plugin.refresh_from_db()
+    if installation.status == AgentPluginInstallation.Status.UNINSTALLED:
+        raise MarketplaceAgentExecutionError(
+            CAPABILITY_NOT_INSTALLED,
+            "The bound agent installation was uninstalled.",
+        )
+    if installation.status == AgentPluginInstallation.Status.DISABLED:
+        raise MarketplaceAgentExecutionError(
+            CAPABILITY_DISABLED,
+            "The bound agent installation is disabled.",
+        )
+    if not installation.plugin.enabled:
+        raise MarketplaceAgentExecutionError(
+            CAPABILITY_DISABLED,
+            "The bound agent plugin is disabled.",
+        )
+    if installation.plugin_version != snapshot.get("plugin_version"):
+        raise MarketplaceAgentExecutionError(
+            BINDING_VERSION_MISMATCH,
+            "The bound plugin version no longer matches this workflow version.",
+        )
+
+    arguments = _marketplace_arguments(node, state, snapshot)
+    try:
+        result = invoke_capability(
+            str(tenant.id),
+            str(project.id),
+            capability,
+            arguments,
+            approved=False,
+        )
+    except ToolApprovalRequired as exc:
+        record_audit_event(
+            None,
+            tenant,
+            "workflow.marketplace_agent.executed",
+            "agent_definition",
+            agent_version.agent_id,
+            project=project,
+            outcome=AuditEvent.Outcome.FAILURE,
+            metadata={
+                "workflow_task_id": str(task.id),
+                "plugin_key": snapshot.get("plugin_key"),
+                "capability": capability,
+                "code": "APPROVAL_REQUIRED",
+            },
+            actor=task.created_by,
+        )
+        raise MarketplaceAgentExecutionError(
+            "APPROVAL_REQUIRED", "This capability requires explicit approval."
+        ) from exc
+    except CapabilityResolutionError as exc:
+        record_audit_event(
+            None,
+            tenant,
+            "workflow.marketplace_agent.executed",
+            "agent_definition",
+            agent_version.agent_id,
+            project=project,
+            outcome=AuditEvent.Outcome.FAILURE,
+            metadata={
+                "workflow_task_id": str(task.id),
+                "plugin_key": snapshot.get("plugin_key"),
+                "capability": capability,
+                "code": exc.code,
+            },
+            actor=task.created_by,
+        )
+        raise MarketplaceAgentExecutionError(exc.code, str(exc)) from exc
+
+    record_audit_event(
+        None,
+        tenant,
+        "workflow.marketplace_agent.executed",
+        "agent_definition",
+        agent_version.agent_id,
+        project=project,
+        outcome=AuditEvent.Outcome.SUCCESS,
+        metadata={
+            "workflow_task_id": str(task.id),
+            "plugin_key": snapshot.get("plugin_key"),
+            "capability": capability,
+        },
+        actor=task.created_by,
+    )
+    return {
+        **result,
+        "agent_id": str(agent_version.agent_id),
+        "agent_version": agent_version.version,
+        "capability": capability,
+        "plugin_key": snapshot.get("plugin_key"),
+    }
 
 
 def _execute_node(node, state, input_data, tenant, project, task, workflow_run=None):
@@ -888,6 +1074,17 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 "Workflow agent version is no longer available."
             ) from exc
         snapshot = agent_version.config_snapshot
+        if snapshot.get("kind") == MARKETPLACE_AGENT_KIND:
+            return _execute_marketplace_agent(
+                node,
+                state,
+                agent_version,
+                snapshot,
+                tenant,
+                project,
+                task,
+                workflow_run,
+            )
         source_value = _step_input(node, state)
         if isinstance(source_value, dict) and isinstance(source_value.get("gathered"), list):
             source_text = ""
@@ -1472,8 +1669,8 @@ def execute_workflow_run(task, worker_id, renew_lease):
         except Exception as exc:
             step.status = WorkflowStepRun.Status.FAILED
             step.error = {
-                "code": "WORKFLOW_NODE_FAILED",
-                "message": type(exc).__name__,
+                "code": getattr(exc, "code", "WORKFLOW_NODE_FAILED"),
+                "message": str(exc) or type(exc).__name__,
             }
             step.finished_at = timezone.now()
             step.save(update_fields=["status", "error", "finished_at"])

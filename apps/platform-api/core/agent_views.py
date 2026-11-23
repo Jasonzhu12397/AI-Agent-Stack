@@ -28,6 +28,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.plugin_agent_binding import MARKETPLACE_AGENT_KIND
 
 
 def get_tenant(request, tenant_id):
@@ -180,6 +181,16 @@ class AgentPublishView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
             config = agent.draft_config
+            if config.get("kind") == MARKETPLACE_AGENT_KIND:
+                return Response(
+                    {
+                        "detail": (
+                            "Marketplace agents are bound from installed plugins "
+                            "and cannot be republished through the agent editor."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
             required = ["model_config_id", "system_prompt"]
             missing = [field for field in required if not config.get(field)]
             if missing:
