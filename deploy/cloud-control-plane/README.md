@@ -1,6 +1,6 @@
 # Cloud Control Plane deployment
 
-This profile deploys the cloud-side AI Agent Studio Control Plane on a cloud VM (Alibaba Cloud or Tencent Cloud) using Docker Compose. PostgreSQL, Redis and Qdrant are external managed services; no development database or default credentials are bundled in this production profile. The EPH and Target Node Agents are deployed separately to their respective Kubernetes clusters using ../agents/deploy.sh.
+This profile deploys the cloud-side AI Agent Studio Control Plane on a cloud VM (Alibaba Cloud or Tencent Cloud) using Docker Compose. PostgreSQL, Redis and Qdrant are external managed services; no development database or default credentials are bundled in this production profile. The EPH and Target Node Agents are deployed separately to their respective Kubernetes clusters using ../agents/deploy_agents.py.
 
 ## Runtime separation
 
@@ -47,7 +47,7 @@ Set `CLOUD_CONTROL_API_URL`, `CLOUD_CONTROL_CA_PEM_PATH`, `PLATFORM_API_CLIENT_P
 ## Build and deploy
 
 ~~~bash
-bash deploy/cloud-control-plane/deploy.sh
+python3 deploy/cloud-control-plane/deploy_cloud_control.py
 docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml exec api python apps/platform-api/manage.py createsuperuser
 docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml logs -f api worker web
 ~~~

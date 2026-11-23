@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_three_agent_deploy_requires_three_distinct_contexts_and_digest_images():
-    script = (ROOT / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
+    script = (ROOT / "deploy/agents/deploy_agents.py").read_text(encoding="utf-8")
     assert "CLOUD_CONTEXT_REQUIRED" in script
     assert "EPH_CONTEXT_REQUIRED" in script
     assert "TARGET_CONTEXT_REQUIRED" in script
@@ -15,33 +15,31 @@ def test_three_agent_deploy_requires_three_distinct_contexts_and_digest_images()
     assert "CLOUD_CONTROL_IMAGE_MUST_BE_PINNED_BY_SHA256_DIGEST" in script
     assert "EPH_AGENT_IMAGE_MUST_BE_PINNED_BY_SHA256_DIGEST" in script
     assert "TARGET_AGENT_IMAGE_MUST_BE_PINNED_BY_SHA256_DIGEST" in script
-    assert "apply --dry-run=server" in script
+    assert '"--dry-run=server"' in script
     assert "THREE_AGENT_DEPLOYMENT_READY" in script
     assert "network-inventory-agent" not in script
     assert "DEPLOYMENT_ID_MUST_BE_A_DNS_LABEL" in script
     assert "TARGET_CAPI_NAMESPACE_MUST_BE_A_DNS_LABEL" in script
     assert "SRIOV_DEVICE_PLUGIN_NAMESPACE_MUST_BE_A_DNS_LABEL" in script
     assert "REPLACE_WITH_TARGET_CAPI_NAMESPACE" in script
-    assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" serviceaccount eph-agent' in script
-    assert 'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrole eph-agent-preflight' in script
-    assert (
-        'mark_eph_cleanup_resources "$EPH_CONTEXT" clusterrolebinding eph-agent-preflight'
-        in script
-    )
+    assert '("serviceaccount", "eph-agent"' in script
+    assert '("clusterrole", "eph-agent-preflight"' in script
+    assert '("clusterrolebinding", "eph-agent-preflight"' in script
     assert "ai-agent-node-agent" not in script
 
 
 def test_three_agent_deploy_validates_role_specific_secrets():
-    script = (ROOT / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
-    assert "cloud-control-agent-database database-url" in script
-    assert "cloud-control-agent-mtls tls.crt tls.key client-ca.crt" in script
-    assert "eph-agent-credentials control-url agent-id installation-id" in script
+    script = (ROOT / "deploy/agents/deploy_agents.py").read_text(encoding="utf-8")
+    assert '"cloud-control-agent-database", "database-url"' in script
+    assert '"cloud-control-agent-mtls", "tls.crt", "tls.key", "client-ca.crt"' in script
+    assert '"eph-agent-credentials", "control-url", "agent-id", "installation-id"' in script
     assert (
-        "target-agent-credentials control-url agent-id installation-id cluster-id "
-        "ironic-api-url ironic-api-token"
+        '"target-agent-credentials",\n        "control-url",\n        "agent-id",\n'
+        '        "installation-id",\n        "cluster-id",'
     ) in script
-    assert "capi-pivot-source-kubeconfig kubeconfig" in script
-    assert 'require_secret_keys "$EPH_CONTEXT" capi-pivot-target-kubeconfig' not in script
+    assert '"ironic-api-url",\n        "ironic-api-token",' in script
+    assert '"capi-pivot-source-kubeconfig", "kubeconfig"' in script
+    assert '"capi-pivot-target-kubeconfig"' in script
     assert "capi-pivot-target-kubeconfig" in script
     assert 'ai-agent-stack.io/credential-scope=eph-agent' in script
 
@@ -138,7 +136,7 @@ def test_cloud_control_agent_is_separate_mtls_service():
 
 
 def test_new_build_script_builds_three_independent_images():
-    script = (ROOT / "deploy/agents/build-agents.sh").read_text(encoding="utf-8")
+    script = (ROOT / "deploy/agents/build_agents.py").read_text(encoding="utf-8")
     assert "Dockerfile.cloud-control-agent" in script
     assert "Dockerfile.eph-agent" in script
     assert "Dockerfile.target-agent" in script

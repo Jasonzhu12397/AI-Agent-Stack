@@ -59,7 +59,7 @@ would break their published checksums, so expansion happens at install time in
 
 `tests/test_eph_agent_control_stack_manifests.py` asserts that every deployment
 arg the loader returns is fully expanded, and
-`tests/integration/kind_metal3_crds.sh` server-side dry-runs the expanded
+`tests/integration/kind_metal3_crds.py` server-side dry-runs the expanded
 documents rather than the raw files.
 
 The other files are unmodified upstream release artifacts and declare their own
@@ -113,5 +113,5 @@ component has a file, every file parses through the real loader, every readiness
 probe names a Deployment that exists in the corresponding manifest, and the
 Ironic CR probe matches the CRD group/version shipped in `ironic.yaml`.
 `tests/test_eph_ironic_cr_render.py` pins the rendered CR shape, and
-`tests/integration/kind_metal3_crds.sh` installs the real `Ironic` CRD and
+`tests/integration/kind_metal3_crds.py` installs the real `Ironic` CRD and
 server-side dry-runs a platform-rendered CR, so a schema drift fails CI.

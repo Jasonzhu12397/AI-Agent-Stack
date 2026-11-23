@@ -29,7 +29,7 @@ Target Agent image hosted in a different registry:
 - `DEPLOYMENT_ID`: stable DNS-label identifier shared by the EPH and Target cleanup scope.
 - `SOFTWARE_WORKSPACE_SIZE`: size of the `eph-agent-software-workspace` and `target-agent-software-workspace` PVCs, default `1Gi`; the cluster must provide a default StorageClass (for example Rook-Ceph or another open-source provisioner).
 
-Run `deploy.sh` only after the secrets below have been provisioned by your secret manager. The script performs server-side dry-run validation before applying resources and waits for all three Deployments.
+Run `deploy_agents.py` only after the secrets below have been provisioned by your secret manager. The entry point performs server-side dry-run validation before applying resources and waits for all three Deployments.
 
 The Cloud Control manifest also deploys `cloud-control-reconcile`, a CronJob that
 runs `python -m apps.cloud_control_agent.main --reconcile-once` every minute. It
@@ -79,7 +79,7 @@ Expired command leases can be reclaimed. The lease token is returned only to the
 
 ## Build
 
-Use `build-agents.sh` with immutable release versions and verified upstream checksums. Current EPH and Target image builds are verified only for `linux/amd64`; the script rejects other platforms rather than silently producing an unverified image. It writes local `.tar` archives and `.metadata.json` digest files under `deploy/agents/dist` (or `IMAGE_OUTPUT_DIR`) and never pushes to an external registry.
+Use `build_agents.py` with immutable release versions and verified upstream checksums. Current EPH and Target image builds are verified only for `linux/amd64`; the script rejects other platforms rather than silently producing an unverified image. It writes local `.tar` archives and `.metadata.json` digest files under `deploy/agents/dist` (or `IMAGE_OUTPUT_DIR`) and never pushes to an external registry.
 
 Example environment variables:
 
@@ -93,7 +93,7 @@ export CLUSTERCTL_VERSION=v1.10.5
 export CLUSTERCTL_SHA256_AMD64=<verified-64-character-sha256>
 export KUBECTL_VERSION=v1.32.2
 export KUBECTL_SHA256_AMD64=<verified-64-character-sha256>
-bash build-agents.sh
+python3 build_agents.py
 ```
 
 The example versions/checksums are placeholders for your selected compatibility matrix; do not copy unverified values.
@@ -108,12 +108,12 @@ export CLOUD_CONTROL_IMAGE=<registry>/ai-agent-cloud-control-agent@sha256:<diges
 export EPH_AGENT_IMAGE=<registry>/ai-agent-eph-agent@sha256:<digest>
 export TARGET_AGENT_IMAGE=<registry>/ai-agent-target-agent@sha256:<digest>
 export DEPLOYMENT_ID=<stable-dns-label>
-bash deploy.sh
+python3 deploy_agents.py
 ```
 
 ## Current implementation boundary
 
-The current runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, live CAPI/Metal3 ownership observation, TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH cleanup executor now requires the Cloud Control trusted Pivot attestation and live Target Metal3/Ironic ownership verification; it deletes only resources explicitly labelled for the matching deployment scope, with source Cluster identity taken from the trusted Pivot attestation, verifies their absence, and removes the Target-side `target-agent-source-observer` Secret. `deploy.sh` applies the matching cleanup labels and requires `DEPLOYMENT_ID` and the observer Secret. The Worker Agent now has a bounded CAPI/CAPM3 provisioning executor: it discovers served CRD versions and schemas, checks existing resource ownership, validates the MachineDeployment/template references, verifies free ready BMH capacity and referenced Metal3 IPPools, injects the worker chrony bootstrap using only the Ironic internal IP, validates the control/data NIC contract, performs server-side dry-run, and applies templates before the MachineDeployment. Scale-down is deliberately blocked until a dedicated drain executor exists. These executors have unit-level fake-API coverage but still require live provider validation and failure/retry verification before production use. Final live network postflight (Calico/Multus/OVS/SR-IOV/DPDK and Pod data-plane routing), autonomous diagnosis/repair, and the full three-Agent lifecycle E2E remain incomplete.
+The current runtimes provide mTLS identity, heartbeat, command claim/result transport, lease renewal, PostgreSQL-backed command and Target checkpoint persistence, compare-and-swap checkpoint updates, Target leader election, ordered handoff evidence validation, live CAPI/Metal3 ownership observation, TLS-authenticated Ironic node verification for every target BMH, and Worker NTP policy validation/command rendering. The EPH cleanup executor now requires the Cloud Control trusted Pivot attestation and live Target Metal3/Ironic ownership verification; it deletes only resources explicitly labelled for the matching deployment scope, with source Cluster identity taken from the trusted Pivot attestation, verifies their absence, and removes the Target-side `target-agent-source-observer` Secret. `deploy_agents.py` applies the matching cleanup labels and requires `DEPLOYMENT_ID` and the observer Secret. The Worker Agent now has a bounded CAPI/CAPM3 provisioning executor: it discovers served CRD versions and schemas, checks existing resource ownership, validates the MachineDeployment/template references, verifies free ready BMH capacity and referenced Metal3 IPPools, injects the worker chrony bootstrap using only the Ironic internal IP, validates the control/data NIC contract, performs server-side dry-run, and applies templates before the MachineDeployment. Scale-down is deliberately blocked until a dedicated drain executor exists. These executors have unit-level fake-API coverage but still require live provider validation and failure/retry verification before production use. Final live network postflight (Calico/Multus/OVS/SR-IOV/DPDK and Pod data-plane routing), autonomous diagnosis/repair, and the full three-Agent lifecycle E2E remain incomplete.
 
 
 After CAPI pivot, the EPH Agent binds cleanup eligibility to the attested source Cluster UID. It uses UID-preconditioned JSON patches to annotate the EPH Deployment, live pods, ServiceAccount, ClusterRole, ClusterRoleBinding, and deployment-scoped Secrets, and it annotates the Target-side source-observer Secret. Both the mounted Target kubeconfig and the Target-side source-observer kubeconfig are byte-compared with their corresponding Kubernetes Secret data before the scope is attested. Cloud Control persists trusted pivot evidence only when this cleanup scope and the observer Secret identity are verified; Target Agent repeats the ownership checks before deleting anything.

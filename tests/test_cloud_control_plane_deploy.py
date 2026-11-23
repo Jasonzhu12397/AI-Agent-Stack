@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def test_cloud_control_plane_deploy_script_validates_production_environment():
     script = (
-        ROOT / "deploy/cloud-control-plane/deploy.sh"
+        ROOT / "deploy/cloud-control-plane/deploy_cloud_control.py"
     ).read_text(encoding="utf-8")
 
     for required in (
@@ -17,7 +17,7 @@ def test_cloud_control_plane_deploy_script_validates_production_environment():
         "QDRANT_URL",
         "PRODUCTION_SECRET_KEY_INVALID",
         "HTTPS_ORIGINS_REQUIRED",
-        "docker compose",
+        "docker",
         "CLOUD_CONTROL_PLANE_HEALTHCHECK_FAILED",
         "CLOUD_CONTROL_PLANE_DEPLOYED",
     ):

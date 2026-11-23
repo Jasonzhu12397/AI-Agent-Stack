@@ -206,7 +206,7 @@ payload supplies both `spec.ironic` and an `Ironic` document in its manifest
 source, the action refuses the ambiguity with `IRONIC_CR_MULTIPLE_SOURCES`.
 
 CI validates the contract in two ways: unit tests pin the rendered document,
-and `tests/integration/kind_metal3_crds.sh` installs the real `Ironic` CRD in a
+and `tests/integration/kind_metal3_crds.py` installs the real `Ironic` CRD in a
 kind cluster and server-side dry-runs the rendered CR.
 
 ## PXE discovery boot

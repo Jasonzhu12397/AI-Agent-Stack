@@ -233,8 +233,8 @@ def test_target_control_plane_and_workers_receive_local_registry_configuration()
 
 
 def test_agent_build_and_deploy_never_use_an_external_registry():
-    build = (ROOT / "deploy" / "agents" / "build-agents.sh").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy" / "agents" / "deploy.sh").read_text(encoding="utf-8")
+    build = (ROOT / "deploy" / "agents" / "build_agents.py").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy" / "agents" / "deploy_agents.py").read_text(encoding="utf-8")
     assert "--push" not in build
     assert "type=docker,dest=" in build
     assert "TARGET_AGENT_IMAGE_MUST_USE_EPH_LOCAL_REGISTRY" in deploy

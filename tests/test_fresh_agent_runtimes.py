@@ -73,8 +73,8 @@ def test_fresh_agent_entrypoints_do_not_import_legacy_node_agent_runtime():
 
 def test_new_deployment_path_does_not_reference_legacy_node_agent_images():
     root = Path(__file__).resolve().parents[1]
-    deployment = (root / "deploy/agents/deploy.sh").read_text(encoding="utf-8")
-    build = (root / "deploy/agents/build-agents.sh").read_text(encoding="utf-8")
+    deployment = (root / "deploy/agents/deploy_agents.py").read_text(encoding="utf-8")
+    build = (root / "deploy/agents/build_agents.py").read_text(encoding="utf-8")
     assert "ai-agent-node-agent" not in deployment
     assert "Dockerfile.node-agent" not in build
     assert "network-inventory-agent" not in deployment
