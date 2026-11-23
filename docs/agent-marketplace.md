@@ -131,6 +131,41 @@ call is rejected and recorded as `rejected` without invoking the adapter.
   call, so an uninstalled capability is immediately unresolvable. Cross-process
   propagation is not required in this batch.
 
+## Credential rotation
+
+An installation that requires a credential stores a *reference*, never a
+value, and the reference is the only thing a rotation changes:
+
+`POST /api/v1/agent-plugin-installations/{installation_id}/credential/`
+
+```json
+{"credential_ref": "vault://merchant/marketplace-agent#token"}
+```
+
+- Permission is project edit or higher; a viewer receives `403`.
+- The request is refused with `409 INSTALLATION_NOT_ACTIVE` when the
+  installation is `uninstalled` (revive it through install instead), and with
+  `400 CREDENTIAL_NOT_ACCEPTED` when the plugin does not declare
+  `auth_required`.
+- The reference passes one check shared with install: syntax comes from the
+  credential resolver (`core.plugin_credentials.validate_reference`) and the
+  maximum length comes from the `credential_ref` column, so a reference cannot
+  be accepted by one entry point and refused by another. Invalid syntax or an
+  over-long reference returns `CREDENTIAL_REFERENCE_INVALID`; an unregistered
+  scheme returns `CREDENTIAL_PROVIDER_UNSUPPORTED`.
+- The reference is then resolved for real. A reference that cannot be resolved
+  is refused with the resolver's own code (`CREDENTIAL_NOT_FOUND`,
+  `CREDENTIAL_RESOLVER_NOT_CONFIGURED`, `CREDENTIAL_INVALID_SHAPE`, ...) and
+  nothing is stored; the error never echoes the reference path.
+- On success the installation row is updated, which bumps `revision` - the
+  cross-process signal a worker compares before reusing a cached resolution -
+  and the in-process capability cache for that installation is dropped.
+- The audit event `agent_plugin.credential_rotated` records the previous and
+  new *schemes* only, never the reference or a secret value.
+
+Rotation deliberately preserves the installation, its granted capabilities and
+its workflow bindings: an expired token costs one request, not a reinstall.
+
 ## Invocation records
 
 Each attempt creates an `AgentCapabilityInvocation` row linked to the
@@ -147,6 +182,7 @@ capability API exposes the latest invocation per installation and capability.
 | GET | `/api/v1/agent-plugins/{plugin_id}/` | Read a plugin definition and manifest |
 | GET/POST | `/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-plugin-installations/` | List/install project installations |
 | POST | `/api/v1/agent-plugin-installations/{installation_id}/status/` | Enable, disable or uninstall an installation |
+| POST | `/api/v1/agent-plugin-installations/{installation_id}/credential/` | Rotate the installation credential reference |
 | GET | `/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-capabilities/` | List active capabilities visible to the project |
 | GET | `/api/v1/tenants/{tenant_id}/marketplace/catalog/` | Browse registered plugins with per-project installation state |
 | GET | `/api/v1/tenants/{tenant_id}/marketplace/catalog/{plugin_key}/` | Read one catalog entry with full manifest capability detail |
