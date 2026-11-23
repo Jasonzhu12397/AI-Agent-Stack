@@ -24,11 +24,13 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 import pytest
 from core.billing_models import EntitlementGrant, Order, PaymentTransactionAudit, Plan
 from core.models import AuditEvent, Tenant, TenantMembership, TenantTokenBudget
+from core.payments.alipay import AlipayProvider
 from core.payments.wechat_v3 import WechatPayV3Provider
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -178,11 +180,11 @@ def billing_setup(db):
     return owner, tenant, plan
 
 
-def _pending_order(tenant, plan, owner, amount_cents=9900) -> Order:
+def _pending_order(tenant, plan, owner, amount_cents=9900, channel="wechat") -> Order:
     order = Order.objects.create(
         tenant=tenant,
         plan=plan,
-        channel="wechat",
+        channel=channel,
         idempotency_key=str(uuid.uuid4()),
         created_by=owner,
         status=Order.Status.PENDING,
@@ -540,3 +542,330 @@ def test_payment_records_never_leak_key_material(wechat_env, billing_setup):
     assert wechat_env["api_v3_key"] not in blob
     assert wechat_env["merchant_pem"] not in blob
     assert wechat_env["platform_cert_pem"] not in blob
+
+
+# --------------------------------------------------------------------------- #
+# Alipay outbound requests and callbacks
+# --------------------------------------------------------------------------- #
+
+
+def _alipay_signed_content(params: dict[str, str]) -> str:
+    excluded = {"sign", "sign_type"}
+    items = sorted(
+        (key, value)
+        for key, value in params.items()
+        if key not in excluded and value != ""
+    )
+    return "&".join(f"{key}={value}" for key, value in items)
+
+
+def _alipay_verify(params: dict[str, str], public_key) -> bool:
+    try:
+        public_key.verify(
+            base64.b64decode(params["sign"]),
+            _alipay_signed_content(params).encode(),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except Exception:  # noqa: BLE001 - any verify failure is invalid
+        return False
+
+
+@pytest.fixture
+def alipay_env(monkeypatch):
+    private, private_pem = _rsa_keypair()
+    public_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    monkeypatch.setenv("ALIPAY_APP_ID", "alipay-app-test")
+    monkeypatch.setenv("ALIPAY_PRIVATE_KEY", private_pem)
+    monkeypatch.setenv("ALIPAY_PUBLIC_KEY", public_pem)
+    monkeypatch.setenv("ALIPAY_NOTIFY_URL", "https://example.test/alipay/notify")
+    monkeypatch.setenv("ALIPAY_GATEWAY", "https://alipay.test.local/gateway.do")
+    return {
+        "private": private,
+        "public_key": private.public_key(),
+        "private_pem": private_pem,
+        "public_pem": public_pem,
+    }
+
+
+def _alipay_notify(
+    private_key,
+    out_trade_no: str,
+    amount_cents: int,
+    trade_status: str = "TRADE_SUCCESS",
+    *,
+    amount_yuan: str | None = None,
+    tamper_amount: str | None = None,
+) -> bytes:
+    params = {
+        "app_id": "alipay-app-test",
+        "out_trade_no": out_trade_no,
+        "trade_status": trade_status,
+        "total_amount": amount_yuan or f"{amount_cents / 100:.2f}",
+        "notify_id": "notify-1",
+        "notify_time": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+        "sign_type": "RSA2",
+    }
+    content = _alipay_signed_content(params)
+    sign = base64.b64encode(
+        private_key.sign(content.encode(), padding.PKCS1v15(), hashes.SHA256())
+    ).decode()
+    params["sign"] = sign
+    if tamper_amount is not None:
+        params["total_amount"] = tamper_amount
+    return urlencode(params).encode()
+
+
+def _alipay_mock_handler(captured: dict, public_key):
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = dict(parse_qsl(request.content.decode(), keep_blank_values=True))
+        captured["form"] = form
+        assert _alipay_verify(form, public_key)
+        biz = json.loads(form["biz_content"])
+        method = form["method"]
+        if method == "alipay.trade.precreate":
+            return httpx.Response(
+                200,
+                json={
+                    "alipay_trade_precreate_response": {
+                        "code": "10000",
+                        "msg": "Success",
+                        "qr_code": "qr://alipay/123",
+                        "out_trade_no": biz["out_trade_no"],
+                    },
+                    "sign": form["sign"],
+                },
+            )
+        if method == "alipay.trade.refund":
+            return httpx.Response(
+                200,
+                json={
+                    "alipay_trade_refund_response": {
+                        "code": "10000",
+                        "trade_status": "TRADE_SUCCESS",
+                        "refund_fee": biz["refund_amount"],
+                        "trade_no": "alipay-trade-1",
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "alipay_trade_query_response": {
+                    "code": "10000",
+                    "trade_status": "TRADE_SUCCESS",
+                }
+            },
+        )
+
+    return handler
+
+
+@pytest.mark.django_db
+def test_alipay_precreate_sends_signed_form_and_returns_qr(alipay_env):
+    captured: dict = {}
+    transport = httpx.MockTransport(
+        _alipay_mock_handler(captured, alipay_env["public_key"])
+    )
+    provider = AlipayProvider(transport=transport)
+    order = SimpleNamespace(
+        id="order-456",
+        plan=SimpleNamespace(code="pro-monthly"),
+        amount_cents=9900,
+        currency="CNY",
+    )
+
+    instructions = provider.create_payment(order)
+
+    assert instructions["provider"] == "alipay"
+    assert instructions["trade_no"] == "order-456"
+    assert instructions["qr_code"] == "qr://alipay/123"
+    form = captured["form"]
+    assert form["method"] == "alipay.trade.precreate"
+    biz = json.loads(form["biz_content"])
+    assert biz["out_trade_no"] == "order-456"
+    assert biz["total_amount"] == "99.00"
+    assert form["sign"]
+
+    serialized = json.dumps(instructions) + urlencode(form)
+    assert "PRIVATE KEY" not in serialized
+    assert alipay_env["private_pem"] not in serialized
+
+
+@pytest.mark.django_db
+def test_alipay_refund_request_payload_is_correct(alipay_env):
+    captured: dict = {}
+    transport = httpx.MockTransport(
+        _alipay_mock_handler(captured, alipay_env["public_key"])
+    )
+    provider = AlipayProvider(transport=transport)
+    order = SimpleNamespace(
+        id="order-456",
+        plan=SimpleNamespace(code="pro-monthly"),
+        amount_cents=9900,
+        currency="CNY",
+    )
+
+    receipt = provider.refund(order, "customer requested refund")
+
+    biz = json.loads(captured["form"]["biz_content"])
+    assert biz["out_trade_no"] == "order-456"
+    assert biz["refund_amount"] == "99.00"
+    assert biz["refund_reason"] == "customer requested refund"
+    assert receipt["refund_id"] == "alipay-trade-1"
+
+
+@pytest.mark.django_db
+def test_alipay_callback_paid_grants_entitlement_once_on_repeat(alipay_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner, channel="alipay")
+    budget = TenantTokenBudget.objects.get_or_create(tenant=tenant)[0]
+    baseline_limit = budget.monthly_limit
+    body = _alipay_notify(alipay_env["private"], str(order.id), order.amount_cents)
+    client = APIClient()
+
+    first = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=body,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert first.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    assert EntitlementGrant.objects.filter(order=order).count() == 1
+    budget.refresh_from_db()
+    assert budget.monthly_limit == baseline_limit + plan.token_quota_monthly
+
+    second = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=body,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert second.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    assert EntitlementGrant.objects.filter(order=order).count() == 1
+    budget.refresh_from_db()
+    assert budget.monthly_limit == baseline_limit + plan.token_quota_monthly
+
+
+@pytest.mark.django_db
+def test_alipay_callback_signature_invalid_rejected_and_audited(alipay_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner, channel="alipay")
+    body = _alipay_notify(
+        alipay_env["private"],
+        str(order.id),
+        order.amount_cents,
+        tamper_amount="88.00",
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=body,
+        content_type="application/x-www-form-urlencoded",
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_SIGNATURE_INVALID"
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.signature_invalid",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+    assert PaymentTransactionAudit.objects.filter(
+        event_type="payment.callback.rejected",
+        error_code="PAYMENT_SIGNATURE_INVALID",
+    ).exists()
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_alipay_callback_amount_mismatch_rejected_and_audited(alipay_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner, channel="alipay")
+    body = _alipay_notify(
+        alipay_env["private"],
+        str(order.id),
+        order.amount_cents,
+        amount_yuan="100.00",
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=body,
+        content_type="application/x-www-form-urlencoded",
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_AMOUNT_MISMATCH"
+    details = response.data["error"]["details"]
+    assert details["expected_cents"] == order.amount_cents
+    assert details["actual_cents"] == 10_000
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.amount_mismatch",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+    assert PaymentTransactionAudit.objects.filter(
+        event_type="payment.callback.amount_mismatch",
+        error_code="PAYMENT_AMOUNT_MISMATCH",
+    ).exists()
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_alipay_callback_untrusted_public_key_rejected(alipay_env, monkeypatch):
+    other_private, _ = _rsa_keypair()
+    other_public_pem = other_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    monkeypatch.setenv("ALIPAY_PUBLIC_KEY", other_public_pem)
+
+    body = _alipay_notify(alipay_env["private"], "order-456", 9900)
+    provider = AlipayProvider()
+    result = provider.verify_callback({}, body)
+
+    assert result.ok is False
+    assert "RSA2" in result.message
+
+
+@pytest.mark.django_db
+def test_alipay_out_of_order_callback_does_not_regress(alipay_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner, channel="alipay")
+    client = APIClient()
+
+    paid_body = _alipay_notify(
+        alipay_env["private"], str(order.id), order.amount_cents
+    )
+    paid = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=paid_body,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert paid.status_code == 200
+
+    closed_body = _alipay_notify(
+        alipay_env["private"],
+        str(order.id),
+        order.amount_cents,
+        trade_status="TRADE_CLOSED",
+    )
+    late = client.post(
+        _callback_url(tenant.id, "alipay"),
+        data=closed_body,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert late.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.out_of_order",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
