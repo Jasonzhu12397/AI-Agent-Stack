@@ -13,6 +13,7 @@ import {
   filterCatalog,
   catalogStatusLabel,
   catalogInstallPayload,
+  validateCatalogInstall,
   protocolLabel,
 } from "../src/domain/agentMarketplace.ts";
 
@@ -62,6 +63,7 @@ const makeCatalogEntry = (overrides = {}) => ({
   version: "1.2.0",
   protocol: "http_json",
   enabled: true,
+  auth_required: false,
   capabilities: [{ name: "summarize", description: "Summarize a document.", risk_level: "low" }],
   installed: false,
   installation_status: "not_installed",
@@ -434,4 +436,71 @@ test("catalogInstallPayload identifies the plugin by key and version, credential
     granted_capabilities: [],
     credential_ref: "env://PLUGIN_SECRET_TOKEN",
   });
+});
+
+test("catalog install blocks an auth-required entry without a reference", () => {
+  const entry = makeCatalogEntry({ auth_required: true });
+  const validation = validateCatalogInstall(entry, "");
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors[0], /credential reference is required/i);
+  // The blocked install payload carries no credential_ref field at all.
+  assert.deepEqual(catalogInstallPayload(entry, ""), {
+    plugin_key: "market-agent-a",
+    plugin_version: "1.2.0",
+    granted_capabilities: [],
+  });
+});
+
+test("catalog install rejects plaintext secrets instead of sending them to the API", () => {
+  const entry = makeCatalogEntry({ auth_required: true });
+  for (const secret of ["hunter2", "sk-xxx", "sk-live-abc123", "Bearer abc123"]) {
+    const validation = validateCatalogInstall(entry, secret);
+    assert.equal(validation.ok, false);
+    assert.notEqual(validation.errors.length, 0);
+  }
+});
+
+test("catalog install accepts env and vault URI references into the payload", () => {
+  const entry = makeCatalogEntry({ auth_required: true });
+  for (const reference of ["vault://platform/github", "env://PLUGIN_SECRET_FOO"]) {
+    assert.equal(validateCatalogInstall(entry, reference).ok, true);
+    assert.deepEqual(catalogInstallPayload(entry, reference), {
+      plugin_key: "market-agent-a",
+      plugin_version: "1.2.0",
+      granted_capabilities: [],
+      credential_ref: reference,
+    });
+  }
+});
+
+test("catalog install rejects references on entries that do not accept credentials", () => {
+  const entry = makeCatalogEntry({ auth_required: false });
+  assert.equal(validateCatalogInstall(entry, "").ok, true);
+  const rejected = validateCatalogInstall(entry, "env://PLUGIN_SECRET_SHOULD_NOT_SEND");
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.errors[0], /does not accept a credential reference/i);
+});
+
+test("protocolLabel renders all four supported protocols", () => {
+  assert.equal(protocolLabel("http_json"), "HTTP JSON");
+  assert.equal(protocolLabel("mcp"), "MCP");
+  assert.equal(protocolLabel("a2a"), "A2A");
+  assert.equal(protocolLabel("openai_compatible"), "OpenAI-compatible");
+});
+
+test("filterCatalog matches the openai_compatible protocol exactly", () => {
+  const entries = [
+    makeCatalogEntry({ plugin_key: "a", protocol: "http_json" }),
+    makeCatalogEntry({ plugin_key: "b", protocol: "openai_compatible" }),
+    makeCatalogEntry({ plugin_key: "c", protocol: "mcp" }),
+    makeCatalogEntry({ plugin_key: "d", protocol: "a2a" }),
+  ];
+  assert.deepEqual(
+    filterCatalog(entries, { protocol: "openai_compatible" }).map((item) => item.plugin_key),
+    ["b"],
+  );
+  assert.deepEqual(
+    filterCatalog(entries, { protocol: "a2a" }).map((item) => item.plugin_key),
+    ["d"],
+  );
 });

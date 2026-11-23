@@ -173,6 +173,8 @@ export const zhCN: Record<string, string> = {
   "MCP": "MCP",
   "A2A": "A2A",
   "OpenAI-compatible": "OpenAI 兼容",
+  "All protocols": "全部协议",
+  "vault://platform/github or env://PLUGIN_SECRET_FOO": "vault://platform/github 或 env://PLUGIN_SECRET_FOO",
   "Show capabilities": "查看能力",
   "Hide capabilities": "收起能力",
   "No invocations yet": "尚无调用",

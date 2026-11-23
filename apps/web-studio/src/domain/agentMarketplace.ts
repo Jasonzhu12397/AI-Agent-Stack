@@ -2,7 +2,7 @@
 // fetch dependency; it only transforms records that mirror the frozen backend
 // contract. Fields the backend may omit are treated as optional.
 
-export type AgentProtocol = "http_json" | "mcp" | "a2a";
+export type AgentProtocol = "http_json" | "mcp" | "a2a" | "openai_compatible";
 
 export type InstallationStatus = "installed" | "disabled" | "uninstalled";
 
@@ -362,6 +362,7 @@ export interface MarketplaceCatalogEntry {
   version: string;
   protocol: string;
   enabled: boolean;
+  auth_required: boolean;
   capabilities: MarketplaceCatalogCapability[];
   installed: boolean;
   installation_status: InstallStatus;
@@ -459,4 +460,32 @@ export function catalogInstallPayload(
     payload.credential_ref = ref;
   }
   return payload;
+}
+
+// Validate a catalog install attempt before it reaches the API. Auth-required
+// entries need a URI reference; plaintext-looking secrets and references on
+// entries that do not accept credentials are rejected with a readable message.
+// Mirrors validateInstall for the definition-based flow.
+export function validateCatalogInstall(
+  entry: MarketplaceCatalogEntry,
+  credentialRef: string,
+): InstallValidation {
+  const errors: string[] = [];
+  const ref = (credentialRef ?? "").trim();
+  if (entry.auth_required) {
+    if (!ref) {
+      errors.push("A credential reference is required for this plugin.");
+    } else if (looksLikePlaintextSecret(ref)) {
+      errors.push(
+        "Enter a secret reference URI (for example env://PLUGIN_SECRET_TOKEN), not a plaintext credential.",
+      );
+    } else if (!isCredentialReference(ref)) {
+      errors.push(
+        "Credential reference must use scheme://path format (for example env://PLUGIN_SECRET_TOKEN).",
+      );
+    }
+  } else if (ref) {
+    errors.push("This plugin does not accept a credential reference.");
+  }
+  return { ok: errors.length === 0, errors };
 }

@@ -504,6 +504,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 
 .marketplace-credential { display: grid; gap: 6px; }
 .marketplace-credential-hint { color: #8da49e; font-size: 10px; line-height: 1.5; }
+.marketplace-credential-hint-error { color: #f56c6c; }
 
 .marketplace-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .marketplace-filter-input { min-width: 220px; }

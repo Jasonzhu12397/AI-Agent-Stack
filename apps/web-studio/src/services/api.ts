@@ -127,6 +127,15 @@ export class ApiError extends Error {
   }
 }
 
+// Read the programmable error code carried by a backend error body. Returns
+// null when the error is not an ApiError or the body has no code field.
+export function apiErrorCode(error: unknown): string | null {
+  if (error instanceof ApiError && error.data && typeof error.data.code === "string") {
+    return error.data.code;
+  }
+  return null;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -1840,7 +1849,7 @@ export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDoc
   });
 }
 
-export type AgentPluginProtocol = "http_json" | "mcp" | "a2a";
+export type AgentPluginProtocol = "http_json" | "mcp" | "a2a" | "openai_compatible";
 
 export type AgentPluginInstallationStatus = "installed" | "disabled" | "uninstalled";
 
@@ -1955,6 +1964,7 @@ export type MarketplaceCatalogEntry = {
   version: string;
   protocol: string;
   enabled: boolean;
+  auth_required: boolean;
   capabilities: MarketplaceCatalogCapability[];
   installed: boolean;
   installation_status: "installed" | "disabled" | "uninstalled" | "not_installed";

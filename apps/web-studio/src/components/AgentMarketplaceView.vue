@@ -11,14 +11,17 @@ import {
   protocolLabel,
   statusTransition,
   summarizeInvocation,
+  validateCatalogInstall,
   validateInstall,
   visibleCapabilities,
+  type InstallValidation,
   type InstalledCapability,
   type LifecycleAction,
   type MarketplaceCatalogEntry,
   type MarketplaceEntry,
 } from "../domain/agentMarketplace";
 import {
+  apiErrorCode,
   fetchMarketplaceCatalog,
   getAgentPluginDefinitions,
   getAgentPluginInstallations,
@@ -51,6 +54,7 @@ const catalogQuery = ref("");
 const catalogProtocol = ref("");
 const catalogInstalledOnly = ref(false);
 const catalogBusyKey = ref("");
+const catalogCredentialRefs = ref<Record<string, string>>({});
 
 const entries = computed<MarketplaceEntry[]>(() =>
   mergeMarketplace(definitions.value, installations.value),
@@ -116,6 +120,17 @@ function setCredentialRef(pluginKey: string, value: string): void {
   credentialRefs.value = { ...credentialRefs.value, [pluginKey]: value };
 }
 
+function setCatalogCredentialRef(pluginKey: string, value: string): void {
+  catalogCredentialRefs.value = { ...catalogCredentialRefs.value, [pluginKey]: value };
+}
+
+function catalogValidation(entry: MarketplaceCatalogEntry): InstallValidation {
+  return validateCatalogInstall(
+    entry,
+    catalogCredentialRefs.value[entry.plugin_key] ?? "",
+  );
+}
+
 function hintFor(entry: MarketplaceEntry): string {
   return credentialHint(entry.definition, entry.installation?.credential_configured ?? false);
 }
@@ -163,17 +178,29 @@ async function refresh(): Promise<void> {
 
 async function installFromCatalog(entry: MarketplaceCatalogEntry): Promise<void> {
   if (!props.tenantId || !props.projectId) return;
+  const ref = catalogCredentialRefs.value[entry.plugin_key] ?? "";
+  const validation = catalogValidation(entry);
+  if (!validation.ok) {
+    error.value = validation.errors[0];
+    info.value = "";
+    return;
+  }
   submitting.value = true;
   catalogBusyKey.value = entry.plugin_key;
   error.value = "";
   info.value = "";
   try {
-    const payload = catalogInstallPayload(entry, "");
+    const payload = catalogInstallPayload(entry, ref);
     await installAgentPluginFromCatalog(props.tenantId, props.projectId, payload);
     info.value = entry.name + " installed into the project.";
+    catalogCredentialRefs.value[entry.plugin_key] = "";
     await refresh();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Agent plugin installation failed.";
+    // Surface the backend detail together with its programmable error code;
+    // the submitted reference is never echoed into the message or logged.
+    const code = apiErrorCode(cause);
+    const message = cause instanceof Error ? cause.message : "Agent plugin installation failed.";
+    error.value = code ? `${message} (${code})` : message;
   } finally {
     submitting.value = false;
     catalogBusyKey.value = "";
@@ -277,6 +304,7 @@ onMounted(() => void refresh());
           clearable
           class="marketplace-filter-select"
         >
+          <el-option value="" label="All protocols" />
           <el-option
             v-for="option in PROTOCOL_OPTIONS"
             :key="option"
@@ -308,13 +336,31 @@ onMounted(() => void refresh());
             </el-tag>
             <el-tag size="small" effect="plain">{{ protocolLabel(entry.protocol) }}</el-tag>
           </div>
+          <div v-if="entry.auth_required" class="marketplace-credential">
+            <el-input
+              :model-value="catalogCredentialRefs[entry.plugin_key] ?? ''"
+              placeholder="vault://platform/github or env://PLUGIN_SECRET_FOO"
+              spellcheck="false"
+              @update:model-value="setCatalogCredentialRef(entry.plugin_key, $event)"
+            />
+            <small
+              class="marketplace-credential-hint"
+              :class="{ 'marketplace-credential-hint-error': !catalogValidation(entry).ok }"
+            >
+              {{
+                catalogValidation(entry).ok
+                  ? "Enter a reference only, never a plaintext secret."
+                  : catalogValidation(entry).errors[0]
+              }}
+            </small>
+          </div>
           <div class="installation-actions">
             <el-button
               v-if="!entry.installed"
               type="primary"
               plain
               size="small"
-              :disabled="!projectId"
+              :disabled="!projectId || (entry.auth_required && !catalogValidation(entry).ok)"
               :loading="submitting && catalogBusyKey === entry.plugin_key"
               @click="installFromCatalog(entry)"
             >
@@ -345,7 +391,7 @@ onMounted(() => void refresh());
         </div>
         <small>
           {{ entry.definition.plugin_key }} · v{{ entry.definition.version }} ·
-          {{ entry.definition.protocol }}
+          {{ protocolLabel(entry.definition.protocol) }}
         </small>
         <p>{{ entry.definition.description || "No description provided." }}</p>
         <div class="plugin-tool-tags">
