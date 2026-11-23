@@ -20,6 +20,56 @@ A reference interaction is not complete merely because a similarly named Vue pag
 - Organization and members: tenant/project/member views, invitation, role/project assignment, revoke, refresh, quota/context display and server-enforced RBAC.
 - Docs & Matrix: documentation navigation, capability/feature matrix, evidence-linked implementation/verification status and clear distinction between implemented, simulated, blocked and hardware-unverified capabilities.
 
+## Settings and account control center
+
+Implement a dedicated Settings area using the supplied settings-navigation reference as the information-architecture baseline. The reference shows a persistent left-side navigation with account and subscription entries followed by a General section. The selected entry is Plugins & Connectors. Preserve this grouping, ordering and clear selected-state treatment in the Vue application; do not treat the screenshot as proof that any setting is already implemented.
+
+### Navigation inventory
+
+| Group | Navigation item | Required product scope |
+|---|---|---|
+| Account | Account Management | Profile details, identity providers, sign-in methods and account-level security settings |
+| Account | Standard Plan | Current plan, included capabilities and plan limits; show upgrade or plan-management actions only when supported |
+| Account | Subscription & Usage Management | Subscription lifecycle, usage/quota consumption, billing-period information and usage history |
+| General | General | Settings landing page and shared preferences |
+| General | Plugins & Connectors | Connector catalog, installed connectors, connection configuration, credential references, scopes, health checks and test invocation |
+| General | Appearance | Theme, light/dark/system appearance and supported display preferences |
+| General | Notification Settings | Notification channels, event categories, delivery preferences and notification history where available |
+| General | Work Mode Settings | Work/agent execution preferences, confirmation behavior and supported workspace defaults |
+| General | Keyboard Shortcuts | Discoverable shortcut reference and configurable shortcuts where supported |
+| General | Data Controls | Data export, retention, deletion requests and controls for conversation/workspace data |
+| General | Archived Content | Search, browse, restore and permanently delete archived conversations or content, subject to retention policy |
+| General | Privacy & Permissions | Privacy controls, connected-app permissions, authorization grants, session/device controls and consent |
+| General | Help & Feedback | Help resources, support entry points, issue reporting and product feedback |
+| General | About | Product version, build/release information, licenses and links to release notes |
+
+The labels above are the required navigation inventory derived from the supplied reference. Product-specific subfeatures must be implemented only when backed by a defined API, policy and operational behavior; do not expose inert controls or simulated billing, privacy, export or deletion actions.
+
+### Interaction and implementation requirements
+
+- Keep the Settings navigation available from the authenticated application shell and make the active section visually obvious. Each entry must resolve to a stable Vue Router route and support browser refresh/deep linking.
+- Separate account-level, tenant/project-level and user-local preferences. Persist each setting at the correct scope and document its precedence when scopes overlap.
+- Load settings from authenticated APIs. Enforce authorization and tenant/project boundaries on the server; never rely on hidden navigation items as access control.
+- Use PostgreSQL for durable settings, subscription/usage records and audit-relevant changes. Redis may be used only for transient cache or coordination.
+- Validate setting values server-side, return actionable validation errors, and provide loading, empty, success and failure states. Avoid silently accepting unsupported values.
+- Record security-sensitive changes (for example identity, connector credentials/scopes, privacy permissions, data export/deletion and subscription changes) in the audit trail without logging secrets or sensitive payloads.
+- For destructive or privacy-sensitive actions, show the affected scope, consequences and retention limitations, require explicit confirmation, and make the operation idempotent and observable.
+- Treat connector configuration as an integration lifecycle, not merely a preference toggle. Secret material must remain server-side and be represented in the UI only by safe metadata or masked values.
+- Appearance and keyboard preferences may be user-local, but must have deterministic defaults and safe fallback behavior when browser storage is unavailable.
+- Provide accessible labels, keyboard navigation, focus states, responsive behavior and localization for all Settings pages.
+
+### Settings acceptance tests
+
+1. Every navigation item in the inventory is visible to an authorized user and opens the correct route; the active item remains selected after refresh.
+2. Direct navigation to a Settings route enforces authentication and server-side authorization.
+3. User-local preferences remain isolated between users; tenant/project settings cannot be read or changed across tenant boundaries.
+4. Changes persist across browser refresh and API/worker restarts when the setting is defined as durable.
+5. Connector changes exercise the real connector APIs and audit path; no fake connected state is accepted.
+6. Subscription and usage values come from authoritative billing/entitlement data; if no billing provider is configured, the UI states that the capability is unavailable rather than inventing values.
+7. Data export, archive restore, deletion and privacy actions verify scope, confirmation, authorization, audit evidence and resulting state.
+8. Theme, notification and keyboard preferences have automated UI tests for defaults, updates, persistence and failure handling.
+9. All entries have loading, empty, error and permission-denied states where applicable; no navigation item leads to a placeholder page presented as complete.
+
 ## Production backend requirements
 
 - PostgreSQL is the source of truth for tenant/project data, agent/workflow versions, runs, approvals, connector registrations/installations/connections, memberships, deployment plans, command records and audit events.
