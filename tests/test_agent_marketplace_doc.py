@@ -74,3 +74,33 @@ def test_the_document_states_that_a_reference_is_never_echoed():
     # Stated as a guarantee, not merely absent from the prose.
     assert "never echoes the reference" in text
     assert "returns the credential_ref" not in text
+
+
+PLUGIN_DOC = Path(__file__).resolve().parents[1] / "docs" / "plugin-credentials.md"
+
+
+def test_the_credential_document_codes_exist_in_the_source():
+    source = _source()
+    named = {
+        token
+        for token in re.findall(r"`([A-Z][A-Z0-9_]{3,})`", PLUGIN_DOC.read_text(encoding="utf-8"))
+        if token not in PROSE_TOKENS
+    }
+    assert named, "the credential document is expected to name error codes"
+    missing = sorted(token for token in named if token not in source)
+    assert missing == [], f"documented codes missing from the source: {missing}"
+
+
+def test_the_credential_document_states_the_column_bound():
+    text = PLUGIN_DOC.read_text(encoding="utf-8")
+    model = (
+        Path(__file__).resolve().parents[1]
+        / "apps"
+        / "platform-api"
+        / "core"
+        / "models.py"
+    ).read_text(encoding="utf-8")
+    # The document names the bound; the model is where it comes from.
+    assert "AgentPluginInstallation.credential_ref" in text
+    assert "200 characters" in text
+    assert re.search(r'credential_ref\s*=\s*models\.CharField\(max_length=200', model)
