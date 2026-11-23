@@ -304,7 +304,16 @@ def invoke_capability(
         "additionalProperties": False,
     }
 
-    validate_schema(arguments, input_schema)
+    try:
+        validate_schema(arguments, input_schema)
+    except ToolExecutionError as exc:
+        _record_invocation(
+            installation, capability_name, plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, 0,
+        )
+        raise CapabilityResolutionError(
+            CAPABILITY_INVOCATION_FAILED, "Capability arguments are invalid."
+        ) from exc
 
     if risk_level in {"high", "critical"} and not approved:
         _record_invocation(
@@ -325,7 +334,7 @@ def invoke_capability(
             AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, latency,
         )
         raise
-    except (ToolExecutionError, Exception) as exc:  # noqa: BLE001 - normalized below
+    except Exception as exc:  # noqa: BLE001 - normalized to a stable failure code
         latency = int((time.monotonic() - started) * 1000)
         _record_invocation(
             installation, capability_name, plugin.protocol,
@@ -348,7 +357,17 @@ def invoke_capability(
         )
         raise
 
-    validate_schema(result, output_schema)
+    try:
+        validate_schema(result, output_schema)
+    except ToolExecutionError as exc:
+        _record_invocation(
+            installation, capability_name, plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, latency,
+        )
+        raise CapabilityResolutionError(
+            CAPABILITY_INVOCATION_FAILED, "Capability result is invalid."
+        ) from exc
+
     _record_invocation(
         installation, capability_name, plugin.protocol,
         AgentCapabilityInvocation.Status.SUCCESS, "", latency,

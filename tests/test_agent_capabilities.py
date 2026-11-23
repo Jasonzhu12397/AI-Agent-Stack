@@ -3,8 +3,10 @@ from unittest.mock import patch
 
 import pytest
 from core.agent_capability_router import (
+    CAPABILITY_AUTH_REQUIRED,
     CAPABILITY_DISABLED,
     CAPABILITY_NOT_INSTALLED,
+    CAPABILITY_PROTOCOL_UNSUPPORTED,
     CAPABILITY_UNINSTALLED_IN_FLIGHT,
     CapabilityResolutionError,
     invoke_capability,
@@ -19,7 +21,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
-from core.tool_router import ToolRouter
+from core.tool_router import ToolApprovalRequired, ToolRouter
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from rest_framework.test import APIClient
@@ -685,3 +687,125 @@ def test_registration_rejects_invalid_manifest(capability_workspace):
         format="json",
     )
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_registration_rejects_open_object_schema(capability_workspace):
+    _, tenant, _, client = capability_workspace
+    open_schema = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+    }
+    manifest = _manifest()
+    manifest["capabilities"][0]["input_schema"] = open_schema
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/",
+        {
+            "plugin_key": "bad-agent",
+            "name": "Bad Agent",
+            "version": "1.0.0",
+            "protocol": "http_json",
+            "endpoint_url": "https://market-agent.example.com/v1/invoke",
+            "auth_required": False,
+            "manifest": manifest,
+        },
+        format="json",
+    )
+    assert response.status_code == 400
+    assert not AgentPluginDefinition.objects.filter(tenant=tenant).exists()
+
+
+@pytest.mark.django_db
+def test_high_risk_capability_requires_approval(capability_workspace, monkeypatch):
+    user, tenant, project, _ = capability_workspace
+    plugin = _make_plugin(tenant, user, manifest=_manifest(risk_level="high"))
+    installation = _install(tenant, project, plugin, user)
+
+    captured: dict = {}
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["market-agent.example.com"]):
+        with _mock_http(monkeypatch, captured, {"summary": "done"}):
+            with pytest.raises(ToolApprovalRequired):
+                invoke_capability(
+                    str(tenant.id), str(project.id), "summarize", {"text": "hello"}
+                )
+
+    assert captured == {}
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.REJECTED
+    assert record.error_code == "approval_required"
+
+
+@pytest.mark.django_db
+def test_mcp_protocol_is_reported_unsupported(capability_workspace):
+    user, tenant, project, _ = capability_workspace
+    plugin = AgentPluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="mcp-agent",
+        name="MCP Agent",
+        version="1.0.0",
+        protocol="mcp",
+        endpoint_url="https://market-agent.example.com/v1/invoke",
+        auth_required=False,
+        capabilities=["summarize"],
+        manifest={"capabilities": _manifest()["capabilities"]},
+    )
+    _install(tenant, project, plugin, user)
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        invoke_capability(str(tenant.id), str(project.id), "summarize", {"text": "hello"})
+    assert exc.value.code == CAPABILITY_PROTOCOL_UNSUPPORTED
+
+
+@pytest.mark.django_db
+def test_auth_required_installation_without_credential_ref_rejected(capability_workspace):
+    user, tenant, project, _ = capability_workspace
+    plugin = AgentPluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="secure-agent",
+        name="Secure Agent",
+        version="1.0.0",
+        protocol="http_json",
+        endpoint_url="https://market-agent.example.com/v1/invoke",
+        auth_required=True,
+        capabilities=["summarize"],
+        manifest=_manifest(),
+    )
+    AgentPluginInstallation.objects.create(
+        tenant=tenant,
+        project=project,
+        plugin=plugin,
+        plugin_version=plugin.version,
+        status="installed",
+        granted_capabilities=["summarize"],
+        credential_ref="",
+        installed_by=user,
+    )
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        invoke_capability(str(tenant.id), str(project.id), "summarize", {"text": "hello"})
+    assert exc.value.code == CAPABILITY_AUTH_REQUIRED
+
+
+@pytest.mark.django_db
+def test_capability_list_exposes_latest_invocation(capability_workspace, monkeypatch):
+    user, tenant, project, client = capability_workspace
+    plugin = _make_plugin(tenant, user)
+    _install(tenant, project, plugin, user)
+
+    captured: dict = {}
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=["market-agent.example.com"]):
+        with _mock_http(monkeypatch, captured, {"summary": "done"}):
+            invoke_capability(
+                str(tenant.id), str(project.id), "summarize", {"text": "hello"}
+            )
+
+    response = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-capabilities/"
+    )
+    assert response.status_code == 200
+    entry = response.data["capabilities"][0]
+    assert entry["last_invocation"]["status"] == "success"
+    assert entry["last_invocation"]["error_code"] == ""
+    assert entry["last_invocation"]["created_at"] is not None
