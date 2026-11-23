@@ -1,2 +1,31 @@
 export const messages: Record<string, string> = {
+  // Account group navigation labels
+  "Account Management": "账户管理",
+  "Standard Plan": "标准套餐",
+  "Subscription & Usage Management": "订阅与用量管理",
+  "Account": "账户",
+
+  // Account page strings
+  "Profile details": "个人资料",
+  "Display name": "显示名称",
+  "Email": "邮箱",
+  "Timezone": "时区",
+  "Locale": "语言区域",
+  "Sign-in methods": "登录方式",
+  "Password": "密码",
+  "Bound identities": "已绑定身份",
+  "Active sessions": "活跃会话",
+  "Current session": "当前会话",
+  "Revoke": "吊销",
+  "Revoke session": "吊销会话",
+  "Confirm session revocation": "确认吊销会话",
+  "Last source IP": "最后来源 IP",
+  "Last active": "最后活跃",
+  "Save changes": "保存更改",
+  "Saved": "已保存",
+  "Identity provider": "身份提供方",
+  "No identities connected.": "尚未绑定任何身份。",
+  "No active sessions.": "暂无活跃会话。",
+  "This session cannot be revoked.": "无法吊销当前会话。",
+  "Other sessions will be signed out immediately.": "其他会话将立即被登出。",
 };
