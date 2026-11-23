@@ -165,6 +165,7 @@ class ModelProvider(models.Model):
     credential_ref = models.CharField(max_length=160, blank=True)
     config = models.JSONField(default=dict)
     enabled = models.BooleanField(default=True)
+    deployment_region = models.CharField(max_length=32, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1325,5 +1326,5 @@ class AuditEvent(models.Model):
         raise ValueError("Audit events cannot be deleted through the model API.")
 
 
-from core import data_controls_models  # noqa: F401,E402
+from core import billing_models, data_controls_models  # noqa: E402,F401
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
