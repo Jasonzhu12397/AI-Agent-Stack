@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("core", "0034_agentcommand_expired_status"),
+        ("core", "0037_account_profile_feedback"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
