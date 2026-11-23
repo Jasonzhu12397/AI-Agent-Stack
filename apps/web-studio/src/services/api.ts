@@ -856,7 +856,14 @@ export type AgentCommand = {
   deployment_id: string | null;
   command_type: string;
   payload: Record<string, unknown>;
-  status: "waiting_approval" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status:
+    | "waiting_approval"
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "expired";
   plan_hash: string;
   approved_at: string | null;
   attempts: number;

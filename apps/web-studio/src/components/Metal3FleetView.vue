@@ -695,7 +695,14 @@ function statusType(status: string): "success" | "warning" | "danger" | "info" {
   if (["online", "succeeded", "healthy"].includes(status)) return "success";
   if (["running", "queued", "waiting_approval", "provisioning", "preflight_queued"].includes(status)) return "warning";
   if (["failed", "revoked", "offline"].includes(status)) return "danger";
+  // `expired` is a terminal state: it is neither active (warning) nor failed
+  // (danger), so it stays on the neutral info tag.
   return "info";
+}
+
+function commandStatusLabel(status: string): string {
+  if (status === "expired") return "Expired";
+  return status;
 }
 
 function deploymentDualAgent(deployment: ClusterDeployment): Record<string, unknown> {
@@ -1931,6 +1938,7 @@ onUnmounted(() => {
             <el-option label="Failed" value="failed" />
             <el-option label="Waiting approval" value="waiting_approval" />
             <el-option label="Cancelled" value="cancelled" />
+            <el-option label="Expired" value="expired" />
           </el-select>
           <span>Showing {{ commandCount ? commandOffset + 1 : 0 }}–{{ Math.min(commandOffset + commands.length, commandCount) }} of {{ commandCount }}</span>
           <el-button size="small" plain :disabled="commandOffset === 0 || refreshing" @click="changeCommandPage(-1)">Previous</el-button>
@@ -1951,7 +1959,7 @@ onUnmounted(() => {
                 <el-tag :type="command.result?.rolled_back ? 'success' : 'warning'" size="small" effect="plain">
                   {{ command.result?.rolled_back ? "RESTORED" : "NOT RESTORED" }}
                 </el-tag>
-                <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+                <el-tag :type="statusType(command.status)" size="small">{{ commandStatusLabel(command.status) }}</el-tag>
               </div>
             </div>
             <ol v-if="rollbackSteps(command).length" class="fleet-upgrade-steps">
@@ -2007,7 +2015,7 @@ onUnmounted(() => {
                 <el-tag :type="upgradeCommandMode(command) === 'execute' ? 'danger' : 'info'" size="small" effect="plain">
                   {{ upgradeCommandMode(command) === "execute" ? "LIVE EXECUTION" : "SIMULATION" }}
                 </el-tag>
-                <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+                <el-tag :type="statusType(command.status)" size="small">{{ commandStatusLabel(command.status) }}</el-tag>
               </div>
             </div>
             <ol v-if="kubernetesUpgradeSteps(command).length" class="fleet-upgrade-steps">
@@ -2113,7 +2121,7 @@ onUnmounted(() => {
             <span class="terminal-time">{{ formatTime(command.finished_at ?? command.started_at ?? command.created_at) }}</span>
             <span class="terminal-node">{{ nodeLabel(command.node_id) }}</span>
             <span class="terminal-command">{{ command.command_type }}</span>
-            <el-tag :type="statusType(command.status)" size="small">{{ command.status }}</el-tag>
+            <el-tag :type="statusType(command.status)" size="small">{{ commandStatusLabel(command.status) }}</el-tag>
             <pre>{{ commandDetail(command) }}</pre>
           </div>
           <el-empty v-if="!recentCommands.length" description="No persisted Agent commands yet" :image-size="56" />
