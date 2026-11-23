@@ -64,6 +64,19 @@ failure; they must never return an empty or anonymous credential.
   introspection.
 - `redact(reference)` — return a masked form such as `env://***` for logs and
   user-facing messages.
+- `validate_reference(reference)` — apply the same syntax rule the resolver
+  applies and return the lowercased scheme. Callers that accept a reference
+  (plugin installation and credential rotation) use it instead of writing their
+  own pattern, so no entry point can accept a reference the resolver rejects.
+
+### Storage bound
+
+The resolver accepts references up to 2048 characters, but each place a
+reference is persisted has its own column width. An agent plugin installation
+stores it in `AgentPluginInstallation.credential_ref`, 200 characters, so the
+installation and rotation endpoints reject a longer reference with
+`CREDENTIAL_REFERENCE_INVALID` — the bound is read from the model field rather
+than restated as a literal, which keeps SQLite and Postgres in agreement.
 
 ### Built-in `env` provider
 
@@ -133,6 +146,7 @@ execution failures.
 | `CREDENTIAL_NOT_FOUND` | The provider could not locate the credential (variable missing, outside the prefix allowlist, Vault `404`, or denied by the source). |
 | `CREDENTIAL_INVALID_SHAPE` | The resolved value or its JSON encoding does not match a supported credential contract; the Vault document is not an object, the field is missing, or the response exceeds the size limit. |
 | `CREDENTIAL_ACCESS_DENIED` | Vault `401`/`403`, a transport/timeout failure, or an unexpected internal error while resolving the reference. |
+| `CREDENTIAL_NOT_ACCEPTED` | The target does not take a credential at all, so a reference was refused instead of stored (for example a plugin whose manifest does not set `auth_required`). |
 
 ## Leak-prevention constraints
 

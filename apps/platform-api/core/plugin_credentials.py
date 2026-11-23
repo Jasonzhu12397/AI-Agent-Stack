@@ -78,6 +78,12 @@ class CredentialAccessDeniedError(CredentialError):
     code = "CREDENTIAL_ACCESS_DENIED"
 
 
+class CredentialNotAcceptedError(CredentialError):
+    """The target does not take a credential, so there is nothing to bind."""
+
+    code = "CREDENTIAL_NOT_ACCEPTED"
+
+
 def register_provider(scheme: str, provider: Provider) -> None:
     """Register a provider for a URI scheme; registering twice overwrites."""
 
@@ -353,6 +359,17 @@ def resolve(credential_ref: str) -> dict[str, str]:
             f"No credential provider is registered for scheme '{parsed.scheme}'."
         )
     return provider(credential_ref)
+
+
+def validate_reference(reference: str) -> str:
+    """Validate a credential reference and return its lowercased scheme.
+
+    One syntax decision for the whole platform: plugin installations and payment
+    channels accept exactly what the resolver accepts, so a reference cannot be
+    refused by one caller and resolved by another.
+    """
+
+    return _parse_reference(reference).scheme
 
 
 def resolve_plaintext(

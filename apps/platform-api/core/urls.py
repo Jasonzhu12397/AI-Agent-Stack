@@ -39,6 +39,7 @@ from core.agent_plugin_views import (
     AgentCapabilityListView,
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
+    AgentPluginCredentialRotateView,
 )
 from core.agent_plugin_views import AgentPluginDiscoverView
 from core.infra_network_views import InfrastructureNetworkProfileView
@@ -417,6 +418,11 @@ urlpatterns = [
         "api/v1/agent-plugin-installations/<uuid:installation_id>/status/",
         AgentPluginInstallationStatusView.as_view(),
         name="agent-plugin-installation-status",
+    ),
+    path(
+        "api/v1/agent-plugin-installations/<uuid:installation_id>/credential/",
+        AgentPluginCredentialRotateView.as_view(),
+        name="agent-plugin-installation-credential",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agents/",

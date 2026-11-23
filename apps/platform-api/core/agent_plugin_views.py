@@ -23,9 +23,12 @@ from core.agent_openai_compatible_adapter import discover as discover_openai
 from core.audit import record_audit_event
 from core.plugin_credentials import (
     CredentialError,
+    CredentialNotAcceptedError,
     CredentialProviderUnsupportedError,
     CredentialReferenceInvalidError,
     providers,
+    resolve,
+    validate_reference,
 )
 from core.tool_router import ToolExecutionError
 from core.models import (
@@ -41,9 +44,6 @@ from core.models import (
 
 _CAPABILITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 _PLUGIN_KEY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_CREDENTIAL_REF_PATTERN = re.compile(
-    r"^[a-z][a-z0-9+.-]{1,31}://[A-Za-z0-9_:@-](?:[A-Za-z0-9_./:@-]{0,199})$"
-)
 _CREDENTIAL_CODE_REQUIRED = "CREDENTIAL_REQUIRED"
 _SENSITIVE_KEY_PARTS = (
     "password",
@@ -193,6 +193,32 @@ def _definition_data(plugin):
         "created_at": plugin.created_at,
         "updated_at": plugin.updated_at,
     }
+
+
+def _credential_reference_error(reference: str) -> tuple[str, str] | None:
+    """Validate an installation credential reference against one authority.
+
+    The resolver owns the syntax; the storage column owns the length. A reference
+    longer than the column would pass SQLite and fail on Postgres, so the bound
+    is read from the model field instead of being restated here.
+    """
+
+    limit = AgentPluginInstallation._meta.get_field("credential_ref").max_length
+    if len(reference) > limit:
+        return (
+            f"credential_ref must be at most {limit} characters.",
+            CredentialReferenceInvalidError.code,
+        )
+    try:
+        scheme = validate_reference(reference)
+    except CredentialReferenceInvalidError as error:
+        return str(error), error.code
+    if scheme not in providers():
+        return (
+            f"No credential provider is registered for scheme '{scheme}'.",
+            CredentialProviderUnsupportedError.code,
+        )
+    return None
 
 
 def _installation_data(installation):
@@ -446,18 +472,13 @@ class AgentPluginInstallationListCreateView(APIView):
             )
 
         credential_ref = request.data.get("credential_ref", "")
-        if not isinstance(credential_ref, str) or (
-            credential_ref and not _CREDENTIAL_REF_PATTERN.fullmatch(credential_ref)
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "credential_ref must be a valid secret reference, not a credential value."
-                    ),
-                    "code": CredentialReferenceInvalidError.code,
-                },
-                status=400,
-            )
+        if not isinstance(credential_ref, str):
+            credential_ref = ""
+        if credential_ref:
+            failure = _credential_reference_error(credential_ref)
+            if failure is not None:
+                detail, code = failure
+                return Response({"detail": detail, "code": code}, status=400)
         if plugin.auth_required and not credential_ref:
             return Response(
                 {
@@ -469,18 +490,6 @@ class AgentPluginInstallationListCreateView(APIView):
                 },
                 status=400,
             )
-        if credential_ref:
-            scheme = urlsplit(credential_ref).scheme.lower()
-            if scheme not in providers():
-                return Response(
-                    {
-                        "detail": (
-                            f"No credential provider is registered for scheme '{scheme}'."
-                        ),
-                        "code": CredentialProviderUnsupportedError.code,
-                    },
-                    status=400,
-                )
         if not plugin.auth_required and credential_ref:
             return Response(
                 {"detail": "This agent plugin does not accept a credential reference."},
@@ -644,12 +653,96 @@ class AgentPluginInstallationStatusView(APIView):
         return Response(_installation_data(installation))
 
 
+class AgentPluginCredentialRotateView(APIView):
+    """Point a live installation at a different credential reference.
+
+    Rotation exists so an expired or relocated secret costs one request instead
+    of a reinstall, which would drop the binding. The reference is validated and
+    then actually resolved: storing a reference that cannot resolve would leave
+    the installation silently broken until the next invocation. The save bumps
+    the installation revision and drops the cached resolution, so other worker
+    processes stop serving the previous credential on their next resolve.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, installation_id):
+        installation = get_object_or_404(
+            AgentPluginInstallation.objects.select_related("tenant", "project", "plugin").filter(
+                tenant__memberships__user=request.user,
+            ),
+            pk=installation_id,
+        )
+        if not _can_manage_project(request.user, installation.tenant, installation.project):
+            return Response({"detail": "Project editor permission required."}, status=403)
+        if installation.status == AgentPluginInstallation.Status.UNINSTALLED:
+            return Response(
+                {
+                    "detail": (
+                        "Uninstalled installations cannot rotate a credential; install it again."
+                    ),
+                    "code": "INSTALLATION_NOT_ACTIVE",
+                },
+                status=409,
+            )
+        if not installation.plugin.auth_required:
+            error = CredentialNotAcceptedError(
+                "This agent plugin does not accept a credential reference."
+            )
+            return Response({"detail": str(error), "code": error.code}, status=400)
+
+        credential_ref = request.data.get("credential_ref", "")
+        failure = (
+            _credential_reference_error(credential_ref)
+            if isinstance(credential_ref, str) and credential_ref
+            else (
+                "credential_ref must be a valid secret reference, not a credential value.",
+                CredentialReferenceInvalidError.code,
+            )
+        )
+        if failure is not None:
+            detail, code = failure
+            return Response({"detail": detail, "code": code}, status=400)
+        scheme = validate_reference(credential_ref)
+        try:
+            resolve(credential_ref)
+        except CredentialError as error:
+            # The provider's own code is surfaced: a missing variable and an
+            # unconfigured secret store are different operator actions, and the
+            # reference itself is never echoed back.
+            return Response({"detail": str(error), "code": error.code}, status=400)
+
+        previous_scheme = (
+            validate_reference(installation.credential_ref)
+            if installation.credential_ref
+            else ""
+        )
+        new_scheme = scheme
+        installation.credential_ref = credential_ref
+        installation.save(update_fields=["credential_ref", "updated_at"])
+        invalidate_installation(installation)
+        record_audit_event(
+            request,
+            installation.tenant,
+            "agent_plugin.credential_rotated",
+            "agent_plugin_installation",
+            installation.id,
+            project=installation.project,
+            metadata={
+                "plugin_key": installation.plugin.plugin_key,
+                "previous_scheme": previous_scheme,
+                "new_scheme": new_scheme,
+                "revision": installation.revision,
+            },
+        )
+        return Response(_installation_data(installation))
+
+
 _DISCOVER_ADAPTERS = {
     "mcp": discover_mcp,
     "a2a": discover_a2a,
     "openai_compatible": discover_openai,
 }
-
 
 class AgentPluginDiscoverView(APIView):
     """Merge capabilities discovered from a remote protocol endpoint into the manifest."""
