@@ -1,18 +1,28 @@
 # ruff: noqa: I001
 import ipaddress
 import re
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core import agent_plugin_manifest
-from core.agent_capability_router import invalidate_installation
+from core.agent_a2a_adapter import discover_card as discover_a2a
+from core.agent_capability_router import (
+    CapabilityResolutionError,
+    invalidate_installation,
+)
+from core.agent_mcp_adapter import discover as discover_mcp
+from core.agent_openai_compatible_adapter import discover as discover_openai
 from core.audit import record_audit_event
+from core.plugin_credentials import CredentialError
+from core.tool_router import ToolExecutionError
 from core.models import (
     AgentCapabilityInvocation,
     AgentPluginDefinition,
@@ -260,7 +270,9 @@ class AgentPluginCatalogView(APIView):
                 {"detail": "manifest must not contain credential-like field names."},
                 status=400,
             )
-        manifest_error = agent_plugin_manifest.validate_manifest(manifest, data["protocol"])
+        manifest_error = agent_plugin_manifest.validate_manifest(
+            manifest, data["protocol"], endpoint_url=data["endpoint_url"]
+        )
         if manifest_error:
             return Response({"detail": manifest_error}, status=400)
         manifest_names = agent_plugin_manifest.capability_names_from_manifest(manifest)
@@ -610,3 +622,140 @@ class AgentPluginInstallationStatusView(APIView):
             },
         )
         return Response(_installation_data(installation))
+
+
+_DISCOVER_ADAPTERS = {
+    "mcp": discover_mcp,
+    "a2a": discover_a2a,
+    "openai_compatible": discover_openai,
+}
+
+
+class AgentPluginDiscoverView(APIView):
+    """Merge capabilities discovered from a remote protocol endpoint into the manifest."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, plugin_id):
+        tenant = get_object_or_404(
+            Tenant.objects.filter(memberships__user=request.user).distinct(),
+            pk=tenant_id,
+        )
+        if not _is_tenant_admin(request.user, tenant):
+            return Response(
+                {"detail": "Tenant administrator permission required."}, status=403
+            )
+        plugin = get_object_or_404(
+            AgentPluginDefinition.objects.filter(tenant=tenant), pk=plugin_id
+        )
+
+        discover = _DISCOVER_ADAPTERS.get(plugin.protocol)
+        if discover is None:
+            return Response(
+                {
+                    "detail": (
+                        f"Protocol {plugin.protocol!r} does not support remote discovery."
+                    )
+                },
+                status=400,
+            )
+
+        installation = (
+            AgentPluginInstallation.objects.filter(tenant=tenant, plugin=plugin)
+            .select_related("plugin")
+            .order_by("created_at")
+            .first()
+        )
+        if installation is None:
+            installation = SimpleNamespace(
+                plugin=plugin,
+                credential_ref="",
+                tenant_id=tenant.id,
+                project_id=None,
+            )
+
+        try:
+            discovered = discover(installation)
+        except CapabilityResolutionError as exc:
+            return Response({"detail": str(exc), "code": exc.code}, status=502)
+        except (ToolExecutionError, CredentialError) as exc:
+            return Response({"detail": str(exc)}, status=502)
+
+        if not isinstance(discovered, list):
+            return Response(
+                {"detail": "Adapter discovery returned an invalid payload."}, status=502
+            )
+
+        manifest = plugin.manifest if isinstance(plugin.manifest, dict) else {}
+        existing = manifest.get("capabilities")
+        existing_entries = (
+            [entry for entry in existing if isinstance(entry, dict)]
+            if isinstance(existing, list)
+            else []
+        )
+        by_name: dict[str, dict] = {
+            entry["name"]: entry
+            for entry in existing_entries
+            if isinstance(entry.get("name"), str)
+        }
+        discovered_names: list[str] = []
+        for entry in discovered:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                mapped = dict(entry)
+                mapped["source"] = agent_plugin_manifest.SOURCE_DISCOVERED
+                by_name[entry["name"]] = mapped
+                discovered_names.append(entry["name"])
+        merged = list(by_name.values())
+        if len(merged) > agent_plugin_manifest.MAX_CAPABILITIES:
+            return Response(
+                {"detail": "Manifest declares too many capabilities."}, status=400
+            )
+
+        merged_manifest = dict(manifest)
+        merged_manifest["capabilities"] = merged
+        if plugin.protocol in agent_plugin_manifest.DISCOVERY_PROTOCOLS:
+            discovery_record = {
+                "endpoint": agent_plugin_manifest.endpoint_fingerprint(
+                    plugin.endpoint_url
+                ),
+                "discovered_at": timezone.now().isoformat(),
+                "tool_count": len(discovered_names),
+                "tools": discovered_names,
+            }
+            transport_block = merged_manifest.get(plugin.protocol)
+            if not isinstance(transport_block, dict):
+                transport_block = {}
+            transport_block = dict(transport_block)
+            transport_block["discovery"] = discovery_record
+            merged_manifest[plugin.protocol] = transport_block
+        manifest_error = agent_plugin_manifest.validate_manifest(
+            merged_manifest, plugin.protocol, endpoint_url=plugin.endpoint_url
+        )
+        if manifest_error:
+            return Response({"detail": manifest_error}, status=400)
+
+        plugin.manifest = merged_manifest
+        plugin.capabilities = [entry["name"] for entry in merged]
+        plugin.save(update_fields=["manifest", "capabilities", "updated_at"])
+
+        record_audit_event(
+            request,
+            tenant,
+            "agent_plugin.discovered",
+            "agent_plugin_definition",
+            plugin.id,
+            metadata={
+                "plugin_key": plugin.plugin_key,
+                "protocol": plugin.protocol,
+                "discovered": len(discovered),
+            },
+        )
+
+        return Response(
+            {
+                "plugin_id": str(plugin.id),
+                "protocol": plugin.protocol,
+                "discovered": len(discovered),
+                "capabilities": merged,
+            }
+        )

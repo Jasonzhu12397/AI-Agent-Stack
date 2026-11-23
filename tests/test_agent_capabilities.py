@@ -5,8 +5,8 @@ import pytest
 from core.agent_capability_router import (
     CAPABILITY_AUTH_REQUIRED,
     CAPABILITY_DISABLED,
+    CAPABILITY_INVOCATION_FAILED,
     CAPABILITY_NOT_INSTALLED,
-    CAPABILITY_PROTOCOL_UNSUPPORTED,
     CAPABILITY_UNINSTALLED_IN_FLIGHT,
     CapabilityResolutionError,
     invoke_capability,
@@ -736,7 +736,9 @@ def test_high_risk_capability_requires_approval(capability_workspace, monkeypatc
 
 
 @pytest.mark.django_db
-def test_mcp_protocol_is_reported_unsupported(capability_workspace):
+def test_mcp_protocol_dispatches_to_registered_adapter_and_records_failure(
+    capability_workspace,
+):
     user, tenant, project, _ = capability_workspace
     plugin = AgentPluginDefinition.objects.create(
         tenant=tenant,
@@ -750,11 +752,16 @@ def test_mcp_protocol_is_reported_unsupported(capability_workspace):
         capabilities=["summarize"],
         manifest={"capabilities": _manifest()["capabilities"]},
     )
-    _install(tenant, project, plugin, user)
+    installation = _install(tenant, project, plugin, user)
 
+    # The mcp adapter is registered in phase 2: a misconfigured or unreachable
+    # endpoint dispatches to the adapter, fails invocation and records the outcome.
     with pytest.raises(CapabilityResolutionError) as exc:
         invoke_capability(str(tenant.id), str(project.id), "summarize", {"text": "hello"})
-    assert exc.value.code == CAPABILITY_PROTOCOL_UNSUPPORTED
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
 
 
 @pytest.mark.django_db

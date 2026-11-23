@@ -8,6 +8,7 @@ is hard-coded here; every value comes from the stored manifest.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -16,6 +17,19 @@ RISK_LEVELS = {"low", "medium", "high", "critical"}
 MAX_CAPABILITIES = 32
 MAX_DESCRIPTION_LENGTH = 1000
 MAX_MANIFEST_BYTES = 32768
+
+# Protocols whose capabilities are sourced from a remote discovery surface
+# (MCP tools/list, A2A agent card). OpenAI-compatible capabilities are
+# declared in the manifest because the endpoint exposes no catalog pull.
+DISCOVERY_PROTOCOLS = {"mcp", "a2a"}
+SOURCE_DECLARED = "declared"
+SOURCE_DISCOVERED = "discovered"
+
+
+def endpoint_fingerprint(endpoint_url: str) -> str:
+    """Stable SHA-256 fingerprint of an endpoint URL used by discovery records."""
+
+    return hashlib.sha256(str(endpoint_url).encode("utf-8")).hexdigest()
 
 _EMPTY_OBJECT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -40,11 +54,35 @@ def _is_closed_object_schema(value: Any) -> bool:
     return True
 
 
-def validate_manifest(manifest: Any, protocol: str) -> str | None:
+def _discovery_context(
+    manifest: dict[str, Any], protocol: str, endpoint_url: str | None
+) -> tuple[Any, set[str], bool | None]:
+    """Return the discovery record, its covered tool names and endpoint match state."""
+
+    block = manifest.get(protocol) if protocol in DISCOVERY_PROTOCOLS else None
+    discovery = block.get("discovery") if isinstance(block, dict) else None
+    tools: set[str] = set()
+    matches: bool | None = None
+    if isinstance(discovery, dict):
+        raw_tools = discovery.get("tools")
+        if isinstance(raw_tools, list):
+            tools = {item for item in raw_tools if isinstance(item, str)}
+        if endpoint_url:
+            matches = discovery.get("endpoint") == endpoint_fingerprint(endpoint_url)
+    return discovery, tools, matches
+
+
+def validate_manifest(
+    manifest: Any, protocol: str, endpoint_url: str | None = None
+) -> str | None:
     """Return a human-readable validation error, or None when the manifest is valid.
 
     A missing manifest is accepted for backwards compatibility with legacy
     definitions that only carry the old string-list ``capabilities`` field.
+
+    For ``mcp`` and ``a2a`` protocols every capability must be covered by a
+    fresh discovery record for the current endpoint URL. A capability marked
+    ``source: "discovered"`` can only be declared by those two protocols.
     """
     if manifest is None:
         return None
@@ -59,6 +97,10 @@ def validate_manifest(manifest: Any, protocol: str) -> str | None:
     if len(capabilities) > MAX_CAPABILITIES:
         return "manifest declares too many capabilities."
 
+    discovery, discovery_tools, discovery_matches = _discovery_context(
+        manifest, protocol, endpoint_url
+    )
+
     names: list[str] = []
     for entry in capabilities:
         if not isinstance(entry, dict):
@@ -67,6 +109,28 @@ def validate_manifest(manifest: Any, protocol: str) -> str | None:
         if not isinstance(name, str) or not CAPABILITY_NAME_PATTERN.fullmatch(name):
             return "Capability names must match ^[a-z0-9][a-z0-9._-]{0,99}$."
         names.append(name)
+
+        source = entry.get("source", SOURCE_DECLARED)
+        if source not in {SOURCE_DECLARED, SOURCE_DISCOVERED}:
+            return "Capability source must be 'declared' or 'discovered'."
+        if protocol in DISCOVERY_PROTOCOLS:
+            if discovery is None:
+                return (
+                    f"Capability '{name}' must be discovered from the remote "
+                    "endpoint before registration; call the discover endpoint first."
+                )
+            if discovery_matches is False:
+                return (
+                    f"Discovery record for '{name}' is stale: the plugin endpoint "
+                    "changed; run discover again."
+                )
+            if name not in discovery_tools:
+                return (
+                    f"Capability '{name}' is not covered by the latest discovery "
+                    "record; run discover again."
+                )
+        elif source == SOURCE_DISCOVERED:
+            return "Only mcp and a2a capabilities can be marked as discovered."
 
         description = entry.get("description", "")
         if not isinstance(description, str) or len(description) > MAX_DESCRIPTION_LENGTH:

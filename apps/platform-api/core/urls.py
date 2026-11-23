@@ -40,6 +40,7 @@ from core.agent_plugin_views import (
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
 )
+from core.agent_plugin_views import AgentPluginDiscoverView
 from core.infra_network_views import InfrastructureNetworkProfileView
 from core.agent_team_views import (
     AgentTeamDetailView,
@@ -601,4 +602,9 @@ urlpatterns = [
         name="model-test",
     ),
     path("", include("core.plugin_agent_urls")),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/agent-plugins/<uuid:plugin_id>/discover/",
+        AgentPluginDiscoverView.as_view(),
+        name="agent-plugin-discover",
+    ),
 ]
