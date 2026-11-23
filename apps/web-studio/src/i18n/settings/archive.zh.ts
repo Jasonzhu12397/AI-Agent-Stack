@@ -1,2 +1,33 @@
 export const messages: Record<string, string> = {
+  "Archived Content": "已归档内容",
+  "Search archived items": "搜索归档项",
+  "Item type": "条目类型",
+  "All types": "全部类型",
+  "Name": "名称",
+  "Description": "描述",
+  "Archived at": "归档时间",
+  "Status": "状态",
+  "Restore": "恢复",
+  "Already restored": "已恢复",
+  "Restored": "已恢复",
+  "Permanently delete": "永久删除",
+  "Delete archived item": "删除归档项",
+  "This permanently deletes the item; the action is unrecoverable and cannot be undone.":
+    "此操作将永久删除该条目，不可恢复、无法撤销。",
+  "No archived items match the current filters.": "当前筛选条件下暂无归档项。",
+  "Search": "搜索",
+  "Cancel": "取消",
+  "I understand this permanent deletion is unrecoverable.": "我已知晓此永久删除不可恢复。",
+  "Archived": "已归档",
+  "Only project members can view archived content; project administrators can restore or delete it.":
+    "仅项目成员可查看归档内容，项目管理员可恢复或删除。",
+  "This archived item no longer exists on the server.": "该归档项在服务端已不存在。",
+  "Your permissions do not allow permanent deletion of archived items.": "当前权限不足，无法永久删除归档项。",
+  "Your role does not allow restoring archived items.": "当前角色无权恢复归档项。",
+  "Your session has expired. Sign in again.": "登录状态已过期，请重新登录。",
+  "Only project administrators can restore or permanently delete archived content.":
+    "仅项目管理员可恢复或永久删除归档内容。",
+  "Restore failed.": "恢复失败。",
+  "Permanent deletion failed.": "永久删除失败。",
+  "No project is available for archived content.": "暂无可用于归档内容的项目。",
 };
