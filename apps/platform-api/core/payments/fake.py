@@ -8,7 +8,7 @@ fail-closed verification path is still exercised.
 
 import json
 
-from core.payments.base import CallbackResult, PaymentProvider
+from core.payments.base import CallbackResult, PaymentProvider, ProviderOrderState
 
 FAKE_SIGNATURE_HEADER = "X-Fake-Signature"
 FAKE_SIGNATURE_VALUE = "fake-ok"
@@ -45,8 +45,15 @@ class FakeProvider(PaymentProvider):
             raw=payload,
         )
 
-    def query_order(self, order) -> str:
-        return "fake:unknown"
+    def query_order(self, order) -> ProviderOrderState:
+        return ProviderOrderState(status="unknown", amount_cents=None)
 
-    def refund(self, order, reason: str) -> dict:
-        return {"provider": "fake", "refunded": True, "reason": reason}
+    def refund(
+        self, order, reason: str, amount_cents: int | None = None
+    ) -> dict:
+        return {
+            "provider": "fake",
+            "refunded": True,
+            "reason": reason,
+            "refund_id": f"refund-{order.id}-{amount_cents}",
+        }

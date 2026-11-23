@@ -36,10 +36,23 @@ class CallbackResult:
     """Outcome of verifying a provider callback payload."""
 
     ok: bool
-    status: str = "unknown"  # paid | failed | closed | unknown
+    status: str = "unknown"  # paid | failed | closed | refunded | unknown
     order_reference: str | None = None
     message: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    amount_cents: int | None = None
+    refund_reference: str | None = None
+
+
+@dataclass
+class ProviderOrderState:
+    """Provider-side trade state returned by ``query_order``.
+
+    ``amount_cents`` is ``None`` when the provider query does not expose an
+    amount; the reconciliation comparison then skips the amount check.
+    """
+
+    status: str
     amount_cents: int | None = None
 
 
@@ -82,9 +95,15 @@ class PaymentProvider(ABC):
         """
 
     @abstractmethod
-    def query_order(self, order) -> str:
+    def query_order(self, order) -> ProviderOrderState:
         """Return the provider-side trade state for an existing order."""
 
     @abstractmethod
-    def refund(self, order, reason: str) -> dict[str, Any]:
-        """Issue a refund for a paid order; returns the provider receipt."""
+    def refund(
+        self, order, reason: str, amount_cents: int | None = None
+    ) -> dict[str, Any]:
+        """Issue a refund for a paid order; returns the provider receipt.
+
+        ``amount_cents`` is the slice being refunded; ``None`` means the full
+        order amount.
+        """
