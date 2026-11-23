@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- The watchdog entry also carries `enabled`, so a disabled cluster is visible in
+  the dump without reading its state.
+- The verification matrix points at run 45088400861 (`9fff2092`, 1812 passed).
 - A pre-upgrade snapshot counts as a restore point even before the first
   recurring backup exists (`assess` no longer returns `restore_point: null`
   when only pre-upgrade files are present).

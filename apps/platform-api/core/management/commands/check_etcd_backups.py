@@ -94,6 +94,7 @@ class Command(BaseCommand):
             entry = {
                 "deployment_id": str(deployment.id),
                 "cluster_name": deployment.cluster_name,
+                "enabled": state.get("enabled", True),
                 "code": code,
                 "ok": code == "",
                 "newest": (state.get("newest") or {}).get("name"),

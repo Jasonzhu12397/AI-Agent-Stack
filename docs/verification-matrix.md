@@ -8,9 +8,9 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 45032629443](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45032629443), commit `dfddd41d`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
+[GitHub Actions run 45088400861](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45088400861), commit `9fff2092`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
 
-- Pytest: **1757 passed, 15 skipped** (four shards, all green).
+- Pytest: **1812 passed, 15 skipped** (four shards, all green).
 - Ruff, Django checks, migration drift detection, PostgreSQL migrations and mTLS ingress: passed.
 - Compose full-stack smoke (API + Worker + Web + PostgreSQL + Redis build, start and probe): passed.
 - Metal3 and SR-IOV CRD integration against a real kind cluster: passed.
