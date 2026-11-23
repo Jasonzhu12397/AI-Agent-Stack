@@ -21,6 +21,8 @@ Error codes defined locally:
 * ``CAPABILITY_TIMEOUT`` - the transport call timed out.
 * ``CAPABILITY_UPSTREAM_ERROR`` - the remote agent answered with a JSON-RPC
   error frame or an application-level failure.
+* ``CAPABILITY_UPSTREAM_CLIENT_ERROR`` - the remote returned a 4xx status.
+* ``CAPABILITY_UPSTREAM_SERVER_ERROR`` - the remote returned a 5xx status.
 * ``CAPABILITY_UPSTREAM_UNREACHABLE`` - a network-level transport failure.
 * ``CAPABILITY_UPSTREAM_INVALID_RESPONSE`` - the response was not valid bounded
   JSON or did not match the expected A2A shape.
@@ -51,6 +53,8 @@ PROTOCOL = "a2a"
 CAPABILITY_INVOCATION_FAILED = "CAPABILITY_INVOCATION_FAILED"
 CAPABILITY_TIMEOUT = "CAPABILITY_TIMEOUT"
 CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
+CAPABILITY_UPSTREAM_CLIENT_ERROR = "CAPABILITY_UPSTREAM_CLIENT_ERROR"
+CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
 CAPABILITY_UPSTREAM_UNREACHABLE = "CAPABILITY_UPSTREAM_UNREACHABLE"
 CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
 CAPABILITY_CONFIG_INVALID = "CAPABILITY_CONFIG_INVALID"
@@ -458,12 +462,12 @@ def _invoke(
                 )
             if 400 <= response.status_code < 500:
                 raise CapabilityResolutionError(
-                    CAPABILITY_UPSTREAM_ERROR,
+                    CAPABILITY_UPSTREAM_CLIENT_ERROR,
                     f"A2A endpoint failed with status {response.status_code}.",
                 )
             if 500 <= response.status_code < 600:
                 raise CapabilityResolutionError(
-                    CAPABILITY_UPSTREAM_ERROR,
+                    CAPABILITY_UPSTREAM_SERVER_ERROR,
                     f"A2A endpoint failed with status {response.status_code}.",
                 )
             if not 200 <= response.status_code < 300:

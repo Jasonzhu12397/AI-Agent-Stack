@@ -290,7 +290,9 @@ record with `status = FAILED` and `error_code = CAPABILITY_INVOCATION_FAILED`.
 |---|---|
 | Request timed out | `CAPABILITY_TIMEOUT` |
 | Network-level transport failure or redirect | `CAPABILITY_UPSTREAM_UNREACHABLE` |
-| JSON-RPC `error` frame or upstream 4xx/5xx | `CAPABILITY_UPSTREAM_ERROR` |
+| JSON-RPC `error` frame | `CAPABILITY_UPSTREAM_ERROR` |
+| Upstream 4xx status | `CAPABILITY_UPSTREAM_CLIENT_ERROR` |
+| Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
 | Card or response missing required shape | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
 | Card missing required field, invalid path, invalid endpoint | `CAPABILITY_CONFIG_INVALID` |
 | Streaming requested by a card that does not declare streaming support | `CAPABILITY_STREAMING_UNSUPPORTED` |
