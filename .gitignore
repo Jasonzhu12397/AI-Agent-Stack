@@ -22,3 +22,6 @@ deploy/metal3-lab/hosts/baremetal-nodes.yaml
 # Large offline image archives and generated bootstrap image references.
 deploy/offline/assets/
 deploy/offline/output/
+
+# Runtime export payloads written by the data-controls worker.
+media/
