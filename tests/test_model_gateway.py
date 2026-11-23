@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -7,6 +8,19 @@ from core.models import ModelConfig, ModelProvider, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from rest_framework.test import APIClient
+
+
+class _StubGuard:
+    authorized = True
+
+    def reserve(self, *, idempotency_key, requested_tokens, **kwargs):
+        return SimpleNamespace(reserved_tokens=requested_tokens)
+
+    def settle(self, *, reservation, consumed_tokens):
+        reservation.consumed_tokens = consumed_tokens
+
+    def release(self, *, reservation):
+        reservation.released = True
 
 
 @pytest.fixture
@@ -37,7 +51,7 @@ def model_tenant(db):
 def test_fake_model_gateway_returns_normalized_response(model_tenant):
     _, _, _, model = model_tenant
 
-    result = ModelGateway().complete(
+    result = ModelGateway(guard=_StubGuard()).complete(
         model,
         [{"role": "user", "content": "hello"}],
     )
@@ -160,7 +174,7 @@ def test_openai_compatible_gateway_normalizes_response_and_usage(monkeypatch):
 
     fake_opener = FakeOpener()
     with patch("core.model_gateway.build_opener", return_value=fake_opener):
-        result = ModelGateway().complete(
+        result = ModelGateway(guard=_StubGuard()).complete(
             model,
             [{"role": "user", "content": "hello"}],
         )
@@ -219,7 +233,7 @@ def test_model_gateway_rejects_invalid_or_unbounded_provider_token_usage(
     monkeypatch.setenv("MODEL_API_KEY", "test-secret")
     with patch("core.model_gateway.build_opener", return_value=FakeOpener()):
         with pytest.raises(ModelGatewayError) as error:
-            ModelGateway().complete(
+            ModelGateway(guard=_StubGuard()).complete(
                 model,
                 [{"role": "user", "content": "hello"}],
                 max_tokens=200,
@@ -241,7 +255,7 @@ def test_missing_model_credential_fails_without_revealing_secret():
     )
 
     with pytest.raises(ModelGatewayError) as exc:
-        ModelGateway().complete(model, [{"role": "user", "content": "hello"}])
+        ModelGateway(guard=_StubGuard()).complete(model, [{"role": "user", "content": "hello"}])
 
     assert exc.value.code == "MODEL_CREDENTIAL_MISSING"
 
@@ -326,7 +340,7 @@ def test_model_gateway_rejects_context_overflow_before_network_call(monkeypatch)
 
     with patch("core.model_gateway.build_opener") as opener:
         with pytest.raises(ModelGatewayError) as error:
-            ModelGateway().complete(
+            ModelGateway(guard=_StubGuard()).complete(
                 model,
                 [{"role": "user", "content": "x" * 512}],
             )
@@ -359,7 +373,7 @@ def test_model_gateway_rejects_oversized_serialized_tool_context():
     }]
 
     with pytest.raises(ModelGatewayError) as error:
-        ModelGateway().complete(
+        ModelGateway(guard=_StubGuard()).complete(
             model,
             [{"role": "user", "content": "hello"}],
             tools=tools,
@@ -384,6 +398,6 @@ def test_embedding_gateway_rejects_aggregate_input_over_byte_budget():
     inputs = ["x" * 19000 for _ in range(14)]
 
     with pytest.raises(ModelGatewayError) as error:
-        ModelGateway().embed(model, inputs)
+        ModelGateway(guard=_StubGuard()).embed(model, inputs)
 
     assert error.value.code == "EMBEDDING_INPUT_LIMIT"

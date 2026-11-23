@@ -13,6 +13,19 @@ from core.models import ModelConfig, ModelProvider
 from django.test import override_settings
 
 
+class _StubGuard:
+    authorized = True
+
+    def reserve(self, *, idempotency_key, requested_tokens, **kwargs):
+        return SimpleNamespace(reserved_tokens=requested_tokens)
+
+    def settle(self, *, reservation, consumed_tokens):
+        reservation.consumed_tokens = consumed_tokens
+
+    def release(self, *, reservation):
+        reservation.released = True
+
+
 class FakeResponse:
     def __init__(self, payload):
         self.payload = payload
@@ -84,7 +97,7 @@ def test_model_gateway_sends_function_tools_and_returns_tool_calls():
     )
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            response = ModelGateway().complete(
+            response = ModelGateway(guard=_StubGuard()).complete(
                 model_config(),
                 [{"role": "user", "content": "check status"}],
                 tools=offered,
@@ -141,7 +154,7 @@ def test_model_gateway_preserves_assistant_content_with_tool_calls():
     ]
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            response = ModelGateway().complete(
+            response = ModelGateway(guard=_StubGuard()).complete(
                 model_config(),
                 messages,
                 tools=[
@@ -156,7 +169,7 @@ def test_model_gateway_preserves_assistant_content_with_tool_calls():
 
 def test_model_gateway_rejects_tools_without_declared_capability():
     with pytest.raises(ModelGatewayError) as error:
-        ModelGateway().complete(
+        ModelGateway(guard=_StubGuard()).complete(
             model_config(["chat"]),
             [{"role": "user", "content": "hello"}],
             tools=[{"type": "function", "function": {"name": "demo__lookup"}}],
@@ -186,7 +199,7 @@ def test_model_gateway_accepts_assistant_tool_and_tool_result_messages():
     ]
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            response = ModelGateway().complete(model_config(), messages)
+            response = ModelGateway(guard=_StubGuard()).complete(model_config(), messages)
 
     assert response.content == "done"
 

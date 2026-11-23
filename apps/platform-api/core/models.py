@@ -392,7 +392,13 @@ class TenantTokenUsage(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="token_usage")
-    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="token_usage")
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
     agent_run = models.ForeignKey(
         AgentRun,
         on_delete=models.CASCADE,
@@ -407,6 +413,7 @@ class TenantTokenUsage(models.Model):
         null=True,
         blank=True,
     )
+    scope_ref = models.CharField(max_length=160, null=True, blank=True)
     idempotency_key = models.CharField(max_length=160)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
     reserved_tokens = models.PositiveBigIntegerField(default=0)
@@ -426,6 +433,11 @@ class TenantTokenUsage(models.Model):
                 condition=(
                     models.Q(agent_run__isnull=False, workflow_run__isnull=True)
                     | models.Q(agent_run__isnull=True, workflow_run__isnull=False)
+                    | models.Q(
+                        scope_ref__isnull=False,
+                        agent_run__isnull=True,
+                        workflow_run__isnull=True,
+                    )
                 ),
                 name="tenant_token_usage_exactly_one_run",
             ),

@@ -26,12 +26,8 @@ from core.models import (
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.tool_router import ToolExecutionError, ToolRouter
-from core.token_budget import (
-    TenantTokenBudgetExceeded,
-    reserve_tenant_tokens,
-    resolve_provider_token_usage,
-    settle_tenant_tokens,
-)
+from core.token_budget import TenantTokenBudgetExceeded, resolve_provider_token_usage
+from core.token_guard import RunTokenGuard
 
 
 FORBIDDEN_CREDENTIAL_KEYS = {
@@ -1008,44 +1004,31 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         )
         if allowed_output_tokens < 1:
             raise WorkflowValidationError("WORKFLOW_RUN_TOKEN_BUDGET_EXHAUSTED")
-        token_reservation = None
-        if workflow_run is not None:
-            reservation_key = hashlib.sha256(
-                f"{task.id}:{task.attempts}:agent:{node['id']}".encode()
-            ).hexdigest()
-            try:
-                token_reservation = reserve_tenant_tokens(
-                    task=task,
-                    workflow_run=workflow_run,
-                    idempotency_key=reservation_key,
-                    requested_tokens=reservation_input_token_ceiling + allowed_output_tokens,
-                )
-            except TenantTokenBudgetExceeded as exc:
-                raise WorkflowValidationError(
-                    "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
-                ) from exc
+        reservation_key = hashlib.sha256(
+            f"{task.id}:{task.attempts}:agent:{node['id']}".encode()
+        ).hexdigest()
+        token_guard = (
+            RunTokenGuard(task=task, workflow_run=workflow_run)
+            if workflow_run is not None
+            else None
+        )
         try:
-            response = ModelGateway().complete(
+            response = ModelGateway(guard=token_guard).complete(
                 model,
                 messages,
                 max_tokens=allowed_output_tokens,
                 timeout_seconds=timeout_seconds,
+                idempotency_key=reservation_key,
             )
+        except TenantTokenBudgetExceeded as exc:
+            raise WorkflowValidationError(
+                "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
+            ) from exc
         except ModelGatewayError as exc:
-            if token_reservation is not None:
-                settle_tenant_tokens(
-                    usage=token_reservation,
-                    consumed_tokens=token_reservation.reserved_tokens,
-                )
             raise WorkflowValidationError(
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            if token_reservation is not None:
-                settle_tenant_tokens(
-                    usage=token_reservation,
-                    consumed_tokens=token_reservation.reserved_tokens,
-                )
             raise WorkflowValidationError(
                 "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
             ) from exc
@@ -1056,11 +1039,6 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             input_token_ceiling=reservation_input_token_ceiling,
             output_token_ceiling=allowed_output_tokens,
         )
-        if token_reservation is not None:
-            settle_tenant_tokens(
-                usage=token_reservation,
-                consumed_tokens=actual_input_tokens + actual_output_tokens,
-            )
         usage = {
             "input_tokens": input_tokens + actual_input_tokens,
             "output_tokens": output_tokens + actual_output_tokens,
@@ -1146,44 +1124,31 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         )
         if allowed_output_tokens < 1:
             raise WorkflowValidationError("WORKFLOW_RUN_TOKEN_BUDGET_EXHAUSTED")
-        token_reservation = None
-        if workflow_run is not None:
-            reservation_key = hashlib.sha256(
-                f"{task.id}:{task.attempts}:workflow:{node['id']}".encode()
-            ).hexdigest()
-            try:
-                token_reservation = reserve_tenant_tokens(
-                    task=task,
-                    workflow_run=workflow_run,
-                    idempotency_key=reservation_key,
-                    requested_tokens=reservation_input_token_ceiling + allowed_output_tokens,
-                )
-            except TenantTokenBudgetExceeded as exc:
-                raise WorkflowValidationError(
-                    "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
-                ) from exc
+        reservation_key = hashlib.sha256(
+            f"{task.id}:{task.attempts}:workflow:{node['id']}".encode()
+        ).hexdigest()
+        token_guard = (
+            RunTokenGuard(task=task, workflow_run=workflow_run)
+            if workflow_run is not None
+            else None
+        )
         try:
-            response = ModelGateway().complete(
+            response = ModelGateway(guard=token_guard).complete(
                 model,
                 messages,
                 max_tokens=allowed_output_tokens,
                 timeout_seconds=config.get("timeout_seconds", 60),
+                idempotency_key=reservation_key,
             )
+        except TenantTokenBudgetExceeded as exc:
+            raise WorkflowValidationError(
+                "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
+            ) from exc
         except ModelGatewayError as exc:
-            if token_reservation is not None:
-                settle_tenant_tokens(
-                    usage=token_reservation,
-                    consumed_tokens=token_reservation.reserved_tokens,
-                )
             raise WorkflowValidationError(
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            if token_reservation is not None:
-                settle_tenant_tokens(
-                    usage=token_reservation,
-                    consumed_tokens=token_reservation.reserved_tokens,
-                )
             raise WorkflowValidationError(
                 "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
             ) from exc
@@ -1194,11 +1159,6 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             input_token_ceiling=reservation_input_token_ceiling,
             output_token_ceiling=allowed_output_tokens,
         )
-        if token_reservation is not None:
-            settle_tenant_tokens(
-                usage=token_reservation,
-                consumed_tokens=actual_input_tokens + actual_output_tokens,
-            )
         usage = {
             "input_tokens": input_tokens + actual_input_tokens,
             "output_tokens": output_tokens + actual_output_tokens,

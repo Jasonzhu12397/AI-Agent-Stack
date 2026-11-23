@@ -2,6 +2,7 @@ import hashlib
 
 from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import Project
+from core.token_guard import AdHocTokenGuard
 from core.vector_store import QdrantVectorStore, VectorStoreError
 
 
@@ -63,13 +64,21 @@ def ingest_text(
     records = []
     collection_ready = False
     collection = None
-    gateway = ModelGateway()
+    guard = AdHocTokenGuard(
+        tenant=tenant_id,
+        scope_ref=f"rag-ingest:{document_id}",
+    )
+    gateway = ModelGateway(guard=guard)
     try:
         for batch_start in range(0, len(chunks), 128):
             if heartbeat is not None:
                 heartbeat()
             batch = chunks[batch_start : batch_start + 128]
-            embedded = gateway.embed(embedding_model, batch)
+            embedded = gateway.embed(
+                embedding_model,
+                batch,
+                idempotency_key=f"rag-ingest:{document_id}:{batch_start}",
+            )
             if not collection_ready:
                 dimension = len(embedded.vectors[0])
                 binder = getattr(store, "for_model", None)
@@ -124,8 +133,17 @@ def retrieve_context(
     if not isinstance(query, str) or not query.strip() or len(query) > 20000:
         raise RagRuntimeError("Query must be a non-empty string up to 20,000 characters.")
     store = vector_store or QdrantVectorStore()
+    query_digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+    guard = AdHocTokenGuard(
+        tenant=tenant_id,
+        scope_ref=f"rag-retrieve:{project_id}",
+    )
     try:
-        embedded = ModelGateway().embed(embedding_model, [query])
+        embedded = ModelGateway(guard=guard).embed(
+            embedding_model,
+            [query],
+            idempotency_key=f"rag-retrieve:{project_id}:{query_digest}",
+        )
         vector = embedded.vectors[0]
         binder = getattr(store, "for_model", None)
         if callable(binder):

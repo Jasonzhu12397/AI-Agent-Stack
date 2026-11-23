@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -7,6 +8,19 @@ from core.models import ModelConfig, ModelProvider
 from core.rag_runtime import RagRuntimeError, chunk_text
 from core.vector_store import QdrantVectorStore, VectorStoreError
 from django.test import override_settings
+
+
+class _StubGuard:
+    authorized = True
+
+    def reserve(self, *, idempotency_key, requested_tokens, **kwargs):
+        return SimpleNamespace(reserved_tokens=requested_tokens)
+
+    def settle(self, *, reservation, consumed_tokens):
+        reservation.consumed_tokens = consumed_tokens
+
+    def release(self, *, reservation):
+        reservation.released = True
 
 
 class FakeHTTPResponse:
@@ -58,7 +72,7 @@ def test_local_openai_compatible_chat_uses_allowlisted_http_endpoint():
     )
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            result = ModelGateway().complete(
+            result = ModelGateway(guard=_StubGuard()).complete(
                 local_model(),
                 [{"role": "user", "content": "hello"}],
             )
@@ -73,7 +87,7 @@ def test_local_openai_compatible_chat_uses_allowlisted_http_endpoint():
 def test_local_openai_compatible_chat_rejects_non_allowlisted_http_endpoint():
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=[]):
         with pytest.raises(ModelGatewayError) as exc:
-            ModelGateway().complete(
+            ModelGateway(guard=_StubGuard()).complete(
                 local_model(),
                 [{"role": "user", "content": "hello"}],
             )
@@ -92,7 +106,7 @@ def test_embedding_gateway_normalizes_vectors_and_sends_model_name():
     )
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
-            result = ModelGateway().embed(local_model(), ["first", "second"])
+            result = ModelGateway(guard=_StubGuard()).embed(local_model(), ["first", "second"])
 
     assert result.vectors == [[0.1, 0.2], [0.3, 0.4]]
     assert opener.request.full_url == "http://ollama:11434/v1/embeddings"
@@ -103,7 +117,7 @@ def test_embedding_gateway_normalizes_vectors_and_sends_model_name():
 
 def test_embedding_gateway_rejects_model_without_embedding_capability():
     with pytest.raises(ModelGatewayError) as exc:
-        ModelGateway().embed(local_model(["chat"]), ["hello"])
+        ModelGateway(guard=_StubGuard()).embed(local_model(["chat"]), ["hello"])
 
     assert exc.value.code == "MODEL_CAPABILITY_MISSING"
 
@@ -113,7 +127,7 @@ def test_embedding_gateway_rejects_non_finite_vector_values():
     with override_settings(LOCAL_MODEL_ALLOWED_HOSTS=["ollama"]):
         with patch("core.model_gateway.build_opener", return_value=opener):
             with pytest.raises(ModelGatewayError) as exc:
-                ModelGateway().embed(local_model(), ["hello"])
+                ModelGateway(guard=_StubGuard()).embed(local_model(), ["hello"])
 
     assert exc.value.code == "MODEL_PROVIDER_INVALID_EMBEDDING"
 
