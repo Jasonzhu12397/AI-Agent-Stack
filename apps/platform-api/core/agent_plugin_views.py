@@ -21,7 +21,12 @@ from core.agent_capability_router import (
 from core.agent_mcp_adapter import discover as discover_mcp
 from core.agent_openai_compatible_adapter import discover as discover_openai
 from core.audit import record_audit_event
-from core.plugin_credentials import CredentialError
+from core.plugin_credentials import (
+    CredentialError,
+    CredentialProviderUnsupportedError,
+    CredentialReferenceInvalidError,
+    providers,
+)
 from core.tool_router import ToolExecutionError
 from core.models import (
     AgentCapabilityInvocation,
@@ -39,6 +44,7 @@ _PLUGIN_KEY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _CREDENTIAL_REF_PATTERN = re.compile(
     r"^[a-z][a-z0-9+.-]{1,31}://[A-Za-z0-9_:@-](?:[A-Za-z0-9_./:@-]{0,199})$"
 )
+_CREDENTIAL_CODE_REQUIRED = "CREDENTIAL_REQUIRED"
 _SENSITIVE_KEY_PARTS = (
     "password",
     "secret",
@@ -447,7 +453,8 @@ class AgentPluginInstallationListCreateView(APIView):
                 {
                     "detail": (
                         "credential_ref must be a valid secret reference, not a credential value."
-                    )
+                    ),
+                    "code": CredentialReferenceInvalidError.code,
                 },
                 status=400,
             )
@@ -457,10 +464,23 @@ class AgentPluginInstallationListCreateView(APIView):
                     "detail": (
                         "credential_ref is required for this agent plugin; "
                         "provide a secret reference, not a credential value."
-                    )
+                    ),
+                    "code": _CREDENTIAL_CODE_REQUIRED,
                 },
                 status=400,
             )
+        if credential_ref:
+            scheme = urlsplit(credential_ref).scheme.lower()
+            if scheme not in providers():
+                return Response(
+                    {
+                        "detail": (
+                            f"No credential provider is registered for scheme '{scheme}'."
+                        ),
+                        "code": CredentialProviderUnsupportedError.code,
+                    },
+                    status=400,
+                )
         if not plugin.auth_required and credential_ref:
             return Response(
                 {"detail": "This agent plugin does not accept a credential reference."},
