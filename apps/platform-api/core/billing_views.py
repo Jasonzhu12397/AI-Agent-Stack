@@ -212,7 +212,16 @@ class BillingCapabilitiesView(TenantScopedView):
         channels = [channel for channel in sorted(providers) if channel in SUPPORTED_CHANNELS]
         reason_code = None if available else "PAYMENT_PROVIDER_NOT_CONFIGURED"
         return Response(
-            {"payment": {"available": available, "channels": channels, "reason_code": reason_code}}
+            {
+                "payment": {
+                    "available": available,
+                    "channels": channels,
+                    "reason_code": reason_code,
+                    # Slot names only: an operator learns which credential a
+                    # channel is missing without any reference URI or value.
+                    "diagnostics": registry.diagnose_channels(),
+                }
+            }
         )
 
 

@@ -90,9 +90,33 @@ class PaymentProvider(ABC):
 
     channel: str
 
-    @abstractmethod
+    # Credential slots this adapter reads. ``SLOTS`` lists every slot in the
+    # order it should be reported; ``REQUIRED_SLOTS`` is the subset that must
+    # resolve for the channel to be usable. Readiness, the missing-slot report
+    # and the registry filter all derive from these two declarations, so an
+    # adapter never restates its own configuration rule.
+    SLOTS: tuple[str, ...] = ()
+    REQUIRED_SLOTS: tuple[str, ...] = ()
+
+    def references(self) -> dict[str, str]:
+        """Credential reference URI per slot, in declaration order."""
+
+        return {slot: self._refs[slot] for slot in self.SLOTS if slot in self._refs}
+
+    def resolve_slot(self, slot: str) -> str | None:
+        """Resolve one declared slot to its plaintext, or ``None``."""
+
+        return resolve_credential_ref(self.references().get(slot))
+
+    def missing_slots(self) -> list[str]:
+        """Required slots that do not resolve in this deployment."""
+
+        return [slot for slot in self.REQUIRED_SLOTS if self.resolve_slot(slot) is None]
+
     def is_configured(self) -> bool:
         """True when every required credential reference resolves."""
+
+        return not self.missing_slots()
 
     @abstractmethod
     def create_payment(self, order) -> dict[str, Any]:
