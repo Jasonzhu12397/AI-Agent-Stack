@@ -440,3 +440,18 @@ def test_a_backup_after_a_change_is_not_the_scheduled_one():
     again, created, _ = queue_backup(deployment, now=moment, trigger="change")
     assert created is False
     assert again.id == after.id
+
+
+@pytest.mark.django_db
+def test_a_reinstalled_cluster_is_backed_up_once_not_once_per_record():
+    user, tenant, project, eph, target = _workspace()
+    old = _deployment(tenant, project, eph, target, user, key="old")
+    new = _deployment(tenant, project, eph, target, user, key="new")
+
+    queued = _run()
+
+    # The old deployment describes a cluster that no longer exists under that
+    # name: two hourly snapshots would compete for one retention.
+    assert [item["deployment_id"] for item in queued["queued"]] == [str(new.id)]
+    assert AgentCommand.objects.filter(command_type=ACTION).count() == 1
+    assert not AgentCommand.objects.filter(deployment=old).exists()

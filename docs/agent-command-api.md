@@ -633,3 +633,12 @@ attribute to this cluster (a recurring name for this cluster, a pre-upgrade
 name naming it, or a legacy pre-upgrade name that carries a version). A shared
 backup directory can hold a run still writing under another cluster name, and
 deleting that file halfway would fail its snapshot.
+
+### One backup per cluster, not per deployment record
+
+A reinstalled cluster keeps its old SUCCEEDED deployment record. Queueing for
+both would take two snapshots of the same etcd every hour, and the two
+retention passes would prune each other's files. The scheduler walks deployments
+newest first and keeps the first one for each (tenant, project, Target Agent,
+cluster name): the same name on a different Target Agent is a different cluster,
+the same name on the same Target Agent is one cluster installed twice.

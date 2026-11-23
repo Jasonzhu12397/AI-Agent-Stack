@@ -42,6 +42,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - A change that could not queue its snapshot for any reason other than the
   policy being off is audited as `cluster.etcd_backup.change_not_queued`, so a
   missing post-change backup is explainable later.
+- The scheduler queues one backup per cluster (same tenant, project, Target
+  Agent and name), newest succeeded deployment first, so a reinstalled cluster
+  no longer takes two snapshots an hour or lets two retentions prune each other.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather

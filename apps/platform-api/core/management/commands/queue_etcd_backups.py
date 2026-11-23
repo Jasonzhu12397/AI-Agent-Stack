@@ -24,6 +24,37 @@ from core.models import AuditEvent, ClusterDeployment, Tenant
 SCHEDULER_EVENT = "cluster.etcd_backup.scheduler.run"
 
 
+def _installed_clusters() -> list[ClusterDeployment]:
+    """One deployment per installed cluster, newest first.
+
+    A cluster that was reinstalled keeps its old SUCCEEDED deployment record, and
+    queueing for both would take two snapshots of the same etcd every hour and
+    let the two retentions prune each other's files. The newest succeeded
+    deployment is the one whose target node and policy describe the cluster now.
+    """
+
+    seen: set[tuple[str, str, str, str]] = set()
+    chosen: list[ClusterDeployment] = []
+    for deployment in (
+        ClusterDeployment.objects.filter(status=ClusterDeployment.Status.SUCCEEDED)
+        .select_related("target_node", "tenant", "project")
+        .order_by("-created_at", "-id")
+    ):
+        # The same name on a different Target Agent is a different cluster; the
+        # same name on the same Target Agent is one cluster installed twice.
+        key = (
+            str(deployment.tenant_id),
+            str(deployment.project_id),
+            str(deployment.target_node_id),
+            deployment.cluster_name,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        chosen.append(deployment)
+    return chosen
+
+
 def _record_heartbeat(bucket: str, queued: list, skipped: list) -> None:
     """Say that the scheduler is alive, once per hour bucket.
 
@@ -85,13 +116,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         queued = []
         skipped = []
-        deployments = (
-            ClusterDeployment.objects.filter(
-                status=ClusterDeployment.Status.SUCCEEDED,
-            )
-            .select_related("target_node", "tenant", "project")
-            .order_by("id")
-        )
+        deployments = _installed_clusters()
         bucket = hour_bucket()
         overrides = {
             "directory": options["directory"],
