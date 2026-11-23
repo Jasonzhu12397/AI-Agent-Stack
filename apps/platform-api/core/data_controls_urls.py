@@ -18,6 +18,7 @@ from core.data_controls_views import (
     PrivacyGrantListView,
     PrivacyGrantRevokeView,
     PrivacySessionListView,
+    PrivacySessionRevokeView,
 )
 
 urlpatterns = [
@@ -94,6 +95,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/privacy/sessions/",
         PrivacySessionListView.as_view(),
         name="privacy-session-list",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/privacy/sessions/<str:session_key>/revoke/",
+        PrivacySessionRevokeView.as_view(),
+        name="privacy-session-revoke",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/privacy/deletion-requests/",

@@ -2,9 +2,12 @@
 import json
 import secrets
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.sessions.models import Session
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -652,17 +655,108 @@ class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
         return Response({"revoked": True, "already_revoked": already_revoked})
 
 
+def _mask_session_key(session_key):
+    """Mask a session key, keeping only a short prefix and suffix.
+
+    The full session key is a bearer credential and must never appear in
+    responses, logs, or audit metadata.
+    """
+    if len(session_key) <= 8:
+        return "********"
+    return f"{session_key[:4]}{'*' * 8}{session_key[-4:]}"
+
+
+def _session_owner_id(session_key):
+    """Return the authenticated user id stored in the session, or ``None``.
+
+    The Django DB session backend stores ``_auth_user_id`` in the encoded
+    session payload; decoding goes through the official ``SessionStore`` so
+    the salt/serializer/decoding path matches the login flow.
+    """
+    store = SessionStore(session_key)
+    try:
+        payload = store.load()
+    except Exception:  # corrupted/undecodable session: treat as anonymous
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("_auth_user_id")
+    if raw is None:
+        return None
+    return str(raw)
+
+
+def _session_payload(session, *, is_current, cookie_age_seconds):
+    expire_date = session.expire_date
+    # ``django_session`` has no ``created_at``/``last_activity`` column. The
+    # only durable timestamp is ``expire_date``; the derived creation time is
+    # expire_date minus the configured cookie age. It is explicitly flagged as
+    # derived rather than a real creation timestamp.
+    created_at = expire_date - timedelta(seconds=cookie_age_seconds)
+    return {
+        "session_key_masked": _mask_session_key(session.session_key),
+        "is_current": is_current,
+        "expire_date": expire_date.isoformat(),
+        "created_at": created_at.isoformat(),
+        "created_at_source": "derived_from_expire_date",
+        # No write point persists last activity for DB sessions in this codebase,
+        # so the field is reported as unavailable instead of faked with now().
+        "last_activity": None,
+        "last_activity_source": "unavailable",
+    }
+
+
 class PrivacySessionListView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
         get_tenant_for_user(request, tenant_id)
-        return error_response(
-            "PRIVACY_DEPENDENCY_UNAVAILABLE",
-            "Session/device details are provided by the account service, which is "
-            "not merged in this environment yet.",
-            status=503,
+        cookie_age = int(
+            getattr(settings, "SESSION_COOKIE_AGE", 1209600)
         )
+        current_key = request.session.session_key
+        results = []
+        for session in Session.objects.all().iterator():
+            owner_id = _session_owner_id(session.session_key)
+            if owner_id is None or owner_id != str(request.user.pk):
+                continue
+            results.append(
+                _session_payload(
+                    session,
+                    is_current=session.session_key == current_key,
+                    cookie_age_seconds=cookie_age,
+                )
+            )
+        return Response({"results": results})
+
+
+class PrivacySessionRevokeView(ErrorEnvelopeMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, session_key):
+        tenant = get_tenant_for_user(request, tenant_id)
+        session = Session.objects.filter(session_key=session_key).first()
+        if session is None:
+            # Already revoked (or never existed for this caller): idempotent 200.
+            return Response({"revoked": True, "already_revoked": True})
+        owner_id = _session_owner_id(session_key)
+        if owner_id is None or owner_id != str(request.user.pk):
+            # Never disclose whether another user's session exists.
+            return error_response(
+                "NOT_FOUND", "Session not found for this user.", status=404
+            )
+
+        masked_key = _mask_session_key(session_key)
+        session.delete()
+        record_audit_event(
+            request,
+            tenant,
+            "privacy.session.revoked",
+            "session",
+            masked_key,
+            metadata={"session_key_masked": masked_key},
+        )
+        return Response({"revoked": True, "already_revoked": False})
 
 
 class DeletionRequestListCreateView(ErrorEnvelopeMixin, APIView):
