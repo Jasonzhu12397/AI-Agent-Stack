@@ -30,6 +30,7 @@ Error codes defined locally:
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -54,11 +55,17 @@ CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
 CAPABILITY_UPSTREAM_UNREACHABLE = "CAPABILITY_UPSTREAM_UNREACHABLE"
 CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
 CAPABILITY_CONFIG_INVALID = "CAPABILITY_CONFIG_INVALID"
+CAPABILITY_ARGUMENTS_OUT_OF_RANGE = "CAPABILITY_ARGUMENTS_OUT_OF_RANGE"
 
 MAX_RESPONSE_BYTES = 1048576  # 1 MiB
 MAX_REQUEST_BYTES = 65536  # 64 KiB
 _MAX_DESCRIPTION_LENGTH = 1000
 _DEFAULT_PATH = "/v1/chat/completions"
+# Fallback upper bound for max_tokens when the manifest declares no
+# ``openai_compatible.max_tokens_limit``.
+_DEFAULT_MAX_TOKENS_LIMIT = 4096
+_TEMPERATURE_MIN = 0.0
+_TEMPERATURE_MAX = 2.0
 
 _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,80}")
 _QUERY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
@@ -174,6 +181,66 @@ def _messages(arguments: dict[str, Any]) -> list[dict[str, str]]:
     return [{"role": "user", "content": prompt}]
 
 
+def _max_tokens_limit(block: dict[str, Any]) -> int:
+    """Read the manifest max_tokens ceiling, falling back to the documented default."""
+
+    raw = block.get("max_tokens_limit")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return _DEFAULT_MAX_TOKENS_LIMIT
+
+
+def _validate_completion_options(
+    arguments: dict[str, Any], block: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate completion options locally and return the legal subset to send.
+
+    ``max_tokens`` must be a positive integer within the manifest ceiling;
+    ``temperature`` must be a finite number in ``[0, 2]``. Booleans are not
+    accepted as numbers. Omitted options are not invented; legal explicit
+    values are preserved verbatim.
+    """
+
+    options: dict[str, Any] = {}
+
+    max_tokens = arguments.get("max_tokens")
+    if max_tokens is not None:
+        if (
+            isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
+            or max_tokens <= 0
+        ):
+            raise CapabilityResolutionError(
+                CAPABILITY_ARGUMENTS_OUT_OF_RANGE,
+                "max_tokens must be a positive integer.",
+            )
+        limit = _max_tokens_limit(block)
+        if max_tokens > limit:
+            raise CapabilityResolutionError(
+                CAPABILITY_ARGUMENTS_OUT_OF_RANGE,
+                f"max_tokens exceeds the configured limit of {limit}.",
+            )
+        options["max_tokens"] = max_tokens
+
+    temperature = arguments.get("temperature")
+    if temperature is not None:
+        if (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature)
+        ):
+            raise CapabilityResolutionError(
+                CAPABILITY_ARGUMENTS_OUT_OF_RANGE, "temperature must be a number."
+            )
+        if temperature < _TEMPERATURE_MIN or temperature > _TEMPERATURE_MAX:
+            raise CapabilityResolutionError(
+                CAPABILITY_ARGUMENTS_OUT_OF_RANGE, "temperature must be between 0 and 2."
+            )
+        options["temperature"] = temperature
+
+    return options
+
+
 def _read_bounded(response: httpx.Response) -> bytes:
     chunks: list[bytes] = []
     total = 0
@@ -234,6 +301,7 @@ def _invoke(
     headers["Accept"] = "application/json"
 
     body: dict[str, Any] = {"model": model, "messages": _messages(arguments), "stream": False}
+    body.update(_validate_completion_options(arguments, block))
     encoded = json.dumps(body, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
         "utf-8"
     )

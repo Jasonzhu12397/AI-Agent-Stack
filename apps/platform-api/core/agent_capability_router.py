@@ -21,6 +21,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from core import agent_capability_cache, agent_plugin_manifest
+from core.capability_argument_validation import (
+    ArgumentValidationError,
+    validate_arguments,
+)
 from core.http_connector import execute_http_operation
 from core.models import (
     AgentCapabilityInvocation,
@@ -405,8 +409,8 @@ def invoke_capability(
     }
 
     try:
-        validate_schema(arguments, input_schema)
-    except ToolExecutionError as exc:
+        validate_arguments(arguments, input_schema)
+    except ArgumentValidationError as exc:
         _record_invocation(
             installation, capability_name, plugin.protocol,
             AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, 0,

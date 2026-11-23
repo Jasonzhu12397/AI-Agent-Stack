@@ -102,6 +102,22 @@ user message is assembled from `arguments.prompt` (falling back to
 `arguments.message`). The result is normalized to
 `{"text": choices[0].message.content}`.
 
+Completion options are validated locally before any request is sent:
+
+- `max_tokens`: must be a positive integer (booleans do not count as numbers).
+  The upper bound is read from `manifest.openai_compatible.max_tokens_limit`
+  when it is a positive integer; otherwise the documented default ceiling of
+  `4096` applies.
+- `temperature`: must be a finite number in `[0, 2]`; booleans do not count as
+  numbers.
+- Omitted options are not invented; explicit legal values are preserved
+  verbatim in the request body.
+
+An out-of-range or non-numeric option is rejected locally with
+`CAPABILITY_ARGUMENTS_OUT_OF_RANGE`; the illegal value never reaches the
+upstream endpoint. The optional `max_tokens` and `temperature` arguments are
+reserved protocol options recognized by the adapter.
+
 ### A2A
 
 ```json
@@ -171,8 +187,15 @@ normalized as follows:
 
 `discover_card(installation)` fetches the agent card at
 `{plugin.endpoint_url origin}{agent_card_path}` and validates the minimum card
-fields: `name` (non-empty string), `description` (string), `capabilities` and
-`skills` (list). A missing field raises a configuration error naming the field.
+fields: `name` (non-empty string), `description` (string), `capabilities`
+(object) and `skills` (list). A missing or malformed field raises a
+configuration error naming the field.
+
+The card's `capabilities.streaming` boolean is recorded on every discovered
+capability. When `capabilities` is present but `streaming` is absent or not a
+boolean, the card defaults to non-streaming (`false`); this relaxation is
+intentional and covers older cards that omit the flag. A missing or
+non-object `capabilities` block remains a required-field rejection.
 
 Each skill is mapped to a capability:
 
@@ -187,6 +210,16 @@ Invocation posts a JSON-RPC 2.0 `message/send` request to `plugin.endpoint_url`
 with a single text part. The result is extracted from the first artifact text,
 the first artifact part text, or the message parts; otherwise the raw result
 object is returned under `data`.
+
+Streaming is gated on the card's recorded flag. A caller may request streaming
+through the reserved `stream: true` or `streaming: true` argument. When the
+capability's recorded flag is `false` (including the relaxed default for a
+missing or non-boolean card flag), such a request is rejected locally with
+`CAPABILITY_STREAMING_UNSUPPORTED`; no `message/stream` or SSE request is sent
+to the remote agent. When the card declares `streaming: true`, the call
+proceeds over the existing `message/send` path. The reserved `stream` and
+`streaming` flags are recognized by the adapter and are not tool-specific
+arguments.
 
 ### OpenAI-compatible discovery
 
@@ -206,6 +239,30 @@ not extended. Every adapter failure is recorded on the invocation record with
 `error_code = CAPABILITY_INVOCATION_FAILED`; the local adapter code is carried on
 the raised exception for direct callers and the discover endpoint.
 
+### Shared argument validator
+
+All four protocols (`http_json`, `mcp`, `a2a`, `openai_compatible`) validate
+caller arguments through the same pure, data-driven validator in
+`core.capability_argument_validation`, wired into the router's existing
+"Capability arguments are invalid." branch before any adapter dispatch. The
+bounded schema subset supports:
+
+- `type`: `string`, `number`, `integer`, `boolean`, `object`, `array`,
+  `null`; booleans are never accepted as `integer` or `number`.
+- `properties`, `required`, and `additionalProperties: false` (unknown
+  properties are rejected only when the schema closes the object).
+- `enum`, array `items` / `minItems` / `maxItems`, string length bounds, and
+  number `minimum` / `maximum`.
+- Local `$ref` pointers resolved against `#/definitions/<name>` or
+  `#/$defs/<name>`. External references, fragment-less pointers and
+  unresolvable targets are rejected with
+  `CAPABILITY_SCHEMA_REF_UNSUPPORTED` instead of being sent upstream.
+
+Ordinary argument violations reuse the router `CAPABILITY_INVOCATION_FAILED`
+token; no synonym argument code is introduced. A rejected argument never
+reaches the remote endpoint, and the failure is recorded on the invocation
+record with `status = FAILED` and `error_code = CAPABILITY_INVOCATION_FAILED`.
+
 ### MCP normalization
 
 | Failure | Raised adapter code | Notes |
@@ -224,6 +281,7 @@ the raised exception for direct callers and the discover endpoint.
 | Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
 | Non-JSON body, missing choices, non-string content | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
 | Missing model, invalid path, invalid endpoint | `CAPABILITY_CONFIG_INVALID` |
+| `max_tokens` / `temperature` out of range or non-numeric | `CAPABILITY_ARGUMENTS_OUT_OF_RANGE` |
 | Other adapter failure | `CAPABILITY_INVOCATION_FAILED` |
 
 ### A2A normalization
@@ -235,6 +293,7 @@ the raised exception for direct callers and the discover endpoint.
 | JSON-RPC `error` frame or upstream 4xx/5xx | `CAPABILITY_UPSTREAM_ERROR` |
 | Card or response missing required shape | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
 | Card missing required field, invalid path, invalid endpoint | `CAPABILITY_CONFIG_INVALID` |
+| Streaming requested by a card that does not declare streaming support | `CAPABILITY_STREAMING_UNSUPPORTED` |
 | Other adapter failure | `CAPABILITY_INVOCATION_FAILED` |
 
 ## Security constraints

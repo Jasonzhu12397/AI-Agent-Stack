@@ -54,6 +54,7 @@ CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
 CAPABILITY_UPSTREAM_UNREACHABLE = "CAPABILITY_UPSTREAM_UNREACHABLE"
 CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
 CAPABILITY_CONFIG_INVALID = "CAPABILITY_CONFIG_INVALID"
+CAPABILITY_STREAMING_UNSUPPORTED = "CAPABILITY_STREAMING_UNSUPPORTED"
 
 MAX_RESPONSE_BYTES = 1048576  # 1 MiB
 _MAX_NAME_LENGTH = 100
@@ -166,12 +167,19 @@ def _closed_object_schema(schema: Any) -> dict[str, Any]:
     if not isinstance(required, list):
         required = []
     required = [item for item in required if isinstance(item, str)]
-    return {
+    closed: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    # Keep local definition blocks so ``$ref`` pointers can be resolved by the
+    # shared argument validator.
+    for key in ("definitions", "$defs"):
+        definitions = schema.get(key)
+        if isinstance(definitions, dict):
+            closed[key] = definitions
+    return closed
 
 
 def _normalize_name(raw: str) -> tuple[str, str] | None:
@@ -241,7 +249,16 @@ def _http_client(timeout: int) -> httpx.Client:
     )
 
 
-def _validate_card(card: Any) -> dict[str, Any]:
+def _validate_card(card: Any) -> tuple[dict[str, Any], bool]:
+    """Validate the minimum card shape and return the declared streaming flag.
+
+    A missing or non-object ``capabilities`` block is rejected as a missing
+    required field. The ``capabilities.streaming`` flag is relaxed: when it is
+    absent or not a boolean, the card defaults to non-streaming (``False``);
+    invocation rejects any streaming request locally instead of contacting a
+    ``message/stream`` endpoint.
+    """
+
     if not isinstance(card, dict):
         raise CapabilityResolutionError(
             CAPABILITY_UPSTREAM_INVALID_RESPONSE, "Agent card must be a JSON object."
@@ -251,7 +268,8 @@ def _validate_card(card: Any) -> dict[str, Any]:
         missing.append("name")
     if not isinstance(card.get("description"), str):
         missing.append("description")
-    if "capabilities" not in card:
+    capabilities = card.get("capabilities")
+    if not isinstance(capabilities, dict):
         missing.append("capabilities")
     if not isinstance(card.get("skills"), list):
         missing.append("skills")
@@ -260,7 +278,10 @@ def _validate_card(card: Any) -> dict[str, Any]:
             CAPABILITY_CONFIG_INVALID,
             f"Agent card is missing required fields: {', '.join(missing)}.",
         )
-    return card
+    streaming = capabilities.get("streaming")
+    if not isinstance(streaming, bool):
+        streaming = False
+    return card, streaming
 
 
 def discover_card(installation: Any) -> list[dict[str, Any]]:
@@ -300,7 +321,7 @@ def discover_card(installation: Any) -> list[dict[str, Any]]:
     except ToolExecutionError as exc:
         raise CapabilityResolutionError(CAPABILITY_CONFIG_INVALID, str(exc)) from exc
 
-    card = _validate_card(card)
+    card, streaming = _validate_card(card)
 
     capabilities: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -334,6 +355,7 @@ def discover_card(installation: Any) -> list[dict[str, Any]]:
                 "risk_level": "low",
                 "timeout_seconds": timeout,
                 "remote_name": remote_name,
+                "streaming": streaming,
             }
         )
         if len(capabilities) >= _MAX_CAPABILITIES:
@@ -378,6 +400,16 @@ def _invoke(
     timeout = _clamp_timeout(
         block.get("timeout_seconds", definition.get("timeout_seconds", plugin.timeout_seconds)), 60
     )
+
+    wants_stream = arguments.get("stream") is True or arguments.get("streaming") is True
+    streaming_allowed = definition.get("streaming") is True
+    if wants_stream and not streaming_allowed:
+        # Reject locally: no message/stream request is sent to the remote agent.
+        raise CapabilityResolutionError(
+            CAPABILITY_STREAMING_UNSUPPORTED,
+            "The agent card does not declare streaming support.",
+        )
+
     headers, _query = _auth(installation)
     headers["Content-Type"] = "application/json"
     headers["Accept"] = "application/json, text/event-stream"

@@ -94,12 +94,19 @@ def _closed_object_schema(schema: Any) -> dict[str, Any] | None:
     if not isinstance(required, list):
         required = []
     required = [item for item in required if isinstance(item, str)]
-    return {
+    closed: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    # Keep local definition blocks so ``$ref`` pointers recorded by the remote
+    # tool schema can be resolved by the shared argument validator.
+    for key in ("definitions", "$defs"):
+        definitions = schema.get(key)
+        if isinstance(definitions, dict):
+            closed[key] = definitions
+    return closed
 
 
 def _normalize_name(raw: str) -> tuple[str, str] | None:
