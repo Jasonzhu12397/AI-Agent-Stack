@@ -14,7 +14,7 @@ import {
 } from "./services/api";
 
 type Health = { status: string; database?: string };
-type ActiveView = "dashboard" | "models" | "agents" | "teams" | "workflows" | "integrations" | "knowledge" | "infrastructure" | "governance" | "audit" | "organization" | "docs";
+type ActiveView = "dashboard" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "infrastructure" | "governance" | "audit" | "organization" | "docs";
 const activeView = ref<ActiveView>("dashboard");
 const elementLocale = computed(() => (locale.value === "zh" ? zhCn : en));
 const navItems: { id: ActiveView; label: string }[] = [
@@ -23,6 +23,7 @@ const navItems: { id: ActiveView; label: string }[] = [
   { id: "agents", label: "Agent Studio" },
   { id: "workflows", label: "Workflow DAG" },
   { id: "integrations", label: "Integration Hub" },
+  { id: "marketplace", label: "Agent Marketplace" },
   { id: "knowledge", label: "Knowledge Bases" },
   { id: "infrastructure", label: "Metal3 Fleet" },
   { id: "governance", label: "Governance" },
@@ -31,7 +32,7 @@ const navItems: { id: ActiveView; label: string }[] = [
   { id: "docs", label: "Docs & Matrix" },
 ];
 const workspaceSection = computed<
-  "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs"
+  "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "governance" | "audit" | "organization" | "docs"
 >(() => {
   if (activeView.value === "dashboard" || activeView.value === "infrastructure") {
     return "overview";

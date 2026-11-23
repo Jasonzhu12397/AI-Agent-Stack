@@ -6,6 +6,7 @@ import AgentTeamStudioView from "./AgentTeamStudioView.vue";
 import ModelManagerView from "./ModelManagerView.vue";
 import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
+import AgentMarketplaceView from "./AgentMarketplaceView.vue";
 import KnowledgeBaseView from "./KnowledgeBaseView.vue";
 import GovernanceView from "./GovernanceView.vue";
 import AuditView from "./AuditView.vue";
@@ -26,7 +27,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "knowledge" | "governance" | "audit" | "organization" | "docs";
+    activeSection?: "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "governance" | "audit" | "organization" | "docs";
   }>(),
   { activeSection: "overview" },
 );
@@ -185,6 +186,8 @@ onUnmounted(() => {
                     ? "Agent Teams"
                     : props.activeSection === "workflows"
                       ? "Workflow Studio"
+                    : props.activeSection === "marketplace"
+                      ? "Agent Marketplace"
                     : props.activeSection === "knowledge"
                       ? "Knowledge Bases"
                       : props.activeSection === "governance"
@@ -292,6 +295,11 @@ onUnmounted(() => {
         />
         <IntegrationHubView
           v-if="props.activeSection === 'integrations'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <AgentMarketplaceView
+          v-if="props.activeSection === 'marketplace'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />

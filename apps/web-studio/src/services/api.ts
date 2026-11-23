@@ -1816,3 +1816,127 @@ export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDoc
     method: "POST",
   });
 }
+
+export type AgentPluginProtocol = "http_json" | "mcp" | "a2a";
+
+export type AgentPluginInstallationStatus = "installed" | "disabled" | "uninstalled";
+
+export type AgentPluginManifestCapability = {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  risk_level?: string;
+  timeout_seconds?: number;
+};
+
+export type AgentPluginDefinition = {
+  id: string;
+  tenant_id: string;
+  plugin_key: string;
+  name: string;
+  description: string;
+  version: string;
+  protocol: AgentPluginProtocol;
+  endpoint_url: string;
+  auth_required: boolean;
+  capabilities: string[];
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  timeout_seconds: number | null;
+  max_concurrency: number | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  manifest?: {
+    capabilities?: AgentPluginManifestCapability[];
+  } | null;
+};
+
+export type AgentPluginInstallation = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  plugin: AgentPluginDefinition | null;
+  plugin_key?: string;
+  plugin_version: string;
+  status: AgentPluginInstallationStatus;
+  granted_capabilities: string[];
+  credential_configured: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentInvocationRecord = {
+  status: "success" | "failed" | "rejected";
+  error_code: string;
+  created_at: string;
+};
+
+export type InstalledAgentCapability = {
+  name: string;
+  plugin_key: string;
+  plugin_version: string;
+  protocol: string;
+  risk_level: string;
+  installation_id: string;
+  input_schema: Record<string, unknown>;
+  last_invocation: AgentInvocationRecord | null;
+};
+
+export type AgentCapabilityResponse = {
+  capabilities: InstalledAgentCapability[];
+};
+
+export function getAgentPluginDefinitions(tenantId: string): Promise<AgentPluginDefinition[]> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/agent-plugins/",
+  );
+}
+
+export function getAgentPluginInstallations(
+  tenantId: string,
+  projectId: string,
+): Promise<AgentPluginInstallation[]> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-plugin-installations/",
+  );
+}
+
+export function installAgentPlugin(
+  tenantId: string,
+  projectId: string,
+  pluginId: string,
+  grantedCapabilities: string[] = [],
+): Promise<AgentPluginInstallation> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-plugin-installations/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        plugin_id: pluginId,
+        granted_capabilities: grantedCapabilities,
+      }),
+    },
+  );
+}
+
+export function setAgentPluginInstallationStatus(
+  installationId: string,
+  status: AgentPluginInstallationStatus,
+): Promise<AgentPluginInstallation> {
+  return request("/api/v1/agent-plugin-installations/" + installationId + "/status/", {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function getProjectAgentCapabilities(
+  tenantId: string,
+  projectId: string,
+): Promise<AgentCapabilityResponse> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-capabilities/",
+  );
+}
