@@ -8,6 +8,14 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- Snapshots left in a retired backup directory no longer leak or disappear
+  from the panel. Retention and the state view derive the candidate location
+  set from the cluster's own records (current spec directory, past backup/status
+  command directories, upgrade snapshot parent directories, and policy-update
+  audit events) instead of reading only the current spec single value. Each
+  entry is tagged with its own directory and pruned at its absolute path; the
+  report carries `pruned_entries` with name and directory, and an unconfirmed
+  restore point is marked as such.
 - Commands created through the node command endpoint no longer leave their
   deployment link empty: the deployment the Target Agent serves is resolved at
   creation and persisted on the command. Rollback snapshot protection, the

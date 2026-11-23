@@ -33,6 +33,7 @@ PAYLOAD_KEYS = frozenset(
     {
         "cluster_name",
         "directory",
+        "directories",
         "keep_count",
         "keep_max_age_hours",
         "pre_upgrade_keep_max_age_hours",
@@ -155,6 +156,56 @@ def _protect_names(value: Any, *, cluster_name: str) -> tuple[str, ...]:
     return tuple(sorted(set(names)))
 
 
+def normalize_directory(directory: Any) -> str | None:
+    """Return the normalized backup directory if it is allowed, else None.
+
+    The rule is the one ``validate_request`` enforces: an absolute path under
+    ``/var/lib/etcd`` with no traversal and no doubled slash, accepted by the
+    pod path check.
+    """
+
+    if not isinstance(directory, str):
+        return None
+    candidate = directory.strip().rstrip("/")
+    if not candidate:
+        return None
+    if not _DIRECTORY.fullmatch(candidate) or "//" in candidate or "/../" in candidate:
+        return None
+    if snapshot_pod_path_problem(candidate + "/placeholder.db"):
+        return None
+    return candidate
+
+
+def candidate_directories(sources: Any) -> dict[str, Any]:
+    """Deduplicate and validate the locations a cluster's snapshots may occupy.
+
+    The candidate set is derived from records this cluster already holds: the
+    current spec directory, directories past backup or status commands reported,
+    directories an upgrade snapshot was reported under, and directories recorded
+    by policy changes. Invalid or unreachable locations are reported separately
+    instead of being silently dropped.
+    """
+
+    valid: list[str] = []
+    invalid: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in sources or []:
+        if not isinstance(raw, str):
+            continue
+        candidate = raw.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        normalized = normalize_directory(candidate)
+        if normalized is None:
+            invalid.append(
+                {"directory": candidate, "reason": "ETCD_BACKUP_DIRECTORY_INVALID"}
+            )
+        else:
+            valid.append(normalized)
+    return {"directories": valid, "invalid": invalid}
+
+
 def validate_request(
     payload: Any, *, cluster_name: str | None = None
 ) -> dict[str, Any]:
@@ -192,15 +243,22 @@ def validate_request(
                 "ETCD_BACKUP_CONFIRMATION_MISMATCH",
                 "execute needs confirm_cluster_name equal to cluster_name",
             )
-    directory = str(payload.get("directory") or DEFAULT_DIRECTORY).strip()
-    if not _DIRECTORY.fullmatch(directory) or "//" in directory or "/../" in directory:
+    directory = normalize_directory(payload.get("directory") or DEFAULT_DIRECTORY)
+    if directory is None:
         raise EtcdBackupError(
             "ETCD_BACKUP_DIRECTORY_INVALID",
             "directory must be an absolute path under /var/lib/etcd without traversal",
         )
-    problem = snapshot_pod_path_problem(directory.rstrip("/") + "/placeholder.db")
-    if problem:
-        raise EtcdBackupError("ETCD_BACKUP_DIRECTORY_INVALID", problem)
+    raw_directories = payload.get("directories")
+    if raw_directories is not None and not isinstance(raw_directories, list):
+        raise EtcdBackupError(
+            "ETCD_BACKUP_PAYLOAD_INVALID", "directories must be a list"
+        )
+    candidates = candidate_directories([directory, *(raw_directories or [])])
+    if candidates["invalid"]:
+        bad = candidates["invalid"][0]
+        raise EtcdBackupError("ETCD_BACKUP_DIRECTORY_INVALID", bad["directory"])
+    directories = candidates["directories"]
     protect = _protect_names(payload.get("protect"), cluster_name=cluster)
     min_free = _int(
         payload.get("min_free_bytes"),
@@ -239,7 +297,8 @@ def validate_request(
     )
     return {
         "cluster_name": cluster,
-        "directory": directory.rstrip("/"),
+        "directory": directory,
+        "directories": directories,
         "keep_count": keep_count,
         "keep_max_age_hours": keep_age,
         "pre_upgrade_keep_max_age_hours": pre_upgrade_age,

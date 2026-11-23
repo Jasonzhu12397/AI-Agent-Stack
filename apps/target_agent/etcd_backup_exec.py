@@ -218,6 +218,29 @@ class EtcdBackupExecutor:
             )
         return entries
 
+    def _union_entries(
+        self, directories: list[str], cluster_name: str
+    ) -> list[dict[str, Any]]:
+        """List every candidate directory and tag each entry with its location.
+
+        After a directory rotation the retired directory still holds this
+        cluster's snapshots, so retention and the status report enumerate the
+        whole candidate set instead of only the current policy directory. Each
+        entry keeps the directory it was found in, so a later prune deletes the
+        file at its own absolute path.
+        """
+
+        listings: list[dict[str, Any]] = []
+        for entry_directory in directories:
+            for item in self._list_directory(entry_directory):
+                item["directory"] = entry_directory
+                listings.append(item)
+        entries = snapshot_entries(listings, cluster_name=cluster_name)
+        listing_dir = {item["name"]: item["directory"] for item in listings}
+        for entry in entries:
+            entry["directory"] = listing_dir.get(entry["name"], directories[0])
+        return entries
+
     def _sweep_stale_partials(self, directory: str, cluster_name: str) -> list[str]:
         """Remove staging files an earlier, killed run left behind.
 
@@ -272,6 +295,7 @@ class EtcdBackupExecutor:
 
         stamp_now = now or datetime.now(UTC)
         directory = request["directory"]
+        directories = request.get("directories") or [directory]
         filename = backup_filename(request["cluster_name"], now=stamp_now)
         staging = f"{directory}/{partial_name(filename)}"
         final = f"{directory}/{filename}"
@@ -287,7 +311,11 @@ class EtcdBackupExecutor:
         )
         if not self._finish(prepare, result):
             return self._failed("ETCD_BACKUP_PREPARE_FAILED", directory, request)
-        swept = self._sweep_stale_partials(directory, request["cluster_name"])
+        swept: list[str] = []
+        for entry_directory in directories:
+            swept.extend(
+                self._sweep_stale_partials(entry_directory, request["cluster_name"])
+            )
 
         disk = self._step(
             2,
@@ -362,9 +390,7 @@ class EtcdBackupExecutor:
                 staging_kept=staging,
             )
 
-        entries = snapshot_entries(
-            self._list_directory(directory), cluster_name=request["cluster_name"]
-        )
+        entries = self._union_entries(directories, request["cluster_name"])
         prunable = select_prunable(
             entries,
             keep_count=request["keep_count"],
@@ -389,15 +415,20 @@ class EtcdBackupExecutor:
                 f"{request['pre_upgrade_keep_max_age_hours']}h except the newest"
             ),
         )
-        removed = []
+        removed: list[str] = []
+        removed_entries: list[dict[str, str]] = []
         for entry in prunable:
-            path = f"{directory}/{entry['name']}"
+            entry_directory = entry.get("directory") or directory
+            path = f"{entry_directory}/{entry['name']}"
             outcome = self._runner(
                 self._pod_shell(["rm", "-f", path]),
                 timeout=STEP_TIMEOUT_SECONDS,
             )
             if _ok(outcome):
                 removed.append(entry["name"])
+                removed_entries.append(
+                    {"name": entry["name"], "directory": entry_directory}
+                )
         retention["status"] = "succeeded"
         retention["exit_code"] = 0
         retention["detail"] = (
@@ -405,7 +436,7 @@ class EtcdBackupExecutor:
         )
 
         report = assess(
-            snapshot_entries(self._list_directory(directory), cluster_name=request["cluster_name"]),
+            self._union_entries(directories, request["cluster_name"]),
             keep_count=request["keep_count"],
             keep_max_age_hours=request["keep_max_age_hours"],
             max_age_hours=request["max_age_hours"],
@@ -421,6 +452,7 @@ class EtcdBackupExecutor:
                 "taken_at": stamp_now.isoformat(),
             },
             "pruned": removed,
+            "pruned_entries": removed_entries,
             "kept": public_entries(retained),
             "retention": {
                 "keep_count": request["keep_count"],
@@ -441,10 +473,8 @@ class EtcdBackupExecutor:
     def status(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
         """Read-only: what backups exist and whether the newest one is fresh."""
 
-        entries = snapshot_entries(
-            self._list_directory(request["directory"]),
-            cluster_name=request["cluster_name"],
-        )
+        directories = request.get("directories") or [request["directory"]]
+        entries = self._union_entries(directories, request["cluster_name"])
         report = assess(
             entries,
             keep_count=request["keep_count"],
