@@ -18,6 +18,7 @@ from django.utils import timezone
 from core.audit import record_audit_event
 from core.etcd_backup_alert import deliver
 from core.etcd_backup_state import etcd_backup_state
+from core.installed_clusters import installed_deployments
 from core.models import AuditEvent, ClusterDeployment
 
 SCHEDULER_SILENCE_HOURS = 2
@@ -53,11 +54,7 @@ class Command(BaseCommand):
         now = timezone.now()
         clusters = []
         problems = []
-        deployments = (
-            ClusterDeployment.objects.filter(status=ClusterDeployment.Status.SUCCEEDED)
-            .select_related("tenant", "project", "target_node")
-            .order_by("id")
-        )
+        deployments = installed_deployments()
         repeat_after = timedelta(hours=float(options["repeat_after_hours"]))
         for deployment in deployments:
             state = etcd_backup_state(deployment, now=now)

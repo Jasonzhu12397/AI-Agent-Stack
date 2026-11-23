@@ -45,6 +45,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The scheduler queues one backup per cluster (same tenant, project, Target
   Agent and name), newest succeeded deployment first, so a reinstalled cluster
   no longer takes two snapshots an hour or lets two retentions prune each other.
+- The scheduler and the watchdog now share one definition of "which deployment
+  speaks for this cluster" (`core/installed_clusters.py`), so a superseded
+  reinstall record cannot be queued twice or watched as a dead cluster.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather

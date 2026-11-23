@@ -642,3 +642,12 @@ retention passes would prune each other's files. The scheduler walks deployments
 newest first and keeps the first one for each (tenant, project, Target Agent,
 cluster name): the same name on a different Target Agent is a different cluster,
 the same name on the same Target Agent is one cluster installed twice.
+
+### One definition of an installed cluster
+
+A reinstalled cluster keeps its old SUCCEEDED deployment record. The scheduler
+and the watchdog both ask "which record speaks for this cluster" through
+`core.installed_clusters.installed_deployments()`: one deployment per (tenant,
+project, Target Agent, cluster name), newest first. Two answers would mean
+either two hourly snapshots of one etcd, or a watchdog reporting a cluster that
+no longer exists under that name.

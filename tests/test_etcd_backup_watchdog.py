@@ -391,3 +391,30 @@ def test_a_queued_command_nobody_ran_surfaces_as_its_own_problem():
 
     assert error
     assert report["problems"][0]["code"] == "ETCD_BACKUP_RUN_STUCK"
+
+
+@pytest.mark.django_db
+def test_a_superseded_deployment_record_is_not_a_cluster_to_watch():
+    tenant, project, target, deployment, user = _workspace()
+    _backup(tenant, project, target, deployment, user, hours_ago=2)
+    # A reinstall left a second SUCCEEDED record for the same cluster on the
+    # same Target Agent. Only the newest one describes the cluster now; inspecting
+    # both would report the same cluster twice or, worse, report the dead record.
+    replacement = ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=deployment.eph_node,
+        target_node=target,
+        requested_by=user,
+        cluster_name="lab",
+        kubernetes_version="v1.38.0",
+        idempotency_key="watchdog-key-2",
+        status=ClusterDeployment.Status.SUCCEEDED,
+        spec={},
+    )
+    _backup(tenant, project, target, replacement, user, hours_ago=1)
+
+    report, error = _run()
+
+    assert [item["deployment_id"] for item in report["clusters"]] == [str(replacement.id)]
+    assert report["problems"] == []
