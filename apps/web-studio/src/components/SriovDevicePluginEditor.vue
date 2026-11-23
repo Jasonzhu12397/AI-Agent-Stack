@@ -307,18 +307,18 @@ defineExpose({ validate });
 </template>
 
 <style scoped>
-.sriov-editor { display: grid; gap: 14px; margin-top: 18px; padding: 16px; border: 1px solid rgba(112,151,187,.2); border-radius: 12px; background: rgba(8,22,36,.5); }
+.sriov-editor { display: grid; gap: 14px; margin-top: 18px; padding: 16px; border: 1px solid #e3eaf2; border-radius: 12px; background: #f6fafd; }
 .editor-heading,.pool-title,.resource-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .editor-actions { display:flex; flex-wrap:wrap; gap:6px; }
-.editor-heading h3 { margin:0; color:#e4effa; font-size:14px; }
-.editor-heading p { margin:5px 0 0; color:#8299b0; font-size:11px; }
+.editor-heading h3 { margin:0; color: #121f28; font-size:14px; }
+.editor-heading p { margin:5px 0 0; color: #566976; font-size:11px; }
 .pool-layout { display:grid; grid-template-columns:130px minmax(0,1fr); gap:14px; }
 .pool-list { display:grid; align-content:start; gap:6px; }
-.pool-list button { padding:9px 10px; border:1px solid rgba(112,151,187,.2); border-radius:7px; background:transparent; color:#91a8bf; text-align:left; cursor:pointer; }
-.pool-list button.active { border-color:#4fc5d7; color:#e4f8ff; background:rgba(47,157,184,.1); }
-.pool-title strong,.resource-heading strong { color:#dce9f6; font-size:12px; }
+.pool-list button { padding:9px 10px; border:1px solid #e3eaf2; border-radius:7px; background:transparent; color: #0a7f58; text-align:left; cursor:pointer; }
+.pool-list button.active { border-color: #bfe8d7; color: #0a7f58; background: #e6f7f1; }
+.pool-title strong,.resource-heading strong { color: #121f28; font-size:12px; }
 .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 12px; }
-.pool-editor :deep(.el-form-item__label) { color:#8fa5bc; }
-.resource-card { margin-top:12px; padding:12px; border:1px solid rgba(112,151,187,.18); border-radius:9px; }
+.pool-editor :deep(.el-form-item__label) { color: #0a7f58; }
+.resource-card { margin-top:12px; padding:12px; border:1px solid #e3eaf2; border-radius:9px; }
 @media(max-width:720px) { .pool-layout,.form-grid { grid-template-columns:1fr; } .pool-list { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 </style>
