@@ -253,3 +253,96 @@ export function statusTransition(
   if (action === "uninstall" && current === "installed") return "uninstalled";
   return null;
 }
+
+// A credential reference is a URI pointing at a secret held outside the
+// platform, for example env://PLUGIN_SECRET_TOKEN. The platform never stores
+// or echoes the resolved secret value.
+const CREDENTIAL_REFERENCE_PATTERN =
+  /^[a-z][a-z0-9+.-]{1,31}:\/\/[A-Za-z0-9_./:-]{1,200}$/;
+
+// Returns true when the value looks like a scheme://path secret reference.
+// Whitespace, line breaks and unsupported schemes are rejected.
+export function isCredentialReference(value: string): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return false;
+  return CREDENTIAL_REFERENCE_PATTERN.test(trimmed);
+}
+
+// Heuristic guard against pasting a plaintext secret: whitespace, an
+// overlong blob, or common token / authorization-header prefixes.
+function looksLikePlaintextSecret(value: string): boolean {
+  const trimmed = value.trim();
+  if (/\s/.test(trimmed)) return true;
+  if (trimmed.length > 200) return true;
+  if (/^sk-/i.test(trimmed)) return true;
+  if (/^Bearer\s/i.test(trimmed)) return true;
+  return false;
+}
+
+// Human-readable credential state for a plugin. Returns an empty string when
+// the plugin does not require authentication.
+export function credentialHint(
+  definition: AgentPluginDefinitionRecord,
+  credentialConfigured = false,
+): string {
+  if (!definition.auth_required) return "";
+  return credentialConfigured
+    ? "Credential configured (value is not stored by the platform)"
+    : "Credential reference required";
+}
+
+export interface AgentInstallPayload {
+  plugin_id: string;
+  granted_capabilities: string[];
+  credential_ref?: string;
+}
+
+// Build the install request body. Auth-required plugins carry the trimmed
+// reference; plugins without authentication never send a credential_ref
+// field, matching the backend contract.
+export function installPayload(
+  definition: AgentPluginDefinitionRecord,
+  credentialRef: string,
+): AgentInstallPayload {
+  const payload: AgentInstallPayload = {
+    plugin_id: definition.id,
+    granted_capabilities: [],
+  };
+  if (definition.auth_required) {
+    payload.credential_ref = credentialRef.trim();
+  }
+  return payload;
+}
+
+export interface InstallValidation {
+  ok: boolean;
+  errors: string[];
+}
+
+// Validate an install attempt before it reaches the API. Plaintext-looking
+// secrets, missing references for auth-required plugins and references on
+// plugins that do not accept them are all rejected with a readable message.
+export function validateInstall(
+  definition: AgentPluginDefinitionRecord,
+  credentialRef: string,
+): InstallValidation {
+  const errors: string[] = [];
+  const ref = (credentialRef ?? "").trim();
+  if (definition.auth_required) {
+    if (!ref) {
+      errors.push("A credential reference is required for this plugin.");
+    } else if (looksLikePlaintextSecret(ref)) {
+      errors.push(
+        "Enter a secret reference URI (for example env://PLUGIN_SECRET_TOKEN), not a plaintext credential.",
+      );
+    } else if (!isCredentialReference(ref)) {
+      errors.push(
+        "Credential reference must use scheme://path format (for example env://PLUGIN_SECRET_TOKEN).",
+      );
+    }
+  } else if (ref) {
+    errors.push("This plugin does not accept a credential reference.");
+  }
+  return { ok: errors.length === 0, errors };
+}

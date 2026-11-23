@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
+  credentialHint,
   declaredCapabilities,
+  installPayload,
   mergeMarketplace,
   statusTransition,
   summarizeInvocation,
+  validateInstall,
   visibleCapabilities,
   type InstalledCapability,
   type LifecycleAction,
@@ -32,6 +35,7 @@ const error = ref("");
 const info = ref("");
 const expandedPlugins = ref<Set<string>>(new Set());
 const busyKey = ref("");
+const credentialRefs = ref<Record<string, string>>({});
 
 const entries = computed<MarketplaceEntry[]>(() =>
   mergeMarketplace(definitions.value, installations.value),
@@ -85,6 +89,14 @@ function formatTime(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function setCredentialRef(pluginKey: string, value: string): void {
+  credentialRefs.value = { ...credentialRefs.value, [pluginKey]: value };
+}
+
+function hintFor(entry: MarketplaceEntry): string {
+  return credentialHint(entry.definition, entry.installation?.credential_configured ?? false);
+}
+
 function toggleExpanded(pluginKey: string): void {
   const next = new Set(expandedPlugins.value);
   if (next.has(pluginKey)) {
@@ -123,15 +135,31 @@ async function refresh(): Promise<void> {
 
 async function install(entry: MarketplaceEntry): Promise<void> {
   if (!props.tenantId || !props.projectId) return;
+  const ref = credentialRefs.value[entry.definition.plugin_key] ?? "";
+  const validation = validateInstall(entry.definition, ref);
+  if (!validation.ok) {
+    error.value = validation.errors[0];
+    info.value = "";
+    return;
+  }
   submitting.value = true;
   busyKey.value = entry.definition.plugin_key;
   error.value = "";
   info.value = "";
   try {
-    await installAgentPlugin(props.tenantId, props.projectId, entry.definition.id);
+    const payload = installPayload(entry.definition, ref);
+    await installAgentPlugin(props.tenantId, props.projectId, payload.plugin_id, {
+      granted_capabilities: payload.granted_capabilities,
+      ...(payload.credential_ref !== undefined
+        ? { credential_ref: payload.credential_ref }
+        : {}),
+    });
     info.value = entry.definition.name + " installed into the project.";
+    credentialRefs.value[entry.definition.plugin_key] = "";
     await refresh();
   } catch (cause) {
+    // Show the backend detail only; the submitted reference is never echoed
+    // into the error message or logged.
     error.value = cause instanceof Error ? cause.message : "Agent plugin installation failed.";
   } finally {
     submitting.value = false;
@@ -216,6 +244,18 @@ onMounted(() => void refresh());
           >
             {{ entry.installation.credential_configured ? "Credential configured" : "No credential" }}
           </el-tag>
+        </div>
+
+        <div v-if="entry.definition.auth_required" class="marketplace-credential">
+          <el-input
+            :model-value="credentialRefs[entry.definition.plugin_key] ?? ''"
+            placeholder="env://PLUGIN_SECRET_MARKET_AGENT_TOKEN"
+            spellcheck="false"
+            @update:model-value="setCredentialRef(entry.definition.plugin_key, $event)"
+          />
+          <small class="marketplace-credential-hint">
+            {{ hintFor(entry) }} · Enter a reference only, never a plaintext secret.
+          </small>
         </div>
 
         <div

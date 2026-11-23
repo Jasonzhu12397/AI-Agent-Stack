@@ -1907,17 +1907,14 @@ export function installAgentPlugin(
   tenantId: string,
   projectId: string,
   pluginId: string,
-  grantedCapabilities: string[] = [],
+  body: { granted_capabilities?: string[]; credential_ref?: string } = {},
 ): Promise<AgentPluginInstallation> {
   return request(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-plugin-installations/",
     {
       method: "POST",
       headers: { "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({
-        plugin_id: pluginId,
-        granted_capabilities: grantedCapabilities,
-      }),
+      body: JSON.stringify({ plugin_id: pluginId, ...body }),
     },
   );
 }
