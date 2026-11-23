@@ -32,6 +32,11 @@ from core.models import (
     AgentPluginInstallation,
 )
 from core.tool_router import (
+    FAULT_CLIENT_ERROR,
+    FAULT_INVALID_RESPONSE,
+    FAULT_SERVER_ERROR,
+    FAULT_TIMEOUT,
+    FAULT_UPSTREAM_ERROR,
     ToolApprovalRequired,
     ToolContext,
     ToolExecutionError,
@@ -45,6 +50,22 @@ CAPABILITY_PROTOCOL_UNSUPPORTED = "CAPABILITY_PROTOCOL_UNSUPPORTED"
 CAPABILITY_AUTH_REQUIRED = "CAPABILITY_AUTH_REQUIRED"
 CAPABILITY_UNINSTALLED_IN_FLIGHT = "CAPABILITY_UNINSTALLED_IN_FLIGHT"
 CAPABILITY_INVOCATION_FAILED = "CAPABILITY_INVOCATION_FAILED"
+CAPABILITY_TIMEOUT = "CAPABILITY_TIMEOUT"
+CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
+CAPABILITY_UPSTREAM_CLIENT_ERROR = "CAPABILITY_UPSTREAM_CLIENT_ERROR"
+CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
+CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
+
+# Connector taxonomy category -> capability raised code for the http_json
+# adapter. Categories without an entry fall back to the generic invocation
+# failure token, preserving the previous behavior for unclassified faults.
+_HTTP_FAULT_CODES: dict[str, str] = {
+    FAULT_CLIENT_ERROR: CAPABILITY_UPSTREAM_CLIENT_ERROR,
+    FAULT_SERVER_ERROR: CAPABILITY_UPSTREAM_SERVER_ERROR,
+    FAULT_TIMEOUT: CAPABILITY_TIMEOUT,
+    FAULT_INVALID_RESPONSE: CAPABILITY_UPSTREAM_INVALID_RESPONSE,
+    FAULT_UPSTREAM_ERROR: CAPABILITY_UPSTREAM_ERROR,
+}
 
 _INSTALLED = AgentPluginInstallation.Status.INSTALLED
 _DISABLED = AgentPluginInstallation.Status.DISABLED
@@ -305,7 +326,13 @@ def _http_adapter(
         credential_ref=installation.credential_ref,
         plugin_manifest=dict(plugin.manifest or {}),
     )
-    return execute_http_operation(arguments, context, tool)
+    try:
+        return execute_http_operation(arguments, context, tool)
+    except ToolExecutionError as exc:
+        raise CapabilityResolutionError(
+            _HTTP_FAULT_CODES.get(exc.code, CAPABILITY_INVOCATION_FAILED),
+            str(exc),
+        ) from exc
 
 
 # Protocol adapters are registered here; mcp/a2a adapters are intentionally

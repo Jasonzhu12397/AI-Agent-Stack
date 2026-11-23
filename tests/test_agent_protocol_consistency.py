@@ -34,12 +34,6 @@ from core.agent_capability_router import (
     invoke_capability,
     resolve_capability,
 )
-from core.agent_openai_compatible_adapter import (
-    CAPABILITY_TIMEOUT as OAI_TIMEOUT,
-    CAPABILITY_UPSTREAM_CLIENT_ERROR as OAI_CLIENT_ERROR,
-    CAPABILITY_UPSTREAM_INVALID_RESPONSE as OAI_INVALID_RESPONSE,
-    CAPABILITY_UPSTREAM_SERVER_ERROR as OAI_SERVER_ERROR,
-)
 from core.models import (
     AgentCapabilityInvocation,
     AgentPluginDefinition,
@@ -176,14 +170,18 @@ class ProtocolSpec:
     plugin_key: str
     arguments: dict[str, Any]
     manifest_factory: Callable[[str], dict[str, Any]]
-    # fault key -> normalized raised error code expected from the adapter.
-    expected_raised: dict[str, str]
 
 
-# The shared expectation table. ``http_json`` and ``mcp`` route every transport
-# fault through their shared connector's generic ``ToolExecutionError``; the
-# router normalizes those to ``CAPABILITY_INVOCATION_FAILED``. The A2A and
-# OpenAI adapters classify status/timeout/payload faults into distinct codes.
+# Shared normalized raised codes. Every protocol must map the same upstream
+# fault class to the same code; the A2A adapter constants are used here as the
+# canonical token set, and the OpenAI-compatible adapter already matches them.
+EXPECTED_FAULT_CODES: dict[str, str] = {
+    "client_error": A2A_CLIENT_ERROR,
+    "server_error": A2A_SERVER_ERROR,
+    "timeout": A2A_TIMEOUT,
+    "invalid_response": A2A_INVALID_RESPONSE,
+}
+
 SPECS: list[ProtocolSpec] = [
     ProtocolSpec(
         protocol="http_json",
@@ -192,12 +190,6 @@ SPECS: list[ProtocolSpec] = [
         plugin_key="http-consistency-agent",
         arguments={"text": "hello"},
         manifest_factory=_http_json_manifest,
-        expected_raised={
-            "client_error": CAPABILITY_INVOCATION_FAILED,
-            "server_error": CAPABILITY_INVOCATION_FAILED,
-            "timeout": CAPABILITY_INVOCATION_FAILED,
-            "invalid_response": CAPABILITY_INVOCATION_FAILED,
-        },
     ),
     ProtocolSpec(
         protocol="mcp",
@@ -206,12 +198,6 @@ SPECS: list[ProtocolSpec] = [
         plugin_key="mcp-consistency-agent",
         arguments={"text": "hello"},
         manifest_factory=_mcp_manifest,
-        expected_raised={
-            "client_error": CAPABILITY_INVOCATION_FAILED,
-            "server_error": CAPABILITY_INVOCATION_FAILED,
-            "timeout": CAPABILITY_INVOCATION_FAILED,
-            "invalid_response": CAPABILITY_INVOCATION_FAILED,
-        },
     ),
     ProtocolSpec(
         protocol="a2a",
@@ -220,12 +206,6 @@ SPECS: list[ProtocolSpec] = [
         plugin_key="a2a-consistency-agent",
         arguments={"prompt": "hello"},
         manifest_factory=_a2a_manifest,
-        expected_raised={
-            "client_error": A2A_CLIENT_ERROR,
-            "server_error": A2A_SERVER_ERROR,
-            "timeout": A2A_TIMEOUT,
-            "invalid_response": A2A_INVALID_RESPONSE,
-        },
     ),
     ProtocolSpec(
         protocol="openai_compatible",
@@ -234,12 +214,6 @@ SPECS: list[ProtocolSpec] = [
         plugin_key="oai-consistency-agent",
         arguments={"prompt": "hello"},
         manifest_factory=_openai_manifest,
-        expected_raised={
-            "client_error": OAI_CLIENT_ERROR,
-            "server_error": OAI_SERVER_ERROR,
-            "timeout": OAI_TIMEOUT,
-            "invalid_response": OAI_INVALID_RESPONSE,
-        },
     ),
 ]
 
@@ -781,7 +755,7 @@ def test_upstream_fault_normalization(consistency_workspace, monkeypatch, spec, 
     calls: list[dict[str, Any]] = []
     _stub_remote(monkeypatch, spec, calls, fault)
 
-    expected_code = spec.expected_raised[fault]
+    expected_code = EXPECTED_FAULT_CODES[fault]
     with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[spec.host]):
         with pytest.raises(CapabilityResolutionError) as exc:
             invoke_capability(

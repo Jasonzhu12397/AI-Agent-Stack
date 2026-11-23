@@ -33,7 +33,14 @@ from core.agent_capability_router import (
 )
 from core.mcp_connector import McpClient, _validate_endpoint
 from core.plugin_credentials import CredentialInvalidShapeError
-from core.tool_router import ToolExecutionError
+from core.tool_router import (
+    FAULT_CLIENT_ERROR,
+    FAULT_INVALID_RESPONSE,
+    FAULT_SERVER_ERROR,
+    FAULT_TIMEOUT,
+    FAULT_UPSTREAM_ERROR,
+    ToolExecutionError,
+)
 
 PROTOCOL = "mcp"
 
@@ -42,7 +49,20 @@ PROTOCOL = "mcp"
 CAPABILITY_INVOCATION_FAILED = "CAPABILITY_INVOCATION_FAILED"
 CAPABILITY_TIMEOUT = "CAPABILITY_TIMEOUT"
 CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
+CAPABILITY_UPSTREAM_CLIENT_ERROR = "CAPABILITY_UPSTREAM_CLIENT_ERROR"
+CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
+CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
 CAPABILITY_CONFIG_INVALID = "CAPABILITY_CONFIG_INVALID"
+
+# Connector taxonomy category -> capability raised code. Categories without an
+# entry keep the generic invocation failure token.
+_FAULT_CODES: dict[str, str] = {
+    FAULT_CLIENT_ERROR: CAPABILITY_UPSTREAM_CLIENT_ERROR,
+    FAULT_SERVER_ERROR: CAPABILITY_UPSTREAM_SERVER_ERROR,
+    FAULT_TIMEOUT: CAPABILITY_TIMEOUT,
+    FAULT_INVALID_RESPONSE: CAPABILITY_UPSTREAM_INVALID_RESPONSE,
+    FAULT_UPSTREAM_ERROR: CAPABILITY_UPSTREAM_ERROR,
+}
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
 _MAX_NAME_LENGTH = 100
@@ -229,7 +249,9 @@ def discover(installation: Any) -> list[dict[str, Any]]:
             client.initialize()
             tools = client.list_tools()
     except ToolExecutionError as exc:
-        raise CapabilityResolutionError(CAPABILITY_UPSTREAM_ERROR, str(exc)) from exc
+        raise CapabilityResolutionError(
+            _FAULT_CODES.get(exc.code, CAPABILITY_UPSTREAM_ERROR), str(exc)
+        ) from exc
 
     capabilities: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -313,7 +335,9 @@ def _invoke(
             client.initialize()
             payload = client.call_tool(remote_name, arguments)
     except ToolExecutionError as exc:
-        raise CapabilityResolutionError(CAPABILITY_INVOCATION_FAILED, str(exc)) from exc
+        raise CapabilityResolutionError(
+            _FAULT_CODES.get(exc.code, CAPABILITY_INVOCATION_FAILED), str(exc)
+        ) from exc
 
     if payload.get("isError") is True:
         message = _result_text(payload.get("content", [])) or "The MCP tool reported an error."

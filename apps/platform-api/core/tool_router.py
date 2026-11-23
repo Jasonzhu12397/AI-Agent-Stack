@@ -6,9 +6,35 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+# Connector fault taxonomy: stable category tags attached to a
+# ``ToolExecutionError`` so protocol adapters can map one shared transport
+# failure class onto a capability error code. Categories are connector-layer
+# vocabulary; capability code tokens live in the adapters and router.
+FAULT_CLIENT_ERROR = "upstream_client_error"
+FAULT_SERVER_ERROR = "upstream_server_error"
+FAULT_TIMEOUT = "upstream_timeout"
+FAULT_INVALID_RESPONSE = "upstream_invalid_response"
+FAULT_UPSTREAM_ERROR = "upstream_application_error"
+
 
 class ToolExecutionError(Exception):
-    """A safe, user-facing tool execution failure."""
+    """A safe, user-facing tool execution failure.
+
+    The optional ``code`` carries a :data:`FAULT_*` taxonomy category for
+    transport failures. Subclasses may override ``code`` as a class attribute
+    (the credential resolver does); the instance attribute is only written
+    when an explicit code is supplied, so those class-level tokens survive.
+    Callers that do not inspect the category keep the original type and
+    message; ``code`` defaults to ``None`` so existing raise sites remain
+    backward compatible.
+    """
+
+    code: str | None = None
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
 
 
 class ToolApprovalRequired(ToolExecutionError):

@@ -9,7 +9,14 @@ import httpx
 from django.conf import settings
 
 from core.http_connector import _resolve_auth_headers
-from core.tool_router import ToolExecutionError
+from core.tool_router import (
+    FAULT_CLIENT_ERROR,
+    FAULT_INVALID_RESPONSE,
+    FAULT_SERVER_ERROR,
+    FAULT_TIMEOUT,
+    FAULT_UPSTREAM_ERROR,
+    ToolExecutionError,
+)
 
 
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
@@ -73,7 +80,10 @@ def _load_json(payload):
             parse_constant=_reject_json_constant,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise ToolExecutionError("MCP response is not valid UTF-8 JSON.") from exc
+        raise ToolExecutionError(
+            "MCP response is not valid UTF-8 JSON.",
+            code=FAULT_INVALID_RESPONSE,
+        ) from exc
 
 
 def _content_type(response):
@@ -188,23 +198,45 @@ class McpClient:
                 content=body,
                 headers=self._request_headers(),
             ) as response:
-                if 300 <= response.status_code < 400:
+                status = response.status_code
+                if 300 <= status < 400:
                     raise ToolExecutionError("MCP redirects are not allowed.")
-                if not 200 <= response.status_code < 300:
+                if 400 <= status < 500:
+                    raise ToolExecutionError(
+                        "MCP endpoint returned a 4xx status.",
+                        code=FAULT_CLIENT_ERROR,
+                    )
+                if 500 <= status < 600:
+                    raise ToolExecutionError(
+                        "MCP endpoint returned a 5xx status.",
+                        code=FAULT_SERVER_ERROR,
+                    )
+                if not 200 <= status < 300:
                     raise ToolExecutionError("MCP endpoint returned a non-success status.")
                 content_type = _content_type(response)
                 if not content_type:
-                    raise ToolExecutionError("MCP response content type is missing.")
+                    raise ToolExecutionError(
+                        "MCP response content type is missing.",
+                        code=FAULT_INVALID_RESPONSE,
+                    )
                 if not (
                     content_type == "application/json"
                     or content_type.endswith("+json")
                     or content_type == "text/event-stream"
                 ):
-                    raise ToolExecutionError("MCP response content type is not supported.")
+                    raise ToolExecutionError(
+                        "MCP response content type is not supported.",
+                        code=FAULT_INVALID_RESPONSE,
+                    )
                 session_id = response.headers.get("Mcp-Session-Id", "")
                 payload_bytes = _read_body(response)
         except ToolExecutionError:
             raise
+        except httpx.TimeoutException as exc:
+            raise ToolExecutionError(
+                "MCP request timed out.",
+                code=FAULT_TIMEOUT,
+            ) from exc
         except httpx.HTTPError:
             raise ToolExecutionError("MCP request failed.") from None
         return content_type, session_id, payload_bytes
@@ -231,20 +263,35 @@ class McpClient:
             messages = [_load_json(body)]
         for message in messages:
             if not isinstance(message, dict):
-                raise ToolExecutionError("MCP response frame is not a JSON object.")
+                raise ToolExecutionError(
+                    "MCP response frame is not a JSON object.",
+                    code=FAULT_INVALID_RESPONSE,
+                )
             if message.get("id") != request_id:
                 continue
             if "error" in message:
                 error = message.get("error")
                 if not isinstance(error, dict):
-                    raise ToolExecutionError("MCP server returned an invalid error object.")
+                    raise ToolExecutionError(
+                        "MCP server returned an invalid error object.",
+                        code=FAULT_UPSTREAM_ERROR,
+                    )
                 code = error.get("code")
                 text = str(error.get("message", ""))[:200]
-                raise ToolExecutionError(f"MCP server error ({code}): {text}")
+                raise ToolExecutionError(
+                    f"MCP server error ({code}): {text}",
+                    code=FAULT_UPSTREAM_ERROR,
+                )
             if "result" not in message:
-                raise ToolExecutionError("MCP server response is missing a result.")
+                raise ToolExecutionError(
+                    "MCP server response is missing a result.",
+                    code=FAULT_INVALID_RESPONSE,
+                )
             return message["result"]
-        raise ToolExecutionError("MCP server did not answer the request.")
+        raise ToolExecutionError(
+            "MCP server did not answer the request.",
+            code=FAULT_INVALID_RESPONSE,
+        )
 
     def initialize(self):
         result = self._send(

@@ -263,13 +263,33 @@ token; no synonym argument code is introduced. A rejected argument never
 reaches the remote endpoint, and the failure is recorded on the invocation
 record with `status = FAILED` and `error_code = CAPABILITY_INVOCATION_FAILED`.
 
+### HTTP JSON normalization
+
+| Failure | Raised adapter code |
+|---|---|
+| Request timed out | `CAPABILITY_TIMEOUT` |
+| Upstream 4xx status | `CAPABILITY_UPSTREAM_CLIENT_ERROR` |
+| Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
+| Non-JSON content type, malformed JSON, non-object body | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
+| Redirect, other non-success status, unreachable network, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
+
 ### MCP normalization
 
 | Failure | Raised adapter code | Notes |
 |---|---|---|
 | Remote application error (`isError: true`, JSON-RPC error frame) | `CAPABILITY_UPSTREAM_ERROR` | Readable message from content; no secret echo. |
-| Transport call, schema rejection or adapter failure | `CAPABILITY_INVOCATION_FAILED` | The shared MCP connector normalizes transport errors; timeouts surface as invocation failures here. `CAPABILITY_TIMEOUT` is reserved for adapters that open their own HTTP transport. |
+| Request timed out | `CAPABILITY_TIMEOUT` |
+| Upstream 4xx status | `CAPABILITY_UPSTREAM_CLIENT_ERROR` |
+| Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
+| Missing/unsupported content type, malformed JSON, malformed JSON-RPC frame | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
+| Redirect, other non-success status, unreachable network, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
 | Misconfigured plugin or manifest block | `CAPABILITY_CONFIG_INVALID` | Invalid tool mapping, missing required block. |
+
+The shared HTTP and MCP connectors attach a `FAULT_*` taxonomy category to the
+raised `ToolExecutionError`; the adapters map that category onto the unified
+codes above. Connectors leave the original exception type and message intact,
+and callers that do not inspect the category keep the previous generic
+`CAPABILITY_INVOCATION_FAILED` behavior.
 
 ### OpenAI-compatible normalization
 
