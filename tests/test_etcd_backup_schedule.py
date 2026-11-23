@@ -458,18 +458,35 @@ def test_a_backup_after_a_change_is_not_the_scheduled_one():
 
     user, tenant, project, eph, target = _workspace()
     deployment = _deployment(tenant, project, eph, target, user)
+    change = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        result={"upgrade_performed": True},
+        plan_hash="0" * 64,
+        deployment=deployment,
+        idempotency_key="schedule-change",
+    )
     moment = datetime.datetime(2026, 11, 23, 3, 10, tzinfo=datetime.UTC)
     scheduled, _, _ = queue_backup(deployment, now=moment)
     assert scheduled is not None
 
     # The scheduled command covers state from before the change: a change made
     # in the same hour needs its own snapshot, not that old one handed back.
-    after, created, _ = queue_backup(deployment, now=moment, trigger="change")
+    after, created, _ = queue_backup(
+        deployment, now=moment, change_source=change
+    )
     assert created is True
     assert after.id != scheduled.id
-    assert after.idempotency_key.endswith(":change")
+    assert after.idempotency_key.endswith(f":change:cmd:{change.id}")
 
-    again, created, _ = queue_backup(deployment, now=moment, trigger="change")
+    again, created, _ = queue_backup(
+        deployment, now=moment, change_source=change
+    )
     assert created is False
     assert again.id == after.id
 

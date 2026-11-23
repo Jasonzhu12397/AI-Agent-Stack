@@ -3197,7 +3197,7 @@ def _queue_change_backup(command) -> None:
             _command, created, reason = queue_backup(
                 deployment,
                 requested_by=command.requested_by,
-                trigger="change",
+                change_source=command,
             )
     except Exception:  # noqa: BLE001 - a bookkeeping hook must not fail the report
         logger.exception(

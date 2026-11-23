@@ -2983,7 +2983,7 @@ def test_a_backup_that_cannot_be_queued_does_not_lose_the_report_of_a_change(
     with patch("core.agent_node_views.queue_backup") as queued:
         _queue_change_backup(command)
 
-    assert queued.call_args.kwargs["trigger"] == "change"
+    assert queued.call_args.kwargs["change_source"] == command
 
 
 @pytest.mark.django_db

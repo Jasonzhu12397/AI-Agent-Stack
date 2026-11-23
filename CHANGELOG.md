@@ -37,6 +37,16 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   suffixed name still parses back to its cluster and stamp, and republish of a
   pending snapshot keeps the recorded final name, so retries do not accumulate
   garbage.
+- The reactive backup slot after a cluster change is now bound to the mutation
+  command that triggered it instead of a coarse per-hour `:change` label. The
+  slot identity distinguishes the recurring hourly slot from the change slot;
+  the change key carries the source command id
+  (`etcd-backup:<deployment>:<hour>:change:cmd:<command-id>`), so a repeated
+  delivery of the same command reuses one slot while two distinct mutations in
+  the same hour keep two slots. The failed-slot retry chain (`:retry:N`) still
+  hangs off the same key. Legacy hourly rows keep their original key scheme and
+  are still reused; legacy coarse `:change` rows are historical records only and
+  are never reused, so they cannot become ghost duplicates.
 - The "who must be kept" protect set is now built in exactly one place:
   `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
   (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the

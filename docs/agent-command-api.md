@@ -749,9 +749,31 @@ skips the cluster under that code instead of guessing — `bool("false")` is
 The hourly key exists to avoid two snapshots of unchanged data. After an
 upgrade or rollback the data *did* change, so the scheduler's earlier snapshot
 in the same hour describes the state before the change — the one file an
-operator does not want afterwards. The change-triggered backup therefore
-queues under `<key>:change`, its own idempotent slot: one per hour per cause,
-never the stale scheduled command handed back.
+operator does not want afterwards. The change-triggered backup therefore opens
+its own idempotent slot, never the stale scheduled command handed back.
+
+A slot identity names both the reason and the source of the backup:
+
+- The **hourly slot** is the recurring snapshot: one per deployment per hour
+  bucket, shared with the manual run view.
+- The **change slot** is bound to the mutation command that triggered it. Its
+  key is `etcd-backup:<deployment>:<hour>:change:cmd:<command-id>`. The source
+  command id is the change identity: the command row carries the command type,
+  plan hash and payload, so the slot is traceable to the actual mutation. A
+  repeated delivery of the same settled command (result replay) resolves to the
+  same slot; two distinct mutations in the same hour keep two distinct slots.
+
+Distinct changes are not merged within the hour. A merged slot would hand back
+the snapshot that predates the later mutation, which defeats the purpose of the
+change backup. The extra change snapshots share the same keep-count and
+keep-age prune policy resolved when the agent claims the command, and the
+hourly slot itself stays one per hour, so retention pressure stays bounded.
+
+Earlier builds collapsed every change in an hour into one coarse `:change`
+slot. Those historical rows are kept as records but are never reused: no lookup
+falls back to the coarse suffix, so a legacy row cannot become a ghost duplicate
+of a new source-bound slot. Hourly rows keep their original key scheme and are
+still matched and reused.
 
 The insert runs in a savepoint: if the backup cannot be queued (a key
 collision, a database blip) the report of the change is still recorded, and the
