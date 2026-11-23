@@ -45,6 +45,14 @@ _TRADE_STATE_MAP = {
     "REVOKED": "refunded",
 }
 
+# Refund notify `refund_status` mapped to internal semantics. ABNORMAL and
+# CLOSED are recorded but never move the order state or reclaim quota.
+_REFUND_STATUS_MAP = {
+    "SUCCESS": "refunded",
+    "ABNORMAL": "refund_abnormal",
+    "CLOSED": "refund_abnormal",
+}
+
 _DEFAULT_BASE_URL = "https://api.mch.weixin.qq.com"
 
 
@@ -287,6 +295,10 @@ class WechatPayV3Provider(PaymentProvider):
         except Exception as exc:  # noqa: BLE001 - any parse/decrypt failure fails closed
             return CallbackResult(ok=False, message=f"resource decode failed: {exc}")
 
+        event_type = str(envelope.get("event_type", ""))
+        if event_type.startswith("REFUND."):
+            return self._parse_refund_notify(plaintext)
+
         amount = plaintext.get("amount") or {}
         amount_total = amount.get("total")
         return CallbackResult(
@@ -295,6 +307,32 @@ class WechatPayV3Provider(PaymentProvider):
             order_reference=plaintext.get("out_trade_no"),
             raw=plaintext,
             amount_cents=amount_total,
+        )
+
+    @staticmethod
+    def _parse_refund_notify(plaintext: dict) -> CallbackResult:
+        """Map a decrypted refund notify resource onto a callback result.
+
+        The provider refund number (``out_refund_no``, falling back to
+        ``refund_id``) is carried as ``refund_reference`` so the reclaim
+        ledger can bind one row to one refund. A missing refund reference is
+        left ``None`` rather than fabricated; the view degrades to a
+        deterministic local reference derived from the order and slice.
+        """
+
+        amount = plaintext.get("amount") or {}
+        refund_reference = (
+            plaintext.get("out_refund_no") or plaintext.get("refund_id") or None
+        )
+        return CallbackResult(
+            ok=True,
+            status=_REFUND_STATUS_MAP.get(
+                plaintext.get("refund_status", ""), "refund_abnormal"
+            ),
+            order_reference=plaintext.get("out_trade_no"),
+            refund_reference=refund_reference,
+            raw=plaintext,
+            amount_cents=amount.get("refund"),
         )
 
     @staticmethod

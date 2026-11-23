@@ -21,6 +21,7 @@ from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
 from core.billing_models import (
     EntitlementGrant,
+    EntitlementReclaim,
     Order,
     PaymentTransactionAudit,
     Plan,
@@ -942,8 +943,16 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
 
         with transaction.atomic():
             locked = Order.objects.select_for_update().get(pk=order.pk)
+            # Refund notifications carry the refund slice, not the order total,
+            # so the payment amount-mismatch guard does not apply to them.
+            is_refund_notify = result.status in {
+                "refunded",
+                "refund",
+                "refund_abnormal",
+            }
             mismatch = (
-                result.amount_cents is not None
+                not is_refund_notify
+                and result.amount_cents is not None
                 and result.amount_cents != locked.amount_cents
             )
             if mismatch:
@@ -988,41 +997,8 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
         return Response({"status": locked.status, "applied": applied})
 
     def _apply_callback(self, order: Order, result) -> bool:
-        if result.status in {"refunded", "refund"}:
-            refund_reference = result.refund_reference or (
-                f"callback-refund-{order.id}-{result.amount_cents or 0}"
-            )
-            # Refund callbacks share the same idempotent reclaim ledger path as
-            # active refunds; a replayed callback never double-deducts.
-            reclaim_for_refund(
-                order=order,
-                refund_reference=refund_reference,
-                refund_cents=result.amount_cents or order.amount_cents,
-                reason="refund_callback",
-            )
-            record_audit_event(
-                None,
-                order.tenant,
-                "billing.order.refund_callback",
-                "payment_callback",
-                order.id,
-                metadata={
-                    "channel": order.channel,
-                    "refund_reference": refund_reference,
-                },
-            )
-            _record_payment_audit(
-                tenant=order.tenant,
-                order=order,
-                channel=order.channel,
-                direction="callback",
-                event_type="payment.callback.refund",
-                status=result.status,
-                amount_cents=result.amount_cents or order.amount_cents,
-                provider_trade_no=order.provider_trade_no,
-                metadata={"refund_reference": refund_reference},
-            )
-            return True
+        if result.status in {"refunded", "refund", "refund_abnormal"}:
+            return self._apply_refund_callback(order, result)
 
         target = {
             "paid": Order.Status.PAID,
@@ -1113,5 +1089,80 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
             status=target,
             amount_cents=order.amount_cents,
             provider_trade_no=order.provider_trade_no,
+        )
+        return True
+
+    def _apply_refund_callback(self, order: Order, result) -> bool:
+        """Apply a verified provider refund notification.
+
+        Replays of the same refund reference reuse the existing reclaim row;
+        the refund path never re-issues an entitlement grant. ABNORMAL/CLOSED
+        refunds are recorded only: no state change, no quota movement.
+        """
+
+        if result.status == "refund_abnormal":
+            record_audit_event(
+                None,
+                order.tenant,
+                "billing.callback.refund_abnormal",
+                "payment_callback",
+                order.id,
+                metadata={"channel": order.channel, "status": result.status},
+                outcome=AuditEvent.Outcome.FAILURE,
+            )
+            _record_payment_audit(
+                tenant=order.tenant,
+                order=order,
+                channel=order.channel,
+                direction="callback",
+                event_type="payment.callback.refund_abnormal",
+                status=result.status,
+                amount_cents=result.amount_cents or 0,
+                provider_trade_no=order.provider_trade_no,
+            )
+            return False
+
+        refund_reference = result.refund_reference or (
+            f"callback-refund-{order.id}-{result.amount_cents or 0}"
+        )
+        already = EntitlementReclaim.objects.filter(
+            refund_reference=refund_reference
+        ).first()
+        if already is None:
+            reclaim = reclaim_for_refund(
+                order=order,
+                refund_reference=refund_reference,
+                refund_cents=result.amount_cents or order.amount_cents,
+                reason="refund_callback",
+            )
+            new_refunded_cents = order.refunded_cents + reclaim.refund_cents
+            target = (
+                Order.Status.REFUNDED
+                if new_refunded_cents >= order.amount_cents
+                else Order.Status.PARTIAL_REFUNDED
+            )
+            if order.can_transition(target):
+                order.refunded_cents = new_refunded_cents
+                order.transition(target)
+                order.save(update_fields=["refunded_cents", "status", "updated_at"])
+
+        record_audit_event(
+            None,
+            order.tenant,
+            "billing.order.refund_callback",
+            "payment_callback",
+            order.id,
+            metadata={"channel": order.channel, "refund_reference": refund_reference},
+        )
+        _record_payment_audit(
+            tenant=order.tenant,
+            order=order,
+            channel=order.channel,
+            direction="callback",
+            event_type="payment.callback.refund",
+            status=result.status,
+            amount_cents=result.amount_cents or order.amount_cents,
+            provider_trade_no=order.provider_trade_no,
+            metadata={"refund_reference": refund_reference},
         )
         return True
