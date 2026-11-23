@@ -907,6 +907,7 @@ class AgentPluginDefinition(models.Model):
         HTTP_JSON = "http_json", "HTTP JSON"
         MCP = "mcp", "Model Context Protocol"
         A2A = "a2a", "Agent-to-Agent"
+        OPENAI_COMPATIBLE = "openai_compatible", "OpenAI Compatible"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(
@@ -923,7 +924,7 @@ class AgentPluginDefinition(models.Model):
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
     version = models.CharField(max_length=40)
-    protocol = models.CharField(max_length=16, choices=Protocol.choices)
+    protocol = models.CharField(max_length=32, choices=Protocol.choices)
     endpoint_url = models.URLField(max_length=500)
     auth_required = models.BooleanField(default=True)
     capabilities = models.JSONField(default=list)
@@ -944,6 +945,35 @@ class AgentPluginDefinition(models.Model):
                 name="uniq_agent_plugin_key_version",
             )
         ]
+
+    def save(self, *args, **kwargs):
+        # When cache-relevant definition fields change, every bound installation
+        # is bumped in bulk so stale process-local capability caches are rejected
+        # by revision verification on the next resolve in any worker process.
+        update_fields = kwargs.get("update_fields")
+        relevant = {"version", "enabled", "manifest"}
+        touched = relevant if update_fields is None else relevant.intersection(update_fields)
+        previous = None
+        if not self._state.adding and touched:
+            previous = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values("version", "enabled", "manifest")
+                .first()
+            )
+        super().save(*args, **kwargs)
+        if previous is not None and touched:
+            changed = False
+            if "version" in touched and previous["version"] != self.version:
+                changed = True
+            if "enabled" in touched and bool(previous["enabled"]) != bool(self.enabled):
+                changed = True
+            if "manifest" in touched and previous["manifest"] != self.manifest:
+                changed = True
+            if changed:
+                AgentPluginInstallation.objects.filter(plugin=self).update(
+                    revision=models.F("revision") + 1
+                )
 
 
 class AgentPluginInstallation(models.Model):
@@ -981,6 +1011,10 @@ class AgentPluginInstallation(models.Model):
         on_delete=models.PROTECT,
         related_name="agent_plugin_installations",
     )
+    # Monotonically increasing per-installation generation. Every save that
+    # mutates install state bumps it; capability caches key their entries on
+    # this revision and reject entries whose revision no longer matches the row.
+    revision = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -992,6 +1026,24 @@ class AgentPluginInstallation(models.Model):
                 name="uniq_agent_plugin_installation_per_project",
             )
         ]
+
+    def save(self, *args, **kwargs):
+        # Any mutation of an existing installation bumps the revision so cached
+        # resolutions are invalidated across processes. The bump is recorded in
+        # update_fields when the caller pins them, so partial saves still bump.
+        if self._state.adding:
+            if self.revision is None:
+                self.revision = 1
+            super().save(*args, **kwargs)
+            return
+        self.revision = (self.revision or 0) + 1
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = list(update_fields)
+            if "revision" not in update_fields:
+                update_fields.append("revision")
+            kwargs["update_fields"] = update_fields
+        super().save(*args, **kwargs)
 
 
 class AgentCapabilityInvocation(models.Model):

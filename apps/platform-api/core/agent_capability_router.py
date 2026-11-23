@@ -3,19 +3,24 @@
 This module is the in-process entry point that turns a project-scoped capability
 name into an active installation, validates the call against the declared schema,
 dispatches through the registered protocol adapter and records a bounded
-invocation outcome. Resolution always reads the database: an uninstall or
-disable becomes visible immediately without relying on a warm cache.
+invocation outcome. Resolved capabilities are held in a process-local revision
+keyed cache; every cached entry is re-verified against the database on the next
+resolve. The revision comparison guarantees immediate cross-process visibility:
+an uninstall, disable, revision bump or definition change in another worker
+process is rejected on the next resolve with no TTL delay.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-from core import agent_plugin_manifest
+from core import agent_capability_cache, agent_plugin_manifest
 from core.http_connector import execute_http_operation
 from core.models import (
     AgentCapabilityInvocation,
@@ -98,16 +103,69 @@ def _diagnose(installations: list[AgentPluginInstallation], capability_name: str
     )
 
 
-def resolve_capability(
-    tenant_id: str,
-    project_id: str,
-    capability_name: str,
-) -> ResolvedCapability:
-    """Resolve an active, declared capability for the project.
+def _manifest_hash(manifest: Any) -> str:
+    """Stable digest of a manifest dictionary for definition signature checks."""
+    canonical = json.dumps(
+        manifest or {}, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-    Never falls back to an empty implementation or ``None``: every failure path
-    raises :class:`CapabilityResolutionError` with a stable error code.
+
+def _definition_signature(plugin: AgentPluginDefinition) -> tuple[Any, ...]:
+    """Version/enabled/manifest fingerprint recorded alongside a cache entry."""
+    return (plugin.version, plugin.enabled, _manifest_hash(plugin.manifest))
+
+
+def _verify_entry(
+    tenant_id: str, project_id: str, entry: dict[str, Any]
+) -> bool:
+    """Re-check a cached entry against a lightweight live database query.
+
+    Only installation status/revision and definition version/enabled/manifest
+    are read. The entry is rejected when the row is gone, its revision moved on,
+    it left the active state, the definition changed, or the active installation
+    set no longer matches the snapshot taken at resolve time.
     """
+    rows = list(
+        AgentPluginInstallation.objects.filter(
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+        .select_related("plugin")
+        .only(
+            "id",
+            "status",
+            "revision",
+            "plugin_id",
+            "plugin__version",
+            "plugin__enabled",
+            "plugin__manifest",
+        )
+    )
+    live = {str(row.id): row for row in rows}
+    row = live.get(entry["installation_id"])
+    if row is None:
+        return False
+    if row.revision != entry["installation_revision"]:
+        return False
+    if row.status != _INSTALLED or not row.plugin.enabled:
+        return False
+    if _definition_signature(row.plugin) != entry["definition_signature"]:
+        return False
+    active_ids = {
+        str(row.id)
+        for row in rows
+        if row.status == _INSTALLED and row.plugin.enabled
+    }
+    if active_ids != set(entry.get("active_installation_ids", [])):
+        return False
+    return True
+
+
+def _resolve_uncached(
+    tenant_id: str, project_id: str, capability_name: str
+) -> tuple[ResolvedCapability, list[str]]:
+    """Resolve from the database and return the result plus the active id set."""
     installations = list(
         AgentPluginInstallation.objects.filter(
             tenant_id=tenant_id,
@@ -148,12 +206,52 @@ def resolve_capability(
     ordered.sort(key=lambda pair: pair[0].created_at, reverse=True)
     ordered.sort(key=lambda pair: _version_key(pair[0].plugin.version), reverse=True)
     installation, definition = ordered[0]
-    return ResolvedCapability(
+    resolved = ResolvedCapability(
         installation=installation,
         plugin=installation.plugin,
         definition=definition,
         capability_name=capability_name,
     )
+    active_ids = [str(item.id) for item, _ in active]
+    return resolved, active_ids
+
+
+def resolve_capability(
+    tenant_id: str,
+    project_id: str,
+    capability_name: str,
+) -> ResolvedCapability:
+    """Resolve an active, declared capability for the project.
+
+    Never falls back to an empty implementation or ``None``: every failure path
+    raises :class:`CapabilityResolutionError` with a stable error code. A warm
+    cache entry is served only after a revision/state verification query; failed
+    resolutions are never cached.
+    """
+    entry = agent_capability_cache.lookup(tenant_id, project_id, capability_name)
+    if entry is not None:
+        if _verify_entry(tenant_id, project_id, entry):
+            return entry["resolved"]
+        agent_capability_cache.invalidate_installation_id(
+            entry["installation_id"]
+        )
+
+    resolved, active_ids = _resolve_uncached(tenant_id, project_id, capability_name)
+    agent_capability_cache.store(
+        tenant_id,
+        project_id,
+        capability_name,
+        {
+            "installation_id": str(resolved.installation.id),
+            "installation_revision": resolved.installation.revision,
+            "definition_id": str(resolved.plugin.id),
+            "definition_signature": _definition_signature(resolved.plugin),
+            "definition": resolved.definition,
+            "active_installation_ids": active_ids,
+            "resolved": resolved,
+        },
+    )
+    return resolved
 
 
 def _record_invocation(
@@ -228,11 +326,13 @@ def register_invalidation_hook(hook: Callable[[AgentPluginInstallation], None]) 
 
 
 def invalidate_installation(installation: AgentPluginInstallation) -> None:
-    """Run registered invalidation hooks for an installation.
+    """Run registered invalidation hooks and drop cached resolutions.
 
     Hook failures are isolated so one broken binder cannot block the status
-    transition; resolution itself already reads the database on every call.
+    transition; the process-local capability cache is dropped alongside so the
+    next resolve recomputes from the database.
     """
+    agent_capability_cache.invalidate(installation)
     for hook in list(_INVALIDATION_HOOKS):
         try:
             hook(installation)
