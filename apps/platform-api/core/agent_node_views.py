@@ -59,7 +59,7 @@ from packages.agent_contracts.machine_lifecycle import (
 )
 from core.audit import record_audit_event
 from core.fleet_inspection import sync_fleet_inspections_quietly
-from core.etcd_backup_policy import policy_directory
+from core.etcd_backup_policy import policy_directory, refresh_command_protect
 from core.etcd_backup_queue import queue_backup
 from core.models import (
     AgentCommand,
@@ -2956,6 +2956,11 @@ class AgentRuntimePollView(APIView):
             if command is None:
                 return Response({"command": None})
 
+            # Refresh the backup's protect set from live command state: a
+            # rollback created after this backup was enqueued must still be
+            # protected when the command is dispatched. Other payload keys,
+            # including the candidate directories, are preserved.
+            refresh_command_protect(command)
             command.status = AgentCommand.Status.RUNNING
             command.attempts += 1
             command.lease_token = uuid.uuid4()
@@ -2966,6 +2971,7 @@ class AgentRuntimePollView(APIView):
                 update_fields=[
                     "status",
                     "attempts",
+                    "payload",
                     "lease_token",
                     "lease_expires_at",
                     "started_at",

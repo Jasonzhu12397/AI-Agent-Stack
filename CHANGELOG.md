@@ -8,6 +8,18 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- An approved rollback whose Target Agent went offline before ever claiming the
+  lease no longer protects its snapshot indefinitely. Protection is now a
+  bounded lease: an approved, unclaimed rollback past the deployment's
+  protection horizon (default 24 hours, overridable through
+  `spec.kubernetes.etcd_backup_rollback_protection_minutes`) is swept once into
+  the terminal `expired` state, writes one
+  `cluster.kubernetes.rollback.protection.released` audit event, and releases
+  the snapshot; running or claimed rollbacks keep protecting. The sweep is
+  idempotent (`select_for_update`, status re-check under lock, one audit event
+  per transition), and a backup command's `protect` set is recomputed fresh
+  when the agent claims it, so a rollback created after the backup was enqueued
+  is still covered instead of relying on the frozen enqueue-time copy.
 - Snapshots left in a retired backup directory no longer leak or disappear
   from the panel. Retention and the state view derive the candidate location
   set from the cluster's own records (current spec directory, past backup/status
