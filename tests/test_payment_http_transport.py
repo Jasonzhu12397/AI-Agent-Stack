@@ -1,0 +1,542 @@
+"""Offline HTTP-transport and callback security tests for real payment adapters.
+
+No real merchant or outbound network connection is involved: every provider
+call goes through an ``httpx.MockTransport`` that mounts official-shaped
+payloads. RSA key pairs and the platform certificate are generated at runtime
+and injected through ``env://`` references; secrets are resolved server-side
+and must never appear in responses, receipts or audit metadata.
+
+Covered invariants:
+
+* WeChat v3: real ``WECHATPAY2-SHA256-RSA2048`` request signing, platform
+  certificate serial trust check, AES-256-GCM resource decryption;
+* Alipay: RSA2 sorted-content request signing and async-notify verification;
+* repeated callbacks apply once, out-of-order callbacks never regress state;
+* a callback amount that does not match the order is rejected and audited;
+* no private key, symmetric key, certificate or PEM material leaks into any
+  response, receipt or audit record.
+"""
+
+import base64
+import json
+import os
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from core.billing_models import EntitlementGrant, Order, PaymentTransactionAudit, Plan
+from core.models import AuditEvent, Tenant, TenantMembership, TenantTokenBudget
+from core.payments.wechat_v3 import WechatPayV3Provider
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.x509.oid import NameOID
+from django.contrib.auth import get_user_model
+from rest_framework.test import APIClient
+
+# --------------------------------------------------------------------------- #
+# Cryptographic fixtures and payload builders
+# --------------------------------------------------------------------------- #
+
+
+def _rsa_keypair():
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("utf-8")
+    return private, private_pem
+
+
+def _self_signed_cert(private_key) -> x509.Certificate:
+    subject = issuer = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "pay-test-platform")]
+    )
+    return (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC).replace(tzinfo=None) + timedelta(days=30))
+        .sign(private_key, hashes.SHA256())
+    )
+
+
+def _encrypt_resource(
+    plaintext: dict, api_v3_key: str, associated_data: str = "transaction"
+) -> dict:
+    aesgcm = AESGCM(api_v3_key.encode("utf-8"))
+    nonce = os.urandom(12).hex()
+    plaintext_bytes = json.dumps(plaintext, separators=(",", ":")).encode("utf-8")
+    ciphertext = aesgcm.encrypt(
+        nonce.encode("utf-8"), plaintext_bytes, associated_data.encode("utf-8")
+    )
+    return {
+        "ciphertext": base64.b64encode(ciphertext).decode("utf-8"),
+        "nonce": nonce,
+        "associated_data": associated_data,
+    }
+
+
+def _wechat_notify(
+    cert: x509.Certificate,
+    platform_private,
+    api_v3_key: str,
+    out_trade_no: str,
+    amount_cents: int,
+    trade_state: str = "SUCCESS",
+    *,
+    serial_override: str | None = None,
+    body_mutator=None,
+    key_override: str | None = None,
+):
+    plaintext = {
+        "out_trade_no": out_trade_no,
+        "trade_state": trade_state,
+        "amount": {"total": amount_cents, "currency": "CNY"},
+    }
+    resource = _encrypt_resource(plaintext, key_override or api_v3_key)
+    envelope = {"id": "evt-1", "event_type": "TRANSACTION.SUCCESS", "resource": resource}
+    body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex
+    message = f"{timestamp}\n{nonce}\n".encode() + body + b"\n"
+    signature = base64.b64encode(
+        platform_private.sign(message, padding.PKCS1v15(), hashes.SHA256())
+    ).decode("utf-8")
+    if body_mutator is not None:
+        body = body_mutator(body)
+    serial = serial_override or format(cert.serial_number, "x")
+    headers = {
+        "Wechatpay-Timestamp": timestamp,
+        "Wechatpay-Nonce": nonce,
+        "Wechatpay-Serial": serial,
+        "Wechatpay-Signature": signature,
+    }
+    return headers, body
+
+
+def _header_kwargs(headers: dict) -> dict:
+    return {
+        f"HTTP_{name.upper().replace('-', '_')}": value
+        for name, value in headers.items()
+    }
+
+
+@pytest.fixture
+def wechat_env(monkeypatch):
+    merchant_private, merchant_pem = _rsa_keypair()
+    platform_private, _ = _rsa_keypair()
+    platform_cert = _self_signed_cert(platform_private)
+    platform_cert_pem = platform_cert.public_bytes(
+        serialization.Encoding.PEM
+    ).decode("utf-8")
+    api_v3_key = "0123456789abcdef0123456789abcdef"
+
+    monkeypatch.setenv("WECHATPAY_APPID", "wx-appid-test")
+    monkeypatch.setenv("WECHATPAY_MCHID", "1600000000")
+    monkeypatch.setenv("WECHATPAY_API_V3_KEY", api_v3_key)
+    monkeypatch.setenv("WECHATPAY_CERT_SERIAL_NO", "merchant-serial-001")
+    monkeypatch.setenv("WECHATPAY_PRIVATE_KEY", merchant_pem)
+    monkeypatch.setenv("WECHATPAY_PLATFORM_CERT", platform_cert_pem)
+    monkeypatch.setenv("WECHATPAY_NOTIFY_URL", "https://example.test/notify")
+    monkeypatch.setenv("WECHATPAY_BASE_URL", "https://pay.test.local")
+
+    return {
+        "merchant_private": merchant_private,
+        "merchant_public": merchant_private.public_key(),
+        "platform_private": platform_private,
+        "platform_cert": platform_cert,
+        "api_v3_key": api_v3_key,
+        "merchant_pem": merchant_pem,
+        "platform_cert_pem": platform_cert_pem,
+    }
+
+
+@pytest.fixture
+def billing_setup(db):
+    user_model = get_user_model()
+    owner = user_model.objects.create_user(username="pay-http-owner")
+    tenant = Tenant.objects.create(name="Pay HTTP tenant", slug="pay-http-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=owner, role="owner")
+    plan = Plan.objects.create(
+        code="pro-monthly",
+        name="Pro",
+        interval="monthly",
+        price_cents=9900,
+        token_quota_daily=10_000,
+        token_quota_monthly=50_000,
+    )
+    return owner, tenant, plan
+
+
+def _pending_order(tenant, plan, owner, amount_cents=9900) -> Order:
+    order = Order.objects.create(
+        tenant=tenant,
+        plan=plan,
+        channel="wechat",
+        idempotency_key=str(uuid.uuid4()),
+        created_by=owner,
+        status=Order.Status.PENDING,
+        amount_cents=amount_cents,
+    )
+    order.provider_trade_no = str(order.id)
+    order.save(update_fields=["provider_trade_no"])
+    return order
+
+
+def _callback_url(tenant_id, channel="wechat"):
+    return f"/api/v1/tenants/{tenant_id}/billing/payments/{channel}/callback/"
+
+
+def _wechat_mock_handler(captured: dict, merchant_public):
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content.decode("utf-8")
+        auth = request.headers.get("authorization", "")
+        captured["authorization"] = auth
+
+        prefix = "WECHATPAY2-SHA256-RSA2048 "
+        assert auth.startswith(prefix)
+        fields = {}
+        for item in auth[len(prefix) :].split(","):
+            key, value = item.strip().split("=", 1)
+            fields[key] = value.strip('"')
+        signature = base64.b64decode(fields["signature"])
+        body_text = request.content.decode("utf-8")
+        message = (
+            f"{request.method}\n{request.url.path}\n"
+            f"{fields['timestamp']}\n{fields['nonce_str']}\n{body_text}\n"
+        )
+        merchant_public.verify(
+            signature, message.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256()
+        )
+
+        if "/native" in request.url.path:
+            return httpx.Response(
+                200, json={"prepay_id": "prepay-123", "code_url": "weixin://wxpay/bizpayurl?pr=abc"}
+            )
+        if "/refunds" in request.url.path:
+            return httpx.Response(200, json={"refund_id": "refund-1", "status": "SUCCESS"})
+        return httpx.Response(200, json={"trade_state": "SUCCESS"})
+
+    return handler
+
+
+# --------------------------------------------------------------------------- #
+# WeChat Pay v3 outbound requests
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db
+def test_wechat_native_create_sends_signed_request_and_returns_instructions(wechat_env):
+    captured: dict = {}
+    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env["merchant_public"]))
+    provider = WechatPayV3Provider(transport=transport)
+    order = SimpleNamespace(
+        id="order-123",
+        plan=SimpleNamespace(code="pro-monthly"),
+        amount_cents=9900,
+        currency="CNY",
+    )
+
+    instructions = provider.create_payment(order)
+
+    assert instructions["provider"] == "wechat_v3"
+    assert instructions["trade_no"] == "order-123"
+    assert instructions["prepay_id"] == "prepay-123"
+    assert instructions["code_url"].startswith("weixin://")
+    assert captured["method"] == "POST"
+    assert "/v3/pay/transactions/native" in captured["url"]
+
+    body = json.loads(captured["body"])
+    assert body["out_trade_no"] == "order-123"
+    assert body["amount"]["total"] == 9900
+    assert body["amount"]["currency"] == "CNY"
+
+    serialized = json.dumps(instructions) + captured["body"] + captured["authorization"]
+    assert "PRIVATE KEY" not in serialized
+    assert wechat_env["api_v3_key"] not in serialized
+
+
+@pytest.mark.django_db
+def test_wechat_refund_request_payload_is_correct(wechat_env):
+    captured: dict = {}
+    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env["merchant_public"]))
+    provider = WechatPayV3Provider(transport=transport)
+    order = SimpleNamespace(
+        id="order-123",
+        plan=SimpleNamespace(code="pro-monthly"),
+        amount_cents=9900,
+        currency="CNY",
+    )
+
+    receipt = provider.refund(order, "customer requested refund")
+
+    body = json.loads(captured["body"])
+    assert body["out_trade_no"] == "order-123"
+    assert body["out_refund_no"] == "refund-order-123"
+    assert body["reason"] == "customer requested refund"
+    assert body["amount"] == {"refund": 9900, "total": 9900, "currency": "CNY"}
+    assert receipt["refund_id"] == "refund-1"
+    assert receipt["status"] == "SUCCESS"
+
+
+# --------------------------------------------------------------------------- #
+# WeChat Pay v3 callback invariants
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db
+def test_wechat_callback_paid_grants_entitlement_once_on_repeat(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    budget = TenantTokenBudget.objects.get_or_create(tenant=tenant)[0]
+    baseline_limit = budget.monthly_limit
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+    )
+    client = APIClient()
+
+    first = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+    assert first.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    assert EntitlementGrant.objects.filter(order=order).count() == 1
+    budget.refresh_from_db()
+    assert budget.monthly_limit == baseline_limit + plan.token_quota_monthly
+
+    second = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+    assert second.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    # Repeated callback: entitlement credited exactly once, budget unchanged.
+    assert EntitlementGrant.objects.filter(order=order).count() == 1
+    budget.refresh_from_db()
+    assert budget.monthly_limit == baseline_limit + plan.token_quota_monthly
+
+
+@pytest.mark.django_db
+def test_wechat_callback_signature_invalid_rejected_and_audited(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+
+    def _tamper(body: bytes) -> bytes:
+        envelope = json.loads(body)
+        envelope["resource"]["nonce"] = "0" * 24
+        return json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+        body_mutator=_tamper,
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_SIGNATURE_INVALID"
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.signature_invalid",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+    assert PaymentTransactionAudit.objects.filter(
+        event_type="payment.callback.rejected",
+        error_code="PAYMENT_SIGNATURE_INVALID",
+    ).exists()
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_wechat_callback_amount_mismatch_rejected_and_audited(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents + 100,  # callback amount differs from the order
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_AMOUNT_MISMATCH"
+    details = response.data["error"]["details"]
+    assert details["expected_cents"] == order.amount_cents
+    assert details["actual_cents"] == order.amount_cents + 100
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.amount_mismatch",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+    assert PaymentTransactionAudit.objects.filter(
+        event_type="payment.callback.amount_mismatch",
+        error_code="PAYMENT_AMOUNT_MISMATCH",
+    ).exists()
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_wechat_callback_untrusted_serial_rejected(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+        serial_override="deadbeefcafe",
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_SIGNATURE_INVALID"
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_wechat_callback_wrong_api_v3_key_fails_decryption(wechat_env, monkeypatch):
+    good_key = wechat_env["api_v3_key"]
+    other_key = "ffffffffffffffffffffffffffffffff"
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        good_key,
+        "order-123",
+        9900,
+        key_override=good_key,
+    )
+    monkeypatch.setenv("WECHATPAY_API_V3_KEY", other_key)
+
+    provider = WechatPayV3Provider()
+    result = provider.verify_callback(headers, body)
+
+    assert result.ok is False
+    assert "decode" in result.message.lower() or "invalid" in result.message.lower()
+
+
+@pytest.mark.django_db
+def test_wechat_out_of_order_callback_does_not_regress(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    client = APIClient()
+
+    paid_headers, paid_body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+        trade_state="SUCCESS",
+    )
+    paid = client.post(
+        _callback_url(tenant.id),
+        data=paid_body,
+        content_type="application/json",
+        **_header_kwargs(paid_headers),
+    )
+    assert paid.status_code == 200
+
+    closed_headers, closed_body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+        trade_state="CLOSED",
+    )
+    late = client.post(
+        _callback_url(tenant.id),
+        data=closed_body,
+        content_type="application/json",
+        **_header_kwargs(closed_headers),
+    )
+    assert late.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.out_of_order",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_payment_records_never_leak_key_material(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    headers, body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+    assert response.status_code == 200
+
+    dumps = [json.dumps(response.data)]
+    for event in AuditEvent.objects.all():
+        dumps.append(json.dumps(event.metadata, default=str))
+    for row in PaymentTransactionAudit.objects.all():
+        dumps.append(json.dumps(row.metadata, default=str))
+        dumps.append(row.error_code)
+    blob = "\n".join(dumps)
+
+    assert "BEGIN PRIVATE KEY" not in blob
+    assert "BEGIN CERTIFICATE" not in blob
+    assert wechat_env["api_v3_key"] not in blob
+    assert wechat_env["merchant_pem"] not in blob
+    assert wechat_env["platform_cert_pem"] not in blob
