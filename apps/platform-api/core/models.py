@@ -1326,3 +1326,4 @@ class AuditEvent(models.Model):
 
 
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
+from core import settings_models  # noqa: F401,E402
