@@ -23,6 +23,7 @@ import {
   setClusterDeploymentEtcdBackupPolicy,
   type EtcdBackupCommandSummary,
   type EtcdBackupState,
+  type EtcdRestorePoint,
   getProjects,
   getTenants,
   getLabWorkflow,
@@ -1104,6 +1105,16 @@ function useRestorePoint(deployment: ClusterDeployment): void {
       : "Restore point " + point.name + " filled in from the upgrade report; the next backup run will list it.";
 }
 
+function restorePointNote(point: EtcdRestorePoint): string {
+  if (point.reason === "not_in_recent_listing") {
+    return "reported by an upgrade, not confirmed in the recent listing";
+  }
+  if (point.reason === "no_recent_listing") {
+    return "reported by an upgrade; no recent directory listing to confirm it";
+  }
+  return "reported by an upgrade, not seen by a directory listing";
+}
+
 async function requestRollback(deployment: ClusterDeployment): Promise<void> {
   const snapshot = (rollbackSnapshots.value[deployment.id] ?? "").trim();
   if (!deployment.target_node_id) {
@@ -1731,7 +1742,8 @@ onUnmounted(() => {
                   <span
                     v-if="backupStates[scope.row.id].restore_point?.listed === false"
                     class="readiness-blocked"
-                  >· reported by an upgrade, not seen by a directory listing</span>
+                    >· {{ restorePointNote(backupStates[scope.row.id].restore_point!) }}</span
+                  >
                   <el-button
                     size="small"
                     text

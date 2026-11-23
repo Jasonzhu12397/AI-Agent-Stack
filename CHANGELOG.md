@@ -8,6 +8,22 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- The "who must be kept" protect set is now built in exactly one place:
+  `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
+  (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the
+  backup payload, panel assessment, executor prune, and executor status report
+  all derive from it instead of recomputing the list separately. A failed
+  rollback releases its snapshot only when the restore consumed it
+  (`rolled_back` is true) or the failure code proves the snapshot was unusable;
+  unknown-outcome and never-executed failures (manual reconciliation required,
+  approval expired, approval hash mismatch, ownership fenced, role forbidden,
+  lease expired) keep protecting, and unknown failure codes fail safe by
+  keeping the file. A verified snapshot reported by a settled upgrade enters the
+  protect set, and the panel marks it unconfirmed with a reason when it is not
+  present in the recent listing or no listing exists yet, instead of pretending
+  it was confirmed on disk. In the executor, prune and assessment consume one
+  protect variable read once at run entry, rather than two independent reads of
+  the request payload.
 - An approved rollback whose Target Agent went offline before ever claiming the
   lease no longer protects its snapshot indefinitely. Protection is now a
   bounded lease: an approved, unclaimed rollback past the deployment's

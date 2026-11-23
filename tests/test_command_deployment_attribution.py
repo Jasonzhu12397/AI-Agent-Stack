@@ -143,7 +143,7 @@ def test_upgrade_created_via_view_binds_its_deployment():
 def test_ended_rollback_commands_release_their_snapshot():
     user, tenant, project, eph, target, deployment, client = _workspace()
 
-    def _ended(status: str, key: str) -> None:
+    def _ended(status: str, key: str, result: dict | None = None) -> None:
         AgentCommand.objects.create(
             tenant=tenant,
             project=project,
@@ -152,13 +152,20 @@ def test_ended_rollback_commands_release_their_snapshot():
             command_type=ROLLBACK_ACTION,
             payload={"snapshot_path": SNAPSHOT_PATH},
             status=status,
+            result=result or {},
             idempotency_key=key,
             plan_hash="0" * 64,
             deployment=deployment,
         )
 
     _ended(AgentCommand.Status.SUCCEEDED, "rb-succeeded")
-    _ended(AgentCommand.Status.FAILED, "rb-failed")
+    # A failed rollback releases only once the snapshot was actually consumed;
+    # an unknown-outcome failure would keep protecting (covered elsewhere).
+    _ended(
+        AgentCommand.Status.FAILED,
+        "rb-failed",
+        result={"rolled_back": True},
+    )
     _ended(AgentCommand.Status.CANCELLED, "rb-cancelled")
 
     assert protected_names(deployment) == []
