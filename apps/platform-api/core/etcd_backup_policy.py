@@ -8,6 +8,7 @@ and a new policy key cannot be honoured by one and ignored by the other.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -55,18 +56,66 @@ SPEC_POLICY_KEYS = {
     "min_free_bytes": "etcd_backup_min_free_bytes",
 }
 
-#: A rollback that ended this way no longer holds the snapshot it named: it
-#: either failed (the file is still usable, but nothing is waiting on it) or it
-#: succeeded, in which case that snapshot has already done its job and must not
-#: be kept forever by a protection nobody releases. ``expired`` is the horizon
-#: terminal state: an approved command no agent ever claimed, released by the
-#: sweep below.
+#: A rollback that ended this way no longer holds the snapshot it named.
+#: ``expired`` is the horizon terminal state: an approved command no agent ever
+#: claimed, released by the sweep below.
 ROLLBACK_ENDED = (
     AgentCommand.Status.SUCCEEDED,
     AgentCommand.Status.FAILED,
     AgentCommand.Status.CANCELLED,
     AgentCommand.Status.EXPIRED,
 )
+
+#: Protect-set source: a rollback still in flight (queued, waiting approval,
+#: or claimed and running) whose snapshot an operator may still restore.
+SOURCE_ROLLBACK_ACTIVE = "rollback_active"
+#: Protect-set source: a failed rollback whose outcome is unknown or that
+#: never executed, so the snapshot is still a valid restore target.
+SOURCE_ROLLBACK_OUTCOME_UNKNOWN = "rollback_outcome_unknown"
+#: Protect-set source: a verified snapshot a settled upgrade reported; it is
+#: kept until a recent listing confirms the file is still on disk.
+SOURCE_UPGRADE_REPORTED = "upgrade_reported"
+
+#: Failure codes that mean the rollback outcome is unknown and needs manual
+#: reconciliation, or that the command never executed at all (approval lapsed,
+#: approval hash rejected, ownership fenced, role forbidden, or the lease
+#: expired mid-action). In every case the snapshot was not consumed and is
+#: still a valid restore target, so it stays protected.
+PROTECT_KEEP_ERROR_CODES = frozenset(
+    {
+        "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+        "CAPI_PIVOT_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED",
+        "LEASE_EXPIRED",
+        "APPROVAL_EXPIRED",
+        "APPROVAL_HASH_MISMATCH",
+        "AGENT_CONTROL_OWNERSHIP_FENCED",
+        "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE",
+    }
+)
+
+#: Failure codes that prove the snapshot itself was rejected as unusable before
+#: anything ran (the path could not name a valid file for this cluster), so
+#: nothing waits on the file and it may be released.
+PROTECT_RELEASE_ERROR_CODES = frozenset(
+    {
+        "ROLLBACK_SNAPSHOT_PATH_INVALID",
+        "ROLLBACK_CLUSTER_NAME_MISMATCH",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ProtectedSnapshot:
+    """One snapshot the retention pass must not delete, with its source.
+
+    The source lets the panel and the audit trail tell a rollback still in
+    flight apart from an outcome-unknown failure and from an upgrade-reported
+    snapshot that has not been confirmed on disk yet.
+    """
+
+    name: str
+    source: str
+    path: str
 
 
 def rollback_protection_horizon_minutes(deployment: ClusterDeployment) -> int:
@@ -198,24 +247,122 @@ def known_directories(deployment: ClusterDeployment) -> dict[str, Any]:
     return candidate_directories(sources)
 
 
-def protected_names(deployment: ClusterDeployment) -> list[str]:
-    """Snapshot files a pending or completed rollback of this cluster still needs.
+def _failure_code(command: AgentCommand) -> str:
+    """The platform or executor error code recorded on a settled command."""
 
-    Retention is allowed to delete old files; it is not allowed to delete the
-    one an operator is about to restore from.
+    error = command.error if isinstance(command.error, dict) else {}
+    code = str(error.get("code") or "").strip()
+    if code:
+        return code
+    result = command.result if isinstance(command.result, dict) else {}
+    return str(result.get("failure_code") or "").strip()
+
+
+def _rollback_should_protect(command: AgentCommand) -> bool:
+    """Whether this rollback still holds a snapshot retention must keep.
+
+    The decision is data-driven, not a blanket "failed means released":
+
+    - ``succeeded``, ``cancelled`` and ``expired`` release: the snapshot has
+      been consumed, the operator aborted, or the lease horizon lapsed.
+    - ``failed`` releases only when the restore actually consumed the snapshot
+      (``rolled_back`` is true) or the failure code proves the snapshot itself
+      was unusable. Unknown-outcome and never-executed failures keep protecting
+      so a manual reconciliation can still restore from the file.
+    - Any other live state keeps protecting.
     """
 
-    names = set()
-    commands = AgentCommand.objects.filter(
+    status = command.status
+    if status in (
+        AgentCommand.Status.SUCCEEDED,
+        AgentCommand.Status.CANCELLED,
+        AgentCommand.Status.EXPIRED,
+    ):
+        return False
+    if status == AgentCommand.Status.FAILED:
+        result = command.result if isinstance(command.result, dict) else {}
+        if result.get("rolled_back") is True:
+            return False
+        if _failure_code(command) in PROTECT_RELEASE_ERROR_CODES:
+            return False
+        # Unknown executor failures are treated conservatively: keep the
+        # snapshot rather than prune a file we are unsure about.
+        return True
+    return True
+
+
+def protected_entries(deployment: ClusterDeployment) -> list[ProtectedSnapshot]:
+    """The authoritative protect set for this deployment, with sources.
+
+    This is the single place that decides "who needs to be kept": the platform
+    owns command lifecycle, so the backup payload, the panel assessment, the
+    executor prune and the executor status report all derive from here. Rollback
+    commands are classified by :func:`_rollback_should_protect`; the newest
+    verified snapshot reported by a settled upgrade is added as an
+    ``upgrade_reported`` entry until a recent listing confirms it on disk.
+    """
+
+    entries: list[ProtectedSnapshot] = []
+    seen: set[str] = set()
+
+    rollbacks = AgentCommand.objects.filter(
         deployment=deployment, command_type=ROLLBACK_ACTION
-    ).exclude(status__in=ROLLBACK_ENDED)
-    for command in commands.only("payload"):
+    ).only("payload", "error", "result", "status")
+    for command in rollbacks:
+        if not _rollback_should_protect(command):
+            continue
         payload = command.payload if isinstance(command.payload, dict) else {}
         path = str(payload.get("snapshot_path") or "").strip()
         if not path:
             continue
-        names.add(path.rsplit("/", 1)[-1])
-    return sorted(names)
+        name = path.rsplit("/", 1)[-1]
+        if name in seen:
+            continue
+        seen.add(name)
+        source = (
+            SOURCE_ROLLBACK_OUTCOME_UNKNOWN
+            if command.status == AgentCommand.Status.FAILED
+            else SOURCE_ROLLBACK_ACTIVE
+        )
+        entries.append(ProtectedSnapshot(name=name, source=source, path=path))
+
+    upgrade = (
+        AgentCommand.objects.filter(
+            deployment=deployment,
+            command_type=UPGRADE_ACTION,
+            status__in=(
+                AgentCommand.Status.SUCCEEDED,
+                AgentCommand.Status.FAILED,
+            ),
+        )
+        .order_by("-created_at")
+        .only("result")
+        .first()
+    )
+    if upgrade is not None:
+        result = upgrade.result if isinstance(upgrade.result, dict) else {}
+        snapshot = result.get("etcd_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("verified"):
+            path = str(snapshot.get("path") or "").strip()
+            name = path.rsplit("/", 1)[-1] if path else ""
+            if name and name not in seen:
+                seen.add(name)
+                entries.append(
+                    ProtectedSnapshot(name=name, source=SOURCE_UPGRADE_REPORTED, path=path)
+                )
+
+    return sorted(entries, key=lambda entry: entry.name)
+
+
+def protected_names(deployment: ClusterDeployment) -> list[str]:
+    """Bare snapshot names the retention pass must not delete.
+
+    Thin wrapper over :func:`protected_entries` for callers that only need the
+    names; the source-tagged entries remain available where the panel or audit
+    trail needs to explain why a file is kept.
+    """
+
+    return [entry.name for entry in protected_entries(deployment)]
 
 
 def refresh_command_protect(command: AgentCommand) -> None:

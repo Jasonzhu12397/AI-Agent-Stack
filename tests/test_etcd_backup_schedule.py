@@ -263,7 +263,7 @@ def test_a_rollback_still_to_be_run_protects_its_snapshot_from_pruning():
 
 
 @pytest.mark.django_db
-def test_a_failed_rollback_stops_holding_its_snapshot():
+def test_a_failed_rollback_that_consumed_the_snapshot_releases_it():
     user, tenant, project, eph, target = _workspace()
     deployment = _deployment(tenant, project, eph, target, user)
     AgentCommand.objects.create(
@@ -278,6 +278,9 @@ def test_a_failed_rollback_stops_holding_its_snapshot():
             )
         },
         status=AgentCommand.Status.FAILED,
+        # The restore already consumed the snapshot before it failed, so
+        # retention no longer needs to hold the file.
+        result={"rolled_back": True},
         idempotency_key="rollback-failed",
         plan_hash="0" * 64,
         deployment=deployment,
@@ -287,6 +290,35 @@ def test_a_failed_rollback_stops_holding_its_snapshot():
 
     payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
     assert "protect" not in payload
+
+
+@pytest.mark.django_db
+def test_a_failed_rollback_with_unknown_outcome_still_protects():
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+    snapshot = "/var/lib/etcd/backups/snapshot-pre-lab-v1.37.2-20261101T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.rollback",
+        payload={"snapshot_path": snapshot},
+        status=AgentCommand.Status.FAILED,
+        result={
+            "failure_code": (
+                "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED"
+            )
+        },
+        idempotency_key="rollback-unknown",
+        plan_hash="0" * 64,
+        deployment=deployment,
+    )
+
+    _run()
+
+    payload = AgentCommand.objects.filter(command_type=ACTION).get().payload
+    assert payload["protect"] == [snapshot.rsplit("/", 1)[-1]]
 
 
 @pytest.mark.django_db

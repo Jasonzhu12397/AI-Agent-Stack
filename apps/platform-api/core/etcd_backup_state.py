@@ -147,7 +147,10 @@ UPGRADE_ACTION = "cluster.kubernetes.version.upgrade"
 
 
 def _reported_restore_point(
-    deployment: ClusterDeployment, *, now: datetime.datetime | None = None
+    deployment: ClusterDeployment,
+    *,
+    listed_names: set[str] | None = None,
+    now: datetime.datetime | None = None,
 ) -> dict[str, Any] | None:
     """The snapshot the newest settled upgrade says it took and verified.
 
@@ -155,6 +158,12 @@ def _reported_restore_point(
     never proved it wrote. A *failed* upgrade is not ignored, because a snapshot
     is taken before anything changes: an upgrade that died afterwards still left
     the exact file a rollback needs, and that is the moment it is needed.
+
+    When a recent directory listing is available, the reported snapshot is
+    checked against it: a name absent from the listing is flagged
+    ``unconfirmed`` with a ``reason`` instead of being presented as a confirmed
+    restore point. With no listing at all, the point is reported as unconfirmed
+    because the directory could not be read.
     """
 
     command = (
@@ -181,7 +190,49 @@ def _reported_restore_point(
     point = contract.restore_point(entries, now=now)
     if not point:
         return None
-    return {**point, "path": path, "listed": False, "unconfirmed": True}
+
+    if listed_names is None:
+        reason = "no_recent_listing"
+        listed = False
+        exists: bool | None = None
+    elif name in listed_names:
+        reason = None
+        listed = True
+        exists = True
+    else:
+        reason = "not_in_recent_listing"
+        listed = False
+        exists = False
+
+    return {
+        **point,
+        "path": path,
+        "listed": listed,
+        "unconfirmed": not listed,
+        "reason": reason,
+        "exists": exists,
+    }
+
+
+def _unconfirmed_points(point: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Carry an unconfirmed reported point into the panel's marker list.
+
+    Only points the recent listing could not confirm are listed here; a
+    confirmed restore point already appears as the primary ``restore_point``.
+    """
+
+    if point is None or point.get("listed"):
+        return []
+    return [
+        {
+            "name": point["name"],
+            "path": point.get("path"),
+            "listed": point["listed"],
+            "unconfirmed": point["unconfirmed"],
+            "reason": point.get("reason"),
+            "exists": point.get("exists"),
+        }
+    ]
 
 
 def _with_location(
@@ -313,6 +364,7 @@ def etcd_backup_state(
         "directories": locations["directories"],
         "invalid_directories": locations["invalid"],
         "restore_point": None,
+        "unconfirmed_restore_points": [],
         "scheduler_last_run": scheduler_at.isoformat() if scheduler_at else None,
         "scheduler_age_hours": (
             round(scheduler_age, 3) if scheduler_age is not None else None
@@ -342,7 +394,9 @@ def etcd_backup_state(
         state["ok"] = False
         state["stale"] = True
         state["findings"] = []
-        state["restore_point"] = _reported_restore_point(deployment, now=now)
+        reported = _reported_restore_point(deployment, now=now)
+        state["restore_point"] = reported
+        state["unconfirmed_restore_points"] = _unconfirmed_points(reported)
         return state
     state["enabled"] = True
     if not runs:
@@ -361,12 +415,18 @@ def etcd_backup_state(
             reported = command
             break
     if reported is None:
-        state["restore_point"] = _reported_restore_point(deployment, now=now)
+        reported_point = _reported_restore_point(deployment, now=now)
+        state["restore_point"] = reported_point
+        state["unconfirmed_restore_points"] = _unconfirmed_points(reported_point)
         return state
 
     result = reported.result
     cluster_name = deployment.cluster_name
     entries = _entries_from(_listing(result), cluster_name)
+    listed_names = {entry["name"] for entry in entries}
+    upgrade_point = _reported_restore_point(
+        deployment, listed_names=listed_names, now=now
+    )
     report = contract.assess(
         entries,
         keep_count=policy["keep_count"],
@@ -393,13 +453,14 @@ def etcd_backup_state(
             "pre_upgrade_count": report["pre_upgrade_count"],
             "pre_upgrade": report["pre_upgrade"],
             "restore_point": _with_location(
-                report["restore_point"] or _reported_restore_point(deployment, now=now),
+                report["restore_point"] or upgrade_point,
                 # The listing came from the directory the command was given, so
                 # that is where its files are, even if the policy has since
                 # been pointed somewhere else.
                 directory=_listing_directory(reported, policy["directory"]),
                 listed=bool(report["restore_point"]),
             ),
+            "unconfirmed_restore_points": _unconfirmed_points(upgrade_point),
             "findings": report["findings"],
         }
     )

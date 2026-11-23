@@ -553,6 +553,10 @@ class EtcdBackupExecutor:
         stamp_now = now or datetime.now(UTC)
         directory = request["directory"]
         directories = request.get("directories") or [directory]
+        # One protect variable for the whole run: both the prune decision and
+        # the post-run assessment read this same tuple, instead of each
+        # parsing the request payload again and drifting apart.
+        protect = tuple(request.get("protect") or ())
         filename = backup_filename(request["cluster_name"], now=stamp_now)
         staging = f"{directory}/{partial_name(filename)}"
         final = f"{directory}/{filename}"
@@ -691,7 +695,7 @@ class EtcdBackupExecutor:
             keep_max_age_hours=request["keep_max_age_hours"],
             pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             now=stamp_now,
-            protect=tuple(request.get("protect") or ()),
+            protect=protect,
         )
         removed_names = {item["name"] for item in prunable}
         retained = [entry for entry in entries if entry["name"] not in removed_names]
@@ -735,6 +739,7 @@ class EtcdBackupExecutor:
             keep_max_age_hours=request["keep_max_age_hours"],
             max_age_hours=request["max_age_hours"],
             now=stamp_now,
+            protect=protect,
         )
         result = {
             "cluster_name": request["cluster_name"],
@@ -771,6 +776,7 @@ class EtcdBackupExecutor:
 
         directories = request.get("directories") or [request["directory"]]
         entries = self._union_entries(directories, request["cluster_name"])
+        protect = tuple(request.get("protect") or ())
         report = assess(
             entries,
             keep_count=request["keep_count"],
@@ -778,7 +784,7 @@ class EtcdBackupExecutor:
             pre_upgrade_keep_max_age_hours=request["pre_upgrade_keep_max_age_hours"],
             max_age_hours=request["max_age_hours"],
             now=now,
-            protect=tuple(request.get("protect") or ()),
+            protect=protect,
         )
         return {
             "cluster_name": request["cluster_name"],

@@ -8,13 +8,13 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Latest verified commit
 
-[GitHub Actions run 45113481307](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45113481307), commit `5cd777c04ef573d6dbdd5f7a5c9e48f153980c6e`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
+[GitHub Actions run 45119394703](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45119394703), commit `c0a73456b9402702e725f408840a4c596e019c6f`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
 
-- Pytest: **1858 passed, 15 skipped** (four shards, all green).
+- Pytest: **1949 passed, 15 skipped** (four shards, all green).
 - Ruff, Django checks, migration drift detection, PostgreSQL migrations and mTLS ingress: passed.
 - Compose full-stack smoke (API + Worker + Web + PostgreSQL + Redis build, start and probe): passed.
 - Metal3 and SR-IOV CRD integration against a real kind cluster: passed.
-- Vue unit tests (36) and production build: passed.
+- Vue unit tests (59) and production build: passed.
 - Agent images (cloud-control, cloud, eph, target, platform API): built.
 
 The `v1.1.0` release baseline remains [run 45015159500](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45015159500), commit `cc970a71`, with 1699 passed; the `v1.0.0` baseline was [run 44979582251](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/44979582251), commit `20a807fd`.

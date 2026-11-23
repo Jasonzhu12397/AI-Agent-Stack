@@ -1095,10 +1095,21 @@ export type EtcdRestorePoint = {
   path: string;
   listed: boolean;
   unconfirmed?: boolean;
+  reason?: string | null;
+  exists?: boolean | null;
   taken_at: string;
   age_hours: number;
   size_bytes: number | null;
   version: string | null;
+};
+
+export type EtcdUnconfirmedRestorePoint = {
+  name: string;
+  path: string | null;
+  listed: boolean;
+  unconfirmed: boolean;
+  reason: string | null;
+  exists: boolean | null;
 };
 
 export type EtcdBackupState = {
@@ -1120,6 +1131,7 @@ export type EtcdBackupState = {
   last_run: EtcdBackupCommandSummary | null;
   history: EtcdBackupCommandSummary[];
   restore_point: EtcdRestorePoint | null;
+  unconfirmed_restore_points?: EtcdUnconfirmedRestorePoint[];
   directories?: string[];
   invalid_directories?: Array<{ directory: string; reason: string }>;
   reported_by?: string;
