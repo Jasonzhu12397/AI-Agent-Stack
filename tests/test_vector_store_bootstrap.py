@@ -89,7 +89,10 @@ def test_ping_reports_missing_and_unhealthy_collections(monkeypatch):
 
 def test_ingestion_creates_the_collection_once(monkeypatch):
     class FakeGateway:
-        def embed(self, model_config, inputs):
+        def __init__(self, guard=None):
+            pass
+
+        def embed(self, model_config, inputs, **kwargs):
             return type("Result", (), {"vectors": [[0.1, 0.2, 0.3] for _ in inputs]})()
 
     class FakeStore:
@@ -107,7 +110,7 @@ def test_ingestion_creates_the_collection_once(monkeypatch):
 
     store = FakeStore()
     monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
-    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda: FakeGateway())
+    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: FakeGateway())
 
     result = rag_runtime.ingest_text(
         tenant_id="tenant-1",

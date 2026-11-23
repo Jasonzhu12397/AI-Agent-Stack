@@ -43,20 +43,10 @@ def get_tenant_token_usage(tenant_id, now=None):
 def reserve_tenant_tokens(
     *, task, idempotency_key: str, requested_tokens: int, agent_run=None, workflow_run=None
 ):
-    if (
-        not isinstance(requested_tokens, int)
-        or isinstance(requested_tokens, bool)
-        or requested_tokens <= 0
-    ):
-        raise ValueError("Token reservation must be a positive integer")
+    _assert_positive_token_count(requested_tokens)
     if (agent_run is None) == (workflow_run is None):
         raise ValueError("Exactly one AgentRun or WorkflowRun must own a token reservation")
-    if (
-        not isinstance(idempotency_key, str)
-        or not idempotency_key.strip()
-        or len(idempotency_key) > 160
-    ):
-        raise ValueError("Token reservation idempotency key must contain 1 to 160 characters")
+    _assert_valid_idempotency_key(idempotency_key)
     if task.project.tenant_id != task.tenant_id:
         raise ValueError("Token reservation task project is outside its tenant")
     if agent_run is not None:
@@ -126,6 +116,89 @@ def reserve_tenant_tokens(
     usage.reserved_tokens = requested_tokens
     usage.consumed_tokens = 0
     usage.expires_at = reservation_expires_at
+    usage.created_at = now
+    usage.save()
+    return usage
+
+
+def _assert_positive_token_count(requested_tokens) -> None:
+    if (
+        not isinstance(requested_tokens, int)
+        or isinstance(requested_tokens, bool)
+        or requested_tokens <= 0
+    ):
+        raise ValueError("Token reservation must be a positive integer")
+
+
+def _assert_valid_idempotency_key(idempotency_key: str) -> None:
+    if (
+        not isinstance(idempotency_key, str)
+        or not idempotency_key.strip()
+        or len(idempotency_key) > 160
+    ):
+        raise ValueError("Token reservation idempotency key must contain 1 to 160 characters")
+
+
+@transaction.atomic
+def reserve_adhoc_tokens(
+    *,
+    tenant,
+    scope_ref: str,
+    idempotency_key: str,
+    requested_tokens: int,
+):
+    """Reserve budget for a provider call without an agent/workflow run context.
+
+    Model connection tests and RAG embedding calls have no Task/Run row of their
+    own; the ledger row is tied to a free-form ``scope_ref`` instead.
+    """
+    _assert_positive_token_count(requested_tokens)
+    _assert_valid_idempotency_key(idempotency_key)
+    if not isinstance(scope_ref, str) or not scope_ref.strip() or len(scope_ref) > 160:
+        raise ValueError(
+            "Ad-hoc token reservation scope reference must contain 1 to 160 characters"
+        )
+    now = timezone.now()
+    budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(tenant=tenant)
+    usage, created = TenantTokenUsage.objects.select_for_update().get_or_create(
+        tenant=tenant,
+        idempotency_key=idempotency_key,
+        defaults={
+            "scope_ref": scope_ref,
+            "status": TenantTokenUsage.Status.RELEASED,
+            "reserved_tokens": 0,
+            "expires_at": now,
+        },
+    )
+    if usage.scope_ref != scope_ref:
+        raise ValueError("Token reservation idempotency key belongs to another scope")
+    if usage.status == TenantTokenUsage.Status.SETTLED:
+        raise ValueError("A settled provider call cannot be replayed with the same idempotency key")
+    if not created and usage.status == TenantTokenUsage.Status.RESERVED and usage.expires_at > now:
+        if usage.reserved_tokens != requested_tokens:
+            raise ValueError("Token reservation amount changed for an existing provider call")
+        usage.expires_at = now + timedelta(minutes=5)
+        usage.save(update_fields=["expires_at", "updated_at"])
+        return usage
+
+    local_now = timezone.localtime(now)
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = day_start.replace(day=1)
+    daily_used = _period_usage(tenant.id, day_start, now)
+    monthly_used = _period_usage(tenant.id, month_start, now)
+    if daily_used + requested_tokens > budget.daily_limit:
+        raise TenantTokenBudgetExceeded("daily")
+    if monthly_used + requested_tokens > budget.monthly_limit:
+        raise TenantTokenBudgetExceeded("monthly")
+
+    usage.task = None
+    usage.agent_run = None
+    usage.workflow_run = None
+    usage.scope_ref = scope_ref
+    usage.status = TenantTokenUsage.Status.RESERVED
+    usage.reserved_tokens = requested_tokens
+    usage.consumed_tokens = 0
+    usage.expires_at = now + timedelta(minutes=5)
     usage.created_at = now
     usage.save()
     return usage

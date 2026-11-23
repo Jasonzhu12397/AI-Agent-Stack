@@ -24,10 +24,10 @@ from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
 from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
 from core.token_budget import (
     TenantTokenBudgetExceeded,
-    reserve_tenant_tokens,
     resolve_provider_token_usage,
     settle_tenant_tokens,
 )
+from core.token_guard import RunTokenGuard
 from core.tool_approvals import (
     consume_approved_tool_call,
     create_pending_tool_approval,
@@ -813,14 +813,14 @@ def execute_agent_run(task):
         except (KeyError, TypeError, ValueError) as exc:
             raise PermanentTaskError("Approved agent execution checkpoint is invalid") from exc
 
-    gateway = ModelGateway()
+    token_guard = RunTokenGuard(task=task, agent_run=agent_run)
+    gateway = ModelGateway(guard=token_guard)
     for iteration in range(start_iteration, max_iterations):
         _renew_agent_lease(task)
         if resume_calls is not None:
             calls = resume_calls
             resume_calls = None
         else:
-            token_reservation = None
             try:
                 messages = _compact_agent_messages(messages)
                 input_token_ceiling = _estimate_message_token_upper_bound(
@@ -836,19 +836,6 @@ def execute_agent_run(task):
                 )
                 if allowed_output_tokens < 1:
                     raise PermanentTaskError("Agent run reached its cumulative token budget")
-                try:
-                    token_reservation = reserve_tenant_tokens(
-                        task=task,
-                        agent_run=agent_run,
-                        idempotency_key=f"{task.id}:{task.attempts}:{iteration}",
-                        requested_tokens=(
-                            input_token_ceiling + allowed_output_tokens
-                        ),
-                    )
-                except TenantTokenBudgetExceeded as exc:
-                    raise PermanentTaskError(
-                        "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
-                    ) from exc
                 response = gateway.complete(
                     model_config,
                     messages,
@@ -856,29 +843,21 @@ def execute_agent_run(task):
                     timeout_seconds=config["timeout_seconds"],
                     tools=offered_tools if offered_tools else None,
                     tool_choice="auto" if offered_tools else None,
+                    idempotency_key=f"{task.id}:{task.attempts}:{iteration}",
                 )
+            except TenantTokenBudgetExceeded as exc:
+                raise PermanentTaskError(
+                    "TENANT_TOKEN_BUDGET_EXCEEDED:" + exc.period.upper()
+                ) from exc
             except ModelGatewayError as exc:
-                if token_reservation is not None:
-                    # A timeout may happen after the provider accepted the request.
-                    # Charge the reserved ceiling unless non-consumption is proven.
-                    settle_tenant_tokens(
-                        usage=token_reservation,
-                        consumed_tokens=token_reservation.reserved_tokens,
-                    )
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
                 ) from exc
             except Exception as exc:
-                if token_reservation is not None:
-                    settle_tenant_tokens(
-                        usage=token_reservation,
-                        consumed_tokens=token_reservation.reserved_tokens,
-                    )
                 raise PermanentTaskError(
                     "MODEL_PROVIDER_REQUEST_FAILED_UNEXPECTEDLY"
                 ) from exc
-            actual_input_tokens, actual_output_tokens = _resolve_and_settle_provider_usage(
-                token_reservation=token_reservation,
+            actual_input_tokens, actual_output_tokens = _resolve_provider_usage(
                 provider_type=model_config.provider.provider_type,
                 reported_input_tokens=response.input_tokens,
                 reported_output_tokens=response.output_tokens,

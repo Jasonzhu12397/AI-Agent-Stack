@@ -156,7 +156,10 @@ def test_model_test_call_records_a_failure_event(audit_scope):
     from core.model_gateway import ModelGatewayError
 
     class _FailingGateway:
-        def complete(self, model_config, messages):
+        def __init__(self, guard=None):
+            pass
+
+        def complete(self, model_config, messages, **kwargs):
             raise ModelGatewayError("MODEL_GATEWAY_UNAVAILABLE", "gateway is offline")
 
     from core import model_views
