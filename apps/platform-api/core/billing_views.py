@@ -18,9 +18,16 @@ from rest_framework.views import APIView
 
 from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
-from core.billing_models import EntitlementGrant, Order, Plan, Subscription
+from core.billing_models import (
+    EntitlementGrant,
+    Order,
+    PaymentTransactionAudit,
+    Plan,
+    Subscription,
+)
 from core.models import AuditEvent, ModelProvider, Tenant, TenantTokenBudget
 from core.payments import registry
+from core.payments.base import PaymentProviderError
 from core.permissions import IsTenantAdmin
 from core.token_budget import (
     get_tenant_token_usage,
@@ -41,6 +48,66 @@ def _error(code: str, message: str, details: dict | None = None, http_status: in
     return Response(
         {"error": {"code": code, "message": message, "details": details or {}}},
         status=http_status,
+    )
+
+
+# Metadata keys that must never reach the payment ledger, even by accident.
+_LEDGER_SENSITIVE_PARTS = (
+    "private",
+    "secret",
+    "key",
+    "cert",
+    "pem",
+    "token",
+    "authorization",
+    "credential",
+    "signature",
+)
+
+
+def _sanitize_ledger_metadata(metadata: dict | None) -> dict:
+    """Drop any key that could carry key material or a signing artifact."""
+
+    safe: dict = {}
+    for key, value in (metadata or {}).items():
+        normalized = str(key).lower().replace("-", "_")
+        if any(part in normalized for part in _LEDGER_SENSITIVE_PARTS):
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            safe[str(key)[:80]] = value
+    return safe
+
+
+def _record_payment_audit(
+    *,
+    tenant,
+    order,
+    channel: str,
+    direction: str,
+    event_type: str,
+    status: str = "",
+    amount_cents: int = 0,
+    provider_trade_no: str = "",
+    error_code: str = "",
+    metadata: dict | None = None,
+) -> None:
+    """Append a payment request/callback ledger row.
+
+    Only non-secret fields are stored; the writer refuses any metadata key
+    that looks like key material, a certificate or a signature.
+    """
+
+    PaymentTransactionAudit.objects.create(
+        tenant=tenant,
+        order=order,
+        channel=channel,
+        direction=direction,
+        event_type=event_type,
+        status=status,
+        amount_cents=amount_cents,
+        provider_trade_no=provider_trade_no,
+        error_code=error_code,
+        metadata=_sanitize_ledger_metadata(metadata),
     )
 
 
@@ -279,21 +346,46 @@ class OrderListCreateView(TenantScopedView):
         if existing is not None:
             return Response(_order_dict(existing), status=status.HTTP_200_OK)
 
-        with transaction.atomic():
-            order = Order.objects.create(
-                tenant=tenant,
-                plan=plan,
-                status=Order.Status.CREATED,
-                amount_cents=plan.price_cents,
-                currency=plan.currency,
-                channel=channel,
-                idempotency_key=idempotency_key,
-                created_by=request.user,
+        try:
+            with transaction.atomic():
+                order = Order.objects.create(
+                    tenant=tenant,
+                    plan=plan,
+                    status=Order.Status.CREATED,
+                    amount_cents=plan.price_cents,
+                    currency=plan.currency,
+                    channel=channel,
+                    idempotency_key=idempotency_key,
+                    created_by=request.user,
+                )
+                instructions = provider.create_payment(order)
+                order.provider_trade_no = instructions.get("trade_no", "")
+                order.status = Order.Status.PENDING
+                order.save(update_fields=["provider_trade_no", "status", "updated_at"])
+        except PaymentProviderError as exc:
+            record_audit_event(
+                request,
+                tenant,
+                "billing.purchase.provider_error",
+                "order",
+                outcome=AuditEvent.Outcome.DENIED,
+                metadata={"channel": channel, "reason_code": exc.code},
             )
-            instructions = provider.create_payment(order)
-            order.provider_trade_no = instructions.get("trade_no", "")
-            order.status = Order.Status.PENDING
-            order.save(update_fields=["provider_trade_no", "status", "updated_at"])
+            _record_payment_audit(
+                tenant=tenant,
+                order=None,
+                channel=channel,
+                direction="request",
+                event_type="payment.request.error",
+                error_code=exc.code,
+                metadata={"plan_code": plan.code},
+            )
+            return _error(
+                exc.code,
+                "The payment provider could not process the request.",
+                details={"channel": channel},
+                http_status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         record_audit_event(
             request,
@@ -302,6 +394,16 @@ class OrderListCreateView(TenantScopedView):
             "order",
             order.id,
             metadata={"channel": channel, "plan_code": plan.code},
+        )
+        _record_payment_audit(
+            tenant=tenant,
+            order=order,
+            channel=channel,
+            direction="request",
+            event_type="payment.request.created",
+            provider_trade_no=order.provider_trade_no,
+            amount_cents=order.amount_cents,
+            metadata={"plan_code": plan.code},
         )
         return Response(
             _order_dict(order, payment=instructions),
@@ -355,26 +457,63 @@ class OrderRefundView(TenantScopedView):
     def post(self, request, tenant_id, order_id):
         tenant = self.get_tenant()
         reason = str(request.data.get("reason", "")).strip() or "refund"
-        with transaction.atomic():
-            order = get_object_or_404(
-                Order.objects.select_for_update().filter(tenant=tenant),
-                pk=order_id,
-            )
-            if order.status != Order.Status.PAID:
-                return _error(
-                    "ORDER_STATE_CONFLICT",
-                    f"Order in status {order.status} cannot be refunded.",
-                    http_status=status.HTTP_409_CONFLICT,
+        try:
+            with transaction.atomic():
+                order = get_object_or_404(
+                    Order.objects.select_for_update().filter(tenant=tenant),
+                    pk=order_id,
                 )
-            provider = registry.get_provider(order.channel)
-            receipt = provider.refund(order, reason) if provider else {}
-            order.transition(Order.Status.REFUNDED)
+                if order.status != Order.Status.PAID:
+                    return _error(
+                        "ORDER_STATE_CONFLICT",
+                        f"Order in status {order.status} cannot be refunded.",
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
+                provider = registry.get_provider(order.channel)
+                receipt = provider.refund(order, reason) if provider else {}
+                order.transition(Order.Status.REFUNDED)
+        except PaymentProviderError as exc:
+            record_audit_event(
+                request,
+                tenant,
+                "billing.refund.provider_error",
+                "order",
+                order.id,
+                outcome=AuditEvent.Outcome.DENIED,
+                metadata={"channel": order.channel, "reason_code": exc.code},
+            )
+            _record_payment_audit(
+                tenant=tenant,
+                order=order,
+                channel=order.channel,
+                direction="request",
+                event_type="payment.request.refund_error",
+                amount_cents=order.amount_cents,
+                error_code=exc.code,
+                metadata={"reason": reason},
+            )
+            return _error(
+                exc.code,
+                "The payment provider could not process the refund.",
+                details={"channel": order.channel},
+                http_status=status.HTTP_502_BAD_GATEWAY,
+            )
         record_audit_event(
             request,
             tenant,
             "billing.order.refunded",
             "order",
             order.id,
+            metadata={"reason": reason},
+        )
+        _record_payment_audit(
+            tenant=tenant,
+            order=order,
+            channel=order.channel,
+            direction="request",
+            event_type="payment.request.refund",
+            amount_cents=order.amount_cents,
+            provider_trade_no=order.provider_trade_no,
             metadata={"reason": reason},
         )
         return Response(_order_dict(order, payment=receipt))
@@ -450,6 +589,15 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
                 outcome=AuditEvent.Outcome.DENIED,
                 metadata={"channel": channel, "message": result.message},
             )
+            _record_payment_audit(
+                tenant=None,
+                order=None,
+                channel=channel,
+                direction="callback",
+                event_type="payment.callback.rejected",
+                error_code="PAYMENT_SIGNATURE_INVALID",
+                metadata={"message": result.message},
+            )
             return _error(
                 "PAYMENT_SIGNATURE_INVALID",
                 "Callback signature verification failed.",
@@ -465,6 +613,47 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
 
         with transaction.atomic():
             locked = Order.objects.select_for_update().get(pk=order.pk)
+            mismatch = (
+                result.amount_cents is not None
+                and result.amount_cents != locked.amount_cents
+            )
+            if mismatch:
+                record_audit_event(
+                    None,
+                    locked.tenant,
+                    "billing.callback.amount_mismatch",
+                    "payment_callback",
+                    locked.id,
+                    metadata={
+                        "channel": locked.channel,
+                        "expected_cents": locked.amount_cents,
+                        "actual_cents": result.amount_cents,
+                    },
+                    outcome=AuditEvent.Outcome.DENIED,
+                )
+                _record_payment_audit(
+                    tenant=locked.tenant,
+                    order=locked,
+                    channel=locked.channel,
+                    direction="callback",
+                    event_type="payment.callback.amount_mismatch",
+                    amount_cents=locked.amount_cents,
+                    provider_trade_no=locked.provider_trade_no,
+                    error_code="PAYMENT_AMOUNT_MISMATCH",
+                    metadata={
+                        "expected_cents": locked.amount_cents,
+                        "actual_cents": result.amount_cents,
+                    },
+                )
+                return _error(
+                    "PAYMENT_AMOUNT_MISMATCH",
+                    "Callback amount does not match the order amount.",
+                    details={
+                        "expected_cents": locked.amount_cents,
+                        "actual_cents": result.amount_cents,
+                    },
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
             applied = self._apply_callback(locked, result)
 
         return Response({"status": locked.status, "applied": applied})
@@ -486,10 +675,29 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
                 metadata={"channel": order.channel, "status": result.status},
                 outcome=AuditEvent.Outcome.FAILURE,
             )
+            _record_payment_audit(
+                tenant=order.tenant,
+                order=order,
+                channel=order.channel,
+                direction="callback",
+                event_type="payment.callback.unknown_status",
+                status=result.status,
+                provider_trade_no=order.provider_trade_no,
+                error_code="PAYMENT_CALLBACK_STATUS_UNKNOWN",
+            )
             return False
 
         if order.status == target:
             # Repeated callback: idempotent no-op.
+            _record_payment_audit(
+                tenant=order.tenant,
+                order=order,
+                channel=order.channel,
+                direction="callback",
+                event_type="payment.callback.duplicate",
+                status=target,
+                provider_trade_no=order.provider_trade_no,
+            )
             return False
 
         if not order.can_transition(target):
@@ -507,6 +715,17 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
                 },
                 outcome=AuditEvent.Outcome.DENIED,
             )
+            _record_payment_audit(
+                tenant=order.tenant,
+                order=order,
+                channel=order.channel,
+                direction="callback",
+                event_type="payment.callback.out_of_order",
+                status=target,
+                provider_trade_no=order.provider_trade_no,
+                metadata={"from_status": order.status, "to_status": target},
+                error_code="PAYMENT_CALLBACK_OUT_OF_ORDER",
+            )
             return False
 
         order.transition(target)
@@ -519,5 +738,15 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
             "payment_callback",
             order.id,
             metadata={"channel": order.channel},
+        )
+        _record_payment_audit(
+            tenant=order.tenant,
+            order=order,
+            channel=order.channel,
+            direction="callback",
+            event_type="payment.callback.verified",
+            status=target,
+            amount_cents=order.amount_cents,
+            provider_trade_no=order.provider_trade_no,
         )
         return True

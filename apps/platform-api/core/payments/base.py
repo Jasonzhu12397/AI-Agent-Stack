@@ -40,6 +40,19 @@ class CallbackResult:
     order_reference: str | None = None
     message: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    amount_cents: int | None = None
+
+
+class PaymentProviderError(Exception):
+    """Upstream provider transport or protocol failure.
+
+    Carries a stable error code for the response envelope; the message is
+    safe to surface. Secrets never travel in this exception.
+    """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
 
 
 class PaymentProvider(ABC):

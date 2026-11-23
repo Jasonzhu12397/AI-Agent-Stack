@@ -225,3 +225,53 @@ class EntitlementGrant(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Entitlement grants cannot be deleted through the model API.")
+
+
+class PaymentTransactionAudit(models.Model):
+    """Append-only ledger row for provider requests and callbacks.
+
+    Every outbound payment request and every verified or rejected callback is
+    recorded here alongside the chain audit event. The metadata dict is
+    sanitized upstream: it carries channel, trade numbers and amounts only,
+    never private keys, symmetric keys, certificates or PEM material.
+    """
+
+    class Direction(models.TextChoices):
+        REQUEST = "request", "Request"
+        CALLBACK = "callback", "Callback"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        "core.Tenant",
+        on_delete=models.SET_NULL,
+        related_name="payment_transaction_audits",
+        null=True,
+        blank=True,
+    )
+    order = models.ForeignKey(
+        "Order",
+        on_delete=models.SET_NULL,
+        related_name="payment_transaction_audits",
+        null=True,
+        blank=True,
+    )
+    channel = models.CharField(max_length=16)
+    direction = models.CharField(max_length=16, choices=Direction.choices)
+    event_type = models.CharField(max_length=80)
+    status = models.CharField(max_length=32, blank=True, default="")
+    amount_cents = models.PositiveBigIntegerField(default=0)
+    provider_trade_no = models.CharField(max_length=128, blank=True, default="")
+    error_code = models.CharField(max_length=80, blank=True, default="")
+    metadata = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Payment audit rows are append-only and cannot be updated.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Payment audit rows cannot be deleted through the model API.")
