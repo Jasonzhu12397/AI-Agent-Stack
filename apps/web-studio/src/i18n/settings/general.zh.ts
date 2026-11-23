@@ -1,0 +1,33 @@
+export const messages: Record<string, string> = {
+  // General group navigation labels
+  "General": "通用",
+  "Plugins & Connectors": "插件与连接器",
+  "Appearance": "外观",
+  "Notification Settings": "通知设置",
+  "Work Mode Settings": "工作模式设置",
+  "Keyboard Shortcuts": "键盘快捷键",
+  "Data Controls": "数据管控",
+  "Archived Content": "归档内容",
+  "Privacy & Permissions": "隐私与权限",
+  "Help & Feedback": "帮助与反馈",
+  "About": "关于",
+
+  // General page strings
+  "General settings": "通用设置",
+  "Scope": "作用域",
+  "Tenant": "租户",
+  "Project": "项目",
+  "Effective value": "生效值",
+  "Default": "默认值",
+  "Source layer": "来源层",
+  "Updated": "更新时间",
+  "Defaults": "默认值",
+  "Effective": "生效值",
+  "No settings available for this scope.": "当前作用域暂无设置。",
+  "Tenant setting": "租户设置",
+  "Project override": "项目覆盖",
+  "User preference": "用户偏好",
+  "Unknown setting key.": "未知设置项。",
+  "Invalid value for setting.": "设置值无效。",
+  "Settings could not be saved.": "设置保存失败。",
+};

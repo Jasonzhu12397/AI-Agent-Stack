@@ -10,6 +10,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from django.conf import settings
 
 from core.models import ModelProvider
+from core.token_budget import resolve_provider_token_usage
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -80,6 +81,18 @@ def _is_local_http_provider(provider):
 
 
 class ModelGateway:
+    def __init__(self, guard=None):
+        self._guard = guard
+
+    def _require_guard(self):
+        if self._guard is None or not getattr(self._guard, "authorized", False):
+            raise ModelGatewayError(
+                "TOKEN_GUARD_REQUIRED",
+                "A token budget guard must be attached before issuing a provider call.",
+                retryable=False,
+            )
+        return self._guard
+
     def complete(
         self,
         model_config,
@@ -88,6 +101,7 @@ class ModelGateway:
         timeout_seconds=30,
         tools=None,
         tool_choice=None,
+        idempotency_key=None,
     ):
         if not isinstance(messages, list) or not messages:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
@@ -171,84 +185,119 @@ class ModelGateway:
                 "MODEL_CONTEXT_WINDOW_EXCEEDED",
                 "The estimated prompt and reserved output exceed the model context window.",
             )
+        guard = self._require_guard()
+        requested_tokens = estimated_input_tokens + effective_max_tokens
+        reservation = guard.reserve(
+            idempotency_key=idempotency_key,
+            requested_tokens=requested_tokens,
+            call_type="complete",
+            model_config=model_config,
+        )
         started = time.monotonic()
-        if provider.provider_type == ModelProvider.ProviderType.FAKE:
-            content = provider.config.get("response", "Fake model response")
-            if not isinstance(content, str):
-                raise ModelGatewayError(
-                    "INVALID_FAKE_RESPONSE",
-                    "Fake provider response must be a string.",
-                )
-            return ModelResponse(
-                content=content,
-                input_tokens=0,
-                output_tokens=0,
-                provider=provider.name,
-                model=model_config.model_name,
-                latency_ms=int((time.monotonic() - started) * 1000),
-            )
-        if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
-            raise ModelGatewayError("PROVIDER_UNSUPPORTED", "The provider type is not supported.")
-        if urlsplit(provider.base_url).scheme == "http" and not _is_local_http_provider(provider):
-            raise ModelGatewayError(
-                "LOCAL_MODEL_HOST_NOT_ALLOWED",
-                "HTTP model endpoints must use an explicitly allowlisted local model host.",
-            )
-        payload = self._post_json(
-            provider,
-            "chat/completions",
-            {
-                "model": model_config.model_name,
-                "messages": messages,
-                "max_tokens": effective_max_tokens,
-                **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
-            },
-            timeout_seconds,
-        )
         try:
-            message = payload["choices"][0]["message"]
-            content = message.get("content") or ""
-            tool_calls = message.get("tool_calls") or []
-            usage = payload.get("usage") or {}
-            if (
-                not isinstance(content, str)
-                or not isinstance(tool_calls, list)
-                or len(tool_calls) > 16
-            ):
-                raise TypeError("message content or tool_calls has an invalid type")
-            if tool_calls and not tools:
-                raise TypeError("provider returned tool calls when no tools were offered")
-            if not isinstance(usage, dict):
-                raise TypeError("usage must be an object")
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
-            if (
-                not isinstance(input_tokens, int)
-                or isinstance(input_tokens, bool)
-                or input_tokens < 0
-                or input_tokens > request_bytes
-                or not isinstance(output_tokens, int)
-                or isinstance(output_tokens, bool)
-                or output_tokens < 0
-                or output_tokens > effective_max_tokens
-            ):
-                raise ValueError("provider token usage is outside the requested bounds")
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            raise ModelGatewayError(
-                "MODEL_PROVIDER_INVALID_RESPONSE",
-                "The model provider returned an invalid chat completion.",
-            ) from exc
-        return ModelResponse(
-            content=content,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            provider=provider.name,
-            model=model_config.model_name,
-            latency_ms=int((time.monotonic() - started) * 1000),
-            tool_calls=tool_calls,
+            if provider.provider_type == ModelProvider.ProviderType.FAKE:
+                content = provider.config.get("response", "Fake model response")
+                if not isinstance(content, str):
+                    raise ModelGatewayError(
+                        "INVALID_FAKE_RESPONSE",
+                        "Fake provider response must be a string.",
+                    )
+                resolved_input, resolved_output = 0, 0
+                response = ModelResponse(
+                    content=content,
+                    input_tokens=resolved_input,
+                    output_tokens=resolved_output,
+                    provider=provider.name,
+                    model=model_config.model_name,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            else:
+                if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
+                    raise ModelGatewayError(
+                        "PROVIDER_UNSUPPORTED", "The provider type is not supported."
+                    )
+                if (
+                    urlsplit(provider.base_url).scheme == "http"
+                    and not _is_local_http_provider(provider)
+                ):
+                    raise ModelGatewayError(
+                        "LOCAL_MODEL_HOST_NOT_ALLOWED",
+                        "HTTP model endpoints must use an explicitly allowlisted local model host.",
+                    )
+                payload = self._post_json(
+                    provider,
+                    "chat/completions",
+                    {
+                        "model": model_config.model_name,
+                        "messages": messages,
+                        "max_tokens": effective_max_tokens,
+                        **(
+                            {"tools": tools, "tool_choice": tool_choice or "auto"}
+                            if tools
+                            else {}
+                        ),
+                    },
+                    timeout_seconds,
+                )
+                try:
+                    message = payload["choices"][0]["message"]
+                    content = message.get("content") or ""
+                    tool_calls = message.get("tool_calls") or []
+                    usage = payload.get("usage") or {}
+                    if (
+                        not isinstance(content, str)
+                        or not isinstance(tool_calls, list)
+                        or len(tool_calls) > 16
+                    ):
+                        raise TypeError("message content or tool_calls has an invalid type")
+                    if tool_calls and not tools:
+                        raise TypeError("provider returned tool calls when no tools were offered")
+                    if not isinstance(usage, dict):
+                        raise TypeError("usage must be an object")
+                    input_tokens = usage.get("prompt_tokens", 0)
+                    output_tokens = usage.get("completion_tokens", 0)
+                    if (
+                        not isinstance(input_tokens, int)
+                        or isinstance(input_tokens, bool)
+                        or input_tokens < 0
+                        or input_tokens > request_bytes
+                        or not isinstance(output_tokens, int)
+                        or isinstance(output_tokens, bool)
+                        or output_tokens < 0
+                        or output_tokens > effective_max_tokens
+                    ):
+                        raise ValueError("provider token usage is outside the requested bounds")
+                except (KeyError, IndexError, TypeError, ValueError) as exc:
+                    raise ModelGatewayError(
+                        "MODEL_PROVIDER_INVALID_RESPONSE",
+                        "The model provider returned an invalid chat completion.",
+                    ) from exc
+                resolved_input, resolved_output = resolve_provider_token_usage(
+                    provider_type=provider.provider_type,
+                    reported_input_tokens=input_tokens,
+                    reported_output_tokens=output_tokens,
+                    input_token_ceiling=estimated_input_tokens,
+                    output_token_ceiling=effective_max_tokens,
+                )
+                response = ModelResponse(
+                    content=content,
+                    input_tokens=resolved_input,
+                    output_tokens=resolved_output,
+                    provider=provider.name,
+                    model=model_config.model_name,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    tool_calls=tool_calls,
+                )
+        except BaseException:
+            guard.release(reservation=reservation)
+            raise
+        guard.settle(
+            reservation=reservation,
+            consumed_tokens=resolved_input + resolved_output,
         )
+        return response
 
-    def embed(self, model_config, inputs, timeout_seconds=45):
+    def embed(self, model_config, inputs, timeout_seconds=45, idempotency_key=None):
         if not isinstance(inputs, list) or not inputs or any(
             not isinstance(item, str) or not item.strip() for item in inputs
         ):
@@ -284,35 +333,50 @@ class ModelGateway:
                 "LOCAL_MODEL_HOST_NOT_ALLOWED",
                 "HTTP model endpoints must use an explicitly allowlisted local model host.",
             )
-        started = time.monotonic()
-        payload = self._post_json(
-            provider,
-            "embeddings",
-            {"model": model_config.model_name, "input": inputs},
-            timeout_seconds,
+        guard = self._require_guard()
+        requested_tokens = max(1, sum(len(item.encode("utf-8")) for item in inputs) // 2)
+        reservation = guard.reserve(
+            idempotency_key=idempotency_key,
+            requested_tokens=requested_tokens,
+            call_type="embed",
+            model_config=model_config,
         )
+        started = time.monotonic()
         try:
-            rows = payload["data"]
-            rows = sorted(rows, key=lambda row: int(row["index"]))
-            vectors = [row["embedding"] for row in rows]
-            if len(vectors) != len(inputs):
-                raise ValueError("embedding count mismatch")
-            dimensions = {len(vector) for vector in vectors}
-            if len(dimensions) != 1 or not dimensions or next(iter(dimensions)) <= 0:
-                raise ValueError("embedding dimensions mismatch")
-            normalized = []
-            for vector in vectors:
-                if not isinstance(vector, list):
-                    raise TypeError("embedding must be an array")
-                values = [float(value) for value in vector]
-                if any(not math.isfinite(value) for value in values):
-                    raise ValueError("embedding contains non-finite values")
-                normalized.append(values)
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            raise ModelGatewayError(
-                "MODEL_PROVIDER_INVALID_EMBEDDING",
-                "The model provider returned invalid embeddings.",
-            ) from exc
+            payload = self._post_json(
+                provider,
+                "embeddings",
+                {"model": model_config.model_name, "input": inputs},
+                timeout_seconds,
+            )
+            try:
+                rows = payload["data"]
+                rows = sorted(rows, key=lambda row: int(row["index"]))
+                vectors = [row["embedding"] for row in rows]
+                if len(vectors) != len(inputs):
+                    raise ValueError("embedding count mismatch")
+                dimensions = {len(vector) for vector in vectors}
+                if len(dimensions) != 1 or not dimensions or next(iter(dimensions)) <= 0:
+                    raise ValueError("embedding dimensions mismatch")
+                normalized = []
+                for vector in vectors:
+                    if not isinstance(vector, list):
+                        raise TypeError("embedding must be an array")
+                    values = [float(value) for value in vector]
+                    if any(not math.isfinite(value) for value in values):
+                        raise ValueError("embedding contains non-finite values")
+                    normalized.append(values)
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ModelGatewayError(
+                    "MODEL_PROVIDER_INVALID_EMBEDDING",
+                    "The model provider returned invalid embeddings.",
+                ) from exc
+        except BaseException:
+            guard.release(reservation=reservation)
+            raise
+        # Embedding responses carry no usage report, so the reserved input
+        # estimate is charged as the settled consumption.
+        guard.settle(reservation=reservation, consumed_tokens=reservation.reserved_tokens)
         return EmbeddingResponse(
             vectors=normalized,
             provider=provider.name,

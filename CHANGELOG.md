@@ -8,6 +8,45 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- The backup disk verdict ignored bytes already held by in-flight `*.db.partial`
+  staging files, so a volume that fit the database alone could be refused only
+  after a half-written snapshot filled it. The pre-write check now counts staging
+  occupancy (partials plus pending-publish records registered for this cluster)
+  alongside the database size and the `min_free_bytes` floor, reports
+  `free_bytes` / `occupancy_bytes` / `required_bytes` / verdict in the `disk`
+  block, and re-measures the free floor after the write; a post-write shortfall
+  fails with `ETCD_BACKUP_DISK_POST_WRITE_LOW` before any pruning. A zero floor
+  remains measure-only. Cleanup failures are no longer swallowed: a `rm` the pod
+  refused is recorded in `cleanup_failures` with path and error, left on disk for
+  the next sweep to retry, while successful removals still report only through
+  `swept_partials`.
+- The mutating backup command did not check its command lease while executing: a
+  lease lost mid-run could still publish a snapshot and then prune old ones. The
+  executor now receives the same `lease_lost_event` the other mutating actions
+  use, checks it before saving, before publishing, and before pruning, and stops
+  with `COMMAND_LEASE_LOST_DURING_EXECUTION` once it is lost. After the loss it
+  neither deletes nor overwrites anything: an interrupted verified snapshot keeps
+  its staging file and a `pending_publish` sidecar for the next republish, and an
+  already-published snapshot stays put with retention skipped. The dispatch path
+  forwards the event instead of dropping it.
+- Two backup runs of the same cluster in the same second collided on the
+  second-resolution stamp, and the publish rename could silently overwrite an
+  existing final snapshot. The staging path now carries a per-run id; the final
+  name keeps the legacy stamp name when it is free and otherwise takes a
+  suffixed, non-colliding name, so an existing final is never overwritten. The
+  suffixed name still parses back to its cluster and stamp, and republish of a
+  pending snapshot keeps the recorded final name, so retries do not accumulate
+  garbage.
+- The reactive backup slot after a cluster change is now bound to the mutation
+  command that triggered it instead of a coarse per-hour `:change` label. The
+  slot identity distinguishes the recurring hourly slot from the change slot;
+  the change key carries the source command id
+  (`etcd-backup:<deployment>:<hour>:change:cmd:<command-id>`), so a repeated
+  delivery of the same command reuses one slot while two distinct mutations in
+  the same hour keep two slots. The failed-slot retry chain (`:retry:N`) still
+  hangs off the same key. Legacy hourly rows keep their original key scheme and
+  are still reused; legacy coarse `:change` rows are historical records only and
+  are never reused, so they cannot become ghost duplicates.
 - The "who must be kept" protect set is now built in exactly one place:
   `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
   (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the

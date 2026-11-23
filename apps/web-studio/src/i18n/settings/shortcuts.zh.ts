@@ -1,0 +1,17 @@
+export const messages: Record<string, string> = {
+  "Keyboard Shortcuts": "键盘快捷键",
+  "Shortcut reference": "快捷键说明",
+  "Default combination": "默认组合",
+  "Your combination": "你的组合",
+  "Reset to default": "恢复默认",
+  "Conflicting shortcut": "快捷键冲突",
+  "Shortcuts are stored per user": "快捷键按用户保存",
+  "Shortcut registry unavailable": "快捷键注册表不可用",
+  "No project is selected.": "尚未选择项目。",
+  "That key combination is not valid. Use modifiers plus a key, for example Ctrl+Shift+K.": "该组合无效，请使用修饰键加一个键，例如 Ctrl+Shift+K。",
+  "Another shortcut already uses this combination.": "已有其他快捷键使用了该组合。",
+  "Only the signed-in user can change their own shortcuts.": "只有当前登录用户可以修改自己的快捷键。",
+  "The shortcut registry is authoritative and comes from the server; your overrides are stored per user.": "快捷键注册表以服务端为准，个人覆盖按用户保存。",
+  "The shortcut registry is empty for this deployment.": "当前部署的快捷键注册表为空。",
+  "Sign in to manage your keyboard shortcuts.": "登录后可管理快捷键。",
+};

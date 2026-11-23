@@ -94,7 +94,10 @@ STAGING_STATES = (
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DIRECTORY = re.compile(r"^/var/lib/etcd[A-Za-z0-9._/-]*$")
-_FILE = re.compile(r"^(?P<cluster>[a-z0-9][-a-z0-9.]*)-(?P<stamp>\d{8}T\d{6}Z)\.db$")
+_FILE = re.compile(
+    r"^(?P<cluster>[a-z0-9][-a-z0-9.]*)-(?P<stamp>\d{8}T\d{6}Z)"
+    r"(?:-(?P<runid>[0-9a-f]{8}))?\.db$"
+)
 #: The upgrade executor writes these before it changes a control plane. They
 #: carry the cluster name from this version on; older files only carry the
 #: target version, and are still recognised because the directory belongs to
@@ -122,30 +125,72 @@ def _int(value: Any, *, code: str, low: int, high: int, default: int | None) -> 
 
 
 def disk_verdict(
-    db_size_bytes: int, free_bytes: int, *, min_free_bytes: int
+    db_size_bytes: int,
+    free_bytes: int,
+    *,
+    min_free_bytes: int,
+    staging_bytes: int = 0,
 ) -> dict[str, Any]:
     """Decide whether a snapshot fits, before anything is written.
 
-    ``required`` is one copy of the database plus the floor: a run needs room
-    for the file it is about to write and room to keep operating afterwards.
+    ``required`` is one copy of the database plus the bytes already held by
+    in-flight staging files plus the floor: a run needs room for the file it
+    is about to write, room for the staging another run left behind, and room
+    to keep operating afterwards. ``staging_bytes`` is the occupancy this
+    volume already carries from ``*.db.partial`` files and pending-publish
+    records; omitting it defaults to zero for callers that measure no staging.
+
+    ``min_free_bytes`` of zero keeps the measure-only policy: the run reports
+    the measurements but reserves no post-write floor.
     """
 
     db_size = max(0, int(db_size_bytes))
     free = max(0, int(free_bytes))
-    required = db_size + max(0, int(min_free_bytes))
+    staging = max(0, int(staging_bytes))
+    floor = max(0, int(min_free_bytes))
+    required = db_size + staging + floor
     ok = free >= required
     return {
         "ok": ok,
         "db_size_bytes": db_size,
         "free_bytes": free,
+        "staging_bytes": staging,
+        "occupancy_bytes": staging,
         "required_bytes": required,
-        "min_free_bytes": max(0, int(min_free_bytes)),
+        "min_free_bytes": floor,
         "code": "" if ok else "ETCD_BACKUP_DISK_LOW",
         "detail": (
             f"{free} byte(s) free, {required} required "
-            f"(database {db_size} + floor {max(0, int(min_free_bytes))})"
+            f"(database {db_size} + staging {staging} + floor {floor})"
         ),
     }
+
+
+def staging_occupancy(entries: Any, *, cluster_name: str) -> int:
+    """Sum bytes held by this cluster's in-flight ``*.db.partial`` files.
+
+    Entries are ``{name, size_bytes}`` listings from the backup directory.
+    Only staging files attributable to this cluster count; final snapshots
+    belong to the retained set and are not occupancy against the new write.
+    A listing that carries no readable size contributes zero rather than
+    guessing a size.
+    """
+
+    if not isinstance(entries, list):
+        return 0
+    total = 0
+    for item in entries:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "")
+        if not name.endswith(".db.partial"):
+            continue
+        if not staging_name_belongs(name, cluster_name=cluster_name):
+            continue
+        size = item.get("size_bytes")
+        if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
+            total += size
+    return total
 
 
 def _protect_names(value: Any, *, cluster_name: str) -> tuple[str, ...]:
@@ -332,11 +377,22 @@ def validate_request(
     }
 
 
-def backup_filename(cluster_name: str, *, now: datetime | None = None) -> str:
-    """Return ``<cluster>-<UTC stamp>.db`` for one run."""
+def backup_filename(
+    cluster_name: str, *, now: datetime | None = None, run_id: str | None = None
+) -> str:
+    """Return ``<cluster>-<UTC stamp>.db`` for one run.
+
+    Two runs of the same cluster in the same second would otherwise collide on
+    the second-resolution stamp. A caller that needs a distinct name per run
+    passes an 8-hex ``run_id``; the suffixed name still parses back to the
+    cluster and stamp. Without ``run_id`` the legacy name is unchanged.
+    """
 
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
-    return f"{cluster_name}-{stamp}.db"
+    base = f"{cluster_name}-{stamp}"
+    if run_id:
+        return f"{base}-{run_id}.db"
+    return f"{base}.db"
 
 
 def partial_name(filename: str) -> str:
@@ -363,6 +419,7 @@ def parse_backup_name(name: str, *, cluster_name: str = "") -> dict[str, str] | 
         "name": name,
         "cluster": match.group("cluster"),
         "stamp": match.group("stamp"),
+        "run_id": match.group("runid"),
         "taken_at": taken_at.isoformat(),
     }
 

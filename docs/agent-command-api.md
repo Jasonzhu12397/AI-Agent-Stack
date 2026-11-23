@@ -340,6 +340,37 @@ verifies the file, so a listing never shows a truncated backup. A failed verify
 removes the partial file and stops before retention, which means a broken backup
 never causes an old good one to be deleted.
 
+The pre-write disk verdict counts the bytes already held by in-flight
+`*.db.partial` files (and the pending-publish records that register them), not
+just the live database size: `required` is database + staging occupancy + the
+`min_free_bytes` floor, and the report's `disk` block carries `free_bytes`,
+`occupancy_bytes`, `required_bytes`, the verdict and its code. After the snapshot
+is written the free floor is re-measured once; a post-write shortfall stops the
+run with `ETCD_BACKUP_DISK_POST_WRITE_LOW` instead of pruning afterwards. A
+`min_free_bytes` of zero stays measure-only: measurements are reported, but no
+post-write floor is reserved.
+
+A cleanup that fails (a `rm` of a staging file or sidecar that the pod refused)
+is no longer swallowed: the failure is listed in `cleanup_failures` with its
+path and error, and the file stays on disk so the next sweep retries it. A
+successful removal still reports only in `swept_partials`, whose semantics are
+unchanged.
+
+The backup command forwards its command lease to the executor, which checks the
+lease before saving, before publishing, and before pruning. Once the lease is
+lost the run stops with `COMMAND_LEASE_LOST_DURING_EXECUTION`: it does not
+delete old snapshots and does not overwrite a final file. A verified snapshot
+whose publish was interrupted by the loss keeps its staging file and a
+`pending_publish` sidecar so the next run can republish it; a snapshot already
+published when the lease is lost stays put and retention is skipped.
+
+Two runs of the same cluster in the same second used to collide on the
+second-resolution stamp, and the publish rename could silently overwrite an
+existing final file. The staging path now carries a per-run id, and the final
+name keeps the legacy stamp name unless that final already exists, in which case
+a suffixed non-colliding name is chosen instead; an existing final is never
+overwritten. The suffixed name still parses back to its cluster and stamp.
+
 Retention is expressed in the request, not in a config file, so the scheduler is
 the single place that decides policy: `keep_count` (default 12, floor 2, ceiling
 168), `keep_max_age_hours` (default 8760, i.e. count-only unless a caller asks
@@ -718,9 +749,31 @@ skips the cluster under that code instead of guessing — `bool("false")` is
 The hourly key exists to avoid two snapshots of unchanged data. After an
 upgrade or rollback the data *did* change, so the scheduler's earlier snapshot
 in the same hour describes the state before the change — the one file an
-operator does not want afterwards. The change-triggered backup therefore
-queues under `<key>:change`, its own idempotent slot: one per hour per cause,
-never the stale scheduled command handed back.
+operator does not want afterwards. The change-triggered backup therefore opens
+its own idempotent slot, never the stale scheduled command handed back.
+
+A slot identity names both the reason and the source of the backup:
+
+- The **hourly slot** is the recurring snapshot: one per deployment per hour
+  bucket, shared with the manual run view.
+- The **change slot** is bound to the mutation command that triggered it. Its
+  key is `etcd-backup:<deployment>:<hour>:change:cmd:<command-id>`. The source
+  command id is the change identity: the command row carries the command type,
+  plan hash and payload, so the slot is traceable to the actual mutation. A
+  repeated delivery of the same settled command (result replay) resolves to the
+  same slot; two distinct mutations in the same hour keep two distinct slots.
+
+Distinct changes are not merged within the hour. A merged slot would hand back
+the snapshot that predates the later mutation, which defeats the purpose of the
+change backup. The extra change snapshots share the same keep-count and
+keep-age prune policy resolved when the agent claims the command, and the
+hourly slot itself stays one per hour, so retention pressure stays bounded.
+
+Earlier builds collapsed every change in an hour into one coarse `:change`
+slot. Those historical rows are kept as records but are never reused: no lookup
+falls back to the coarse suffix, so a legacy row cannot become a ghost duplicate
+of a new source-bound slot. Hourly rows keep their original key scheme and are
+still matched and reused.
 
 The insert runs in a savepoint: if the backup cannot be queued (a key
 collision, a database blip) the report of the change is still recorded, and the

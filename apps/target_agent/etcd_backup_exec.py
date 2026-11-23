@@ -13,6 +13,7 @@ go.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -36,6 +37,7 @@ from packages.agent_contracts.etcd_backup import (
     select_prunable,
     snapshot_entries,
     staging_name_belongs,
+    staging_occupancy,
     staging_sidecar_name,
     staging_state_decision,
 )
@@ -48,6 +50,11 @@ STEP_TIMEOUT_SECONDS = 900
 #: at it because it is not a snapshot.
 PARTIAL_STALE_MINUTES = 24 * 60
 ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
+#: Shared with the other mutating actions: a lease lost mid-run stops the
+#: command before it deletes or overwrites anything else.
+COMMAND_LEASE_LOST_DURING_EXECUTION = "COMMAND_LEASE_LOST_DURING_EXECUTION"
+#: Bounded retry when allocating a non-colliding suffixed final name.
+FINAL_NAME_ALLOC_ATTEMPTS = 8
 
 
 class EtcdBackupExecutionError(ValueError):
@@ -102,6 +109,8 @@ class EtcdBackupExecutor:
         self._runner = runner
         self._steps: list[dict[str, Any]] = []
         self._pod = ""
+        self._lease_lost_event: Any = None
+        self._cleanup_failures: list[dict[str, str]] = []
 
     # ------------------------------------------------------------------ steps
     def _step(
@@ -413,11 +422,8 @@ class EtcdBackupExecutor:
                     {"name": name, "directory": directory, "state": STAGING_STATE_ABANDONED}
                 )
                 continue
-            outcome = self._runner(
-                self._pod_shell(["rm", "-f", path]),
-                timeout=STEP_TIMEOUT_SECONDS,
-            )
-            if _ok(outcome):
+            outcome = self._best_effort_remove(path)
+            if outcome["ok"]:
                 removed.append(name)
         return removed
 
@@ -547,9 +553,16 @@ class EtcdBackupExecutor:
                     )
 
     # ------------------------------------------------------------------ run
-    def run(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        request: dict[str, Any],
+        *,
+        now: datetime | None = None,
+        lease_lost_event: Any = None,
+    ) -> dict[str, Any]:
         """Take one snapshot, verify it, publish it, then prune old ones."""
 
+        self._lease_lost_event = lease_lost_event
         stamp_now = now or datetime.now(UTC)
         directory = request["directory"]
         directories = request.get("directories") or [directory]
@@ -557,9 +570,17 @@ class EtcdBackupExecutor:
         # the post-run assessment read this same tuple, instead of each
         # parsing the request payload again and drifting apart.
         protect = tuple(request.get("protect") or ())
-        filename = backup_filename(request["cluster_name"], now=stamp_now)
-        staging = f"{directory}/{partial_name(filename)}"
-        final = f"{directory}/{filename}"
+
+        allocated = self._allocate_final_name(
+            directory, request["cluster_name"], stamp_now
+        )
+        if allocated is None:
+            return self._failed(
+                "ETCD_BACKUP_PUBLISH_NAME_CONFLICT", directory, request
+            )
+        final_name, staged_name = allocated
+        staging = f"{directory}/{partial_name(staged_name)}"
+        final = f"{directory}/{final_name}"
 
         prepare = self._step(
             1,
@@ -601,14 +622,27 @@ class EtcdBackupExecutor:
                 "--write-out=json",
                 f"kubectl -n kube-system exec <etcd-pod> -- df -PB1 {directory}",
             ],
-            detail="measure the live database and the free space before writing",
+            detail="measure the live database, staging occupancy and free space before writing",
         )
-        verdict = self._disk_verdict(directory, request)
+        verdict = self._disk_verdict(directory, request, directories)
         disk["detail"] = verdict["detail"]
         if not verdict["ok"]:
-            return self._failed(verdict["code"], directory, request, verdict=verdict)
+            return self._failed(
+                verdict["code"], directory, request, verdict=verdict
+            )
         disk["status"] = "succeeded"
         disk["exit_code"] = 0
+
+        if self._lease_lost():
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                verdict=verdict,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
 
         save = self._step(
             3,
@@ -627,7 +661,14 @@ class EtcdBackupExecutor:
             # retention will never look at it: it would sit on the volume until
             # the disk filled. Whatever existed before is untouched.
             self._best_effort_remove(staging)
-            return self._failed("ETCD_BACKUP_SAVE_FAILED", directory, request)
+            return self._failed(
+                "ETCD_BACKUP_SAVE_FAILED",
+                directory,
+                request,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
 
         verify = self._step(
             4,
@@ -643,7 +684,63 @@ class EtcdBackupExecutor:
         )
         if not self._finish(verify, result):
             self._best_effort_remove(staging)
-            return self._failed("ETCD_BACKUP_VERIFY_FAILED", directory, request)
+            return self._failed(
+                "ETCD_BACKUP_VERIFY_FAILED",
+                directory,
+                request,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
+
+        # Post-write recheck: the new file has consumed its space, so the
+        # remaining free floor is measured again instead of assumed from the
+        # pre-write verdict. A zero floor stays measure-only.
+        post_write = self._post_write_check(
+            directory, request.get("min_free_bytes", 0)
+        )
+        if not post_write["ok"]:
+            self._best_effort_remove(staging)
+            return self._failed(
+                post_write["code"],
+                directory,
+                request,
+                post_write=post_write,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
+
+        if self._lease_lost():
+            # The verified staging file is kept with a pending-publish record so
+            # the next run can republish it; nothing is deleted or overwritten.
+            record = self._staging_record(
+                cluster_name=request["cluster_name"],
+                partial=partial_name(staged_name),
+                final_name=final_name,
+                directory=directory,
+                now=stamp_now,
+                state=STAGING_STATE_PENDING,
+                attempts=1,
+                last_failure="lease lost before publish",
+            )
+            self._write_staging_state(directory, partial_name(staged_name), record)
+            staging_report.append(
+                {
+                    "name": partial_name(staged_name),
+                    "directory": directory,
+                    "state": STAGING_STATE_PENDING,
+                }
+            )
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                staging_kept=staging,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
 
         publish = self._step(
             5,
@@ -662,18 +759,18 @@ class EtcdBackupExecutor:
             # the age sweep and lets the next run republish it.
             record = self._staging_record(
                 cluster_name=request["cluster_name"],
-                partial=partial_name(filename),
-                final_name=filename,
+                partial=partial_name(staged_name),
+                final_name=final_name,
                 directory=directory,
                 now=stamp_now,
                 state=STAGING_STATE_PENDING,
                 attempts=1,
                 last_failure=_output(result) or "publish rename failed",
             )
-            self._write_staging_state(directory, partial_name(filename), record)
+            self._write_staging_state(directory, partial_name(staged_name), record)
             staging_report.append(
                 {
-                    "name": partial_name(filename),
+                    "name": partial_name(staged_name),
                     "directory": directory,
                     "state": STAGING_STATE_PENDING,
                 }
@@ -683,6 +780,24 @@ class EtcdBackupExecutor:
                 directory,
                 request,
                 staging_kept=staging,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
+
+        if self._lease_lost():
+            # The snapshot is already published; retention must not run under
+            # a lost lease. The new final stays, nothing old is pruned.
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                backup={
+                    "name": final_name,
+                    "path": final,
+                    "verified": True,
+                    "taken_at": stamp_now.isoformat(),
+                },
                 swept_partials=swept,
                 republished=republished,
                 staging=staging_report,
@@ -745,7 +860,7 @@ class EtcdBackupExecutor:
             "cluster_name": request["cluster_name"],
             "execution_mode": "execute",
             "backup": {
-                "name": filename,
+                "name": final_name,
                 "path": final,
                 "verified": True,
                 "taken_at": stamp_now.isoformat(),
@@ -756,6 +871,13 @@ class EtcdBackupExecutor:
             "retention": {
                 "keep_count": request["keep_count"],
                 "keep_max_age_hours": request["keep_max_age_hours"],
+            },
+            "disk": {
+                "free_bytes": verdict.get("free_bytes"),
+                "occupancy_bytes": verdict.get("staging_bytes", 0),
+                "required_bytes": verdict.get("required_bytes"),
+                "verdict": verdict["ok"],
+                "code": verdict["code"],
             },
             "status": report["ok"],
             "findings": report["findings"],
@@ -768,6 +890,7 @@ class EtcdBackupExecutor:
             "swept_partials": swept,
             "republished": republished,
             "staging": staging_report,
+            "cleanup_failures": list(self._cleanup_failures),
         }
         return result
 
@@ -794,16 +917,79 @@ class EtcdBackupExecutor:
         }
 
     # ------------------------------------------------------------------ helpers
-    def _best_effort_remove(self, path: str) -> None:
-        self._runner(self._pod_shell(["rm", "-f", path]), timeout=60)
+    def _lease_lost(self) -> bool:
+        return (
+            self._lease_lost_event is not None
+            and self._lease_lost_event.is_set()
+        )
 
-    def _disk_verdict(self, directory: str, request: dict[str, Any]) -> dict[str, Any]:
-        """Ask the live database its size and the volume its free space.
+    def _best_effort_remove(self, path: str) -> dict[str, Any]:
+        """Remove a staging file or sidecar, reporting the outcome.
+
+        A failed removal is recorded in ``cleanup_failures`` instead of being
+        swallowed: the file stays on disk, so the next run's sweep retries it.
+        A successful removal does not change the ``swept_partials`` semantics,
+        which still list only names this run actually deleted.
+        """
+
+        outcome = self._runner(
+            self._pod_shell(["rm", "-f", path]), timeout=60
+        )
+        if _ok(outcome):
+            return {"ok": True, "error": ""}
+        error = _output(outcome) or "rm failed"
+        self._cleanup_failures.append({"path": path, "error": error})
+        return {"ok": False, "error": error}
+
+    def _allocate_final_name(
+        self, directory: str, cluster_name: str, now: datetime
+    ) -> tuple[str, str] | None:
+        """Pick a non-colliding final name and a distinct staging name.
+
+        The base name carries the second-resolution stamp. If a final file
+        with that name already exists, the run never overwrites it: a suffixed
+        name with a per-run id is used instead. The staging path always carries
+        the per-run id, so two runs in the same second never share a partial
+        path either.
+        """
+
+        base = backup_filename(cluster_name, now=now)
+        existing = {item["name"] for item in self._list_directory(directory)}
+        if base not in existing:
+            staged = backup_filename(
+                cluster_name, now=now, run_id=uuid.uuid4().hex[:8]
+            )
+            return base, staged
+        for _ in range(FINAL_NAME_ALLOC_ATTEMPTS):
+            suffixed = backup_filename(
+                cluster_name, now=now, run_id=uuid.uuid4().hex[:8]
+            )
+            if suffixed not in existing:
+                return suffixed, suffixed
+        return None
+
+    def _staging_occupancy(self, directories: list[str], cluster_name: str) -> int:
+        """Bytes held by this cluster's in-flight staging files across dirs."""
+
+        entries: list[dict[str, Any]] = []
+        for entry_directory in directories:
+            entries.extend(self._list_directory(entry_directory))
+        return staging_occupancy(entries, cluster_name=cluster_name)
+
+    def _disk_verdict(
+        self,
+        directory: str,
+        request: dict[str, Any],
+        directories: list[str],
+    ) -> dict[str, Any]:
+        """Ask the live database its size, the staging occupancy and free space.
 
         Both answers come from the etcd pod: the size from ``endpoint status``
-        and the free space from ``df``. If either cannot be read the run does not
-        guess - a snapshot written into a nearly full volume is worse than a
-        snapshot that was skipped and reported.
+        and the free space from ``df``. If either cannot be read the run does
+        not guess - a snapshot written into a nearly full volume is worse than a
+        snapshot that was skipped and reported. The verdict also counts bytes
+        already held by in-flight ``*.db.partial`` files, so the floor is
+        judged against the volume as it will be after this write.
         """
 
         status = self._runner(
@@ -821,6 +1007,7 @@ class EtcdBackupExecutor:
                 ),
                 "db_size_bytes": None,
                 "free_bytes": None,
+                "staging_bytes": 0,
                 "required_bytes": None,
             }
         free = self._free_bytes(directory)
@@ -831,11 +1018,41 @@ class EtcdBackupExecutor:
                 "detail": f"cannot read free space in {directory}",
                 "db_size_bytes": db_size,
                 "free_bytes": None,
+                "staging_bytes": 0,
                 "required_bytes": None,
             }
+        occupancy = self._staging_occupancy(directories, request["cluster_name"])
         return disk_verdict(
-            db_size, free, min_free_bytes=request.get("min_free_bytes", 0)
+            db_size,
+            free,
+            min_free_bytes=request.get("min_free_bytes", 0),
+            staging_bytes=occupancy,
         )
+
+    def _post_write_check(self, directory: str, floor: int) -> dict[str, Any]:
+        """Re-measure free space after the snapshot file has been written.
+
+        The pre-write verdict assumed the new file's size from the database
+        size; this check confirms the volume still keeps its reserved floor
+        afterwards. A zero floor stays measure-only and never refuses.
+        """
+
+        free = self._free_bytes(directory)
+        if free is None:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_CHECK_FAILED",
+                "free_bytes": None,
+                "required_bytes": None,
+            }
+        if floor > 0 and free < floor:
+            return {
+                "ok": False,
+                "code": "ETCD_BACKUP_DISK_POST_WRITE_LOW",
+                "free_bytes": free,
+                "required_bytes": floor,
+            }
+        return {"ok": True, "free_bytes": free, "required_bytes": floor}
 
     def _free_bytes(self, directory: str) -> int | None:
         listing = self._runner(
@@ -875,6 +1092,7 @@ class EtcdBackupExecutor:
             "swept_partials": [],
             "republished": [],
             "staging": [],
+            "cleanup_failures": list(self._cleanup_failures),
         }
         # Callers pass what they measured so a failed report still explains
         # itself; before this, the extras were accepted and silently dropped.

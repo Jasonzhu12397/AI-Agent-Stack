@@ -5,6 +5,21 @@ wants one now. They must agree on the payload, on what makes a cluster
 unqueueable, and above all on the idempotency key: if the scheduler already
 queued this hour, pressing "back up now" should hand back that command rather
 than take a second snapshot of the same data.
+
+Slot identity is explicit, not a string that happens not to collide:
+
+- The hourly slot answers "the recurring snapshot for this hour". One per
+  deployment per hour bucket; the manual run view shares it.
+- The change slot answers "the snapshot after this specific mutation". It is
+  bound to the source command that triggered it, so a repeated delivery of
+  that command (result replay) reuses one slot, while two distinct mutations in
+  the same hour keep two slots.
+
+Distinct changes are not merged within the hour: a merged slot would hand back
+the snapshot that predates the later mutation, which is the one snapshot an
+operator does not want afterwards. The extra change snapshots share the same
+keep-count / keep-age prune policy resolved when the agent claims the command,
+and the hourly slot itself stays one per hour.
 """
 
 from __future__ import annotations
@@ -191,11 +206,37 @@ def queue_status(
     return command, created, ""
 
 
-#: A backup taken because the cluster just changed is not the same backup as
-#: the one the hourly scheduler took before the change: reusing the hourly key
-#: would answer "already queued" for a snapshot of the state *before* the
-#: change, which is the one snapshot an operator does not want afterwards.
-CHANGE_TRIGGER = "change"
+#: Slot kind that marks the reactive snapshot after one specific mutation
+#: command. The recurring snapshot uses the plain hourly key (see
+#: ``_hourly_slot_key``) and needs no kind suffix.
+SLOT_CHANGE = "change"
+
+
+def _hourly_slot_key(deployment: ClusterDeployment, now: datetime | None) -> str:
+    """The recurring slot key.
+
+    The scheme is unchanged from the original hourly layout so commands queued
+    before the upgrade are still matched and reused instead of being copied.
+    """
+
+    return f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
+
+
+def _change_slot_key(
+    deployment: ClusterDeployment, now: datetime | None, source: AgentCommand
+) -> str:
+    """The reactive slot key, bound to the mutation command that triggered it.
+
+    The source command id is the change identity: it names the actual mutation
+    (its row carries command_type, plan_hash and payload), so a replayed result
+    of the same command resolves to the same slot and two distinct commands do
+    not collapse into one. The key stays under the 128-char idempotency limit.
+    """
+
+    return (
+        f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
+        f":{SLOT_CHANGE}:cmd:{source.id}"
+    )
 
 
 def queue_backup(
@@ -204,13 +245,22 @@ def queue_backup(
     now: datetime | None = None,
     overrides: dict[str, Any] | None = None,
     requested_by: Any = None,
-    trigger: str = "",
+    change_source: AgentCommand | None = None,
 ) -> tuple[AgentCommand | None, bool, str]:
-    """Queue one backup for this deployment, at most once per hour bucket.
+    """Queue one backup for this deployment, at most once per slot identity.
 
     Returns the command, whether this call created it, and the reason nothing
     was queued. A backup needs no approval: it writes a file and prunes by
     policy, and a backup that waits for a human is not a backup.
+
+    Pass ``change_source`` for the reactive snapshot after a mutation; the
+    slot is bound to that command. Without it, the call takes the shared hourly
+    slot for this hour bucket.
+
+    Legacy compatibility: hourly rows keep the original key scheme and are
+    still matched. The old coarse ``:change`` rows are not reused: no lookup
+    falls back to that suffix, so a historical row cannot become a ghost
+    duplicate of a new source-bound slot.
     """
 
     reason = unqueueable_reason(deployment)
@@ -221,10 +271,10 @@ def queue_backup(
         payload = backup_payload(deployment, overrides)
     except EtcdBackupError as exc:
         return None, False, exc.code
-    key = f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
-    if trigger:
-        # Same hour, different reason: its own idempotent slot.
-        key = f"{key}:{trigger}"
+    if change_source is None:
+        key = _hourly_slot_key(deployment, now)
+    else:
+        key = _change_slot_key(deployment, now, change_source)
     command, created = _queue_with_retry(
         deployment.tenant,
         key,

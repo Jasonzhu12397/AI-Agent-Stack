@@ -608,4 +608,7 @@ urlpatterns = [
         AgentPluginDiscoverView.as_view(),
         name="agent-plugin-discover",
     ),
+    path("", include("core.settings_urls")),
+    path("", include("core.billing_urls")),
+    path("", include("core.data_controls_urls")),
 ]

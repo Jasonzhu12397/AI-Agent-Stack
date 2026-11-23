@@ -1,4 +1,7 @@
+import { settingsMessages } from "./settings";
+
 export const zhCN: Record<string, string> = {
+  ...settingsMessages,
   // Navigation and shell
   "Overview": "概览",
   "Model Manager": "模型管理",

@@ -165,6 +165,7 @@ class ModelProvider(models.Model):
     credential_ref = models.CharField(max_length=160, blank=True)
     config = models.JSONField(default=dict)
     enabled = models.BooleanField(default=True)
+    deployment_region = models.CharField(max_length=32, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -392,7 +393,13 @@ class TenantTokenUsage(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="token_usage")
-    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="token_usage")
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="token_usage",
+        null=True,
+        blank=True,
+    )
     agent_run = models.ForeignKey(
         AgentRun,
         on_delete=models.CASCADE,
@@ -407,6 +414,7 @@ class TenantTokenUsage(models.Model):
         null=True,
         blank=True,
     )
+    scope_ref = models.CharField(max_length=160, null=True, blank=True)
     idempotency_key = models.CharField(max_length=160)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
     reserved_tokens = models.PositiveBigIntegerField(default=0)
@@ -426,6 +434,11 @@ class TenantTokenUsage(models.Model):
                 condition=(
                     models.Q(agent_run__isnull=False, workflow_run__isnull=True)
                     | models.Q(agent_run__isnull=True, workflow_run__isnull=False)
+                    | models.Q(
+                        scope_ref__isnull=False,
+                        agent_run__isnull=True,
+                        workflow_run__isnull=True,
+                    )
                 ),
                 name="tenant_token_usage_exactly_one_run",
             ),
@@ -1408,4 +1421,5 @@ class AuditEvent(models.Model):
         raise ValueError("Audit events cannot be deleted through the model API.")
 
 
+from core import billing_models, data_controls_models, settings_models  # noqa: E402,F401
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401

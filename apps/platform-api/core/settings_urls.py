@@ -1,0 +1,67 @@
+from django.urls import path
+
+from core.settings_views import (
+    AboutView,
+    AccountIdentitiesView,
+    AccountProfileView,
+    AccountSessionRevokeView,
+    AccountSessionsView,
+    FeedbackListCreateView,
+    ProjectSettingsView,
+    ShortcutRegistryView,
+    TenantSettingsView,
+    UserPreferenceView,
+)
+
+urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/settings/<str:section>/",
+        TenantSettingsView.as_view(),
+        name="tenant-settings",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/settings/<str:section>/",
+        ProjectSettingsView.as_view(),
+        name="project-settings",
+    ),
+    path(
+        "api/v1/users/me/preferences/<str:namespace>/",
+        UserPreferenceView.as_view(),
+        name="user-preferences",
+    ),
+    path(
+        "api/v1/meta/shortcuts/",
+        ShortcutRegistryView.as_view(),
+        name="meta-shortcuts",
+    ),
+    path(
+        "api/v1/meta/about/",
+        AboutView.as_view(),
+        name="meta-about",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/feedback/",
+        FeedbackListCreateView.as_view(),
+        name="tenant-feedback",
+    ),
+    path(
+        "api/v1/users/me/",
+        AccountProfileView.as_view(),
+        name="account-profile",
+    ),
+    path(
+        "api/v1/users/me/identities/",
+        AccountIdentitiesView.as_view(),
+        name="account-identities",
+    ),
+    path(
+        "api/v1/users/me/sessions/",
+        AccountSessionsView.as_view(),
+        name="account-sessions",
+    ),
+    path(
+        "api/v1/users/me/sessions/<str:session_key>/revoke/",
+        AccountSessionRevokeView.as_view(),
+        name="account-session-revoke",
+    ),
+]

@@ -1,0 +1,61 @@
+from django.urls import path
+
+from core.billing_views import (
+    BillingCapabilitiesView,
+    OrderCloseView,
+    OrderDetailView,
+    OrderListCreateView,
+    OrderRefundView,
+    PaymentCallbackView,
+    PlansView,
+    SubscriptionView,
+    UsageView,
+)
+
+urlpatterns = [
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/capabilities/",
+        BillingCapabilitiesView.as_view(),
+        name="billing-capabilities",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/plans/",
+        PlansView.as_view(),
+        name="billing-plans",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/",
+        SubscriptionView.as_view(),
+        name="billing-subscription",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/usage/",
+        UsageView.as_view(),
+        name="billing-usage",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/orders/",
+        OrderListCreateView.as_view(),
+        name="billing-orders",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/",
+        OrderDetailView.as_view(),
+        name="billing-order-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/close/",
+        OrderCloseView.as_view(),
+        name="billing-order-close",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/refund/",
+        OrderRefundView.as_view(),
+        name="billing-order-refund",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/payments/<str:channel>/callback/",
+        PaymentCallbackView.as_view(),
+        name="billing-payment-callback",
+    ),
+]

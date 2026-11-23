@@ -1629,7 +1629,9 @@ def execute(
             }
         executor = EtcdBackupExecutor(_run_read_only)
         try:
-            backup_result = executor.run(backup_request)
+            backup_result = executor.run(
+                backup_request, lease_lost_event=lease_lost_event
+            )
         except Exception as exc:  # the executor names its own refusals
             code = getattr(exc, "code", "ETCD_BACKUP_EXECUTION_FAILED")
             detail = getattr(exc, "detail", str(exc))
