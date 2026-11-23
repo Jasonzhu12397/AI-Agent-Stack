@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ("core", "0034_agentcommand_expired_status"),
+        ("core", "0042_billing_order_entitlement_grant"),
     ]
 
     operations = [
