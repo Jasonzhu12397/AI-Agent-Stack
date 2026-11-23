@@ -33,6 +33,13 @@ class Plan(models.Model):
     currency = models.CharField(max_length=8, default="CNY")
     token_quota_daily = models.PositiveBigIntegerField(default=0)
     token_quota_monthly = models.PositiveBigIntegerField(default=0)
+    # Fallback quotas applied to the tenant budget once the subscription has
+    # lapsed (expired or cancelled at period end). Zero means the budget is
+    # closed after expiry; there is no carry-over of the paid quota.
+    token_quota_daily_expired = models.PositiveBigIntegerField(default=0)
+    token_quota_monthly_expired = models.PositiveBigIntegerField(default=0)
+    # Free-trial length in days. Zero means the plan offers no trial.
+    trial_days = models.PositiveSmallIntegerField(default=0)
     features = models.JSONField(default=list)
     region_scope = models.CharField(
         max_length=16,
@@ -53,6 +60,7 @@ class Plan(models.Model):
 class Subscription(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        TRIALING = "trialing", "Trialing"
         ACTIVE = "active", "Active"
         PAST_DUE = "past_due", "Past due"
         CANCELLED = "cancelled", "Cancelled"
@@ -60,6 +68,19 @@ class Subscription(models.Model):
 
     class RenewalMode(models.TextChoices):
         MANUAL = "manual", "Manual"
+
+    # Allowed forward transitions. Cancelled and expired are terminal states;
+    # any backwards move is rejected by the service layer with a contract
+    # error code. A period-end cancellation only lands in ``cancelled`` when
+    # the settlement job runs after ``current_period_end``.
+    TRANSITIONS = {
+        Status.PENDING: {Status.TRIALING, Status.ACTIVE},
+        Status.TRIALING: {Status.ACTIVE, Status.EXPIRED},
+        Status.ACTIVE: {Status.PAST_DUE, Status.CANCELLED, Status.EXPIRED},
+        Status.PAST_DUE: {Status.ACTIVE, Status.CANCELLED, Status.EXPIRED},
+        Status.CANCELLED: set(),
+        Status.EXPIRED: set(),
+    }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(
@@ -93,6 +114,24 @@ class Subscription(models.Model):
                 name="uniq_subscription_tenant_plan",
             )
         ]
+
+    def can_transition(self, target: str) -> bool:
+        return target in self.TRANSITIONS.get(self.status, set())
+
+    def transition(self, target: str) -> None:
+        """Move to ``target`` when the state machine allows it.
+
+        Raises ``ValueError`` for backwards or otherwise illegal moves.
+        """
+
+        if target == self.status:
+            return
+        if not self.can_transition(target):
+            raise ValueError(
+                f"Subscription {self.id} cannot transition from {self.status} to {target}"
+            )
+        self.status = target
+        self.save()
 
 
 class Order(models.Model):

@@ -16,12 +16,14 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core import subscription_service
 from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
 from core.billing_models import EntitlementGrant, Order, Plan, Subscription
 from core.models import AuditEvent, ModelProvider, Tenant, TenantTokenBudget
 from core.payments import registry
 from core.permissions import IsTenantAdmin
+from core.subscription_service import SubscriptionStateError
 from core.token_budget import (
     get_tenant_token_usage,
     get_tenant_usage_history,
@@ -97,6 +99,9 @@ def _subscription_dict(subscription: Subscription | None) -> dict | None:
         else None,
         "cancel_at_period_end": subscription.cancel_at_period_end,
         "renewal_mode": subscription.renewal_mode,
+        "cancel_effective_at": subscription.current_period_end.isoformat()
+        if subscription.cancel_at_period_end and subscription.current_period_end
+        else None,
     }
 
 
@@ -170,6 +175,97 @@ class SubscriptionView(TenantScopedView):
         )
         return Response(
             {"subscription": _subscription_dict(subscription), "source": "authoritative"}
+        )
+
+
+class _SubscriptionAdminView(TenantScopedView):
+    def get_permissions(self):
+        return [IsAuthenticated(), IsTenantAdmin()]
+
+
+def _subscription_error(exc: SubscriptionStateError):
+    return _error(
+        exc.code,
+        exc.message,
+        details=exc.details,
+        http_status=exc.http_status,
+    )
+
+
+class SubscriptionTrialView(_SubscriptionAdminView):
+    def post(self, request, tenant_id):
+        tenant = self.get_tenant()
+        plan_code = str(request.data.get("plan_code", "")).strip()
+        if not plan_code:
+            return _error(
+                "SUBSCRIPTION_PLAN_REQUIRED",
+                "plan_code is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        plan = get_object_or_404(Plan, code=plan_code, active=True)
+        try:
+            subscription = subscription_service.start_trial(
+                tenant=tenant, plan=plan, request=request
+            )
+        except SubscriptionStateError as exc:
+            return _subscription_error(exc)
+        return Response(
+            {"subscription": _subscription_dict(subscription)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SubscriptionCancelView(_SubscriptionAdminView):
+    def post(self, request, tenant_id):
+        tenant = self.get_tenant()
+        subscription = get_object_or_404(Subscription.objects.filter(tenant=tenant))
+        mode = str(request.data.get("mode", "period_end")).strip() or "period_end"
+        try:
+            subscription = subscription_service.cancel_subscription(
+                subscription=subscription, mode=mode, request=request
+            )
+        except SubscriptionStateError as exc:
+            return _subscription_error(exc)
+        return Response({"subscription": _subscription_dict(subscription)})
+
+
+class SubscriptionRenewView(_SubscriptionAdminView):
+    def post(self, request, tenant_id):
+        tenant = self.get_tenant()
+        subscription = get_object_or_404(Subscription.objects.filter(tenant=tenant))
+        order_id = str(request.data.get("order_id", "")).strip()
+        if not order_id:
+            return _error(
+                "SUBSCRIPTION_RENEWAL_ORDER_REQUIRED",
+                "order_id is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        order = get_object_or_404(Order.objects.filter(tenant=tenant), pk=order_id)
+        try:
+            subscription, grant = subscription_service.renew_subscription(
+                subscription=subscription, order=order, request=request
+            )
+        except SubscriptionStateError as exc:
+            return _subscription_error(exc)
+        return Response(
+            {
+                "subscription": _subscription_dict(subscription),
+                "grant": {"id": str(grant.id), "tokens": grant.tokens},
+            }
+        )
+
+
+class SubscriptionSettleView(_SubscriptionAdminView):
+    def post(self, request, tenant_id):
+        tenant = self.get_tenant()
+        settled = subscription_service.settle_due_subscriptions(
+            request=request, tenant=tenant
+        )
+        return Response(
+            {
+                "count": len(settled),
+                "settled": [_subscription_dict(item) for item in settled],
+            }
         )
 
 
