@@ -1,34 +1,51 @@
 """Payment provider abstraction and shared credential-reference resolution.
 
 Credentials are never stored inline. Every secret is referenced as an
-``env://NAME`` or ``vault://path`` string and resolved at call time. A provider
+``env://NAME`` or ``vault://mount/path#field`` string and resolved at call time
+through the platform credential resolver, so payment channels follow exactly the
+same reference syntax and allowlist rules as plugin connectors. A provider
 whose required references do not resolve reports ``is_configured() == False``
 and stays out of the registry.
 """
 
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+from django.conf import settings
+
+from core.plugin_credentials import CredentialError, resolve_plaintext
+
+DEFAULT_PAYMENT_ENV_PREFIXES = ("WECHATPAY_", "ALIPAY_")
+
+
+def payment_env_prefixes() -> tuple[str, ...]:
+    """Environment variable prefixes a payment channel may read."""
+
+    configured = getattr(
+        settings, "PAYMENT_CREDENTIAL_ENV_PREFIXES", DEFAULT_PAYMENT_ENV_PREFIXES
+    )
+    prefixes = tuple(str(prefix) for prefix in configured if str(prefix))
+    return prefixes or DEFAULT_PAYMENT_ENV_PREFIXES
 
 
 def resolve_credential_ref(ref: str | None) -> str | None:
     """Resolve a secret reference to its plaintext value, or ``None``.
 
-    ``env://NAME`` reads the process environment. ``vault://path`` references
-    the platform secret resolver; an unresolved vault reference means the
-    provider is not configured in this deployment.
+    ``None`` means the reference did not resolve in this deployment, which keeps
+    the channel out of the registry instead of failing a request. Resolution is
+    delegated to ``core.plugin_credentials.resolve_plaintext``: environment
+    lookups are confined to the payment prefixes, and ``vault://`` references
+    are read from the deployment's secret store rather than silently ignored.
     """
 
     if not ref:
         return None
-    if ref.startswith("env://"):
-        name = ref[len("env://") :]
-        value = os.environ.get(name, "").strip()
-        return value or None
-    if ref.startswith("vault://"):
+    try:
+        value = resolve_plaintext(ref, env_prefixes=payment_env_prefixes())
+    except CredentialError:
         return None
-    return None
+    return value or None
 
 
 @dataclass

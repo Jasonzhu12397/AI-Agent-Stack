@@ -183,6 +183,16 @@ PLUGIN_CREDENTIAL_RESOLVER = os.getenv(
 PLUGIN_CREDENTIAL_ENV_PREFIX = os.getenv(
     "PLUGIN_CREDENTIAL_ENV_PREFIX", "PLUGIN_SECRET_"
 ).strip()
+# Payment channels resolve secrets through the same credential resolver, limited
+# to these environment prefixes so an unrelated process variable cannot become a
+# merchant key. Comma-separated override for deployments with other naming.
+PAYMENT_CREDENTIAL_ENV_PREFIXES = tuple(
+    prefix.strip()
+    for prefix in os.getenv(
+        "PAYMENT_CREDENTIAL_ENV_PREFIXES", "WECHATPAY_,ALIPAY_"
+    ).split(",")
+    if prefix.strip()
+)
 BMC_CREDENTIAL_RESOLVER = os.getenv("BMC_CREDENTIAL_RESOLVER", "").strip()
 BMC_VAULT_ADDR = os.getenv("BMC_VAULT_ADDR", "").strip()
 BMC_VAULT_TOKEN = os.getenv("BMC_VAULT_TOKEN", "").strip()
