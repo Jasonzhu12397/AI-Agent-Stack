@@ -3,6 +3,55 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(ellipse at 75% 0%, #17233c 0, #080d18 48%); }
 a { color: inherit; text-decoration: none; }
+/* Element Plus token layer for the dark workspace shell.
+ *
+ * Components read --el-* variables, so the palette belongs here once instead of
+ * being re-patched per component. Without this the library falls back to its
+ * light defaults: dark text on a dark card, light fills behind light labels.
+ */
+:root {
+  --el-color-primary: #4269dc;
+  --el-color-primary-light-3: #6b8ce4;
+  --el-color-primary-light-5: #8ea8ec;
+  --el-color-primary-light-7: #2f4d9e;
+  --el-color-primary-light-9: #182b4f;
+  --el-color-success-light-9: #122a24;
+  --el-color-warning-light-9: #2a2417;
+  --el-color-danger-light-9: #2b1a1c;
+  --el-color-info-light-9: #1a2436;
+  --el-color-success-light-8: #1a3a31;
+  --el-color-warning-light-8: #3a3120;
+  --el-color-danger-light-8: #3b2427;
+  --el-color-info-light-8: #223047;
+  --el-color-success: #3fbf8f;
+  --el-color-warning: #e8b34b;
+  --el-color-danger: #f26d6d;
+  --el-color-info: #93a1b7;
+  --el-bg-color: #111a2a;
+  --el-bg-color-page: #080d18;
+  --el-bg-color-overlay: #131d30;
+  --el-text-color-primary: #e8edf7;
+  --el-text-color-regular: #c7d2e3;
+  --el-text-color-secondary: #93a1b7;
+  --el-text-color-placeholder: #6b7a93;
+  --el-text-color-disabled: #53627a;
+  --el-border-color: #28364d;
+  --el-border-color-light: #263146;
+  --el-border-color-lighter: #223047;
+  --el-border-color-extra-light: #1b2739;
+  --el-border-color-dark: #34435c;
+  --el-fill-color: #16233a;
+  --el-fill-color-light: #16233a;
+  --el-fill-color-lighter: #111a2a;
+  --el-fill-color-extra-light: #0e1726;
+  --el-fill-color-blank: #0b1321;
+  --el-fill-color-dark: #0b1321;
+  --el-mask-color: rgba(8, 13, 24, 0.82);
+  --el-card-bg-color: #111a2a;
+  --el-disabled-bg-color: #16233a;
+  --el-disabled-text-color: #6b7a93;
+}
+
 .shell { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
 .topbar { height: 84px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #263146; }
 .brand { display: flex; align-items: center; gap: 12px; font-size: 16px; letter-spacing: -.3px; }
@@ -525,6 +574,64 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .main-nav a.active { color: #dce7ff; border-color: #344c78; background: #182744; }
 
 /* Settings center layout */
+/* Settings primitives.
+ *
+ * Every class here is referenced by a settings template. They are declared in
+ * one place because an undefined class silently collapses layout: the page
+ * renders, but headings lose the card palette and grids fall back to a single
+ * column. tests/settings-styles.test.mjs fails when a new class is referenced
+ * without a definition.
+ */
+.settings-page { display: grid; gap: 16px; }
+.settings-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.settings-page__header h2 { margin: 0; font-size: 24px; letter-spacing: -0.6px; color: #e8edf7; }
+.settings-page__description {
+  margin: 8px 0 0;
+  max-width: 72ch;
+  color: #93a1b7;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.settings-page__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-page__body { display: grid; gap: 16px; }
+.settings-page__footer { display: flex; gap: 10px; flex-wrap: wrap; }
+.settings-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.settings-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #e8edf7;
+  font-size: 15px;
+  font-weight: 600;
+}
+.settings-price { margin: 0; color: #e8edf7; font-size: 20px; letter-spacing: -0.4px; }
+.settings-tag { max-width: 100%; }
+.settings-scope { color: #93a1b7; font-size: 12px; }
+.settings-form { display: grid; gap: 14px; }
+.settings-form .el-form-item { margin-bottom: 0; }
+.settings-inline-error { margin: 4px 0; }
+.settings-filter-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-pagination { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.settings-loading { display: grid; gap: 10px; color: #93a1b7; font-size: 13px; }
+.settings-unavailable { margin: 0; }
+.settings-confirm-checkbox { margin-top: 6px; }
+.settings-connector-installation {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #263146;
+}
+.settings-nav { display: grid; gap: 18px; }
+
 .settings-layout { padding: 28px 0 48px; display: grid; gap: 18px; }
 .settings-layout__context {
   display: flex;
@@ -572,13 +679,15 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   border-left: 2px solid #536fd0;
 }
 
+/* The card root only holds a header and a body; padding and rhythm belong to
+ * those two slots, otherwise the root adds a second inset and an extra gap. */
 .settings-card {
-  padding: 20px;
+  padding: 0;
   background: #111a2a;
   border: 1px solid #28364d;
   border-radius: 12px;
-  display: grid;
-  gap: 12px;
+  overflow: hidden;
+  color: #c7d2e3;
 }
 .settings-card h3 { margin: 0; font-size: 15px; }
 .settings-card__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -625,3 +734,14 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   .settings-usage-row { grid-template-columns: 1fr; }
   .settings-list__item { flex-direction: column; align-items: flex-start; }
 }
+
+/* el-card paints its header and body separately; pin them to the dark surface
+ * so a settings card never shows a light band. */
+.settings-card .el-card__header {
+  padding: 14px 18px;
+  background: #16233a;
+  border-bottom: 1px solid #263146;
+  color: #e8edf7;
+}
+.settings-card .el-card__body { padding: 16px 18px; display: grid; gap: 12px; color: #c7d2e3; }
+.settings-card .el-card__header .el-tag { margin-left: auto; }
