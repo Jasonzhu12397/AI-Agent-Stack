@@ -17,10 +17,8 @@ Requires ``docker`` and ``openssl`` on PATH.
 from __future__ import annotations
 
 import hashlib
-import http.client
 import json
 import shutil
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -110,29 +108,36 @@ def request(
     *,
     client_cert: bool = True,
     forged_fingerprint: bool = False,
-) -> tuple[int, dict | str]:
-    context = ssl.create_default_context(cafile=str(directory / "ca.crt"))
+) -> tuple[int, str]:
+    """Issue the HTTPS probe with curl.
+
+    curl is the same client the original check used; it handles the 1-day test
+    chain and sends the client certificate the proxy demands without relying on
+    Python's OpenSSL binding details.
+    """
+    body = directory / "response.json"
+    command = [
+        "curl", "--silent", "--show-error",
+        "--cacert", str(directory / "ca.crt"),
+        "--output", str(body),
+        "--write-out", "%{http_code}",
+        "--max-time", "10",
+    ]
     if client_cert:
-        context.load_cert_chain(
-            str(directory / "client.crt"), str(directory / "client.key")
-        )
-    connection = http.client.HTTPSConnection(
-        "localhost", port, context=context, timeout=10
-    )
-    headers = {}
+        command += [
+            "--cert", str(directory / "client.crt"),
+            "--key", str(directory / "client.key"),
+        ]
     if forged_fingerprint:
-        headers["X-Verified-Client-Cert-SHA256"] = "forged-value"
+        command += ["-H", "X-Verified-Client-Cert-SHA256: forged-value"]
+    command.append(f"https://localhost:{port}{path}")
+    result = subprocess.run(command, text=True, capture_output=True)
+    payload = body.read_text(encoding="utf-8") if body.is_file() else ""
     try:
-        connection.request("GET", path, headers=headers)
-        response = connection.getresponse()
-        body = response.read().decode()
-        status = response.status
-    finally:
-        connection.close()
-    try:
-        return status, json.loads(body)
-    except json.JSONDecodeError:
-        return status, body
+        status = int(result.stdout.strip() or "0")
+    except ValueError:
+        status = 0
+    return status, payload
 
 
 def fingerprint(certificate: Path) -> str:
@@ -181,22 +186,23 @@ def main() -> None:
             ])
 
             expected = fingerprint(directory / "client.crt")
-            payload: dict | str = ""
+            payload: dict = {}
+            status = 0
             for _ in range(30):
-                try:
-                    status, payload = request(
-                        port, directory, HEARTBEAT_PATH, forged_fingerprint=True
-                    )
-                except (ssl.SSLError, OSError):
-                    time.sleep(1)
-                    continue
+                status, raw = request(
+                    port, directory, HEARTBEAT_PATH, forged_fingerprint=True
+                )
                 if status == 200:
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        payload = {}
                     break
                 time.sleep(1)
+            if status != 200:
+                fail(f"The mTLS ingress never answered the heartbeat request (HTTP {status})")
             if not payload:
-                fail("The mTLS ingress never answered the heartbeat request")
-            if not isinstance(payload, dict):
-                fail(f"Unexpected heartbeat payload: {payload!r}")
+                fail("The mTLS ingress returned an unreadable heartbeat payload")
             if payload.get("path") != HEARTBEAT_PATH:
                 fail(f"Unexpected forwarded path: {payload}")
             if payload.get("forwarded_proto") != "https":
@@ -207,10 +213,7 @@ def main() -> None:
                     f"{payload}"
                 )
 
-            try:
-                status, _ = request(port, directory, HEARTBEAT_PATH, client_cert=False)
-            except ssl.SSLError:
-                status = 0
+            status, _ = request(port, directory, HEARTBEAT_PATH, client_cert=False)
             if status == 200:
                 fail("The mTLS ingress accepted a client without a certificate.")
 

@@ -77,6 +77,10 @@ def expand_manifest(manifest: Path, destination: Path) -> None:
 
 
 def load_module(name: str, path: Path):
+    # The modules under apps/ and packages/ import each other by repository-
+    # rooted names, so the repository root must be importable first.
+    if str(ROOT_DIR) not in sys.path:
+        sys.path.insert(0, str(ROOT_DIR))
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
