@@ -2,7 +2,7 @@ export const messages: Record<string, string> = {
   // Account group navigation labels
   "Account Management": "账户管理",
   "Standard Plan": "标准套餐",
-  "Subscription & Usage Management": "订阅与用量管理",
+  "Subscription & Usage Management": "订阅与额度管理",
   "Account": "账户",
 
   // Account page strings
@@ -16,7 +16,7 @@ export const messages: Record<string, string> = {
   "Bound identities": "已绑定身份",
   "Active sessions": "活跃会话",
   "Current session": "当前会话",
-  "Revoke": "吊销",
+  "Revoke": "撤销",
   "Revoke session": "吊销会话",
   "Confirm session revocation": "确认吊销会话",
   "Last source IP": "最后来源 IP",

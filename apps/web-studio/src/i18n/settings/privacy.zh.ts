@@ -3,7 +3,7 @@ export const messages: Record<string, string> = {
   "Active grants": "生效授权",
   "Subject": "主体",
   "Permission": "权限",
-  "Scope": "范围",
+  "Scope": "作用域",
   "Granted at": "授予时间",
   "Revoke grant": "撤销授权",
   "Revoke": "撤销",

@@ -1,5 +1,5 @@
 export const messages: Record<string, string> = {
-  "Archived Content": "已归档内容",
+  "Archived Content": "归档内容",
   "Search archived items": "搜索归档项",
   "Item type": "条目类型",
   "All types": "全部类型",

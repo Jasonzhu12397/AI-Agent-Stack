@@ -189,7 +189,12 @@ void pageLabels;
       @close="actionError = ''"
     />
 
-    <el-dialog v-model="deletingItem !== null" :title="t('Delete archived item')" width="520px">
+    <el-dialog
+      :model-value="deletingItem !== null"
+      :title="t('Delete archived item')"
+      width="520px"
+      @update:model-value="(open: boolean) => { if (!open) deletingItem = null }"
+    >
       <template v-if="deletingItem">
         <p>
           <strong>{{ deletingItem.name }}</strong>

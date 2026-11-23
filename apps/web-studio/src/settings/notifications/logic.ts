@@ -104,7 +104,7 @@ export const pageLabels = [
   "Event categories",
   "Delivery channels",
   "In-app",
-  "Email",
+  "Email channel",
   "Webhook",
   "Digest frequency",
   "User delivery preferences",

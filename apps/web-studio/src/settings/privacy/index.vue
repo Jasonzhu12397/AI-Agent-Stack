@@ -235,7 +235,12 @@ void pageLabels;
       @close="actionError = ''"
     />
 
-    <el-dialog v-model="revokeTarget !== null" :title="t('Revoke grant')" width="520px">
+    <el-dialog
+      :model-value="revokeTarget !== null"
+      :title="t('Revoke grant')"
+      width="520px"
+      @update:model-value="(open: boolean) => { if (!open) revokeTarget = null }"
+    >
       <template v-if="revokeTarget">
         <p>
           <strong>{{ revokeTarget.subject }}</strong>

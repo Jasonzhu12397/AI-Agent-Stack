@@ -100,7 +100,7 @@ void pageLabels;
         <el-table-column label="Event categories">
           <template #default="{ row }">{{ t(cellLabel(row.category)) }}</template>
         </el-table-column>
-        <el-table-column v-for="channel in CHANNELS" :key="channel" :label="t(channel === 'in_app' ? 'In-app' : channel === 'email' ? 'Email' : 'Webhook')">
+        <el-table-column v-for="channel in CHANNELS" :key="channel" :label="t(channel === 'in_app' ? 'In-app' : channel === 'email' ? 'Email channel' : 'Webhook')">
           <template #default="{ row }">
             <el-checkbox
               :model-value="cellValue(row.category, channel)"
@@ -130,7 +130,7 @@ void pageLabels;
             v-for="channel in CHANNELS"
             :key="channel"
             v-model="delivery[channel]"
-            :label="t(channel === 'in_app' ? 'In-app' : channel === 'email' ? 'Email' : 'Webhook')"
+            :label="t(channel === 'in_app' ? 'In-app' : channel === 'email' ? 'Email channel' : 'Webhook')"
           />
         </el-collapse-item>
       </el-collapse>

@@ -3,7 +3,7 @@ export const messages: Record<string, string> = {
   "Event categories": "事件类别",
   "Delivery channels": "投递渠道",
   "In-app": "站内",
-  "Email": "邮件",
+  "Email channel": "邮件",
   "Webhook": "Webhook",
   "Digest frequency": "摘要频率",
   "User delivery preferences": "用户投递偏好",
@@ -21,7 +21,7 @@ export const messages: Record<string, string> = {
   "No notification rules are defined for this tenant yet.": "该租户尚未定义通知规则。",
   "Only tenant members can read notification rules; administrators can change them.": "仅租户成员可查看通知规则，管理员可修改。",
   "This notification setting no longer exists on the server.": "该通知设置项在服务端已不存在。",
-  "The server rejected a value; check the highlighted field.": "服务端拒绝了该值，请检查高亮字段。",
+  "The server rejected a value; check the highlighted field.": "服务端拒绝了该取值，请检查高亮字段。",
   "Only tenant administrators can change tenant notification rules.": "仅租户管理员可修改租户通知规则。",
   "Notification rules could not be saved.": "通知规则保存失败。",
 };

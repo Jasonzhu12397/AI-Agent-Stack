@@ -21,7 +21,7 @@ export const messages: Record<string, string> = {
   "Default": "默认值",
   "Source layer": "来源层",
   "Updated": "更新时间",
-  "Defaults": "默认值集合",
+  "Defaults": "默认值",
   "Effective": "生效值",
   "No settings available for this scope.": "当前作用域暂无设置。",
   "Tenant setting": "租户设置",

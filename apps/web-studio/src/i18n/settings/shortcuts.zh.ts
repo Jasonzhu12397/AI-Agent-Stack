@@ -1,5 +1,5 @@
 export const messages: Record<string, string> = {
-  "Keyboard Shortcuts": "快捷键设置",
+  "Keyboard Shortcuts": "键盘快捷键",
   "Shortcut reference": "快捷键说明",
   "Default combination": "默认组合",
   "Your combination": "你的组合",
