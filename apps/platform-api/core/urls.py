@@ -602,6 +602,7 @@ urlpatterns = [
         name="model-test",
     ),
     path("", include("core.plugin_agent_urls")),
+    path("", include("core.agent_marketplace_catalog_urls")),
     path(
         "api/v1/tenants/<uuid:tenant_id>/agent-plugins/<uuid:plugin_id>/discover/",
         AgentPluginDiscoverView.as_view(),
