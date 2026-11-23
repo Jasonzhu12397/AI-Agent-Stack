@@ -116,7 +116,9 @@ or corrupt cache must fall back to the server value and then to `defaults` (dete
 
 ```
 GET  .../billing/capabilities/        -> {"payment": {"available": bool, "channels": ["wechat","alipay"],
-                                        "reason_code": "PAYMENT_PROVIDER_NOT_CONFIGURED"|null}}
+                                        "reason_code": "PAYMENT_PROVIDER_NOT_CONFIGURED"|null,
+                                        "diagnostics": [{"channel","configured","missing":[slot],
+                                        "required":[slot]}]}}   (slot names only, never a reference URI)
 GET  .../billing/plans/               -> {"results":[Plan...]}      (each with purchasable: bool, reason_code)
 GET  .../billing/subscription/        -> {"subscription": Subscription|null, "source": "authoritative"}
 GET  .../billing/usage/               -> limits + used + period + history[]  (authoritative, from
@@ -143,8 +145,13 @@ GET  .../billing/orders/<id>/         (includes payment instructions when paid-p
 `core/payments/` with `base.py` (`PaymentProvider` ABC: `create_payment`, `verify_callback`, `query_order`,
 `refund`, `channel`), `wechat_v3.py`, `alipay.py`, `fake.py`, `registry.py`.
 
-- Credentials only as `env://NAME` / `vault://path` refs resolved at call time; absence of every ref keeps the
-  provider out of the registry (→ capabilities unavailable).
+- Credentials only as `env://NAME` / `vault://mount/path#field` refs resolved through the platform credential
+  resolver (`core.plugin_credentials.resolve_plaintext`), with `env` lookups confined to
+  `PAYMENT_CREDENTIAL_ENV_PREFIXES` (default `WECHATPAY_,ALIPAY_`). Absence of a required ref keeps the
+  provider out of the registry (→ capabilities unavailable). Onboarding sequence:
+  `docs/payment-credentials.md`; self-check: `python manage.py check_payment_channels`.
+- Readiness is declared per adapter (`SLOTS` / `REQUIRED_SLOTS`) and `is_configured()` derives from it, so
+  diagnostics, the registry filter and the ops command cannot disagree.
 - Signature verification is fail-closed: bad/missing signature → 400 `PAYMENT_SIGNATURE_INVALID` + audit.
 - `fake.py` is a test double used by tests only, selected through explicit settings override, never by default.
 
