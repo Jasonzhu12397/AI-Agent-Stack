@@ -2914,3 +2914,73 @@ def test_a_failed_change_and_an_unrelated_command_queue_nothing():
             "node.health", AgentCommand.Status.SUCCEEDED, {"upgrade_performed": True}
         )
     )
+
+
+@pytest.mark.django_db
+def test_a_backup_that_cannot_be_queued_does_not_lose_the_report_of_a_change(
+    node_workspace,
+):
+    from unittest.mock import patch
+
+    from core.agent_node_views import _queue_change_backup
+    from core.models import AuditEvent, ClusterDeployment
+
+    user, tenant, project, _ = node_workspace
+    eph = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="eph-for-hook",
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash="e" * 64,
+    )
+    target = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-for-hook",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        credential_hash="t" * 64,
+        cluster_name="edge-lab",
+    )
+    deployment = ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=eph,
+        target_node=target,
+        requested_by=user,
+        cluster_name="edge-lab",
+        kubernetes_version="v1.34.3",
+        idempotency_key="hook-failure",
+        status=ClusterDeployment.Status.SUCCEEDED,
+    )
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "edge-lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        result={"upgrade_performed": True},
+        requested_by=user,
+        deployment=deployment,
+    )
+
+    from django.db import IntegrityError
+
+    with patch(
+        "core.agent_node_views.queue_backup",
+        side_effect=IntegrityError("duplicate key"),
+    ):
+        # The report of a real change must survive a bookkeeping collision.
+        _queue_change_backup(command)
+
+    assert AuditEvent.objects.filter(
+        event_type="cluster.etcd_backup.queue_failed",
+        resource_id=deployment.id,
+    ).exists()
+
+    with patch("core.agent_node_views.queue_backup") as queued:
+        _queue_change_backup(command)
+
+    assert queued.call_args.kwargs["trigger"] == "change"

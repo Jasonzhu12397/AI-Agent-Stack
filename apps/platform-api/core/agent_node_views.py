@@ -4,6 +4,7 @@ import ipaddress
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import ssl
@@ -3142,15 +3143,7 @@ class AgentRuntimeResultView(APIView):
                             ]
                         )
         if _changed_the_cluster(command) and command.deployment is not None:
-            # The run that just changed the cluster made every existing
-            # snapshot describe a past state. Take one now, in the same
-            # transaction as the result, so "changed the cluster" and "has a
-            # snapshot of the result" cannot drift apart.
-            queue_backup(
-                command.deployment,
-                requested_by=command.requested_by,
-                trigger="change",
-            )
+            _queue_change_backup(command)
         return Response(
             {
                 "id": str(command.id),
@@ -3160,6 +3153,47 @@ class AgentRuntimeResultView(APIView):
                 ),
             }
         )
+
+
+logger = logging.getLogger(__name__)
+
+
+def _queue_change_backup(command) -> None:
+    """Queue the snapshot that follows a change, never at the cost of the report.
+
+    The run that just changed the cluster made every existing snapshot describe
+    a past state, so one is queued in the same transaction as the result and
+    "changed the cluster" and "has a snapshot of the result" cannot drift apart.
+    The insert is a savepoint, though: a collision or a database blip must not
+    take the report down with it, or the change stays invisible while the agent
+    retries a result it can never deliver. The failure is audited instead.
+    """
+
+    deployment = command.deployment
+    try:
+        with transaction.atomic():
+            queue_backup(
+                deployment,
+                requested_by=command.requested_by,
+                trigger="change",
+            )
+    except Exception:  # noqa: BLE001 - a bookkeeping hook must not fail the report
+        logger.exception(
+            "could not queue the backup after command %s", command.id
+        )
+        try:  # pragma: no cover - best effort audit
+            record_audit_event(
+                None,
+                deployment.tenant,
+                "cluster.etcd_backup.queue_failed",
+                "cluster_deployment",
+                deployment.id,
+                project=deployment.project,
+                outcome="failure",
+                metadata={"command_id": str(command.id)},
+            )
+        except Exception:  # noqa: BLE001 - the audit must not resurrect the failure
+            logger.exception("could not audit the failed backup queue")
 
 
 class AgentProjectCommandListView(APIView):

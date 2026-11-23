@@ -33,6 +33,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - A change-triggered backup queues under its own key suffix instead of reusing
   the hour's scheduled command, whose snapshot describes the state before the
   change.
+- Queueing the snapshot after a change runs in a savepoint, so a collision
+  cannot cost the platform the report of a change that really happened; the
+  failure is audited as `cluster.etcd_backup.queue_failed`.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather

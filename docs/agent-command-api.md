@@ -622,3 +622,8 @@ in the same hour describes the state before the change — the one file an
 operator does not want afterwards. The change-triggered backup therefore
 queues under `<key>:change`, its own idempotent slot: one per hour per cause,
 never the stale scheduled command handed back.
+
+The insert runs in a savepoint: if the backup cannot be queued (a key
+collision, a database blip) the report of the change is still recorded, and the
+failure appears as a `cluster.etcd_backup.queue_failed` audit event rather than
+as a 5xx that leaves the agent retrying a result it cannot deliver.
