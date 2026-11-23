@@ -4,14 +4,17 @@ import re
 from urllib.parse import urlsplit
 
 from django.db import IntegrityError, transaction
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core import agent_plugin_manifest
+from core.agent_capability_router import invalidate_installation
 from core.audit import record_audit_event
 from core.models import (
+    AgentCapabilityInvocation,
     AgentPluginDefinition,
     AgentPluginInstallation,
     Project,
@@ -390,12 +393,28 @@ class AgentPluginInstallationListCreateView(APIView):
             return Response({"detail": "Project editor permission required."}, status=403)
 
         plugin_id = request.data.get("plugin_id")
+        plugin_key = request.data.get("plugin_key")
         if not isinstance(plugin_id, str):
-            return Response({"detail": "plugin_id is required."}, status=400)
-        plugin = get_object_or_404(
-            AgentPluginDefinition.objects.filter(tenant=tenant, enabled=True),
-            pk=plugin_id,
-        )
+            plugin_id = None
+        if not isinstance(plugin_key, str):
+            plugin_key = None
+        if not plugin_id and not plugin_key:
+            return Response({"detail": "plugin_id or plugin_key is required."}, status=400)
+
+        plugin_queryset = AgentPluginDefinition.objects.filter(tenant=tenant, enabled=True)
+        if plugin_id:
+            plugin = get_object_or_404(plugin_queryset, pk=plugin_id)
+        else:
+            plugin_version = request.data.get("plugin_version")
+            if plugin_version is not None and not isinstance(plugin_version, str):
+                return Response({"detail": "plugin_version must be a string."}, status=400)
+            key_query = plugin_queryset.filter(plugin_key=plugin_key)
+            if plugin_version:
+                plugin = get_object_or_404(key_query, version=plugin_version)
+            else:
+                plugin = key_query.order_by("-created_at").first()
+                if plugin is None:
+                    raise Http404("Agent plugin definition does not exist.")
         granted = request.data.get("granted_capabilities", [])
         capability_error = _validate_capabilities(granted)
         if capability_error:
@@ -420,7 +439,12 @@ class AgentPluginInstallationListCreateView(APIView):
             )
         if plugin.auth_required and not credential_ref:
             return Response(
-                {"detail": "A credential reference is required for this agent plugin."},
+                {
+                    "detail": (
+                        "credential_ref is required for this agent plugin; "
+                        "provide a secret reference, not a credential value."
+                    )
+                },
                 status=400,
             )
         if not plugin.auth_required and credential_ref:
@@ -429,32 +453,116 @@ class AgentPluginInstallationListCreateView(APIView):
                 status=400,
             )
 
-        installation, created = AgentPluginInstallation.objects.get_or_create(
-            tenant=tenant,
-            project=project,
-            plugin=plugin,
-            defaults={
-                "plugin_version": plugin.version,
-                "granted_capabilities": granted,
-                "credential_ref": credential_ref,
-                "installed_by": request.user,
-            },
+        installation = (
+            AgentPluginInstallation.objects.select_related("plugin")
+            .filter(tenant=tenant, project=project, plugin=plugin)
+            .first()
         )
-        if not created:
-            return Response(
-                {"detail": "Agent plugin is already installed in this project."},
-                status=409,
+        revived = False
+        if installation is None:
+            installation = AgentPluginInstallation(
+                tenant=tenant,
+                project=project,
+                plugin=plugin,
+                plugin_version=plugin.version,
+                granted_capabilities=granted,
+                credential_ref=credential_ref,
+                installed_by=request.user,
             )
-        record_audit_event(
-            request,
-            tenant,
-            "agent_plugin.installed",
-            "agent_plugin_installation",
-            installation.id,
-            project=project,
-            metadata={"plugin_key": plugin.plugin_key, "granted_capabilities": granted},
+            created = True
+        elif installation.status == AgentPluginInstallation.Status.UNINSTALLED:
+            # Reinstall a previously uninstalled record: revive it instead of
+            # creating a duplicate row or returning a conflict.
+            installation.status = AgentPluginInstallation.Status.INSTALLED
+            installation.plugin_version = plugin.version
+            installation.granted_capabilities = granted
+            installation.credential_ref = credential_ref
+            installation.installed_by = request.user
+            created = False
+            revived = True
+        else:
+            # installed/disabled: idempotent; leave state and grants untouched.
+            created = False
+
+        try:
+            installation.save()
+        except IntegrityError:
+            installation = get_object_or_404(
+                AgentPluginInstallation.objects.select_related("plugin"),
+                tenant=tenant,
+                project=project,
+                plugin=plugin,
+            )
+            created = False
+            revived = False
+
+        if created or revived:
+            record_audit_event(
+                request,
+                tenant,
+                "agent_plugin.installed",
+                "agent_plugin_installation",
+                installation.id,
+                project=project,
+                metadata={"plugin_key": plugin.plugin_key, "granted_capabilities": granted},
+            )
+        status_code = 201 if created else 200
+        return Response(_installation_data(installation), status=status_code)
+
+
+class AgentCapabilityListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id, project_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        project = _project_for_user(request, tenant, project_id)
+        installations = (
+            AgentPluginInstallation.objects.filter(
+                tenant=tenant,
+                project=project,
+                status=AgentPluginInstallation.Status.INSTALLED,
+            ).select_related("plugin")
         )
-        return Response(_installation_data(installation), status=201)
+        entries = []
+        for installation in installations:
+            plugin = installation.plugin
+            if not plugin.enabled:
+                continue
+            for definition in agent_plugin_manifest.declared_capabilities(plugin):
+                name = definition.get("name")
+                if not name:
+                    continue
+                last = (
+                    AgentCapabilityInvocation.objects.filter(
+                        installation=installation, capability=name
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+                entries.append(
+                    {
+                        "name": name,
+                        "plugin_key": plugin.plugin_key,
+                        "plugin_version": installation.plugin_version,
+                        "protocol": plugin.protocol,
+                        "risk_level": definition.get("risk_level", "low"),
+                        "installation_id": str(installation.id),
+                        "input_schema": definition.get("input_schema", {}),
+                        "last_invocation": (
+                            {
+                                "status": last.status,
+                                "error_code": last.error_code,
+                                "created_at": last.created_at,
+                            }
+                            if last
+                            else None
+                        ),
+                    }
+                )
+        entries.sort(
+            key=lambda item: (item["name"], item["plugin_key"], item["installation_id"])
+        )
+        return Response({"capabilities": entries})
 
 
 class AgentPluginInstallationStatusView(APIView):
@@ -484,6 +592,8 @@ class AgentPluginInstallationStatusView(APIView):
         previous_status = installation.status
         installation.status = status_value
         installation.save(update_fields=["status", "updated_at"])
+        if status_value == AgentPluginInstallation.Status.UNINSTALLED:
+            invalidate_installation(installation)
         record_audit_event(
             request,
             installation.tenant,

@@ -993,6 +993,35 @@ class AgentPluginInstallation(models.Model):
         ]
 
 
+class AgentCapabilityInvocation(models.Model):
+    class Status(models.TextChoices):
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        REJECTED = "rejected", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    installation = models.ForeignKey(
+        AgentPluginInstallation,
+        on_delete=models.CASCADE,
+        related_name="capability_invocations",
+    )
+    capability = models.CharField(max_length=100)
+    protocol = models.CharField(max_length=16)
+    status = models.CharField(max_length=16, choices=Status.choices)
+    error_code = models.CharField(max_length=64, blank=True)
+    latency_ms = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["installation", "capability", "created_at"],
+                name="agent_cap_invocation_idx",
+            )
+        ]
+
+
 class PluginDefinition(models.Model):
     class ConnectorType(models.TextChoices):
         NATIVE = "native", "Native"

@@ -34,6 +34,7 @@ from core.tool_approvals import (
     expire_pending_tool_approvals,
     validate_execution_checkpoint,
 )
+from core.agent_capability_router import register_invalidation_hook
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
@@ -309,6 +310,16 @@ def fail_task(task_id, lease_token, error, retryable=True):
 
 TOOL_ROUTER = ToolRouter()
 logger = logging.getLogger(__name__)
+
+
+def _invalidate_installation_handlers(installation: object) -> None:
+    """Drop every in-process handler bound to the uninstalled plugin."""
+    plugin_key = getattr(getattr(installation, "plugin", None), "plugin_key", None)
+    if plugin_key:
+        TOOL_ROUTER.unregister(plugin_key)
+
+
+register_invalidation_hook(_invalidate_installation_handlers)
 
 
 def _record_connector_tool_event(task, tool, connection, outcome):

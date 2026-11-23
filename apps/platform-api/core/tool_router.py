@@ -180,6 +180,31 @@ class ToolRouter:
             )
         return (plugin_key, plugin_version, tool_name) in self._handlers
 
+    def unregister(
+        self,
+        plugin_key: str,
+        tool_name: str | None = None,
+        plugin_version: str | None = None,
+    ) -> int:
+        """Remove matched handlers idempotently and return the removed count.
+
+        Both registered key shapes are covered: ``(plugin_key, tool)`` and
+        ``(plugin_key, plugin_version, tool)``. Repeated calls return zero and
+        never raise.
+        """
+        removed = 0
+        for key in list(self._handlers):
+            if key[0] != plugin_key:
+                continue
+            if tool_name is not None and key[-1] != tool_name:
+                continue
+            if plugin_version is not None:
+                if len(key) != 3 or key[1] != plugin_version:
+                    continue
+            del self._handlers[key]
+            removed += 1
+        return removed
+
     def execute(
         self,
         *,
