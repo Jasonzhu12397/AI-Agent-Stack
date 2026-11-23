@@ -119,7 +119,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workspace-sidebar .el-input__inner, .task-create .el-input__inner { color: #121f28; }
 .task-create { display: flex; gap: 10px; margin: 20px 0; }
 .task-create .el-input { flex: 1; }
-.task-table { width: 100%; margin-top: 10px; --el-table-bg-color: #111a2a; --el-table-tr-bg-color: #111a2a; --el-table-header-bg-color: #172338; --el-table-row-hover-bg-color: #1a2940; --el-table-border-color: #28364d; --el-table-text-color: #c7d2e3; --el-table-header-text-color: #91a3c0; }
+.task-table { width: 100%; margin-top: 10px; }
 .task-note { margin: 16px 0 0; color: #566976; font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) { .workspace-grid { grid-template-columns: 1fr; } .task-create { flex-direction: column; } .workspace-heading { align-items: flex-start; flex-direction: column; } }
 
