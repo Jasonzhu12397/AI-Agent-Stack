@@ -128,6 +128,95 @@ def test_usage_history_groups_settled_consumption_by_period_and_source(usage_set
 
 
 @pytest.mark.django_db
+def test_usage_payload_remaining_equals_limit_minus_used(usage_setup):
+    owner, _, tenant = usage_setup
+    now = timezone.now()
+    _settle(
+        tenant,
+        key="usage-rem-under-1",
+        scope_ref="rag-ingest:doc-1",
+        consumed=20_000,
+        settled_at=now,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    response = client.get(_usage_url(tenant.id))
+
+    assert response.status_code == 200
+    body = response.data
+    assert body["daily_used"] == 20_000
+    assert body["monthly_used"] == 20_000
+    assert body["remaining_daily"] == 80_000
+    assert body["remaining_monthly"] == 980_000
+    assert body["remaining_daily"] >= 0
+    assert body["remaining_monthly"] >= 0
+
+
+@pytest.mark.django_db
+def test_usage_payload_remaining_floors_at_zero_when_usage_exceeds_limit(usage_setup):
+    owner, _, tenant = usage_setup
+    budget = TenantTokenBudget.objects.get(tenant=tenant)
+    budget.monthly_limit = 100_000
+    budget.save(update_fields=["monthly_limit", "updated_at"])
+    now = timezone.now()
+    _settle(
+        tenant,
+        key="usage-rem-over-1",
+        scope_ref="rag-retrieve:proj-1",
+        consumed=120_000,
+        settled_at=now,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    response = client.get(_usage_url(tenant.id))
+
+    assert response.status_code == 200
+    body = response.data
+    assert body["daily_used"] == 120_000
+    assert body["monthly_used"] == 120_000
+    # Overspent ledger rows must never project a negative remaining quota.
+    assert body["remaining_daily"] == 0
+    assert body["remaining_monthly"] == 0
+
+
+@pytest.mark.django_db
+def test_usage_payload_exposes_reset_times_and_limits_source(usage_setup):
+    owner, _, tenant = usage_setup
+    now = timezone.now()
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    response = client.get(_usage_url(tenant.id))
+
+    assert response.status_code == 200
+    body = response.data
+    # Daily reset shares the exact local day boundary with ``period_end``.
+    assert body["reset_at"] == body["period_end"]
+    reset_at = datetime.fromisoformat(body["reset_at"])
+    period_end = datetime.fromisoformat(body["period_end"])
+    assert reset_at == period_end
+
+    month_reset = datetime.fromisoformat(body["monthly_reset_at"])
+    local_now = timezone.localtime(now)
+    expected_month_reset = local_now.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    if expected_month_reset.month == 12:
+        expected_month_reset = expected_month_reset.replace(
+            year=expected_month_reset.year + 1, month=1
+        )
+    else:
+        expected_month_reset = expected_month_reset.replace(
+            month=expected_month_reset.month + 1
+        )
+    assert month_reset == expected_month_reset
+
+    assert body["limits_source"] == "tenant_budget"
+
+
+@pytest.mark.django_db
 def test_usage_history_ignores_released_and_unsettled_rows(usage_setup):
     owner, _, tenant = usage_setup
     now = timezone.now()
