@@ -769,3 +769,37 @@ def test_a_staging_name_is_attributed_to_the_cluster_that_wrote_it():
         "snapshot-pre-other-v1.34.1-20260102T000000Z.db.partial", cluster_name="lab"
     )
     assert not staging_name_belongs("notes.db.partial", cluster_name="lab")
+
+
+def test_a_cluster_with_only_pre_upgrade_snapshots_reports_what_may_be_pruned():
+    now = datetime(2026, 11, 23, 12, tzinfo=UTC)
+    entries = snapshot_entries(
+        [
+            {"name": f"snapshot-pre-lab-v1.34.{index}-{stamp}.db"}
+            for index, stamp in (
+                (1, "20261001T000000Z"),
+                (2, "20261002T000000Z"),
+                (3, "20261003T000000Z"),
+            )
+        ],
+        cluster_name="lab",
+    )
+
+    report = assess(
+        entries,
+        keep_count=2,
+        keep_max_age_hours=8760,
+        max_age_hours=8760,
+        pre_upgrade_keep_max_age_hours=168,
+        now=now,
+    )
+
+    # No recurring backup exists, so the set is not healthy...
+    assert report["ok"] is False
+    # ...but the old pre-upgrade files are past their policy and a run would
+    # delete them: this report must not claim there is nothing to prune.
+    prunable = [entry["name"] for entry in report["prunable"]]
+    assert prunable == [
+        "snapshot-pre-lab-v1.34.1-20261001T000000Z.db",
+        "snapshot-pre-lab-v1.34.2-20261002T000000Z.db",
+    ]

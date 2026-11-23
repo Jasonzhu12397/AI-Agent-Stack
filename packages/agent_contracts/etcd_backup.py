@@ -514,6 +514,19 @@ def assess(
     # recurring backup has run: a cluster that was upgraded on its first day
     # would otherwise be told no snapshot exists while one sits on disk.
     point = restore_point(entries, now=current)
+    # Retention is decided from the whole listing, not from the periodic slice:
+    # a cluster whose only snapshots are pre-upgrade ones still has files that
+    # outlive their policy, and a status report that called nothing prunable
+    # while a run would delete them would be a different answer to the same
+    # question.
+    prunable = select_prunable(
+        entries,
+        keep_count=keep_count,
+        keep_max_age_hours=keep_max_age_hours,
+        pre_upgrade_keep_max_age_hours=pre_upgrade_keep_max_age_hours,
+        now=current,
+        protect=protect,
+    )
     if not periodic:
         findings.append(
             {
@@ -546,7 +559,7 @@ def assess(
             "oldest": None,
             "pre_upgrade_count": len(pre_upgrade),
             "pre_upgrade": public_entries(pre_upgrade),
-            "prunable": [],
+            "prunable": public_entries(prunable),
             "restore_point": point,
             "findings": findings,
             "ok": False,
@@ -564,14 +577,6 @@ def assess(
                 f"{newest_age:.1f}h old (limit {max_age_hours}h)"
             ),
         }
-    )
-    prunable = select_prunable(
-        entries,
-        keep_count=keep_count,
-        keep_max_age_hours=keep_max_age_hours,
-        pre_upgrade_keep_max_age_hours=pre_upgrade_keep_max_age_hours,
-        now=current,
-        protect=protect,
     )
     findings.append(
         {

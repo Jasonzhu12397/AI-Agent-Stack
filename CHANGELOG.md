@@ -48,6 +48,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The scheduler and the watchdog now share one definition of "which deployment
   speaks for this cluster" (`core/installed_clusters.py`), so a superseded
   reinstall record cannot be queued twice or watched as a dead cluster.
+- A cluster whose only snapshots are pre-upgrade ones now reports the files its
+  retention policy would delete, instead of reporting nothing to prune because
+  no recurring backup exists yet.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather
