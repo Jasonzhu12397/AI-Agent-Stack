@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A change-triggered backup queues under its own key suffix instead of reusing
+  the hour's scheduled command, whose snapshot describes the state before the
+  change.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather

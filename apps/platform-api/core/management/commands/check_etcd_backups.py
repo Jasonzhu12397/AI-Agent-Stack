@@ -20,18 +20,6 @@ from core.etcd_backup_alert import deliver
 from core.etcd_backup_state import etcd_backup_state
 from core.models import AuditEvent, ClusterDeployment
 
-PROBLEM_CODES = frozenset(
-    {
-        "ETCD_BACKUP_MISSING",
-        "ETCD_BACKUP_STALE",
-        "ETCD_BACKUP_NOT_RUN_YET",
-        # Same symptom as STALE, different cause and different fix: the process
-        # that takes backups is gone, so nothing will ever refresh this cluster.
-        "ETCD_BACKUP_SCHEDULER_SILENT",
-        "ETCD_BACKUP_LAST_RUN_FAILED",
-        "ETCD_BACKUP_RUN_STUCK",
-    }
-)
 SCHEDULER_SILENCE_HOURS = 2
 PROBLEM_EVENT = "cluster.etcd_backup.problem"
 RECOVERED_EVENT = "cluster.etcd_backup.recovered"
@@ -79,6 +67,9 @@ class Command(BaseCommand):
             elif not policy.get("enabled", True):
                 code = "ETCD_BACKUP_DISABLED"
             else:
+                # Any finding that is not ok is a problem: the state decides
+                # what "not ok" means, and duplicating the list of codes here
+                # is how the two would drift.
                 codes = [
                     finding["code"]
                     for finding in state["findings"]

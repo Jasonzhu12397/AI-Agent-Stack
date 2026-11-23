@@ -1691,10 +1691,10 @@ onUnmounted(() => {
               >etcd backups are switched off for this cluster by policy</small>
               <template v-if="backupStates[scope.row.id] && backupStates[scope.row.id].enabled !== false">
                 <el-tag
-                  :type="backupStates[scope.row.id].stale ? 'warning' : 'success'"
+                  :type="backupStates[scope.row.id].ok ? 'success' : (backupStates[scope.row.id].stale ? 'warning' : 'danger')"
                   size="small"
                   effect="plain"
-                >{{ backupStates[scope.row.id].stale ? "stale" : "fresh" }}</el-tag>
+                >{{ backupStates[scope.row.id].ok ? "fresh" : (backupStates[scope.row.id].stale ? "stale" : "backup failing") }}</el-tag>
                 <small class="fleet-version-current">
                   {{ backupStates[scope.row.id].newest?.name || "no snapshot yet" }}
                   · {{ backupAgeLabel(backupStates[scope.row.id]) }}

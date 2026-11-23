@@ -183,12 +183,20 @@ def queue_status(
     return command, created, ""
 
 
+#: A backup taken because the cluster just changed is not the same backup as
+#: the one the hourly scheduler took before the change: reusing the hourly key
+#: would answer "already queued" for a snapshot of the state *before* the
+#: change, which is the one snapshot an operator does not want afterwards.
+CHANGE_TRIGGER = "change"
+
+
 def queue_backup(
     deployment: ClusterDeployment,
     *,
     now: datetime | None = None,
     overrides: dict[str, Any] | None = None,
     requested_by: Any = None,
+    trigger: str = "",
 ) -> tuple[AgentCommand | None, bool, str]:
     """Queue one backup for this deployment, at most once per hour bucket.
 
@@ -206,6 +214,9 @@ def queue_backup(
     except EtcdBackupError as exc:
         return None, False, exc.code
     key = f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
+    if trigger:
+        # Same hour, different reason: its own idempotent slot.
+        key = f"{key}:{trigger}"
     command, created = _queue_with_retry(
         deployment.tenant,
         key,

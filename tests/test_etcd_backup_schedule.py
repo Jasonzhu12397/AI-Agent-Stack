@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from io import StringIO
 
@@ -417,3 +418,25 @@ def test_a_hand_edited_switch_is_skipped_with_its_own_code():
     assert report["queued"] == []
     assert report["skipped"][0]["reason"] == "ETCD_BACKUP_ENABLED_INVALID"
     assert not AgentCommand.objects.filter(command_type=ACTION).exists()
+
+
+@pytest.mark.django_db
+def test_a_backup_after_a_change_is_not_the_scheduled_one():
+    from core.etcd_backup_queue import queue_backup
+
+    user, tenant, project, eph, target = _workspace()
+    deployment = _deployment(tenant, project, eph, target, user)
+    moment = datetime.datetime(2026, 11, 23, 3, 10, tzinfo=datetime.UTC)
+    scheduled, _, _ = queue_backup(deployment, now=moment)
+    assert scheduled is not None
+
+    # The scheduled command covers state from before the change: a change made
+    # in the same hour needs its own snapshot, not that old one handed back.
+    after, created, _ = queue_backup(deployment, now=moment, trigger="change")
+    assert created is True
+    assert after.id != scheduled.id
+    assert after.idempotency_key.endswith(":change")
+
+    again, created, _ = queue_backup(deployment, now=moment, trigger="change")
+    assert created is False
+    assert again.id == after.id

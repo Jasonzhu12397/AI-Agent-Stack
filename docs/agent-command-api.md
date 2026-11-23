@@ -613,3 +613,12 @@ boolean. A hand-edited `"false"`, `0` or `"no"` is reported as
 `ETCD_BACKUP_ENABLED_INVALID` by the view and the watchdog, and the scheduler
 skips the cluster under that code instead of guessing — `bool("false")` is
 `True`, and either guess switches backups the wrong way half the time.
+
+### A backup after a change is its own backup
+
+The hourly key exists to avoid two snapshots of unchanged data. After an
+upgrade or rollback the data *did* change, so the scheduler's earlier snapshot
+in the same hour describes the state before the change — the one file an
+operator does not want afterwards. The change-triggered backup therefore
+queues under `<key>:change`, its own idempotent slot: one per hour per cause,
+never the stale scheduled command handed back.

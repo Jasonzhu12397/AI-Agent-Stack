@@ -3146,7 +3146,11 @@ class AgentRuntimeResultView(APIView):
             # snapshot describe a past state. Take one now, in the same
             # transaction as the result, so "changed the cluster" and "has a
             # snapshot of the result" cannot drift apart.
-            queue_backup(command.deployment, requested_by=command.requested_by)
+            queue_backup(
+                command.deployment,
+                requested_by=command.requested_by,
+                trigger="change",
+            )
         return Response(
             {
                 "id": str(command.id),
