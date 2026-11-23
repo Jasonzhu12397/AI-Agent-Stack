@@ -1059,7 +1059,8 @@ class AgentCapabilityInvocation(models.Model):
         related_name="capability_invocations",
     )
     capability = models.CharField(max_length=100)
-    protocol = models.CharField(max_length=16)
+    # Wide enough for every declared protocol token (openai_compatible is 17 chars).
+    protocol = models.CharField(max_length=32)
     status = models.CharField(max_length=16, choices=Status.choices)
     error_code = models.CharField(max_length=64, blank=True)
     latency_ms = models.PositiveIntegerField(default=0)
