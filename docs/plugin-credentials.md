@@ -82,6 +82,43 @@ failure; they must never return an empty or anonymous credential.
 - A JSON array, a non-object JSON value, or malformed JSON is rejected with
   `CREDENTIAL_INVALID_SHAPE`.
 
+### Built-in `vault` provider
+
+`vault://<mount>/<path>#<field>` reads a secret from a HashiCorp Vault KV v2
+mount. The field fragment is optional and defaults to `value`.
+
+- Reference shape: `vault://secret/research-agent#api_key`. The mount must be
+  `[A-Za-z0-9_-]+`, the path segments must be safe identifier parts (no `.` or
+  `..` traversal), and the optional field must be `[A-Za-z0-9_-]+`.
+- Configuration is read from Django settings with an environment-variable
+  fallback; no entry is added to `settings.py`:
+  - `PLUGIN_VAULT_ADDR` / `PLUGIN_VAULT_ADDR` env: Vault origin. HTTPS is
+    enforced. Plain HTTP is allowed only when the host is `127.0.0.1` or
+    `localhost` and `PLUGIN_VAULT_ALLOW_INSECURE` is enabled (default `false`).
+  - `PLUGIN_VAULT_TOKEN` / `PLUGIN_VAULT_TOKEN` env: static Vault token.
+  - `PLUGIN_VAULT_TOKEN_RESOLVER` / `PLUGIN_VAULT_TOKEN_RESOLVER` env: dotted
+    Python path to a no-argument callable that returns a token; it takes
+    precedence over the static token.
+  - `PLUGIN_VAULT_TIMEOUT_SECONDS` / env: request timeout in seconds, default
+    `5`.
+- Transport: `GET {addr}/v1/{mount}/data/{path}` with the `X-Vault-Token`
+  header. Redirects are disabled, the timeout is bounded, and the response
+  body is capped at 1 MiB. The token and resolved secret are never written to
+  logs, exception messages, audit metadata or the database.
+- A plain string field value is returned as a bearer token. A JSON object with
+  `type` `header` or `query` (and matching `name`/`value` strings) selects that
+  injection point; a `bearer` object with a `token` string is also accepted.
+- Failure mapping:
+  - No address, no token, or an unavailable token resolver →
+    `CREDENTIAL_RESOLVER_NOT_CONFIGURED`.
+  - Malformed mount/path/field, or a non-permitted address scheme →
+    `CREDENTIAL_REFERENCE_INVALID` / `CREDENTIAL_RESOLVER_NOT_CONFIGURED` as
+    listed below.
+  - Vault `404` → `CREDENTIAL_NOT_FOUND`; `401`/`403` →
+    `CREDENTIAL_ACCESS_DENIED`.
+  - Non-object document, missing field, or a value that does not match a
+    supported contract → `CREDENTIAL_INVALID_SHAPE`.
+
 ## Error codes
 
 All resolver exceptions inherit `core.tool_router.ToolExecutionError` and carry
@@ -90,12 +127,12 @@ execution failures.
 
 | Code | Condition |
 |------|-----------|
-| `CREDENTIAL_RESOLVER_NOT_CONFIGURED` | `PLUGIN_CREDENTIAL_RESOLVER` is empty; no resolver callable is wired. |
-| `CREDENTIAL_REFERENCE_INVALID` | The reference is missing, blank, malformed, contains whitespace, or exceeds the length limit. |
+| `CREDENTIAL_RESOLVER_NOT_CONFIGURED` | `PLUGIN_CREDENTIAL_RESOLVER` is empty; no resolver callable is wired. For the `vault` provider: Vault address/token is missing, the token resolver is unavailable, or the address is not a permitted HTTPS origin. |
+| `CREDENTIAL_REFERENCE_INVALID` | The reference is missing, blank, malformed, contains whitespace, exceeds the length limit, or has an invalid Vault mount/path/field. |
 | `CREDENTIAL_PROVIDER_UNSUPPORTED` | The URI scheme has no registered provider. |
-| `CREDENTIAL_NOT_FOUND` | The provider could not locate the credential (variable missing, outside the prefix allowlist, or denied by the source). |
-| `CREDENTIAL_INVALID_SHAPE` | The resolved value or its JSON encoding does not match a supported credential contract. |
-| `CREDENTIAL_ACCESS_DENIED` | The configured resolver raised an unexpected internal error while resolving the reference. |
+| `CREDENTIAL_NOT_FOUND` | The provider could not locate the credential (variable missing, outside the prefix allowlist, Vault `404`, or denied by the source). |
+| `CREDENTIAL_INVALID_SHAPE` | The resolved value or its JSON encoding does not match a supported credential contract; the Vault document is not an object, the field is missing, or the response exceeds the size limit. |
+| `CREDENTIAL_ACCESS_DENIED` | Vault `401`/`403`, a transport/timeout failure, or an unexpected internal error while resolving the reference. |
 
 ## Leak-prevention constraints
 
@@ -120,17 +157,11 @@ failure aborts the operation before the HTTP client or transport is
 constructed. The connector never falls back to an unauthenticated or anonymous
 request.
 
-## Future providers: Vault / KMS
+## Extending the provider registry
 
-External secret managers are expected to be added as additional registered
-providers rather than changing the connector flow. A future implementation
-would, for example, register a `vault` scheme:
-
-- `vault://mount/path#key` resolves through a Vault or KMS client configured
-  from platform settings;
-- the provider reads a short-lived wrapping token from its own environment
-  variables, never from the reference URI;
-- access failures map to `CREDENTIAL_ACCESS_DENIED` or `CREDENTIAL_NOT_FOUND`;
-- cached leases are renewed or discarded according to the provider TTL.
-
-No Vault or KMS provider is implemented in this change.
+External secret managers are added as additional registered providers rather
+than changing the connector flow. A provider receives the full reference URI,
+returns one of the supported credential contracts, and raises a
+`CredentialError` subclass on any failure. The built-in `env` and `vault`
+providers follow this contract; cached leases, when introduced, are renewed or
+discarded according to the provider TTL.

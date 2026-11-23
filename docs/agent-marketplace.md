@@ -148,11 +148,84 @@ capability API exposes the latest invocation per installation and capability.
 | GET/POST | `/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-plugin-installations/` | List/install project installations |
 | POST | `/api/v1/agent-plugin-installations/{installation_id}/status/` | Enable, disable or uninstall an installation |
 | GET | `/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-capabilities/` | List active capabilities visible to the project |
+| GET | `/api/v1/tenants/{tenant_id}/marketplace/catalog/` | Browse registered plugins with per-project installation state |
+| GET | `/api/v1/tenants/{tenant_id}/marketplace/catalog/{plugin_key}/` | Read one catalog entry with full manifest capability detail |
 
 The capability list returns only `installed` installations of enabled plugins.
 Each entry carries `name`, `plugin_key`, `plugin_version`, `protocol`,
 `risk_level`, `installation_id`, `input_schema` and `last_invocation`
 (`{status, error_code, created_at}` or `null`).
+
+## Read-only marketplace catalog
+
+`GET /api/v1/tenants/{tenant_id}/marketplace/catalog/` lets the frontend browse
+registered plugin definitions before installing them. The endpoint is a pure
+GET: it writes nothing to the database and never triggers remote discovery or
+synchronization.
+
+### Query parameters
+
+- `project_id` (UUID, optional): installation scope. When omitted, every
+  entry is reported as not installed in the scope (`installed=false`,
+  `installation_status=not_installed`, `installation_id=null`,
+  `project_id=null`); the catalog can be opened from the browser without a
+  project context. An unknown or inaccessible project returns `404`.
+- `capability`: case-insensitive substring match against declared capability
+  names. As a fallback it also matches the plugin `name` and `description`.
+- `protocol`: exact match against a registered protocol (`http_json`, `mcp`,
+  `a2a`); an unknown value returns `400`.
+- `installed`: `true` or `false`; filters on whether an installation exists
+  in the scoped project with a status other than `uninstalled`. Any other
+  value returns `400`.
+
+### Catalog entry contract
+
+```json
+{
+  "plugin_key": "market-agent-a",
+  "name": "Market Agent A",
+  "description": "Summarizes research reports",
+  "version": "1.2.0",
+  "protocol": "http_json",
+  "enabled": true,
+  "auth_required": true,
+  "capabilities": [
+    {"name": "summarize", "description": "Summarize the supplied text", "risk_level": "low"}
+  ],
+  "installed": true,
+  "installation_status": "installed",
+  "installation_id": "<uuid>",
+  "project_id": "<uuid>"
+}
+```
+
+`installation_status` is one of `installed`, `disabled`, `uninstalled`,
+`not_installed`; `installation_id` and `project_id` are `null` when no project
+scope is resolved. `auth_required` comes from the definition and tells the
+browse-to-install flow whether a credential reference must be collected.
+
+### Aggregation and scope
+
+- Definitions in the tenant are grouped by `plugin_key`; the highest version
+  wins, using the same semver-like segment ordering as the capability router,
+  with most recent `created_at` as the tie-break.
+- Installation state is evaluated only against the requested project. An
+  installation in another project does not mark the entry installed in this
+  project's scope.
+
+### Detail endpoint
+
+`GET /api/v1/tenants/{tenant_id}/marketplace/catalog/{plugin_key}/` returns the
+same entry for a single plugin, with full manifest capability detail
+(`input_schema`, `output_schema`, `timeout_seconds`) and the stored
+`manifest`, `input_schema` and `output_schema`. An unknown `plugin_key`
+returns `404`.
+
+### Permissions
+
+Any tenant member may browse the catalog; the endpoint is read-only and does
+not require an admin role. Resolving `project_id` follows project membership:
+a project the user cannot access returns `404`.
 
 ## Not implemented in this batch
 

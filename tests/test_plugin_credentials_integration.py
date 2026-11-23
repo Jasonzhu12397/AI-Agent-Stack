@@ -214,7 +214,7 @@ def test_unknown_scheme_fails_closed_without_transport_call(monkeypatch):
             ) as exc:
                 execute_http_operation(
                     {"item_id": "item-1", "query": "status"},
-                    _context("vault://platform/github"),
+                    _context("kv://platform/github"),
                     _tool(),
                 )
 
