@@ -46,6 +46,17 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   name as `protect` so the retention pass can never delete it, and the read-only
   view shows the protected set. A rollback that failed or was cancelled stops
   protecting its file.
+- A verified etcd snapshot whose publish rename failed used to be kept under
+  its `.partial` name with no state record, so the 24h mtime sweep eventually
+  deleted it and no run ever republished it. It now carries a sidecar state
+  record written at verify time (`pending_publish` / `published` / `abandoned`,
+  with cluster, final name, directory, verify time, attempt count and last
+  failure); the sweep and the republish pass read that state instead of the
+  mtime. Pending snapshots inside the republish window (default 24h, up to 3
+  publish attempts) are kept and republished by the next run, idempotently and
+  without overwriting a newer final file; past the window or after the attempt
+  limit the record turns `abandoned` and only then the file is removed, listed
+  in the report. Partials without a readable record still follow the age sweep.
 
 ### Added
 

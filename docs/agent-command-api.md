@@ -596,12 +596,34 @@ window is left alone.
 A save that dies mid-write, or a run whose process is killed outright, leaves a
 `*.db.partial` behind. Retention only ever looks at naming-valid snapshots, so
 nothing would delete it and it can be as large as the whole database. The
-executor therefore removes the staging file on a failed save or failed verify,
-keeps a verified file that failed only to be renamed (`staging_kept` names it),
-and, as part of `prepare`, sweeps staging files older than
-`PARTIAL_STALE_MINUTES` (24h) that sit directly in the backup directory —
-nothing outside it and nothing that is not a staging file is ever touched. The
-run reports what it swept in `swept_partials`.
+executor therefore removes the staging file on a failed save or failed verify.
+
+A file that passed `snapshot status` but whose publish rename failed is still a
+usable snapshot, so it is kept rather than deleted. At verify time it writes a
+machine-readable sidecar record next to the file (`<partial>.state.json`)
+recording the owning cluster, final name, directory, verify time, state
+(`pending_publish`, `published`, `abandoned`), attempt count and last failure.
+The sweep and the republish pass read that state record, never the mtime alone:
+
+* a `pending_publish` snapshot inside its republish window (default 24h, up to
+  3 publish attempts) is kept even when it is older than the 24h stale
+  threshold;
+* the next run, after its own sweep, republishes each pending record to its
+  final name. The republish is idempotent: it never overwrites a final file
+  that is already newer or equally old, and a successful republish clears the
+  sidecar;
+* past the window, after the attempt limit, or when a newer final file already
+  exists, the record transitions to `abandoned` and only then the staging file
+  and sidecar are removed. The report lists what was abandoned instead of
+  dropping it silently;
+* a partial with no readable record (or a record that cannot be validated)
+  keeps the legacy age sweep: files older than `PARTIAL_STALE_MINUTES` (24h)
+  that sit directly in the backup directory are removed, and nothing outside
+  it and nothing that is not a staging file is ever touched.
+
+The run reports swept partials in `swept_partials`, republished snapshots as
+`republished` (`{name, directory}`), and the per-file staging state in
+`staging` (`{name, directory, state}`).
 
 The pre-upgrade snapshot follows the same discipline: it is saved as
 `snapshot-pre-<cluster>-<target>-<stamp>.db.partial`, read back with
