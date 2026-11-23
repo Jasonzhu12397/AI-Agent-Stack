@@ -60,6 +60,22 @@ Rules:
 
   HTTP status: 400 validation, 401 unauthenticated, 403 forbidden, 404 unknown scope, 409 state conflict,
   422 unsupported value/region, 429 rate/额度, 503 capability unavailable.
+
+- The envelope is enforced by the shared `ErrorEnvelopeMixin` in
+  `core/api_errors.py` (the `SettingsBaseView` family emits the same shape).
+  DRF/Django exceptions are mapped as follows; `details` defaults to `{}` and
+  field-level validation errors are placed there. The 404 message never
+  discloses whether the target object exists, and unexpected exceptions stay
+  500 without echoing internal details or tracebacks.
+
+  | Exception | HTTP | `error.code` |
+  |---|---|---|
+  | `NotAuthenticated` | 401 | `AUTHENTICATION_REQUIRED` |
+  | `AuthenticationFailed` | 401 | `AUTHENTICATION_FAILED` |
+  | `PermissionDenied` | 403 | `PERMISSION_DENIED` |
+  | `NotFound` / `Http404` | 404 | `NOT_FOUND` |
+  | other `APIException` | its status code | `default_code` upper-cased |
+  | unexpected exception | 500 | internal details are not echoed |
 - Secrets never leave the server: credential fields are write-only and read back as
   `{"credential_ref": "env://...", "configured": true, "masked_hint": "…ABCD"}`.
 - Security-sensitive mutations call `core.audit.record_audit_event(...)`; metadata must not contain secrets.

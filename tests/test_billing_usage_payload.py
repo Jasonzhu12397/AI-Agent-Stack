@@ -156,9 +156,12 @@ def test_usage_endpoint_rejects_anonymous_request(usage_setup):
 
     response = client.get(_usage_url(tenant.id))
 
-    # Session-authenticated tenant routes deny anonymous callers with 403,
-    # matching the project-wide unauthenticated-access contract.
-    assert response.status_code == 403
+    # Anonymous callers are rejected with 401 and the contract error envelope.
+    assert response.status_code == 401
+    assert "detail" not in response.data
+    error = response.data["error"]
+    assert error["code"] == "AUTHENTICATION_REQUIRED"
+    assert {"code", "message", "details"} <= set(error)
 
 
 @pytest.mark.django_db

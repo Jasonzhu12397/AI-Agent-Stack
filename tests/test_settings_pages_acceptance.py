@@ -3,9 +3,11 @@
 Every page is driven over real HTTP (DRF ``APIClient``) against the trunk
 backend. For each page the matrix runs three acceptance checks:
 
-1. ``test_page_unauthenticated_rejected`` — an anonymous request is rejected.
+1. ``test_page_unauthenticated_rejected`` — an anonymous request is rejected
+   with strict 401 and the contract error envelope.
 2. ``test_page_non_member_isolation`` — an authenticated non-member of the
-   tenant/project scope receives 404 and the resource is not disclosed.
+   tenant/project scope receives 404 and the contract error envelope; the
+   resource is not disclosed.
 3. ``test_page_member_payload`` — an authenticated member receives a 2xx
    response carrying the page's primary payload fields. Empty data returns an
    empty list or server-owned defaults; nothing is fabricated here.
@@ -16,8 +18,6 @@ Two matrix-integrity tests guard the registry itself:
    ``docs/settings-center-contract.md`` match the registry exactly.
 5. ``test_matrix_has_one_case_per_slug`` — exactly one parametrized acceptance
    case per slug; a missing page fails this test.
-
-Only tests are added; no production code is modified.
 """
 
 import re
@@ -30,17 +30,6 @@ from rest_framework.test import APIClient
 
 CONTRACT_DOC = Path(__file__).resolve().parent.parent / "docs" / "settings-center-contract.md"
 
-# Views inheriting ``SettingsBaseView`` answer anonymous requests with the
-# contract envelope ``{"error": {"code", "message", "details"}}`` (401
-# AUTH_REQUIRED under this base view).
-ENVELOPE_AUTH_STYLE = "envelope"
-# Plain ``APIView`` subclasses rely on DRF's default rejection. Under the
-# project's Session/Basic authentication this answers anonymous requests 403
-# with ``{"detail": ...}``; the contract error envelope is not emitted there
-# yet. This is a backend contract gap recorded for upstream follow-up; the
-# matrix asserts the actual rejection without touching production code.
-DRF_AUTH_STYLE = "drf"
-
 
 def _tenant_path(tenant_id: str, path: str) -> str:
     return f"/api/v1/tenants/{tenant_id}/{path}/"
@@ -51,21 +40,18 @@ PAGES = [
     {
         "slug": "account",
         "scope": "user",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: "/api/v1/users/me/",
         "member_keys": ["id", "username", "display_name", "timezone", "locale"],
     },
     {
         "slug": "plan",
         "scope": "tenant",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(tenant.id, "billing/plans"),
         "member_keys": ["results"],
     },
     {
         "slug": "subscription",
         "scope": "tenant",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(
             tenant.id, "billing/subscription"
         ),
@@ -74,28 +60,24 @@ PAGES = [
     {
         "slug": "general",
         "scope": "tenant",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(tenant.id, "settings/general"),
         "member_keys": ["section", "scope", "effective", "defaults", "sources"],
     },
     {
         "slug": "connectors",
         "scope": "tenant",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(tenant.id, "connectors"),
         "member_keys": ["results"],
     },
     {
         "slug": "appearance",
         "scope": "user",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: "/api/v1/users/me/preferences/appearance/",
         "member_keys": ["namespace", "scope", "effective", "defaults", "sources"],
     },
     {
         "slug": "notifications",
         "scope": "tenant",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(
             tenant.id, "settings/notifications"
         ),
@@ -104,7 +86,6 @@ PAGES = [
     {
         "slug": "work-mode",
         "scope": "tenant",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(
             tenant.id, "settings/work-mode"
         ),
@@ -113,14 +94,12 @@ PAGES = [
     {
         "slug": "shortcuts",
         "scope": "meta",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: "/api/v1/meta/shortcuts/",
         "member_keys": ["results"],
     },
     {
         "slug": "data-controls",
         "scope": "tenant",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(
             tenant.id, "data-controls/exports"
         ),
@@ -129,7 +108,6 @@ PAGES = [
     {
         "slug": "archive",
         "scope": "project",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: (
             f"/api/v1/tenants/{tenant.id}/projects/{project.id}/archive-items/"
         ),
@@ -138,21 +116,18 @@ PAGES = [
     {
         "slug": "privacy",
         "scope": "tenant",
-        "auth_style": DRF_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(tenant.id, "privacy/grants"),
         "member_keys": ["results"],
     },
     {
         "slug": "help",
         "scope": "tenant",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: _tenant_path(tenant.id, "feedback"),
         "member_keys": ["results"],
     },
     {
         "slug": "about",
         "scope": "meta",
-        "auth_style": ENVELOPE_AUTH_STYLE,
         "url": lambda tenant, project: "/api/v1/meta/about/",
         "member_keys": ["version", "build", "licenses"],
     },
@@ -208,6 +183,8 @@ def _assert_error_envelope(response):
     assert "error" in response.data, response.data
     error = response.data["error"]
     assert {"code", "message", "details"} <= set(error)
+    assert isinstance(error["code"], str) and error["code"]
+    assert isinstance(error["details"], dict)
 
 
 @pytest.mark.django_db
@@ -217,17 +194,11 @@ def test_page_unauthenticated_rejected(slug, acceptance_workspace):
     client = APIClient()
     response = client.get(_url(entry, acceptance_workspace))
 
-    # Project convention (see tests/test_tenant_access.py and
-    # tests/test_settings_store.py): anonymous requests are rejected with the
-    # DRF default 403, or 401 AUTH_REQUIRED on SettingsBaseView subclasses.
-    # No global authentication configuration is changed to force 401.
-    assert response.status_code in {401, 403}, response.data
-    if entry["auth_style"] == ENVELOPE_AUTH_STYLE:
-        _assert_error_envelope(response)
-    else:
-        # Plain APIViews emit the DRF default {"detail": ...} instead of the
-        # contract error envelope; tracked as a backend gap in the report.
-        assert "detail" in response.data or "error" in response.data
+    # Contract: anonymous callers are rejected with strict 401 and the shared
+    # error envelope; the DRF default ``{"detail": ...}`` shape must not leak.
+    assert response.status_code == 401, response.data
+    assert "detail" not in response.data
+    _assert_error_envelope(response)
 
 
 @pytest.mark.django_db
@@ -240,8 +211,11 @@ def test_page_non_member_isolation(slug, acceptance_workspace):
     if entry["scope"] in {"tenant", "project"}:
         response = client.get(_url(entry, acceptance_workspace))
         assert response.status_code == 404, response.data
-        # No existence disclosure: contract envelope or DRF detail shape.
-        assert "detail" in response.data or "error" in response.data
+        # No existence disclosure: contract envelope carrying ``error.code``,
+        # never the DRF default ``{"detail": ...}`` shape.
+        assert "detail" not in response.data
+        _assert_error_envelope(response)
+        assert response.data["error"]["code"]
     elif entry["scope"] == "user":
         response = client.get(_url(entry, acceptance_workspace))
         assert response.status_code == 200, response.data

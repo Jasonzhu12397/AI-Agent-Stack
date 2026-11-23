@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
 from core.data_controls_views import (
     error_response,
@@ -122,7 +123,7 @@ def _catalog_entry(definition, source, installations):
     }
 
 
-class ConnectorCatalogView(APIView):
+class ConnectorCatalogView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
@@ -161,7 +162,7 @@ class ConnectorCatalogView(APIView):
         return Response({"results": results})
 
 
-class ConnectorInstallView(APIView):
+class ConnectorInstallView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def _resolve_definition(self, tenant, slug):
@@ -312,7 +313,7 @@ def _resolve_installation(tenant, installation_id):
     return None, None, None
 
 
-class ConnectorInstallationUpdateView(APIView):
+class ConnectorInstallationUpdateView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, tenant_id, installation_id):
@@ -473,7 +474,7 @@ def _run_gateway_check(installation, connection, plugin, *, purpose):
         raise ConnectorCheckError(code, str(exc)) from exc
 
 
-class ConnectorHealthView(APIView):
+class ConnectorHealthView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, tenant_id, installation_id):
@@ -537,7 +538,7 @@ class ConnectorHealthView(APIView):
         return Response(_plugin_installation_payload(installation))
 
 
-class ConnectorTestView(APIView):
+class ConnectorTestView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, tenant_id, installation_id):

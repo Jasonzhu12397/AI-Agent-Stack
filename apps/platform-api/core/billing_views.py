@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
 from core.billing_models import EntitlementGrant, Order, Plan, Subscription
 from core.models import AuditEvent, ModelProvider, Tenant, TenantTokenBudget
@@ -118,7 +119,7 @@ def _order_dict(order: Order, payment: dict | None = None) -> dict:
     return payload
 
 
-class TenantScopedView(APIView):
+class TenantScopedView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_tenant(self) -> Tenant:
@@ -420,7 +421,7 @@ def _credit_entitlement(order: Order) -> EntitlementGrant:
     return grant
 
 
-class PaymentCallbackView(APIView):
+class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, tenant_id, channel):

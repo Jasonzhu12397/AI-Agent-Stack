@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import ErrorEnvelopeMixin
 from core.audit import record_audit_event
 from core.data_controls_models import ArchiveAction, DataExportJob, DeletionRequest
 from core.knowledge_models import KnowledgeBase
@@ -267,7 +268,7 @@ def _export_job_payload(job, *, include_file_ref):
     return payload
 
 
-class DataExportListCreateView(APIView):
+class DataExportListCreateView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_tenant(self):
@@ -342,7 +343,7 @@ class DataExportListCreateView(APIView):
         return Response(_export_job_payload(job, include_file_ref=True), status=201)
 
 
-class DataExportDetailView(APIView):
+class DataExportDetailView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_tenant(self):
@@ -363,7 +364,7 @@ class DataExportDetailView(APIView):
         return Response(_export_job_payload(job, include_file_ref=True))
 
 
-class DataExportExpireView(APIView):
+class DataExportExpireView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_tenant(self):
@@ -417,7 +418,7 @@ def _archive_item_payload(item_type, item):
     }
 
 
-class ArchiveItemListView(APIView):
+class ArchiveItemListView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id, project_id):
@@ -459,7 +460,7 @@ class ArchiveItemListView(APIView):
         )
 
 
-class ArchiveItemRestoreView(APIView):
+class ArchiveItemRestoreView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, tenant_id, project_id, item_type, item_id):
@@ -511,7 +512,7 @@ class ArchiveItemRestoreView(APIView):
         return Response({"already_restored": False, "item": _archive_item_payload(item_type, item)})
 
 
-class ArchiveItemPurgeView(APIView):
+class ArchiveItemPurgeView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, tenant_id, project_id, item_type, item_id):
@@ -580,7 +581,7 @@ def _grant_payload(installation, source, scopes):
     }
 
 
-class PrivacyGrantListView(APIView):
+class PrivacyGrantListView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
@@ -605,7 +606,7 @@ class PrivacyGrantListView(APIView):
         return Response({"results": grants})
 
 
-class PrivacyGrantRevokeView(APIView):
+class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def _resolve(self, tenant, grant_id):
@@ -651,7 +652,7 @@ class PrivacyGrantRevokeView(APIView):
         return Response({"revoked": True, "already_revoked": already_revoked})
 
 
-class PrivacySessionListView(APIView):
+class PrivacySessionListView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
@@ -664,7 +665,7 @@ class PrivacySessionListView(APIView):
         )
 
 
-class DeletionRequestListCreateView(APIView):
+class DeletionRequestListCreateView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_tenant(self):
