@@ -181,6 +181,11 @@ class Order(models.Model):
     currency = models.CharField(max_length=8, default="CNY")
     channel = models.CharField(max_length=16, choices=Channel.choices)
     provider_trade_no = models.CharField(max_length=128, blank=True, default="")
+    # Provider checkout instructions captured when the trade was opened (WeChat
+    # prepay ``code_url`` / Alipay ``qr_code``). It is persisted because
+    # re-creating a trade with the same merchant order number is rejected
+    # upstream, so a page refresh must replay the stored payload instead.
+    payment_instruction = models.JSONField(default=dict, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     idempotency_key = models.CharField(max_length=160)
     created_by = models.ForeignKey(

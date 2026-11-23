@@ -61,7 +61,9 @@ class AlipayProvider(PaymentProvider):
     channel = "alipay"
 
     SLOTS = ("app_id", "private_key", "public_key", "notify_url", "gateway")
-    REQUIRED_SLOTS = ("app_id", "private_key", "public_key")
+    # ``notify_url`` is required: without a callback URL a settled trade has no
+    # verified notification path, and the order would never be credited.
+    REQUIRED_SLOTS = ("app_id", "private_key", "public_key", "notify_url")
 
     def __init__(
         self,
@@ -165,10 +167,12 @@ class AlipayProvider(PaymentProvider):
         node = envelope.get(node_key) or {}
         if node.get("code") not in {"10000"}:
             decline_reason = node.get("sub_code") or node.get("msg") or "unknown"
-            raise PaymentProviderError(
+            error = PaymentProviderError(
                 "PAYMENT_PROVIDER_UPSTREAM_ERROR",
                 f"Alipay declined the request: {decline_reason}.",
             )
+            error.upstream_code = str(node.get("sub_code") or node.get("code") or "")
+            raise error
         return node
 
     # ------------------------------------------------------------------ orders
@@ -196,7 +200,11 @@ class AlipayProvider(PaymentProvider):
         )
 
     def refund(
-        self, order, reason: str, amount_cents: int | None = None
+        self,
+        order,
+        reason: str,
+        amount_cents: int | None = None,
+        refund_reference: str = "",
     ) -> dict:
         # Alipay refunds are settled synchronously: the refund result comes
         # back in this response, so there is no async refund-notify channel
@@ -205,8 +213,10 @@ class AlipayProvider(PaymentProvider):
         refund_amount = (
             Decimal(refund_cents) / Decimal(100)
         ).quantize(Decimal("0.01"))
+        out_request_no = refund_reference or f"refund-{order.id}-{refund_cents}"
         biz_content = {
             "out_trade_no": str(order.id),
+            "out_request_no": out_request_no,
             "refund_amount": f"{refund_amount:.2f}",
             "refund_reason": reason[:200],
         }
@@ -214,8 +224,37 @@ class AlipayProvider(PaymentProvider):
         return {
             "provider": "alipay",
             "refund_id": node.get("trade_no", ""),
-            "status": node.get("trade_status", ""),
+            "out_refund_no": out_request_no,
+            # ``fund_change`` is the authoritative settled flag; the refund
+            # response carries no ``trade_status``.
+            "status": "SUCCESS" if node.get("fund_change") in {"Y", "y"} else "PENDING",
             "refund_amount": node.get("refund_fee", ""),
+            "buyer_logon_id": node.get("buyer_logon_id", ""),
+        }
+
+    def close_payment(self, order) -> dict:
+        try:
+            node = self._request(
+                "alipay.trade.close", {"out_trade_no": str(order.id)}
+            )
+        except PaymentProviderError as exc:
+            if getattr(exc, "upstream_code", "") == "ACQ.TRADE_NOT_EXIST":
+                return {"provider": "alipay", "closed": True, "already": True}
+            raise
+        return {"provider": "alipay", "closed": True, "status": node.get("out_trade_no", "")}
+
+    def query_refund(self, order, refund_reference: str) -> dict:
+        node = self._request(
+            "alipay.trade.fastpay.refund.query",
+            {"out_trade_no": str(order.id), "out_request_no": refund_reference},
+        )
+        refunded = node.get("refund_amount") or node.get("refund_fee") or ""
+        settled = str(node.get("refund_status", "")).upper() == "REFUND_SUCCESS"
+        return {
+            "provider": "alipay",
+            "status": "refunded" if settled else "unknown",
+            "provider_status": node.get("refund_status", ""),
+            "refund_cents": _yuan_to_cents(str(refunded)) if refunded else None,
         }
 
     # ------------------------------------------------------------- callbacks

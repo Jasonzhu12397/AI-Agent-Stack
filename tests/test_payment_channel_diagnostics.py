@@ -37,12 +37,14 @@ WECHAT_ENV = {
     "WECHATPAY_CERT_SERIAL_NO": "merchant-serial-001",
     "WECHATPAY_PRIVATE_KEY": SECRET_SENTINEL,
     "WECHATPAY_PLATFORM_CERT": SECRET_SENTINEL,
+    "WECHATPAY_NOTIFY_URL": "https://billing.example.com/api/v1/payments/wechat/callback",
 }
 
 ALIPAY_ENV = {
     "ALIPAY_APP_ID": "alipay-app-test",
     "ALIPAY_PRIVATE_KEY": SECRET_SENTINEL,
     "ALIPAY_PUBLIC_KEY": SECRET_SENTINEL,
+    "ALIPAY_NOTIFY_URL": "https://billing.example.com/api/v1/payments/alipay/callback",
 }
 
 
@@ -116,16 +118,25 @@ def test_one_missing_required_slot_disables_the_channel(
     assert provider.missing_slots() == [slot]
 
 
-def test_optional_slot_absence_keeps_the_channel_usable(
+def test_callback_url_is_required_because_it_gates_settlement(
     settings, clean_payment_env, monkeypatch
 ):
-    _set_env(monkeypatch, WECHAT_ENV)
+    """A channel without a callback URL cannot ever settle a payment.
+
+    Creating a trade without notify_url leaves it pending forever, so the
+    readiness check treats the callback URL as mandatory rather than optional.
+    """
+
+    env = dict(WECHAT_ENV)
+    env.pop("WECHATPAY_NOTIFY_URL")
+    _set_env(monkeypatch, env)
 
     provider = WechatPayV3Provider()
 
     assert "notify_url" in provider.SLOTS
-    assert "notify_url" not in provider.REQUIRED_SLOTS
-    assert provider.is_configured() is True
+    assert "notify_url" in provider.REQUIRED_SLOTS
+    assert provider.is_configured() is False
+    assert provider.missing_slots() == ["notify_url"]
 
 
 def test_diagnostics_report_unconfigured_channels_by_slot_name_only(

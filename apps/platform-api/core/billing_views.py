@@ -6,6 +6,7 @@ fail-closed signature verified. Paid state can only be produced by a verified
 callback from a configured provider.
 """
 
+import uuid
 from datetime import date, timedelta
 
 from django.db import IntegrityError, transaction
@@ -478,8 +479,19 @@ class OrderListCreateView(TenantScopedView):
                 )
                 instructions = provider.create_payment(order)
                 order.provider_trade_no = instructions.get("trade_no", "")
+                # Checkout instructions are persisted with the trade: the
+                # provider rejects a second trade under the same merchant
+                # order number, so every later render must replay this payload.
+                order.payment_instruction = instructions
                 order.status = Order.Status.PENDING
-                order.save(update_fields=["provider_trade_no", "status", "updated_at"])
+                order.save(
+                    update_fields=[
+                        "provider_trade_no",
+                        "payment_instruction",
+                        "status",
+                        "updated_at",
+                    ]
+                )
         except PaymentProviderError as exc:
             record_audit_event(
                 request,
@@ -536,15 +548,62 @@ class OrderDetailView(TenantScopedView):
             Order.objects.filter(tenant=tenant).select_related("plan"),
             pk=order_id,
         )
-        payment = None
+        payment = dict(order.payment_instruction or {})
+        if order.status == Order.Status.PENDING and not payment:
+            # Legacy rows opened before instructions were persisted: rebuild
+            # once and store, so the next refresh does not hit the upstream.
+            provider = registry.get_provider(order.channel)
+            if provider is not None:
+                try:
+                    payment = provider.create_payment(order)
+                except PaymentProviderError:
+                    payment = {}
+                else:
+                    order.payment_instruction = payment
+                    order.save(update_fields=["payment_instruction", "updated_at"])
+        return Response(_order_dict(order, payment=payment or None))
+
+
+class OrderStatusView(TenantScopedView):
+    """Read-only settlement poll: local state plus the provider's view.
+
+    The poll never mutates: a paid order is only produced by a verified
+    callback, so this endpoint reports ``provider_status`` for the UI and
+    leaves the state machine to the callback path.
+    """
+
+    def get(self, request, tenant_id, order_id):
+        tenant = self.get_tenant()
+        order = get_object_or_404(
+            Order.objects.filter(tenant=tenant).select_related("plan"),
+            pk=order_id,
+        )
+        provider_status = ""
+        provider_error = ""
         if order.status == Order.Status.PENDING:
             provider = registry.get_provider(order.channel)
             if provider is not None:
-                payment = provider.create_payment(order)
-        return Response(_order_dict(order, payment=payment))
+                try:
+                    provider_status = provider.query_order(order).status
+                except PaymentProviderError as exc:
+                    provider_error = exc.code
+        payload = _order_dict(order, payment=order.payment_instruction or None)
+        payload["provider_status"] = provider_status
+        payload["provider_error"] = provider_error
+        return Response(payload)
 
 
 class OrderCloseView(TenantScopedView):
+    """Close an unpaid order on the provider first, then locally.
+
+    Closing only the local row would leave a trade the buyer can still settle;
+    its callback would then land on a closed order and be rejected as
+    out-of-order, stranding the money. So the provider trade is queried first
+    (a settled trade must be refunded, not closed), closed upstream, and only
+    then moved to ``closed``. A provider failure keeps the order pending and
+    returns a retryable 502.
+    """
+
     def get_permissions(self):
         return [IsAuthenticated(), IsTenantAdmin()]
 
@@ -561,9 +620,62 @@ class OrderCloseView(TenantScopedView):
                     f"Order in status {order.status} cannot be closed.",
                     http_status=status.HTTP_409_CONFLICT,
                 )
+            provider = registry.get_provider(order.channel)
+            if provider is not None and order.status == Order.Status.PENDING:
+                try:
+                    provider_state = provider.query_order(order)
+                except PaymentProviderError:
+                    return _error(
+                        "PAYMENT_QUERY_FAILED",
+                        "The payment provider could not be queried; the order stays open.",
+                        details={"channel": order.channel},
+                        http_status=status.HTTP_502_BAD_GATEWAY,
+                    )
+                if provider_state.status == "paid":
+                    record_audit_event(
+                        request,
+                        tenant,
+                        "billing.order.close_refused_paid",
+                        "order",
+                        order.id,
+                        metadata={"channel": order.channel},
+                        outcome=AuditEvent.Outcome.DENIED,
+                    )
+                    return _error(
+                        "ORDER_ALREADY_PAID",
+                        "The provider reports this order as paid; refund it instead of closing.",
+                        details={"channel": order.channel},
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
+                try:
+                    provider.close_payment(order)
+                except PaymentProviderError as exc:
+                    _record_payment_audit(
+                        tenant=tenant,
+                        order=order,
+                        channel=order.channel,
+                        direction="request",
+                        event_type="payment.request.close_error",
+                        provider_trade_no=order.provider_trade_no,
+                        error_code=exc.code,
+                    )
+                    return _error(
+                        exc.code,
+                        "The payment provider could not close the trade; the order stays open.",
+                        details={"channel": order.channel},
+                        http_status=status.HTTP_502_BAD_GATEWAY,
+                    )
             order.transition(Order.Status.CLOSED)
         record_audit_event(
             request, tenant, "billing.order.closed", "order", order.id
+        )
+        _record_payment_audit(
+            tenant=tenant,
+            order=order,
+            channel=order.channel,
+            direction="request",
+            event_type="payment.request.closed",
+            provider_trade_no=order.provider_trade_no,
         )
         return Response(_order_dict(order))
 
@@ -628,16 +740,21 @@ class OrderRefundView(TenantScopedView):
                         details={"refundable_cents": refundable},
                         http_status=status.HTTP_400_BAD_REQUEST,
                     )
+                # One key per refund slice, owned here and persisted in the
+                # reclaim ledger. A retry of the same request reuses it; a second
+                # partial refund gets a fresh key, so the provider cannot mistake
+                # it for a replay of the first slice.
+                refund_reference = f"refund-{order.id}-{uuid.uuid4().hex[:12]}"
                 provider = registry.get_provider(order.channel)
                 receipt = (
-                    provider.refund(order, reason, amount_cents=refund_cents)
+                    provider.refund(
+                        order,
+                        reason,
+                        amount_cents=refund_cents,
+                        refund_reference=refund_reference,
+                    )
                     if provider
                     else {}
-                )
-                refund_reference = (
-                    receipt.get("refund_id")
-                    or receipt.get("out_refund_no")
-                    or f"local-refund-{order.id}-{order.refunded_cents}-{refund_cents}"
                 )
                 # Reclaim runs on the shared idempotent ledger path; a replay of
                 # this refund reference reuses the existing row.
@@ -944,11 +1061,41 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
 
-        order = get_object_or_404(
-            Order,
+        # A verified callback for a trade we never opened is a real anomaly,
+        # but the provider still needs a machine-readable answer rather than an
+        # HTML 404 page, so this is answered in the API error envelope.
+        order = Order.objects.filter(
             channel=channel,
             provider_trade_no=result.order_reference or "",
-        )
+        ).first()
+        if order is None:
+            record_audit_event(
+                request,
+                None,
+                "billing.callback.unknown_trade",
+                "payment_callback",
+                resource_id=channel,
+                outcome=AuditEvent.Outcome.DENIED,
+                metadata={
+                    "channel": channel,
+                    "order_reference": result.order_reference or "",
+                },
+            )
+            _record_payment_audit(
+                tenant=None,
+                order=None,
+                channel=channel,
+                direction="callback",
+                event_type="payment.callback.unknown_trade",
+                error_code="ORDER_NOT_FOUND",
+                metadata={"order_reference": result.order_reference or ""},
+            )
+            return _error(
+                "ORDER_NOT_FOUND",
+                "The callback references a trade this tenant does not own.",
+                details={"channel": channel},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
 
         with transaction.atomic():
             locked = Order.objects.select_for_update().get(pk=order.pk)

@@ -27,6 +27,7 @@ class FakeProvider(PaymentProvider):
             "provider": "fake",
             "trade_no": trade_no,
             "prepay_id": f"fake-prepay-{order.id}",
+            "code_url": f"weixin://wxpay/bizpayurl?pr=fake{order.id}",
         }
 
     def verify_callback(self, headers, body: bytes) -> CallbackResult:
@@ -50,11 +51,27 @@ class FakeProvider(PaymentProvider):
         return ProviderOrderState(status="unknown", amount_cents=None)
 
     def refund(
-        self, order, reason: str, amount_cents: int | None = None
+        self,
+        order,
+        reason: str,
+        amount_cents: int | None = None,
+        refund_reference: str = "",
     ) -> dict:
+        out_refund_no = refund_reference or f"refund-{order.id}-{amount_cents}"
         return {
             "provider": "fake",
             "refunded": True,
             "reason": reason,
             "refund_id": f"refund-{order.id}-{amount_cents}",
+            "out_refund_no": out_refund_no,
+        }
+
+    def close_payment(self, order) -> dict:
+        return {"provider": "fake", "closed": True}
+
+    def query_refund(self, order, refund_reference: str) -> dict:
+        return {
+            "provider": "fake",
+            "status": "refunded",
+            "refund_cents": None,
         }

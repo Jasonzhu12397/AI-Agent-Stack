@@ -53,7 +53,7 @@ overrides the list rather than relaxing the check.
 | `serial_no` | `env://WECHATPAY_CERT_SERIAL_NO` | yes |
 | `private_key` | `env://WECHATPAY_PRIVATE_KEY` | yes |
 | `platform_cert` | `env://WECHATPAY_PLATFORM_CERT` | yes |
-| `notify_url` | `env://WECHATPAY_NOTIFY_URL` | no |
+| `notify_url` | `env://WECHATPAY_NOTIFY_URL` | yes |
 | `base_url` | `env://WECHATPAY_BASE_URL` | no |
 
 `private_key` is the merchant PKCS#8 PEM private key used for
@@ -62,8 +62,10 @@ platform certificate whose serial must match the certificate serial presented in
 the `Wechatpay-Serial` response header. `api_v3_key` decrypts the
 AES-256-GCM `resource` block of callbacks and refund notifications.
 
-Optional slots fall back, not fail: a missing `notify_url` or `base_url` keeps
-the channel usable (`base_url` defaults to `https://api.mch.weixin.qq.com`).
+`notify_url` is required because it gates settlement, not just convenience: a
+trade opened without a callback URL can never be marked paid, so the channel is
+reported unconfigured until the URL resolves. Optional slots fall back, not fail
+— `base_url` defaults to `https://api.mch.weixin.qq.com`.
 
 ## Alipay slots
 
@@ -72,12 +74,13 @@ the channel usable (`base_url` defaults to `https://api.mch.weixin.qq.com`).
 | `app_id` | `env://ALIPAY_APP_ID` | yes |
 | `private_key` | `env://ALIPAY_PRIVATE_KEY` | yes |
 | `public_key` | `env://ALIPAY_PUBLIC_KEY` | yes |
-| `notify_url` | `env://ALIPAY_NOTIFY_URL` | no |
+| `notify_url` | `env://ALIPAY_NOTIFY_URL` | yes |
 | `gateway` | `env://ALIPAY_GATEWAY` | no |
 
 `private_key` signs the sorted request content with RSA2; `public_key` verifies
 async notifications. Alipay refunds are synchronous responses — the adapter
 declares no asynchronous refund notification, and no such path is simulated.
+`notify_url` is required for the same settlement reason as on WeChat Pay.
 
 ## Readiness, and why checkout is unavailable
 

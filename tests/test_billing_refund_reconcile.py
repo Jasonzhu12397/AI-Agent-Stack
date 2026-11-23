@@ -17,6 +17,7 @@ from core.payments import registry
 from core.payments.base import (
     CallbackResult,
     PaymentProvider,
+    PaymentProviderError,
     ProviderOrderState,
 )
 from core.refund_service import reclaim_for_refund
@@ -70,7 +71,11 @@ class StubProvider(PaymentProvider):
         self.channel = channel
         self.query_status = status
         self.query_amount_cents = amount_cents
-        self.refunds: list[tuple[str, int | None]] = []
+        self.refunds: list[tuple[str, int | None, str]] = []
+        self.closed: list[str] = []
+        self.queries = 0
+        self.fail_query = False
+        self.fail_close = False
 
     def is_configured(self) -> bool:
         return True
@@ -82,17 +87,40 @@ class StubProvider(PaymentProvider):
         return CallbackResult(ok=True, status="paid", order_reference="")
 
     def query_order(self, order) -> ProviderOrderState:
+        self.queries += 1
+        if self.fail_query:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_UPSTREAM_ERROR", "query failed"
+            )
         return ProviderOrderState(
             status=self.query_status, amount_cents=self.query_amount_cents
         )
 
-    def refund(self, order, reason: str, amount_cents: int | None = None) -> dict:
-        self.refunds.append((str(order.id), amount_cents))
+    def refund(
+        self,
+        order,
+        reason: str,
+        amount_cents: int | None = None,
+        refund_reference: str = "",
+    ) -> dict:
+        self.refunds.append((str(order.id), amount_cents, refund_reference))
         return {
             "provider": "stub",
             "refund_id": f"refund-{order.id}-{amount_cents}",
+            "refund_reference": refund_reference,
             "status": "SUCCESS",
         }
+
+    def close_payment(self, order) -> dict:
+        if self.fail_close:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_UPSTREAM_ERROR", "close failed"
+            )
+        self.closed.append(str(order.id))
+        return {"provider": "stub", "closed": True}
+
+    def query_refund(self, order, refund_reference: str) -> dict:
+        return {"provider": "stub", "status": "refunded", "refund_cents": None}
 
 
 def _install_providers(monkeypatch, providers: dict[str, StubProvider]) -> None:
@@ -431,3 +459,142 @@ def test_reclaim_ledger_is_append_only(refund_setup):
                 monthly_limit_after=0,
                 reason="duplicate reference",
             )
+
+
+# --------------------------------------------------------------------------- #
+# Order close: provider-authoritative, idempotent and money-safe
+# --------------------------------------------------------------------------- #
+
+
+def _make_pending_order(tenant, plan, owner, key, channel="wechat"):
+    return Order.objects.create(
+        tenant=tenant,
+        plan=plan,
+        channel=channel,
+        idempotency_key=key,
+        created_by=owner,
+        status=Order.Status.PENDING,
+        amount_cents=plan.price_cents,
+        currency=plan.currency,
+        provider_trade_no=f"fake-{key}",
+    )
+
+
+def _close_url(tenant_id, order_id):
+    return f"/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/close/"
+
+
+@pytest.mark.django_db
+def test_close_settles_the_trade_upstream_before_marking_the_order_closed(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    stub = StubProvider("wechat", status="pending")
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    order = _make_pending_order(tenant, plan, owner, "close-happy")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    response = client.post(_close_url(tenant.id, order.id))
+
+    assert response.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.CLOSED
+    assert stub.queries == 1
+    assert stub.closed == [str(order.id)]
+
+
+@pytest.mark.django_db
+def test_close_refuses_an_order_the_provider_says_is_already_paid(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    stub = StubProvider("wechat", status="paid")
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    order = _make_pending_order(tenant, plan, owner, "close-paid")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    response = client.post(_close_url(tenant.id, order.id))
+
+    assert response.status_code == 409
+    assert response.data["error"]["code"] == "ORDER_ALREADY_PAID"
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+    assert stub.closed == []
+
+
+@pytest.mark.django_db
+def test_close_keeps_the_order_open_when_the_provider_query_fails(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    stub = StubProvider("wechat", status="pending")
+    stub.fail_query = True
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    order = _make_pending_order(tenant, plan, owner, "close-query-fail")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    response = client.post(_close_url(tenant.id, order.id))
+
+    assert response.status_code == 502
+    assert response.data["error"]["code"] == "PAYMENT_QUERY_FAILED"
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+    assert stub.closed == []
+
+
+@pytest.mark.django_db
+def test_close_keeps_the_order_open_when_the_provider_close_fails(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    stub = StubProvider("wechat", status="pending")
+    stub.fail_close = True
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    order = _make_pending_order(tenant, plan, owner, "close-fail")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    response = client.post(_close_url(tenant.id, order.id))
+
+    assert response.status_code == 502
+    assert response.data["error"]["code"] == "PAYMENT_PROVIDER_UPSTREAM_ERROR"
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+    assert stub.closed == []
+
+
+@pytest.mark.django_db
+def test_two_partial_refunds_carry_distinct_provider_references(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    stub = StubProvider("wechat")
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    order = _make_paid_order(tenant, plan, owner, "refund-slices")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    first = client.post(
+        _refund_url(tenant.id, order.id), {"amount_cents": 4000, "reason": "partial one"}
+    )
+    assert first.status_code == 200
+    second = client.post(
+        _refund_url(tenant.id, order.id), {"amount_cents": 4000, "reason": "partial two"}
+    )
+    assert second.status_code == 200
+
+    references = [reference for _, _, reference in stub.refunds]
+    assert len(references) == 2
+    assert references[0] != references[1]
+    assert all(reference.startswith(f"refund-{order.id}-") for reference in references)
+    order.refresh_from_db()
+    assert order.status == Order.Status.PARTIAL_REFUNDED
+    assert order.refunded_cents == 8000

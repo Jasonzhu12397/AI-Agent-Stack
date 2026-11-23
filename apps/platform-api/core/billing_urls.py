@@ -6,6 +6,7 @@ from core.billing_views import (
     OrderDetailView,
     OrderListCreateView,
     OrderRefundView,
+    OrderStatusView,
     PaymentCallbackView,
     PlansView,
     ReconciliationView,
@@ -67,6 +68,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/",
         OrderDetailView.as_view(),
         name="billing-order-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/status/",
+        OrderStatusView.as_view(),
+        name="billing-order-status",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/close/",

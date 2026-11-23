@@ -217,3 +217,61 @@ def test_grant_updates_tenant_budget_via_ledger(orders_setup):
     _callback(client, tenant, trade_no, "paid")
     budget.refresh_from_db()
     assert budget.monthly_limit == 1_000_000 + plan.token_quota_monthly
+
+
+@override_settings(BILLING_FAKE_PROVIDER_ENABLED=True)
+@pytest.mark.django_db
+def test_checkout_instructions_are_persisted_and_replayed_on_detail(orders_setup):
+    owner, _, tenant, plan = orders_setup
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    created = _create_order(client, tenant, plan, "instruction-1")
+    assert created.status_code == 201
+    order = Order.objects.get(id=created.data["id"])
+    assert order.payment_instruction == created.data["payment"]
+    assert order.payment_instruction["code_url"].startswith("weixin://")
+
+    detail = client.get(_order_url(tenant.id, f"orders/{order.id}"))
+    assert detail.status_code == 200
+    assert detail.data["payment"] == created.data["payment"]
+    order.refresh_from_db()
+    assert order.payment_instruction == created.data["payment"]
+
+
+@override_settings(BILLING_FAKE_PROVIDER_ENABLED=True)
+@pytest.mark.django_db
+def test_status_poll_reports_local_state_and_leaves_it_untouched(orders_setup):
+    owner, _, tenant, plan = orders_setup
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    created = _create_order(client, tenant, plan, "poll-1")
+    order = Order.objects.get(id=created.data["id"])
+
+    pending = client.get(_order_url(tenant.id, f"orders/{order.id}/status"))
+    assert pending.status_code == 200
+    assert pending.data["status"] == Order.Status.PENDING
+    assert pending.data["provider_status"] == "unknown"
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+
+    trade_no = created.data["payment"]["trade_no"]
+    assert _callback(client, tenant, trade_no, "paid").status_code == 200
+    settled = client.get(_order_url(tenant.id, f"orders/{order.id}/status"))
+    assert settled.data["status"] == Order.Status.PAID
+    assert settled.data["paid_at"] is not None
+
+
+@override_settings(BILLING_FAKE_PROVIDER_ENABLED=True)
+@pytest.mark.django_db
+def test_unknown_trade_callback_gets_a_json_envelope(orders_setup):
+    owner, _, tenant, plan = orders_setup
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    response = _callback(client, tenant, "trade-that-never-existed", "paid")
+
+    assert response.status_code == 404
+    assert response.data["error"]["code"] == "ORDER_NOT_FOUND"
+    assert response["Content-Type"].startswith("application/json")

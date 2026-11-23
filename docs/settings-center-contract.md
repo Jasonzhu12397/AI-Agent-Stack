@@ -109,6 +109,11 @@ or corrupt cache must fall back to the server value and then to `defaults` (dete
   `currency`, `channel` (`wechat|alipay`), `provider_trade_no`, `paid_at`, `idempotency_key`.
   Transitions are only `created→pending→(paid|failed|closed)` and `paid→refunded`; repeated callbacks are
   no-ops keyed by `(channel, provider_trade_no, order_id)`; out-of-order callbacks never move state backwards.
+- Closing an unpaid order is provider-first: the trade is queried, a settled trade is refused with
+  **409 `ORDER_ALREADY_PAID`**, the trade is closed upstream, and a provider failure keeps the order
+  `pending` with **502** and a retryable error code. A closed order therefore cannot still be paid.
+- Each refund slice carries a server-generated, unique `refund_reference` (`refund-<order>-<random>`),
+  replayed unchanged on retry, so a second partial refund is never mistaken for a provider replay.
 - `EntitlementGrant`: append-only 额度发放记录 `tenant`, `subscription`, `order`, `period`, `tokens`,
   `expires_at`, `reason`. Buying a plan credits `TenantTokenBudget` **through a grant row**, never by writing
   the limit directly.
@@ -126,7 +131,9 @@ GET  .../billing/usage/               -> limits + used + period + history[]  (au
 GET  .../billing/orders/  POST .../billing/orders/
 POST .../billing/orders/<id>/close/   POST .../billing/orders/<id>/refund/
 POST .../billing/payments/<channel>/callback/   (unauthenticated, signature-verified)
-GET  .../billing/orders/<id>/         (includes payment instructions when paid-pending)
+GET  .../billing/orders/<id>/         (replays the persisted payment instructions)
+GET  .../billing/orders/<id>/status/  (read-only settlement poll: local status +
+                                        provider_status/provider_error, never mutates)
 ```
 
 - **No provider configured** (default in every environment): `GET capabilities` → `available:false`,

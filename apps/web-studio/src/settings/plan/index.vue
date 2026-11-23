@@ -5,7 +5,8 @@ import { ApiError } from "../../services/http";
 import SettingsPageShell from "../shared/SettingsPageShell.vue";
 import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
-import { createOrder, fetchBillingOverview } from "./api";
+import { createOrder, fetchBillingOverview, type OrderResponse } from "./api";
+import PaymentDialog from "./PaymentDialog.vue";
 import {
   canPurchase,
   channelLabel,
@@ -31,6 +32,8 @@ const resource = useSettingsResource(async () => {
 
 const orderError = ref("");
 const pendingPlan = ref("");
+const activeOrder = ref<OrderResponse | null>(null);
+const orderNotice = ref("");
 const payment = computed(() => paymentAvailability(resource.data.value?.capabilities));
 const subscription = computed(() => resource.data.value?.subscription ?? null);
 const channels = computed(() => channelReadiness(resource.data.value?.capabilities));
@@ -63,12 +66,22 @@ async function buy(plan: BillingPlan): Promise<void> {
       "wechat",
       `plan-${plan.code}-${Date.now()}`,
     );
-    orderError.value = `Order ${order.id} is ${order.status}. Complete the payment in the payment provider app.`;
+    activeOrder.value = order;
   } catch (cause) {
     orderError.value = cause instanceof ApiError ? describeError(cause.code) : "Order could not be created.";
   } finally {
     pendingPlan.value = "";
   }
+}
+
+function onOrderSettled(order: OrderResponse): void {
+  orderNotice.value = `Order ${order.id} is ${order.status}. The subscription is up to date.`;
+  void resource.reload();
+}
+
+function onOrderClosed(order: OrderResponse): void {
+  orderNotice.value = `Order ${order.id} is ${order.status}. No payment is outstanding.`;
+  activeOrder.value = null;
 }
 
 onMounted(() => void resource.reload());
@@ -175,6 +188,25 @@ void pageLabels;
       @close="orderError = ''"
     />
 
+    <el-alert
+      v-if="orderNotice"
+      class="settings-inline-error"
+      type="success"
+      show-icon
+      :closable="true"
+      :title="orderNotice"
+      @close="orderNotice = ''"
+    />
+
     <p class="muted">{{ t("Payment channels") }}: WeChat Pay, Alipay.</p>
+
+    <PaymentDialog
+      v-if="activeTenantId"
+      :tenant-id="activeTenantId"
+      :order="activeOrder"
+      @settled="onOrderSettled"
+      @closed="onOrderClosed"
+      @dismissed="activeOrder = null"
+    />
   </SettingsPageShell>
 </template>

@@ -48,6 +48,7 @@ _TRADE_STATE_MAP = {
 # CLOSED are recorded but never move the order state or reclaim quota.
 _REFUND_STATUS_MAP = {
     "SUCCESS": "refunded",
+    "PROCESSING": "pending",
     "ABNORMAL": "refund_abnormal",
     "CLOSED": "refund_abnormal",
 }
@@ -68,6 +69,9 @@ class WechatPayV3Provider(PaymentProvider):
         "notify_url",
         "base_url",
     )
+    # ``notify_url`` is required too: WeChat rejects a native order without a
+    # reachable callback URL, and a trade we cannot receive notifications for
+    # would be stranded after the buyer pays.
     REQUIRED_SLOTS = (
         "appid",
         "mchid",
@@ -75,6 +79,7 @@ class WechatPayV3Provider(PaymentProvider):
         "serial_no",
         "private_key",
         "platform_cert",
+        "notify_url",
     )
 
     def __init__(
@@ -170,10 +175,17 @@ class WechatPayV3Provider(PaymentProvider):
             content=body_bytes,
         )
         if response.status_code >= 400:
-            raise PaymentProviderError(
+            upstream_code = ""
+            try:
+                upstream_code = str((response.json() or {}).get("code", ""))
+            except ValueError:
+                upstream_code = ""
+            error = PaymentProviderError(
                 "PAYMENT_PROVIDER_UPSTREAM_ERROR",
                 f"WeChat Pay returned HTTP {response.status_code}.",
             )
+            error.upstream_code = upstream_code
+            raise error
         if not response.content:
             return {}
         try:
@@ -222,12 +234,19 @@ class WechatPayV3Provider(PaymentProvider):
         )
 
     def refund(
-        self, order, reason: str, amount_cents: int | None = None
+        self,
+        order,
+        reason: str,
+        amount_cents: int | None = None,
+        refund_reference: str = "",
     ) -> dict:
         refund_cents = amount_cents if amount_cents is not None else order.amount_cents
+        # The caller owns the refund key: one key per slice, so a retry maps to
+        # the same provider refund while a second partial refund stays distinct.
+        out_refund_no = refund_reference or f"refund-{order.id}"
         payload = {
             "out_trade_no": str(order.id),
-            "out_refund_no": f"refund-{order.id}",
+            "out_refund_no": out_refund_no,
             "reason": reason[:200],
             "amount": {
                 "refund": refund_cents,
@@ -243,6 +262,40 @@ class WechatPayV3Provider(PaymentProvider):
             "refund_id": data.get("refund_id", ""),
             "status": data.get("status", ""),
             "out_refund_no": payload["out_refund_no"],
+        }
+
+    def close_payment(self, order) -> dict:
+        mchid = self._resolve("mchid") or ""
+        try:
+            data = self._signed_request(
+                "POST",
+                f"/v3/pay/transactions/out-trade-no/{order.id}/close",
+                "",
+                {"mchid": mchid},
+            )
+        except PaymentProviderError as exc:
+            # Already closed or already settled elsewhere: closing is idempotent
+            # from our point of view, and the caller re-queries the trade state.
+            if getattr(exc, "upstream_code", "") in {"ORDER_CLOSED", "ORDER_NOT_EXIST"}:
+                return {"provider": "wechat_v3", "closed": True, "already": True}
+            raise
+        return {
+            "provider": "wechat_v3",
+            "closed": True,
+            "status": data.get("trade_state", "CLOSED"),
+        }
+
+    def query_refund(self, order, refund_reference: str) -> dict:
+        data = self._signed_request(
+            "GET", f"/v3/refund/domestic/refunds/{refund_reference}", "", None
+        )
+        amount = data.get("amount") or {}
+        return {
+            "provider": "wechat_v3",
+            "status": _REFUND_STATUS_MAP.get(data.get("status", ""), "unknown"),
+            "provider_status": data.get("status", ""),
+            "refund_cents": amount.get("refund"),
+            "refund_id": data.get("refund_id", ""),
         }
 
     # ------------------------------------------------------------- callbacks
