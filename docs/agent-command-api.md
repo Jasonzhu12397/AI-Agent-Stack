@@ -595,3 +595,9 @@ The watchdog entry now also carries `last_run_failed` and `run_stuck_hours`, so
 a log line or a dashboard can tell a cluster with old backups (nothing queued),
 a cluster whose newest attempt failed, and a cluster with a command nobody ran,
 without re-reading the whole report.
+
+A cluster that was upgraded before its first recurring backup still has a
+restore point: `assess` used to return `restore_point: null` whenever no periodic
+snapshot existed, so the panel said no snapshot could be restored while the
+pre-upgrade file sat on disk. The restore-point finding is now reported in that
+branch too, and the missing recurring backup stays a finding of its own.

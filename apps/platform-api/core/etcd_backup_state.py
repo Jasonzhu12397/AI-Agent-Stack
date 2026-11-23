@@ -171,11 +171,21 @@ def _with_location(
 
     if not point:
         return None
-    return {
-        **point,
-        "path": f"{directory.rstrip('/')}/{point['name']}",
-        "listed": listed,
-    }
+    # A command that saw the file knows where it is; rebuilding the path from
+    # the policy directory would point a rollback at a file that is not there
+    # when the policy directory has been changed since the snapshot was taken.
+    path = str(point.get("path") or "").strip()
+    if not path:
+        path = f"{directory.rstrip('/')}/{point['name']}"
+    return {**point, "path": path, "listed": listed}
+
+
+def _listing_directory(command: AgentCommand, fallback: str) -> str:
+    """Where the file a command listed actually lives."""
+
+    payload = command.payload if isinstance(command.payload, dict) else {}
+    directory = str(payload.get("directory") or "").strip()
+    return directory or fallback
 
 
 def _listing(result: dict[str, Any]) -> list[Any]:
@@ -341,7 +351,10 @@ def etcd_backup_state(
             "pre_upgrade": report["pre_upgrade"],
             "restore_point": _with_location(
                 report["restore_point"] or _reported_restore_point(deployment, now=now),
-                directory=policy["directory"],
+                # The listing came from the directory the command was given, so
+                # that is where its files are, even if the policy has since
+                # been pointed somewhere else.
+                directory=_listing_directory(reported, policy["directory"]),
                 listed=bool(report["restore_point"]),
             ),
             "findings": report["findings"],

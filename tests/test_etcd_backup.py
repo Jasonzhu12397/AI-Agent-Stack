@@ -716,3 +716,26 @@ def test_pre_upgrade_snapshots_do_not_use_up_the_recurring_keep_count():
     names = [entry["name"] for entry in prunable]
     assert periodic[0]["name"] not in names
     assert periodic[1]["name"] not in names
+
+
+def test_a_pre_upgrade_snapshot_is_a_restore_point_before_the_first_backup():
+    now = NOW
+    name = "snapshot-pre-lab-v1.38.0-20261121T230000Z.db"
+    report = assess(
+        snapshot_entries([{"name": name}], cluster_name="lab"),
+        keep_count=2,
+        keep_max_age_hours=26,
+        max_age_hours=26,
+        now=now,
+    )
+
+    # No recurring backup has run yet, so the cluster is still not "ok"...
+    assert report["ok"] is False
+    assert report["findings"][0]["code"] == "ETCD_BACKUP_MISSING"
+    # ...but the snapshot the upgrade took is real and can be rolled back to.
+    assert report["restore_point"]["name"] == name
+    assert report["restore_point"]["kind"] == "pre_upgrade"
+    restore = next(
+        finding for finding in report["findings"] if finding["name"] == "backup.restore_point"
+    )
+    assert restore["ok"] is True

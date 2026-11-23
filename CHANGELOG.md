@@ -30,6 +30,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A pre-upgrade snapshot counts as a restore point even before the first
+  recurring backup exists (`assess` no longer returns `restore_point: null`
+  when only pre-upgrade files are present).
 - The watchdog report entry carries `last_run_failed` and `run_stuck_hours`
   alongside the existing codes.
 - `keep_count` counts recurring snapshots only: recent pre-upgrade files no

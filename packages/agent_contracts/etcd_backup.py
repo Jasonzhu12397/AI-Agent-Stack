@@ -483,6 +483,10 @@ def assess(
     periodic = [entry for entry in entries if _kind(entry) == "periodic"]
     pre_upgrade = [entry for entry in entries if _kind(entry) == "pre_upgrade"]
     findings: list[dict[str, Any]] = []
+    # A pre-upgrade snapshot is a usable restore point even before the first
+    # recurring backup has run: a cluster that was upgraded on its first day
+    # would otherwise be told no snapshot exists while one sits on disk.
+    point = restore_point(entries, now=current)
     if not periodic:
         findings.append(
             {
@@ -495,6 +499,19 @@ def assess(
                 ),
             }
         )
+        findings.append(
+            {
+                "name": "backup.restore_point",
+                "ok": point is not None,
+                "code": "" if point else "ETCD_BACKUP_NO_RESTORE_POINT",
+                "detail": (
+                    f"a rollback would restore {point['name']} ({point['kind']}, "
+                    f"{point['age_hours']:.1f}h old)"
+                    if point
+                    else "no snapshot exists that a rollback could restore"
+                ),
+            }
+        )
         return {
             "count": 0,
             "newest": None,
@@ -503,7 +520,7 @@ def assess(
             "pre_upgrade_count": len(pre_upgrade),
             "pre_upgrade": public_entries(pre_upgrade),
             "prunable": [],
-            "restore_point": None,
+            "restore_point": point,
             "findings": findings,
             "ok": False,
         }
@@ -529,7 +546,6 @@ def assess(
         now=current,
         protect=protect,
     )
-    point = restore_point(entries, now=current)
     findings.append(
         {
             "name": "backup.restore_point",

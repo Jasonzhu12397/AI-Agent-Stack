@@ -784,3 +784,68 @@ def test_a_cluster_switched_off_says_so_instead_of_never_backed_up():
     assert body["ok"] is False
     assert body["findings"] == []
     assert "not_run_yet" not in body
+
+
+@pytest.mark.django_db
+def test_a_reported_snapshot_path_is_not_rewritten_from_the_policy_directory():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    name = "snapshot-pre-lab-v1.38.0-20261123T010000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="upgrade-snapshot",
+        plan_hash="7" * 64,
+        deployment=deployment,
+        finished_at=now,
+        result={
+            "etcd_snapshot": {
+                "path": f"/var/lib/etcd/backups-labcache/{name}",
+                "verified": True,
+                "taken": True,
+            }
+        },
+    )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    point = body["restore_point"]
+    assert point["name"] == name
+    # The snapshot lives in the directory the upgrade was told to use, not in
+    # whatever the policy says today.
+    assert point["path"] == f"/var/lib/etcd/backups-labcache/{name}"
+    assert point["listed"] is False
+
+
+@pytest.mark.django_db
+def test_a_restore_point_from_a_listing_uses_the_directory_that_was_listed():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    name = "snapshot-pre-lab-v1.38.0-20261123T000000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.STATUS_ACTION,
+        payload={
+            "cluster_name": "lab",
+            "directory": "/var/lib/etcd/backups-old",
+        },
+        status=AgentCommand.Status.SUCCEEDED,
+        idempotency_key="status-old-directory",
+        plan_hash="8" * 64,
+        deployment=deployment,
+        finished_at=now,
+        result={"entries": [name]},
+    )
+
+    point = client.get(URL.format(deployment.id)).data["restore_point"]
+
+    assert point["listed"] is True
+    assert point["path"] == f"/var/lib/etcd/backups-old/{name}"
