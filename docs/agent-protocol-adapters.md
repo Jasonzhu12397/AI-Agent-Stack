@@ -267,22 +267,24 @@ record with `status = FAILED` and `error_code = CAPABILITY_INVOCATION_FAILED`.
 
 | Failure | Raised adapter code |
 |---|---|
-| Request timed out | `CAPABILITY_TIMEOUT` |
+| Request timed out (read/write/pool timeout) | `CAPABILITY_TIMEOUT` |
+| Connection refused/reset (`ConnectError`), connection timeout (`ConnectTimeout`), redirect loop (`TooManyRedirects`), rejected 3xx redirect | `CAPABILITY_UPSTREAM_UNREACHABLE` |
 | Upstream 4xx status | `CAPABILITY_UPSTREAM_CLIENT_ERROR` |
 | Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
 | Non-JSON content type, malformed JSON, non-object body | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
-| Redirect, other non-success status, unreachable network, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
+| Other non-success status, remaining transport failure, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
 
 ### MCP normalization
 
 | Failure | Raised adapter code | Notes |
 |---|---|---|
 | Remote application error (`isError: true`, JSON-RPC error frame) | `CAPABILITY_UPSTREAM_ERROR` | Readable message from content; no secret echo. |
-| Request timed out | `CAPABILITY_TIMEOUT` |
+| Request timed out (read/write/pool timeout) | `CAPABILITY_TIMEOUT` |
+| Connection refused/reset (`ConnectError`), connection timeout (`ConnectTimeout`), redirect loop (`TooManyRedirects`), rejected 3xx redirect | `CAPABILITY_UPSTREAM_UNREACHABLE` |
 | Upstream 4xx status | `CAPABILITY_UPSTREAM_CLIENT_ERROR` |
 | Upstream 5xx status | `CAPABILITY_UPSTREAM_SERVER_ERROR` |
 | Missing/unsupported content type, malformed JSON, malformed JSON-RPC frame | `CAPABILITY_UPSTREAM_INVALID_RESPONSE` |
-| Redirect, other non-success status, unreachable network, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
+| Other non-success status, remaining transport failure, schema rejection | `CAPABILITY_INVOCATION_FAILED` |
 | Misconfigured plugin or manifest block | `CAPABILITY_CONFIG_INVALID` | Invalid tool mapping, missing required block. |
 
 The shared HTTP and MCP connectors attach a `FAULT_*` taxonomy category to the
@@ -290,6 +292,13 @@ raised `ToolExecutionError`; the adapters map that category onto the unified
 codes above. Connectors leave the original exception type and message intact,
 and callers that do not inspect the category keep the previous generic
 `CAPABILITY_INVOCATION_FAILED` behavior.
+
+**Timeout vs. unreachable split:** a `ConnectTimeout` means the handshake never
+completed, so it is classified `FAULT_UNREACHABLE` (mapped to
+`CAPABILITY_UPSTREAM_UNREACHABLE`). Read, write and pool `TimeoutException`
+subclasses mean a connected upstream stalled, and stay `FAULT_TIMEOUT` (mapped
+to `CAPABILITY_TIMEOUT`). A connect timeout is never counted in both buckets.
+The same split applies to the A2A and OpenAI-compatible adapters.
 
 ### OpenAI-compatible normalization
 

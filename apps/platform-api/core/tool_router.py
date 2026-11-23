@@ -14,6 +14,7 @@ FAULT_CLIENT_ERROR = "upstream_client_error"
 FAULT_SERVER_ERROR = "upstream_server_error"
 FAULT_TIMEOUT = "upstream_timeout"
 FAULT_INVALID_RESPONSE = "upstream_invalid_response"
+FAULT_UNREACHABLE = "upstream_unreachable"
 FAULT_UPSTREAM_ERROR = "upstream_application_error"
 
 

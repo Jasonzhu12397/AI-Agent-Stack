@@ -23,6 +23,7 @@ from core.tool_router import (
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
     FAULT_TIMEOUT,
+    FAULT_UNREACHABLE,
     ToolExecutionError,
 )
 
@@ -141,6 +142,20 @@ def test_http_malformed_json_maps_to_invalid_response(monkeypatch):
         monkeypatch, response=_HttpResponse(200, b"not-json")
     )
     assert error.code == FAULT_INVALID_RESPONSE
+
+
+def test_http_connect_error_maps_to_unreachable(monkeypatch):
+    error = _run_http(
+        monkeypatch, side_effect=httpx.ConnectError("connection refused")
+    )
+    assert error.code == FAULT_UNREACHABLE
+
+
+def test_http_too_many_redirects_maps_to_unreachable(monkeypatch):
+    error = _run_http(
+        monkeypatch, side_effect=httpx.TooManyRedirects("redirect loop")
+    )
+    assert error.code == FAULT_UNREACHABLE
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +311,17 @@ def test_mcp_malformed_json_maps_to_invalid_response(monkeypatch):
     ]
     error = _run_mcp(monkeypatch, responses)
     assert error.code == FAULT_INVALID_RESPONSE
+
+
+def test_mcp_connect_error_maps_to_unreachable(monkeypatch):
+    error = _run_mcp(
+        monkeypatch, [], side_effect=httpx.ConnectError("connection refused")
+    )
+    assert error.code == FAULT_UNREACHABLE
+
+
+def test_mcp_too_many_redirects_maps_to_unreachable(monkeypatch):
+    error = _run_mcp(
+        monkeypatch, [], side_effect=httpx.TooManyRedirects("redirect loop")
+    )
+    assert error.code == FAULT_UNREACHABLE

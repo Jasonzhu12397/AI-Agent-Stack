@@ -19,6 +19,7 @@ from core.tool_router import (
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
     FAULT_TIMEOUT,
+    FAULT_UNREACHABLE,
     ToolContext,
     ToolExecutionError,
 )
@@ -390,7 +391,10 @@ def execute_http_operation(arguments, context: ToolContext, tool):
             ) as response:
                 status = response.status_code
                 if 300 <= status < 400:
-                    raise ToolExecutionError("Connector redirects are not allowed.")
+                    raise ToolExecutionError(
+                        "Connector redirects are not allowed.",
+                        code=FAULT_UNREACHABLE,
+                    )
                 if 400 <= status < 500:
                     raise ToolExecutionError(
                         "Connector returned a 4xx status.",
@@ -427,13 +431,29 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                 payload = b"".join(chunks)
     except ToolExecutionError:
         raise
+    # ConnectTimeout is classified UNREACHABLE: the handshake never completed,
+    # so the endpoint could not be reached. Remaining TimeoutException
+    # subclasses (read/write/pool timeouts) mean a connected upstream stalled.
+    except httpx.ConnectTimeout as exc:
+        raise ToolExecutionError(
+            "Connector could not establish a connection.",
+            code=FAULT_UNREACHABLE,
+        ) from exc
+    except (httpx.ConnectError, httpx.TooManyRedirects) as exc:
+        raise ToolExecutionError(
+            "Connector endpoint is unreachable.",
+            code=FAULT_UNREACHABLE,
+        ) from exc
     except httpx.TimeoutException as exc:
         raise ToolExecutionError(
             "Connector HTTP request timed out.",
             code=FAULT_TIMEOUT,
         ) from exc
     except httpx.HTTPError:
-        raise ToolExecutionError("Connector HTTP request failed.") from None
+        raise ToolExecutionError(
+            "Connector HTTP request failed.",
+            code=FAULT_UNREACHABLE,
+        ) from None
 
     try:
         result = json.loads(

@@ -320,6 +320,11 @@ def _invoke(
         ) as client:
             try:
                 response = client.post(url, content=encoded, headers=headers)
+            except httpx.ConnectTimeout as exc:
+                raise CapabilityResolutionError(
+                    CAPABILITY_UPSTREAM_UNREACHABLE,
+                    "The upstream chat completion endpoint is unreachable.",
+                ) from exc
             except httpx.TimeoutException as exc:
                 raise CapabilityResolutionError(
                     CAPABILITY_TIMEOUT,

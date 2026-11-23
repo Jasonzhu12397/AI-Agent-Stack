@@ -14,6 +14,7 @@ from core.tool_router import (
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
     FAULT_TIMEOUT,
+    FAULT_UNREACHABLE,
     FAULT_UPSTREAM_ERROR,
     ToolExecutionError,
 )
@@ -200,7 +201,10 @@ class McpClient:
             ) as response:
                 status = response.status_code
                 if 300 <= status < 400:
-                    raise ToolExecutionError("MCP redirects are not allowed.")
+                    raise ToolExecutionError(
+                        "MCP redirects are not allowed.",
+                        code=FAULT_UNREACHABLE,
+                    )
                 if 400 <= status < 500:
                     raise ToolExecutionError(
                         "MCP endpoint returned a 4xx status.",
@@ -232,13 +236,28 @@ class McpClient:
                 payload_bytes = _read_body(response)
         except ToolExecutionError:
             raise
+        # ConnectTimeout is classified UNREACHABLE: the handshake never completed.
+        # Remaining TimeoutException subclasses mean a connected upstream stalled.
+        except httpx.ConnectTimeout as exc:
+            raise ToolExecutionError(
+                "MCP client could not establish a connection.",
+                code=FAULT_UNREACHABLE,
+            ) from exc
+        except (httpx.ConnectError, httpx.TooManyRedirects) as exc:
+            raise ToolExecutionError(
+                "MCP endpoint is unreachable.",
+                code=FAULT_UNREACHABLE,
+            ) from exc
         except httpx.TimeoutException as exc:
             raise ToolExecutionError(
                 "MCP request timed out.",
                 code=FAULT_TIMEOUT,
             ) from exc
         except httpx.HTTPError:
-            raise ToolExecutionError("MCP request failed.") from None
+            raise ToolExecutionError(
+                "MCP request failed.",
+                code=FAULT_UNREACHABLE,
+            ) from None
         return content_type, session_id, payload_bytes
 
     def _send(self, method, params=None, *, expect_response=True):

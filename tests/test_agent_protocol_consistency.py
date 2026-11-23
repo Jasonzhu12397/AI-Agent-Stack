@@ -24,6 +24,7 @@ from core.agent_a2a_adapter import (
     CAPABILITY_UPSTREAM_CLIENT_ERROR as A2A_CLIENT_ERROR,
     CAPABILITY_UPSTREAM_INVALID_RESPONSE as A2A_INVALID_RESPONSE,
     CAPABILITY_UPSTREAM_SERVER_ERROR as A2A_SERVER_ERROR,
+    CAPABILITY_UPSTREAM_UNREACHABLE as A2A_UNREACHABLE,
 )
 from core.agent_capability_router import (
     CAPABILITY_DISABLED,
@@ -46,7 +47,13 @@ from core.models import (
 from core.tool_router import ToolApprovalRequired
 
 CAPABILITY_NAME = "complete"
-FAULT_KEYS = ("client_error", "server_error", "timeout", "invalid_response")
+FAULT_KEYS = (
+    "client_error",
+    "server_error",
+    "timeout",
+    "invalid_response",
+    "unreachable",
+)
 _REAL_CLIENT = httpx.Client
 _Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -180,6 +187,7 @@ EXPECTED_FAULT_CODES: dict[str, str] = {
     "server_error": A2A_SERVER_ERROR,
     "timeout": A2A_TIMEOUT,
     "invalid_response": A2A_INVALID_RESPONSE,
+    "unreachable": A2A_UNREACHABLE,
 }
 
 SPECS: list[ProtocolSpec] = [
@@ -349,7 +357,12 @@ def _patch_http_json(
         "core.http_connector.socket.getaddrinfo",
         lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
     )
-    side_effect = httpx.TimeoutException("timed out") if fault == "timeout" else None
+    if fault == "timeout":
+        side_effect: Exception | None = httpx.TimeoutException("timed out")
+    elif fault == "unreachable":
+        side_effect = httpx.ConnectError("connection refused")
+    else:
+        side_effect = None
     if fault is None:
         response = _FakeResponse(
             200, json.dumps({"text": "done"}).encode("utf-8"), "application/json"
@@ -375,6 +388,8 @@ def _mcp_handler(calls: list[dict[str, Any]], fault: str | None) -> _Handler:
         calls.append({"method": request.method, "url": str(request.url)})
         if fault == "timeout":
             raise httpx.TimeoutException("timed out")
+        if fault == "unreachable":
+            raise httpx.ConnectError("connection refused")
         body = json.loads(request.content.decode("utf-8"))
         method = body.get("method")
         if method == "initialize":
@@ -426,6 +441,8 @@ def _a2a_handler(calls: list[dict[str, Any]], fault: str | None) -> _Handler:
         calls.append({"method": request.method, "url": str(request.url)})
         if fault == "timeout":
             raise httpx.TimeoutException("timed out")
+        if fault == "unreachable":
+            raise httpx.ConnectError("connection refused")
         if fault == "client_error":
             return httpx.Response(400, content=b'{"error":"bad request"}')
         if fault == "server_error":
@@ -454,6 +471,8 @@ def _openai_handler(calls: list[dict[str, Any]], fault: str | None) -> _Handler:
         calls.append({"method": request.method, "url": str(request.url)})
         if fault == "timeout":
             raise httpx.TimeoutException("timed out")
+        if fault == "unreachable":
+            raise httpx.ConnectError("connection refused")
         if fault == "client_error":
             return httpx.Response(400, content=b'{"error":"bad request"}')
         if fault == "server_error":

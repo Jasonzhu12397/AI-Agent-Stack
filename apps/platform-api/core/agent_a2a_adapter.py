@@ -304,6 +304,10 @@ def discover_card(installation: Any) -> list[dict[str, Any]]:
         with _http_client(timeout) as client:
             try:
                 response = client.get(url, headers=headers)
+            except httpx.ConnectTimeout as exc:
+                raise CapabilityResolutionError(
+                    CAPABILITY_UPSTREAM_UNREACHABLE, "The agent card endpoint is unreachable."
+                ) from exc
             except httpx.TimeoutException as exc:
                 raise CapabilityResolutionError(
                     CAPABILITY_TIMEOUT, "The agent card request timed out."
@@ -448,6 +452,10 @@ def _invoke(
         with _http_client(timeout) as client:
             try:
                 response = client.post(endpoint, content=encoded, headers=headers)
+            except httpx.ConnectTimeout as exc:
+                raise CapabilityResolutionError(
+                    CAPABILITY_UPSTREAM_UNREACHABLE, "The A2A endpoint is unreachable."
+                ) from exc
             except httpx.TimeoutException as exc:
                 raise CapabilityResolutionError(
                     CAPABILITY_TIMEOUT, "The A2A message request timed out."
