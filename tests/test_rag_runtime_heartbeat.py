@@ -5,10 +5,10 @@ from core import rag_runtime
 
 
 class FakeGateway:
-    def __init__(self):
+    def __init__(self, guard=None):
         self.batch_sizes = []
 
-    def embed(self, model_config, texts):
+    def embed(self, model_config, texts, **kwargs):
         self.batch_sizes.append(len(texts))
         return SimpleNamespace(vectors=[[0.1, 0.2] for _ in texts])
 
@@ -34,7 +34,7 @@ def test_ingestion_renews_lease_before_each_batch_and_vector_write(monkeypatch):
     model = SimpleNamespace(model_name="test-embedding-model")
 
     monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
-    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda: gateway)
+    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     result = rag_runtime.ingest_text(
         tenant_id="tenant-1",
@@ -62,7 +62,7 @@ def test_ingestion_stops_when_lease_heartbeat_fails(monkeypatch):
     model = SimpleNamespace(model_name="test-embedding-model")
 
     monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
-    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda: gateway)
+    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     def fail_heartbeat():
         raise RuntimeError("lease lost")
@@ -144,7 +144,7 @@ def test_ingestion_and_retrieval_use_the_model_scoped_collection(monkeypatch):
     model = SimpleNamespace(model_name="bge-m3")
 
     monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
-    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda: gateway)
+    monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     result = rag_runtime.ingest_text(
         tenant_id="tenant-1",

@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -20,6 +22,8 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.token_budget import TenantTokenBudgetExceeded
+from core.token_guard import AdHocTokenGuard
 
 
 def get_tenant(request, tenant_id):
@@ -168,8 +172,34 @@ class ModelTestView(APIView):
             "messages",
             [{"role": "user", "content": "Reply with a short connection test."}],
         )
+        request_id = str(request.headers.get("X-Request-ID") or uuid.uuid4().hex)[:160]
+        guard = AdHocTokenGuard(tenant=tenant, scope_ref=f"model-test:{model_config.id}")
         try:
-            result = ModelGateway().complete(model_config, messages)
+            result = ModelGateway(guard=guard).complete(
+                model_config,
+                messages,
+                idempotency_key=f"model-test:{request_id}",
+            )
+        except TenantTokenBudgetExceeded as exc:
+            record_audit_event(
+                request,
+                tenant,
+                "model.config.tested",
+                "model_config",
+                model_config.id,
+                outcome=AuditEvent.Outcome.FAILURE,
+                metadata={"error_code": "TENANT_TOKEN_BUDGET_EXCEEDED", "period": exc.period},
+            )
+            return Response(
+                {
+                    "error": {
+                        "code": "TENANT_TOKEN_BUDGET_EXCEEDED",
+                        "message": f"Tenant {exc.period} token budget would be exceeded.",
+                        "details": {"period": exc.period},
+                    }
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         except ModelGatewayError as exc:
             record_audit_event(
                 request,
