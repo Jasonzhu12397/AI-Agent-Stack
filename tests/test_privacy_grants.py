@@ -124,12 +124,12 @@ def test_privacy_deletion_request_requires_confirm_and_scope(privacy_workspace):
 
 
 @pytest.mark.django_db
-def test_privacy_sessions_reports_dependency_unavailable(privacy_workspace):
+def test_privacy_sessions_lists_current_user_sessions(privacy_workspace):
     response = privacy_workspace["client"].get(
         f"/api/v1/tenants/{privacy_workspace['tenant'].id}/privacy/sessions/"
     )
-    assert response.status_code == 503
-    assert response.data["error"]["code"] == "PRIVACY_DEPENDENCY_UNAVAILABLE"
+    assert response.status_code == 200
+    assert response.data["results"] == []
 
 
 @pytest.mark.django_db
