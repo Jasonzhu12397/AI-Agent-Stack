@@ -10,6 +10,10 @@ import {
   credentialHint,
   installPayload,
   validateInstall,
+  filterCatalog,
+  catalogStatusLabel,
+  catalogInstallPayload,
+  protocolLabel,
 } from "../src/domain/agentMarketplace.ts";
 
 const makeDefinition = (overrides = {}) => ({
@@ -50,6 +54,21 @@ const makeInstallation = (pluginKey, overrides = {}) => ({
 
 const findEntry = (entries, pluginKey) =>
   entries.find((entry) => entry.definition.plugin_key === pluginKey);
+
+const makeCatalogEntry = (overrides = {}) => ({
+  plugin_key: "market-agent-a",
+  name: "Market Agent A",
+  description: "Summarizes market notes.",
+  version: "1.2.0",
+  protocol: "http_json",
+  enabled: true,
+  capabilities: [{ name: "summarize", description: "Summarize a document.", risk_level: "low" }],
+  installed: false,
+  installation_status: "not_installed",
+  installation_id: null,
+  project_id: null,
+  ...overrides,
+});
 
 test("mergeMarketplace marks a plugin without installation as not installed", () => {
   const entries = mergeMarketplace([makeDefinition({ plugin_key: "plugin-a" })], []);
@@ -335,4 +354,84 @@ test("validateInstall rejects references on plugins that do not accept credentia
   const rejected = validateInstall(openDefinition, "env://SHOULD_NOT_SEND");
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors[0], /does not accept a credential reference/i);
+});
+
+test("catalogStatusLabel maps installation states to badge labels and tones", () => {
+  assert.deepEqual(catalogStatusLabel(makeCatalogEntry({ installation_status: "installed" })), {
+    label: "Installed",
+    type: "success",
+  });
+  assert.deepEqual(catalogStatusLabel(makeCatalogEntry({ installation_status: "disabled" })), {
+    label: "Disabled",
+    type: "warning",
+  });
+  assert.deepEqual(catalogStatusLabel(makeCatalogEntry({ installation_status: "uninstalled" })), {
+    label: "Uninstalled",
+    type: "info",
+  });
+  assert.deepEqual(catalogStatusLabel(makeCatalogEntry({ installation_status: "not_installed" })), {
+    label: "Not installed",
+    type: "info",
+  });
+});
+
+test("filterCatalog matches name, description and capability names case-insensitively", () => {
+  const entries = [
+    makeCatalogEntry({ plugin_key: "a", name: "Weather Agent", description: "Reports weather forecasts." }),
+    makeCatalogEntry({
+      plugin_key: "b",
+      name: "Docs Agent",
+      description: "Handles market research summaries.",
+    }),
+    makeCatalogEntry({
+      plugin_key: "c",
+      name: "Charter Agent",
+      description: "Files charter paperwork.",
+      capabilities: [{ name: "draft_reply", description: "Draft a reply.", risk_level: "medium" }],
+    }),
+  ];
+  assert.deepEqual(filterCatalog(entries, { query: "weather" }).map((item) => item.plugin_key), ["a"]);
+  assert.deepEqual(filterCatalog(entries, { query: "MARKET" }).map((item) => item.plugin_key), ["b"]);
+  assert.deepEqual(filterCatalog(entries, { query: "draft" }).map((item) => item.plugin_key), ["c"]);
+  assert.deepEqual(filterCatalog(entries, { query: "nomatch" }), []);
+});
+
+test("filterCatalog applies exact protocol match and installed-only toggle", () => {
+  const entries = [
+    makeCatalogEntry({ plugin_key: "a", protocol: "http_json", installed: true, installation_status: "installed" }),
+    makeCatalogEntry({ plugin_key: "b", protocol: "mcp", installed: false, installation_status: "not_installed" }),
+    makeCatalogEntry({ plugin_key: "c", protocol: "a2a", installed: true, installation_status: "installed" }),
+  ];
+  assert.deepEqual(filterCatalog(entries, { protocol: "mcp" }).map((item) => item.plugin_key), ["b"]);
+  assert.deepEqual(
+    filterCatalog(entries, { installedOnly: true }).map((item) => item.plugin_key),
+    ["a", "c"],
+  );
+  assert.deepEqual(
+    filterCatalog(entries, { protocol: "a2a", installedOnly: true }).map((item) => item.plugin_key),
+    ["c"],
+  );
+});
+
+test("protocolLabel renders known protocols and passes unknown values through", () => {
+  assert.equal(protocolLabel("http_json"), "HTTP JSON");
+  assert.equal(protocolLabel("mcp"), "MCP");
+  assert.equal(protocolLabel("a2a"), "A2A");
+  assert.equal(protocolLabel("openai_compatible"), "OpenAI-compatible");
+  assert.equal(protocolLabel("custom_grpc"), "custom_grpc");
+});
+
+test("catalogInstallPayload identifies the plugin by key and version, credential optional", () => {
+  const entry = makeCatalogEntry({ plugin_key: "market-agent-a", version: "1.2.0" });
+  assert.deepEqual(catalogInstallPayload(entry, ""), {
+    plugin_key: "market-agent-a",
+    plugin_version: "1.2.0",
+    granted_capabilities: [],
+  });
+  assert.deepEqual(catalogInstallPayload(entry, "  env://PLUGIN_SECRET_TOKEN  "), {
+    plugin_key: "market-agent-a",
+    plugin_version: "1.2.0",
+    granted_capabilities: [],
+    credential_ref: "env://PLUGIN_SECRET_TOKEN",
+  });
 });
