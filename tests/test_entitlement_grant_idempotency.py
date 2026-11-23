@@ -11,13 +11,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from django.db import IntegrityError, OperationalError, transaction
-
 from core.billing_models import EntitlementGrant, Order, Plan, Subscription
 from core.billing_views import _credit_entitlement
-from django.contrib.auth import get_user_model
-
 from core.models import Tenant, TenantTokenBudget
+from django.contrib.auth import get_user_model
+from django.db import IntegrityError, OperationalError, transaction
 
 
 @pytest.fixture
@@ -42,7 +40,9 @@ def order_setup(db):
         idempotency_key="ledger-order-1",
         created_by=user,
     )
-    TenantTokenBudget.objects.get_or_create(tenant=tenant, defaults={"daily_limit": 0, "monthly_limit": 0})
+    TenantTokenBudget.objects.get_or_create(
+        tenant=tenant, defaults={"daily_limit": 0, "monthly_limit": 0}
+    )
     return tenant, plan, order
 
 
