@@ -213,6 +213,48 @@ def wechat_env(monkeypatch):
     }
 
 
+def _wechat_signed_response(
+    status: int, payload: dict | None, env: dict
+) -> httpx.Response:
+    """Sign a response body the way the WeChat Pay platform does."""
+
+    body_text = (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if payload is not None
+        else ""
+    )
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex
+    message = f"{timestamp}\n{nonce}\n{body_text}\n".encode()
+    signature = base64.b64encode(
+        env["platform_private"].sign(message, padding.PKCS1v15(), hashes.SHA256())
+    ).decode()
+    headers = {
+        "Wechatpay-Timestamp": timestamp,
+        "Wechatpay-Nonce": nonce,
+        "Wechatpay-Signature": signature,
+        "Wechatpay-Serial": format(env["platform_cert"].serial_number, "X"),
+    }
+    return httpx.Response(status, content=body_text.encode(), headers=headers)
+
+
+def _alipay_signed_response(node_key: str, payload: dict, env: dict) -> httpx.Response:
+    """Sign a response node the way the Alipay gateway does."""
+
+    node_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    signature = base64.b64encode(
+        env["private"].sign(
+            node_text.encode(), padding.PKCS1v15(), hashes.SHA256()
+        )
+    ).decode()
+    body = json.dumps(
+        {node_key: payload, "sign": signature},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return httpx.Response(200, text=body, headers={"Content-Type": "application/json"})
+
+
 @pytest.fixture
 def billing_setup(db):
     user_model = get_user_model()
@@ -249,7 +291,9 @@ def _callback_url(tenant_id, channel="wechat"):
     return f"/api/v1/tenants/{tenant_id}/billing/payments/{channel}/callback/"
 
 
-def _wechat_mock_handler(captured: dict, merchant_public):
+def _wechat_mock_handler(captured: dict, env: dict):
+    merchant_public = env["merchant_public"]
+
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
         captured["url"] = str(request.url)
@@ -274,12 +318,19 @@ def _wechat_mock_handler(captured: dict, merchant_public):
         )
 
         if "/native" in request.url.path:
-            return httpx.Response(
-                200, json={"prepay_id": "prepay-123", "code_url": "weixin://wxpay/bizpayurl?pr=abc"}
+            return _wechat_signed_response(
+                200,
+                {
+                    "prepay_id": "prepay-123",
+                    "code_url": "weixin://wxpay/bizpayurl?pr=abc",
+                },
+                env,
             )
         if "/refunds" in request.url.path:
-            return httpx.Response(200, json={"refund_id": "refund-1", "status": "SUCCESS"})
-        return httpx.Response(200, json={"trade_state": "SUCCESS"})
+            return _wechat_signed_response(
+                200, {"refund_id": "refund-1", "status": "SUCCESS"}, env
+            )
+        return _wechat_signed_response(200, {"trade_state": "SUCCESS"}, env)
 
     return handler
 
@@ -292,7 +343,7 @@ def _wechat_mock_handler(captured: dict, merchant_public):
 @pytest.mark.django_db
 def test_wechat_native_create_sends_signed_request_and_returns_instructions(wechat_env):
     captured: dict = {}
-    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env["merchant_public"]))
+    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env))
     provider = WechatPayV3Provider(transport=transport)
     order = SimpleNamespace(
         id="order-123",
@@ -323,7 +374,7 @@ def test_wechat_native_create_sends_signed_request_and_returns_instructions(wech
 @pytest.mark.django_db
 def test_wechat_refund_request_payload_is_correct(wechat_env):
     captured: dict = {}
-    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env["merchant_public"]))
+    transport = httpx.MockTransport(_wechat_mock_handler(captured, wechat_env))
     provider = WechatPayV3Provider(transport=transport)
     order = SimpleNamespace(
         id="order-123",
@@ -822,7 +873,9 @@ def _alipay_notify(
     return urlencode(params).encode()
 
 
-def _alipay_mock_handler(captured: dict, public_key):
+def _alipay_mock_handler(captured: dict, env: dict):
+    public_key = env["public_key"]
+
     def handler(request: httpx.Request) -> httpx.Response:
         form = dict(parse_qsl(request.content.decode(), keep_blank_values=True))
         captured["form"] = form
@@ -830,38 +883,31 @@ def _alipay_mock_handler(captured: dict, public_key):
         biz = json.loads(form["biz_content"])
         method = form["method"]
         if method == "alipay.trade.precreate":
-            return httpx.Response(
-                200,
-                json={
-                    "alipay_trade_precreate_response": {
-                        "code": "10000",
-                        "msg": "Success",
-                        "qr_code": "qr://alipay/123",
-                        "out_trade_no": biz["out_trade_no"],
-                    },
-                    "sign": form["sign"],
+            return _alipay_signed_response(
+                "alipay_trade_precreate_response",
+                {
+                    "code": "10000",
+                    "msg": "Success",
+                    "qr_code": "qr://alipay/123",
+                    "out_trade_no": biz["out_trade_no"],
                 },
+                env,
             )
         if method == "alipay.trade.refund":
-            return httpx.Response(
-                200,
-                json={
-                    "alipay_trade_refund_response": {
-                        "code": "10000",
-                        "trade_status": "TRADE_SUCCESS",
-                        "refund_fee": biz["refund_amount"],
-                        "trade_no": "alipay-trade-1",
-                    }
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "alipay_trade_query_response": {
+            return _alipay_signed_response(
+                "alipay_trade_refund_response",
+                {
                     "code": "10000",
-                    "trade_status": "TRADE_SUCCESS",
-                }
-            },
+                    "fund_change": "Y",
+                    "refund_fee": biz["refund_amount"],
+                    "trade_no": "alipay-trade-1",
+                },
+                env,
+            )
+        return _alipay_signed_response(
+            "alipay_trade_query_response",
+            {"code": "10000", "trade_status": "TRADE_SUCCESS"},
+            env,
         )
 
     return handler
@@ -871,7 +917,7 @@ def _alipay_mock_handler(captured: dict, public_key):
 def test_alipay_precreate_sends_signed_form_and_returns_qr(alipay_env):
     captured: dict = {}
     transport = httpx.MockTransport(
-        _alipay_mock_handler(captured, alipay_env["public_key"])
+        _alipay_mock_handler(captured, alipay_env)
     )
     provider = AlipayProvider(transport=transport)
     order = SimpleNamespace(
@@ -902,7 +948,7 @@ def test_alipay_precreate_sends_signed_form_and_returns_qr(alipay_env):
 def test_alipay_refund_request_payload_is_correct(alipay_env):
     captured: dict = {}
     transport = httpx.MockTransport(
-        _alipay_mock_handler(captured, alipay_env["public_key"])
+        _alipay_mock_handler(captured, alipay_env)
     )
     provider = AlipayProvider(transport=transport)
     order = SimpleNamespace(
@@ -1079,9 +1125,11 @@ def test_alipay_out_of_order_callback_does_not_regress(alipay_env, billing_setup
 
 
 def _wechat_lifecycle_handler(
-    captured: dict, merchant_public, *, close_code: str = "", refund_status: str = "SUCCESS"
+    captured: dict, env: dict, *, close_code: str = "", refund_status: str = "SUCCESS"
 ):
     """Signed WeChat handler that only serves close and refund-query routes."""
+
+    merchant_public = env["merchant_public"]
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.setdefault("requests", []).append(
@@ -1110,13 +1158,14 @@ def _wechat_lifecycle_handler(
                 return httpx.Response(400, json={"code": close_code, "message": "close rejected"})
             return httpx.Response(204)
         if "/refunds/" in request.url.path:
-            return httpx.Response(
+            return _wechat_signed_response(
                 200,
-                json={
+                {
                     "refund_id": "50300000000000000000000001",
                     "status": refund_status,
                     "amount": {"refund": 5000, "total": 9900, "currency": "CNY"},
                 },
+                env,
             )
         return httpx.Response(404, json={"code": "NOT_FOUND"})
 
@@ -1126,7 +1175,7 @@ def _wechat_lifecycle_handler(
 def test_wechat_close_posts_to_the_close_route_with_merchant_id(wechat_env):
     captured: dict = {}
     transport = httpx.MockTransport(
-        _wechat_lifecycle_handler(captured, wechat_env["merchant_public"])
+        _wechat_lifecycle_handler(captured, wechat_env)
     )
     provider = WechatPayV3Provider(transport=transport)
     order = SimpleNamespace(id="order-close-1", amount_cents=9900, currency="CNY")
@@ -1145,7 +1194,7 @@ def test_wechat_close_treats_already_closed_trades_as_success(wechat_env, upstre
     captured: dict = {}
     transport = httpx.MockTransport(
         _wechat_lifecycle_handler(
-            captured, wechat_env["merchant_public"], close_code=upstream_code
+            captured, wechat_env, close_code=upstream_code
         )
     )
     provider = WechatPayV3Provider(transport=transport)
@@ -1161,7 +1210,7 @@ def test_wechat_close_surfaces_other_upstream_errors(wechat_env):
     captured: dict = {}
     transport = httpx.MockTransport(
         _wechat_lifecycle_handler(
-            captured, wechat_env["merchant_public"], close_code="SYSTEM_ERROR"
+            captured, wechat_env, close_code="SYSTEM_ERROR"
         )
     )
     provider = WechatPayV3Provider(transport=transport)
@@ -1180,7 +1229,7 @@ def test_wechat_query_refund_maps_provider_status(wechat_env, upstream_status, e
     captured: dict = {}
     transport = httpx.MockTransport(
         _wechat_lifecycle_handler(
-            captured, wechat_env["merchant_public"], refund_status=upstream_status
+            captured, wechat_env, refund_status=upstream_status
         )
     )
     provider = WechatPayV3Provider(transport=transport)
@@ -1198,14 +1247,17 @@ def test_wechat_query_refund_maps_provider_status(wechat_env, upstream_status, e
     assert request["path"] == "/v3/refund/domestic/refunds/refund-order-refund-1-abc123"
 
 
-def _alipay_lifecycle_handler(captured: dict, public_key, responses: dict):
+def _alipay_lifecycle_handler(captured: dict, env: dict, responses: dict):
+    public_key = env["public_key"]
+
     def handler(request: httpx.Request) -> httpx.Response:
         form = dict(parse_qsl(request.content.decode(), keep_blank_values=True))
         assert _alipay_verify(form, public_key)
         captured.setdefault("forms", []).append(form)
         method = form["method"]
-        payload = responses[method]
-        return httpx.Response(200, json={method.replace(".", "_") + "_response": payload})
+        return _alipay_signed_response(
+            method.replace(".", "_") + "_response", responses[method], env
+        )
 
     return handler
 
@@ -1222,7 +1274,7 @@ def test_alipay_refund_uses_caller_reference_and_fund_change(alipay_env):
         }
     }
     transport = httpx.MockTransport(
-        _alipay_lifecycle_handler(captured, alipay_env["public_key"], responses)
+        _alipay_lifecycle_handler(captured, alipay_env, responses)
     )
     provider = AlipayProvider(transport=transport)
     order = SimpleNamespace(id="order-alipay-1", amount_cents=9900, currency="CNY")
@@ -1249,7 +1301,7 @@ def test_alipay_refund_reports_pending_when_funds_do_not_move(alipay_env):
         }
     }
     transport = httpx.MockTransport(
-        _alipay_lifecycle_handler(captured, alipay_env["public_key"], responses)
+        _alipay_lifecycle_handler(captured, alipay_env, responses)
     )
     provider = AlipayProvider(transport=transport)
 
@@ -1273,7 +1325,7 @@ def test_alipay_close_is_idempotent_when_trade_does_not_exist(alipay_env):
         }
     }
     transport = httpx.MockTransport(
-        _alipay_lifecycle_handler(captured, alipay_env["public_key"], responses)
+        _alipay_lifecycle_handler(captured, alipay_env, responses)
     )
     provider = AlipayProvider(transport=transport)
 
@@ -1295,7 +1347,7 @@ def test_alipay_query_refund_reads_refund_status(alipay_env):
         }
     }
     transport = httpx.MockTransport(
-        _alipay_lifecycle_handler(captured, alipay_env["public_key"], responses)
+        _alipay_lifecycle_handler(captured, alipay_env, responses)
     )
     provider = AlipayProvider(transport=transport)
 
@@ -1308,3 +1360,110 @@ def test_alipay_query_refund_reads_refund_status(alipay_env):
     assert result["refund_cents"] == 5000
     biz = json.loads(captured["forms"][0]["biz_content"])
     assert biz == {"out_trade_no": "order-alipay-4", "out_request_no": "refund-abc-4"}
+
+
+# --------------------------------------------------------------------------- #
+# Response trust: an unsigned or tampered upstream answer is rejected
+# --------------------------------------------------------------------------- #
+
+
+def _wechat_static_handler(payload: dict, env: dict, *, unsigned: bool = False,
+                           serial: str | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if unsigned:
+            return httpx.Response(200, json=payload)
+        response = _wechat_signed_response(200, payload, env)
+        if serial is not None:
+            response.headers["Wechatpay-Serial"] = serial
+        return response
+
+    return handler
+
+
+@pytest.mark.parametrize("case", ["unsigned", "wrong_serial"])
+def test_wechat_rejects_an_untrusted_response(wechat_env, case):
+    handler = _wechat_static_handler(
+        {"trade_state": "SUCCESS"},
+        wechat_env,
+        unsigned=case == "unsigned",
+        serial="DEADBEEF" if case == "wrong_serial" else None,
+    )
+    provider = WechatPayV3Provider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(PaymentProviderError) as error:
+        provider.query_order(
+            SimpleNamespace(id="order-trust-1", amount_cents=9900, currency="CNY")
+        )
+
+    assert error.value.code == "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED"
+
+
+def test_wechat_rejects_a_response_signed_for_a_different_body(wechat_env):
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Signature covers a paid body, but the body served says CLOSED.
+        signed = _wechat_signed_response(200, {"trade_state": "SUCCESS"}, wechat_env)
+        headers = {
+            key: value
+            for key, value in signed.headers.items()
+            if key.lower().startswith("wechatpay-")
+        }
+        return httpx.Response(
+            200,
+            content=json.dumps({"trade_state": "CLOSED"}, separators=(",", ":")).encode(),
+            headers={**headers, "content-type": "application/json"},
+        )
+
+    provider = WechatPayV3Provider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(PaymentProviderError) as error:
+        provider.query_order(
+            SimpleNamespace(id="order-trust-2", amount_cents=9900, currency="CNY")
+        )
+
+    assert error.value.code == "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED"
+
+
+def test_alipay_rejects_an_unsigned_response(alipay_env):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "alipay_trade_query_response": {
+                    "code": "10000",
+                    "trade_status": "TRADE_SUCCESS",
+                }
+            },
+        )
+
+    provider = AlipayProvider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(PaymentProviderError) as error:
+        provider.query_order(
+            SimpleNamespace(id="order-trust-3", amount_cents=9900, currency="CNY")
+        )
+
+    assert error.value.code == "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED"
+
+
+def test_alipay_rejects_a_tampered_response_node(alipay_env):
+    def handler(request: httpx.Request) -> httpx.Response:
+        signed = _alipay_signed_response(
+            "alipay_trade_query_response",
+            {"code": "10000", "trade_status": "WAIT_BUYER_PAY"},
+            alipay_env,
+        )
+        body = json.loads(signed.text)
+        body["alipay_trade_query_response"]["trade_status"] = "TRADE_SUCCESS"
+        return httpx.Response(
+            200,
+            text=json.dumps(body, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    provider = AlipayProvider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(PaymentProviderError) as error:
+        provider.query_order(
+            SimpleNamespace(id="order-trust-4", amount_cents=9900, currency="CNY")
+        )
+
+    assert error.value.code == "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED"

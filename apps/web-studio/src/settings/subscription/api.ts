@@ -15,3 +15,19 @@ export async function fetchSubscriptionBundle(tenantId: string): Promise<Subscri
 export async function closeOrder(tenantId: string, orderId: string): Promise<OrderRecord> {
   return request(tenantPath(tenantId, `/billing/orders/${orderId}/close/`), { method: "POST" });
 }
+
+/**
+ * Refund a slice or the remainder of a paid order. The server generates the
+ * provider refund reference per slice; the UI only states amount and reason.
+ */
+export async function refundOrder(
+  tenantId: string,
+  orderId: string,
+  amountCents: number | null,
+  reason: string,
+): Promise<OrderRecord> {
+  return request(tenantPath(tenantId, `/billing/orders/${orderId}/refund/`), {
+    method: "POST",
+    body: JSON.stringify({ amount_cents: amountCents, reason }),
+  });
+}

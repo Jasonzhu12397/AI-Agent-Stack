@@ -138,6 +138,71 @@ class AlipayProvider(PaymentProvider):
             "notify_url": self._resolve("notify_url") or "",
         }
 
+    @staticmethod
+    def _node_text(payload: str, node_key: str) -> str:
+        """Return the raw JSON text of the response node inside the envelope.
+
+        Alipay signs the node exactly as it appears in the response, so the
+        signature has to be checked against the original substring rather than
+        a re-serialized dict.
+        """
+
+        marker = f'"{node_key}"'
+        marker_index = payload.find(marker)
+        if marker_index == -1:
+            return ""
+        start = payload.find("{", marker_index + len(marker))
+        if start == -1:
+            return ""
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(payload)):
+            char = payload[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return payload[start : index + 1]
+        return ""
+
+    def _verify_response(self, payload: str, node_key: str, sign: str) -> None:
+        if not sign:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "Alipay response is missing its signature.",
+            )
+        node_text = self._node_text(payload, node_key)
+        if not node_text:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "Alipay response node could not be isolated for verification.",
+            )
+        try:
+            public_key = _load_key(self._resolve("public_key") or "", private=False)
+            public_key.verify(
+                base64.b64decode(sign),
+                node_text.encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        except Exception as exc:  # noqa: BLE001 - any verify failure is invalid
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "Alipay response signature does not verify.",
+            ) from exc
+
     def _request(self, method: str, biz_content: dict) -> dict:
         params = self._common_params(method)
         params["biz_content"] = json.dumps(biz_content, ensure_ascii=False)
@@ -164,6 +229,7 @@ class AlipayProvider(PaymentProvider):
             ) from exc
 
         node_key = method.replace(".", "_") + "_response"
+        self._verify_response(response.text, node_key, str(envelope.get("sign") or ""))
         node = envelope.get(node_key) or {}
         if node.get("code") not in {"10000"}:
             decline_reason = node.get("sub_code") or node.get("msg") or "unknown"

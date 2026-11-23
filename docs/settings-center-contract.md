@@ -109,6 +109,8 @@ or corrupt cache must fall back to the server value and then to `defaults` (dete
   `currency`, `channel` (`wechat|alipay`), `provider_trade_no`, `paid_at`, `idempotency_key`.
   Transitions are only `created→pending→(paid|failed|closed)` and `paid→refunded`; repeated callbacks are
   no-ops keyed by `(channel, provider_trade_no, order_id)`; out-of-order callbacks never move state backwards.
+- Successful provider responses are signature-verified (`PAYMENT_PROVIDER_RESPONSE_UNTRUSTED` on mismatch),
+  and each order payload carries `refunded_cents` so the UI can show the refundable remainder.
 - Closing an unpaid order is provider-first: the trade is queried, a settled trade is refused with
   **409 `ORDER_ALREADY_PAID`**, the trade is closed upstream, and a provider failure keeps the order
   `pending` with **502** and a retryable error code. A closed order therefore cannot still be paid.

@@ -16,8 +16,16 @@ export type UsageSnapshot = {
 export type OrderRecord = {
   id: string;
   plan_code: string;
-  status: "created" | "pending" | "paid" | "failed" | "closed" | "refunded";
+  status:
+    | "created"
+    | "pending"
+    | "paid"
+    | "failed"
+    | "closed"
+    | "partial_refunded"
+    | "refunded";
   amount_cents: number;
+  refunded_cents: number;
   currency: string;
   channel: "wechat" | "alipay";
   created_at: string;
@@ -49,6 +57,8 @@ export function orderStatusLabel(status: OrderRecord["status"]): string {
       return "Payment failed";
     case "closed":
       return "Closed";
+    case "partial_refunded":
+      return "Partially refunded";
     case "refunded":
       return "Refunded";
     default:
@@ -191,6 +201,20 @@ export function describeError(code: string): string {
       return "Usage is read-only here: no payment provider is configured, so no order can be paid.";
     case "TENANT_TOKEN_BUDGET_EXCEEDED":
       return "The token budget for this period is exhausted. Requests fail instead of overspending.";
+    case "ORDER_ALREADY_PAID":
+      return "The provider reports this order as paid. Refund it instead of closing it.";
+    case "PAYMENT_QUERY_FAILED":
+      return "The payment provider could not be queried. Try again; the order stays open.";
+    case "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED":
+      return "The payment provider response failed signature verification. Nothing was changed.";
+    case "PAYMENT_PROVIDER_UPSTREAM_ERROR":
+      return "The payment provider rejected the request. Nothing was changed; try again later.";
+    case "REFUND_AMOUNT_EXCEEDED":
+      return "The refund exceeds the remaining refundable amount.";
+    case "REFUND_AMOUNT_INVALID":
+      return "The refund amount must be a positive amount within the refundable remainder.";
+    case "ORDER_STATE_CONFLICT":
+      return "This order can no longer change state.";
     case "HTTP_401":
       return "Your session has expired. Sign in again.";
     case "HTTP_403":

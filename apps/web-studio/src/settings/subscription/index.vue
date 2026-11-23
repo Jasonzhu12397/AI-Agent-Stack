@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { t } from "../../i18n";
 import { ApiError } from "../../services/http";
 import SettingsPageShell from "../shared/SettingsPageShell.vue";
 import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
-import { fetchSubscriptionBundle } from "./api";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { closeOrder, fetchSubscriptionBundle, refundOrder } from "./api";
 import {
   describeError,
   formatAmount,
@@ -19,6 +20,7 @@ import {
   quotaState,
   remainingQuota,
   usagePercent,
+  type OrderRecord,
 } from "./logic";
 
 const resource = useSettingsResource(async () => {
@@ -63,6 +65,89 @@ const blockedMessage = computed(() => {
   return mapQuotaError("TENANT_TOKEN_BUDGET_EXCEEDED", "monthly", monthlyResetAt.value);
 });
 
+const actionError = ref("");
+const busyOrderId = ref("");
+const refundTarget = ref<OrderRecord | null>(null);
+const refundVisible = ref(false);
+const refundYuan = ref<number | undefined>(undefined);
+const refundReason = ref("");
+const refunding = ref(false);
+
+const refundRemaining = computed(() =>
+  refundTarget.value
+    ? refundTarget.value.amount_cents - (refundTarget.value.refunded_cents ?? 0)
+    : 0,
+);
+
+function canClose(order: OrderRecord): boolean {
+  return order.status === "created" || order.status === "pending";
+}
+
+function canRefund(order: OrderRecord): boolean {
+  return (
+    (order.status === "paid" || order.status === "partial_refunded") &&
+    (order.amount_cents - (order.refunded_cents ?? 0)) > 0
+  );
+}
+
+async function closeUnpaid(order: OrderRecord): Promise<void> {
+  if (!activeTenantId.value) return;
+  actionError.value = "";
+  try {
+    await ElMessageBox.confirm(
+      t("Close this unpaid order? The payment provider trade is closed first, so it can no longer be paid."),
+      t("Close order"),
+      { confirmButtonText: t("Close order"), cancelButtonText: t("Cancel") },
+    );
+  } catch {
+    return;
+  }
+  busyOrderId.value = order.id;
+  try {
+    await closeOrder(activeTenantId.value, order.id);
+    ElMessage.success(t("The order was closed."));
+    await resource.reload();
+  } catch (cause) {
+    actionError.value = cause instanceof ApiError ? describeError(cause.code) : t("The order could not be closed.");
+  } finally {
+    busyOrderId.value = "";
+  }
+}
+
+function openRefund(order: OrderRecord): void {
+  refundTarget.value = order;
+  refundYuan.value = undefined;
+  refundReason.value = "";
+  actionError.value = "";
+  refundVisible.value = true;
+}
+
+async function submitRefund(): Promise<void> {
+  if (!activeTenantId.value || !refundTarget.value) return;
+  const remaining = refundRemaining.value;
+  const cents =
+    refundYuan.value === undefined || refundYuan.value === null
+      ? remaining
+      : Math.round(Number(refundYuan.value) * 100);
+  if (!Number.isFinite(cents) || cents <= 0 || cents > remaining) {
+    actionError.value = `${t("Refund amount must be between ¥0.01 and")} ${formatAmount(remaining, refundTarget.value.currency)}.`;
+    return;
+  }
+  refunding.value = true;
+  actionError.value = "";
+  try {
+    await refundOrder(activeTenantId.value, refundTarget.value.id, cents, refundReason.value.trim());
+    ElMessage.success(t("The refund was submitted to the payment provider."));
+    refundVisible.value = false;
+    refundTarget.value = null;
+    await resource.reload();
+  } catch (cause) {
+    actionError.value = cause instanceof ApiError ? describeError(cause.code) : t("The refund could not be submitted.");
+  } finally {
+    refunding.value = false;
+  }
+}
+
 onMounted(() => void resource.reload());
 void pageLabels;
 </script>
@@ -80,6 +165,18 @@ void pageLabels;
   >
     <el-card class="settings-card" shadow="never">
       <template #header>{{ t("Subscription & Usage Management") }}</template>
+
+<style scoped>
+.refund-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.refund-dialog :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+</style>
       <div v-if="subscription">
         <p>
           <strong>{{ subscription.plan_name }}</strong>
@@ -194,10 +291,86 @@ void pageLabels;
             <el-tag :type="isPaid(row) ? 'success' : 'info'" effect="plain">{{ t(orderStatusLabel(row.status)) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="Refunded">
+          <template #default="{ row }">{{ formatAmount(row.refunded_cents ?? 0, row.currency) }}</template>
+        </el-table-column>
         <el-table-column prop="created_at" label="Created" />
+        <el-table-column label="" width="170" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="canClose(row)"
+              size="small"
+              :loading="busyOrderId === row.id"
+              @click="closeUnpaid(row)"
+            >{{ t("Close order") }}</el-button>
+            <el-button
+              v-if="canRefund(row)"
+              size="small"
+              type="primary"
+              plain
+              @click="openRefund(row)"
+            >{{ t("Refund") }}</el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <el-empty v-else description="No orders yet." :image-size="64" />
     </el-card>
+
+    <el-alert
+      v-if="actionError && !refundVisible"
+      class="settings-inline-error"
+      type="error"
+      show-icon
+      :closable="true"
+      :title="actionError"
+      @close="actionError = ''"
+    />
+
+    <el-dialog
+      v-model="refundVisible"
+      width="420px"
+      align-center
+      :close-on-click-modal="false"
+      data-refund-dialog
+    >
+      <template #header>{{ t("Refund order") }}</template>
+      <div class="refund-dialog">
+        <p class="muted">{{ t("Order") }} {{ refundTarget?.id }}</p>
+        <p class="muted">
+          {{ t("Paid") }} {{ formatAmount(refundTarget?.amount_cents ?? 0, refundTarget?.currency ?? "CNY") }}
+          · {{ t("Refundable") }} {{ formatAmount(refundRemaining, refundTarget?.currency ?? "CNY") }}
+        </p>
+        <el-form label-position="top">
+          <el-form-item :label="t('Refund amount (¥, blank refunds the remainder)')">
+            <el-input-number
+              v-model="refundYuan"
+              :min="0.01"
+              :max="refundRemaining / 100"
+              :precision="2"
+              :step="1"
+              controls-position="right"
+              data-refund-amount
+            />
+          </el-form-item>
+          <el-form-item :label="t('Reason')">
+            <el-input v-model="refundReason" maxlength="200" show-word-limit data-refund-reason />
+          </el-form-item>
+        </el-form>
+        <el-alert
+          v-if="actionError"
+          type="error"
+          show-icon
+          :closable="false"
+          :title="actionError"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="refundVisible = false">{{ t("Cancel") }}</el-button>
+        <el-button type="primary" :loading="refunding" @click="submitRefund">
+          {{ t("Submit refund") }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <p class="muted">{{ describeError("PAYMENT_PROVIDER_NOT_CONFIGURED") }}</p>
   </SettingsPageShell>

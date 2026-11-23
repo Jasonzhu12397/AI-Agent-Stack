@@ -180,6 +180,12 @@ export function describeError(code: string): string {
       return "This plan includes models that cannot be purchased in this region.";
     case "PAYMENT_CHANNEL_NOT_SUPPORTED":
       return "Only WeChat Pay and Alipay are supported.";
+    case "ORDER_ALREADY_PAID":
+      return "This order is already paid at the provider; refund it instead of closing it.";
+    case "PAYMENT_QUERY_FAILED":
+      return "The payment provider could not be queried. Try again; the order stays open.";
+    case "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED":
+      return "The payment provider response failed signature verification.";
     case "HTTP_401":
       return "Your session has expired. Sign in again.";
     case "HTTP_403":

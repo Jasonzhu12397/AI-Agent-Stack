@@ -24,6 +24,7 @@ import uuid
 
 import httpx
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -54,6 +55,10 @@ _REFUND_STATUS_MAP = {
 }
 
 _DEFAULT_BASE_URL = "https://api.mch.weixin.qq.com"
+
+# Response signatures are accepted only within this clock-skew window, so a
+# captured response body cannot be replayed indefinitely.
+_RESPONSE_SKEW_SECONDS = 300
 
 
 class WechatPayV3Provider(PaymentProvider):
@@ -128,6 +133,58 @@ class WechatPayV3Provider(PaymentProvider):
         pem = self._resolve("platform_cert") or ""
         return x509.load_pem_x509_certificate(pem.encode("utf-8"))
 
+    def _verify_response(self, response: httpx.Response) -> None:
+        """Verify the platform signature on a successful response body.
+
+        WeChat signs ``timestamp\nnonce\nbody\n`` with the platform key and
+        identifies the signing certificate by serial. Without this check a
+        compromised or spoofed upstream could hand back attacker-chosen
+        trade states. An empty body (204 close) carries nothing to verify.
+        """
+
+        if not response.content:
+            return
+        timestamp = response.headers.get("Wechatpay-Timestamp", "")
+        nonce = response.headers.get("Wechatpay-Nonce", "")
+        signature = response.headers.get("Wechatpay-Signature", "")
+        serial = response.headers.get("Wechatpay-Serial", "")
+        if not (timestamp and nonce and signature and serial):
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "WeChat Pay response is missing its signature headers.",
+            )
+        certificate = self._platform_certificate()
+        if serial.upper() != format(certificate.serial_number, "X"):
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "WeChat Pay signed the response with an unknown certificate.",
+            )
+        try:
+            signed_at = int(timestamp)
+        except ValueError as exc:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "WeChat Pay response timestamp is not an integer.",
+            ) from exc
+        if abs(time.time() - signed_at) > _RESPONSE_SKEW_SECONDS:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "WeChat Pay response signature is outside the accepted window.",
+            )
+        message = f"{timestamp}\n{nonce}\n{response.content.decode('utf-8')}\n".encode()
+        try:
+            certificate.public_key().verify(
+                base64.b64decode(signature),
+                message,
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        except (ValueError, TypeError, InvalidSignature) as exc:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_RESPONSE_UNTRUSTED",
+                "WeChat Pay response signature does not verify.",
+            ) from exc
+
     def _signed_request(
         self,
         method: str,
@@ -188,6 +245,7 @@ class WechatPayV3Provider(PaymentProvider):
             raise error
         if not response.content:
             return {}
+        self._verify_response(response)
         try:
             return response.json()
         except ValueError as exc:

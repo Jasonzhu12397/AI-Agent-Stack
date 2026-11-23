@@ -183,6 +183,7 @@ def _order_dict(order: Order, payment: dict | None = None) -> dict:
         "plan": order.plan.code,
         "status": order.status,
         "amount_cents": order.amount_cents,
+        "refunded_cents": order.refunded_cents,
         "currency": order.currency,
         "channel": order.channel,
         "provider_trade_no": order.provider_trade_no,
@@ -917,6 +918,8 @@ class ReconciliationView(_SubscriptionAdminView):
         }
 
         discrepancies: list[dict] = []
+        refund_discrepancies: list[dict] = []
+        refund_slice_count = 0
         for order in orders:
             if order.status not in _RECONCILED_STATUSES:
                 continue
@@ -932,6 +935,20 @@ class ReconciliationView(_SubscriptionAdminView):
             if item is not None:
                 discrepancies.append(item)
 
+            # Every refund slice was taken locally from the provider's
+            # acceptance, so the report has to confirm what the provider
+            # actually holds for that reference.
+            for reclaim in order.reclaims.all():
+                refund_slice_count += 1
+                try:
+                    refund_state = provider.query_refund(order, reclaim.refund_reference)
+                except PaymentProviderError:
+                    unavailable.add(order.channel)
+                    continue
+                refund_item = self._compare_refund(order, reclaim, refund_state)
+                if refund_item is not None:
+                    refund_discrepancies.append(refund_item)
+
         unavailable_channels = sorted(unavailable)
 
         return Response(
@@ -941,8 +958,10 @@ class ReconciliationView(_SubscriptionAdminView):
                 "order_count": len(orders),
                 "status_counts": status_counts,
                 "channel_amounts": channel_amounts,
+                "refund_slice_count": refund_slice_count,
                 "unavailable_channels": unavailable_channels,
                 "discrepancies": discrepancies,
+                "refund_discrepancies": refund_discrepancies,
             }
         )
 
@@ -964,6 +983,32 @@ class ReconciliationView(_SubscriptionAdminView):
             return {**base, "kind": "status_mismatch"}
         if provider_amount is not None and provider_amount != order.amount_cents:
             return {**base, "kind": "amount_mismatch"}
+        return None
+
+    @staticmethod
+    def _compare_refund(order: Order, reclaim, state) -> dict | None:
+        # The channel adapters answer with a plain mapping for refunds.
+        if isinstance(state, dict):
+            raw_status = state.get("status", "")
+            provider_cents = state.get("refund_cents")
+        else:
+            raw_status = getattr(state, "status", "")
+            provider_cents = getattr(state, "refund_cents", None)
+        provider_status = (raw_status or "unknown").strip()
+        base = {
+            "order_id": str(order.id),
+            "channel": order.channel,
+            "refund_reference": reclaim.refund_reference,
+            "local_refund_cents": reclaim.refund_cents,
+            "provider_refund_cents": provider_cents,
+            "provider_status": provider_status,
+        }
+        # ``pending`` is a legitimate in-flight provider answer; anything else
+        # that is not the settled refund status is a discrepancy.
+        if provider_status != "refunded" and provider_status != "pending":
+            return {**base, "kind": "refund_status_mismatch"}
+        if provider_cents is not None and provider_cents != reclaim.refund_cents:
+            return {**base, "kind": "refund_amount_mismatch"}
         return None
 
 

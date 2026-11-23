@@ -84,6 +84,13 @@ declares no asynchronous refund notification, and no such path is simulated.
 
 ## Readiness, and why checkout is unavailable
 
+Both adapters verify the upstream response before trusting it: WeChat Pay
+signature headers (`Wechatpay-Signature` over `timestamp\nnonce\nbody\n`, signed
+by the configured platform certificate, inside a five-minute window) and the
+Alipay `sign` over the raw response node. A missing, stale or mismatched
+signature raises `PAYMENT_PROVIDER_RESPONSE_UNTRUSTED` instead of returning a
+trade state, so a spoofed gateway cannot mark an order paid.
+
 Readiness is declared by each adapter through `SLOTS` and `REQUIRED_SLOTS`, and
 `PaymentProvider.is_configured()` derives from them. A channel is registered for
 checkout only when every required slot resolves; a channel with one unresolved

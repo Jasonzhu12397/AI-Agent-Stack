@@ -76,6 +76,10 @@ class StubProvider(PaymentProvider):
         self.queries = 0
         self.fail_query = False
         self.fail_close = False
+        self.refund_query_status = "refunded"
+        self.refund_query_cents: int | None = None
+        self.refund_queries: list[str] = []
+        self.fail_refund_query = False
 
     def is_configured(self) -> bool:
         return True
@@ -120,7 +124,16 @@ class StubProvider(PaymentProvider):
         return {"provider": "stub", "closed": True}
 
     def query_refund(self, order, refund_reference: str) -> dict:
-        return {"provider": "stub", "status": "refunded", "refund_cents": None}
+        self.refund_queries.append(refund_reference)
+        if self.fail_refund_query:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_UPSTREAM_ERROR", "refund query failed"
+            )
+        return {
+            "provider": "stub",
+            "status": self.refund_query_status,
+            "refund_cents": self.refund_query_cents,
+        }
 
 
 def _install_providers(monkeypatch, providers: dict[str, StubProvider]) -> None:
@@ -598,3 +611,129 @@ def test_two_partial_refunds_carry_distinct_provider_references(
     order.refresh_from_db()
     assert order.status == Order.Status.PARTIAL_REFUNDED
     assert order.refunded_cents == 8000
+
+
+@pytest.mark.django_db
+def test_reconciliation_confirms_every_refund_slice_with_the_provider(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    order = _make_paid_order(tenant, plan, owner, "rec-refund-ok")
+    stub = StubProvider("wechat", status="partial_refunded", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    EntitlementReclaim.objects.create(
+        tenant=tenant,
+        order=order,
+        refund_reference=f"refund-{order.id}-abc123",
+        refund_cents=4900,
+        reason="goodwill",
+    )
+    order.refunded_cents = 4900
+    order.status = Order.Status.PARTIAL_REFUNDED
+    order.save(update_fields=["refunded_cents", "status", "updated_at"])
+    stub.refund_query_cents = 4900
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    assert response.data["refund_slice_count"] == 1
+    assert response.data["refund_discrepancies"] == []
+    assert stub.refund_queries == [f"refund-{order.id}-abc123"]
+
+
+@pytest.mark.django_db
+def test_reconciliation_flags_a_refund_the_provider_has_not_settled(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    order = _make_paid_order(tenant, plan, owner, "rec-refund-pending")
+    stub = StubProvider("wechat", status="partial_refunded", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    EntitlementReclaim.objects.create(
+        tenant=tenant,
+        order=order,
+        refund_reference=f"refund-{order.id}-def456",
+        refund_cents=4900,
+    )
+    order.refunded_cents = 4900
+    order.status = Order.Status.PARTIAL_REFUNDED
+    order.save(update_fields=["refunded_cents", "status", "updated_at"])
+    stub.refund_query_status = "unknown"
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    item = response.data["refund_discrepancies"][0]
+    assert item["kind"] == "refund_status_mismatch"
+    assert item["local_refund_cents"] == 4900
+    assert item["provider_status"] == "unknown"
+    assert item["refund_reference"] == f"refund-{order.id}-def456"
+
+
+@pytest.mark.django_db
+def test_reconciliation_flags_a_refund_amount_the_provider_disagrees_with(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    order = _make_paid_order(tenant, plan, owner, "rec-refund-amount")
+    stub = StubProvider("wechat", status="refunded", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    EntitlementReclaim.objects.create(
+        tenant=tenant,
+        order=order,
+        refund_reference=f"refund-{order.id}-ghi789",
+        refund_cents=9900,
+    )
+    order.refunded_cents = 9900
+    order.status = Order.Status.REFUNDED
+    order.save(update_fields=["refunded_cents", "status", "updated_at"])
+    stub.refund_query_cents = 8900
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    item = response.data["refund_discrepancies"][0]
+    assert item["kind"] == "refund_amount_mismatch"
+    assert item["provider_refund_cents"] == 8900
+
+
+@pytest.mark.django_db
+def test_reconciliation_marks_the_channel_unavailable_when_a_refund_query_fails(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    order = _make_paid_order(tenant, plan, owner, "rec-refund-down")
+    stub = StubProvider("wechat", status="paid", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    EntitlementReclaim.objects.create(
+        tenant=tenant,
+        order=order,
+        refund_reference=f"refund-{order.id}-jkl012",
+        refund_cents=1000,
+    )
+    order.refunded_cents = 1000
+    order.status = Order.Status.PARTIAL_REFUNDED
+    order.save(update_fields=["refunded_cents", "status", "updated_at"])
+    stub.fail_refund_query = True
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    assert response.data["refund_discrepancies"] == []
+    assert response.data["unavailable_channels"] == ["wechat"]
