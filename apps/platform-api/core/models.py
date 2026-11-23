@@ -1325,4 +1325,5 @@ class AuditEvent(models.Model):
         raise ValueError("Audit events cannot be deleted through the model API.")
 
 
+from core import data_controls_models  # noqa: F401,E402
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
