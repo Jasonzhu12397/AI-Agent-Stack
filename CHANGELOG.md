@@ -30,6 +30,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- A restore point reported only by an upgrade is labelled `listed: false` in the
+  Delivery table, so its path is not mistaken for a file a listing has seen.
 - The read-only check follows the same retry rule: a failed check no longer
   answers "already queued" for its ten-minute bucket.
 - The watchdog entry also carries `enabled`, so a disabled cluster is visible in

@@ -130,15 +130,17 @@ def _reported_restore_point(
 ) -> dict[str, Any] | None:
     """The snapshot the newest settled upgrade says it took and verified.
 
-    A pending or failed upgrade is ignored: the platform may not offer a file a
-    command never proved it wrote.
+    A pending upgrade is ignored: the platform may not offer a file a command
+    never proved it wrote. A *failed* upgrade is not ignored, because a snapshot
+    is taken before anything changes: an upgrade that died afterwards still left
+    the exact file a rollback needs, and that is the moment it is needed.
     """
 
     command = (
         AgentCommand.objects.filter(
             deployment=deployment,
             command_type=UPGRADE_ACTION,
-            status=AgentCommand.Status.SUCCEEDED,
+            status__in=(AgentCommand.Status.SUCCEEDED, AgentCommand.Status.FAILED),
         )
         .order_by("-created_at")
         .only("result")

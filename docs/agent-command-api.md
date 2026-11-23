@@ -602,3 +602,8 @@ restore point: `assess` used to return `restore_point: null` whenever no periodi
 snapshot existed, so the panel said no snapshot could be restored while the
 pre-upgrade file sat on disk. The restore-point finding is now reported in that
 branch too, and the missing recurring backup stays a finding of its own.
+
+A restore point the platform only learned from an upgrade report carries
+`listed: false`, and the Delivery table says so next to it: the file was verified
+when it was written, but no later directory listing has seen it, so an operator
+knows to check the path before using it.

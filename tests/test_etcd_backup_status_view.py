@@ -876,3 +876,38 @@ def test_a_failed_check_does_not_block_checking_again_in_the_same_bucket():
     assert first.data["code"] == ""
     assert second.data["created"] is False
     assert second.data["command_id"] == first.data["command_id"]
+
+
+@pytest.mark.django_db
+def test_a_failed_upgrade_still_reports_the_snapshot_it_took():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    name = "snapshot-pre-lab-v1.39.0-20261123T020000Z.db"
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.FAILED,
+        idempotency_key="upgrade-failed-with-snapshot",
+        plan_hash="a" * 64,
+        deployment=deployment,
+        finished_at=now,
+        result={
+            "failure_code": "UPGRADE_STEP_FAILED",
+            "etcd_snapshot": {
+                "path": f"/var/lib/etcd/backups/{name}",
+                "verified": True,
+                "taken": True,
+            },
+        },
+    )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    # No listing exists, so the only evidence is the upgrade's own report: a
+    # failed upgrade is exactly when the pre-upgrade file matters.
+    assert body["restore_point"]["name"] == name
+    assert body["restore_point"]["path"] == f"/var/lib/etcd/backups/{name}"

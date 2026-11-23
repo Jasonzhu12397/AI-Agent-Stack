@@ -1721,6 +1721,10 @@ onUnmounted(() => {
                   class="fleet-version-current"
                 >restore point: {{ backupStates[scope.row.id].restore_point?.name }}
                   · {{ backupStates[scope.row.id].restore_point?.kind }}
+                  <span
+                    v-if="backupStates[scope.row.id].restore_point?.listed === false"
+                    class="readiness-blocked"
+                  >· reported by an upgrade, not seen by a directory listing</span>
                   <el-button
                     size="small"
                     text
