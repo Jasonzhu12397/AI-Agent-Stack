@@ -94,7 +94,10 @@ STAGING_STATES = (
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DIRECTORY = re.compile(r"^/var/lib/etcd[A-Za-z0-9._/-]*$")
-_FILE = re.compile(r"^(?P<cluster>[a-z0-9][-a-z0-9.]*)-(?P<stamp>\d{8}T\d{6}Z)\.db$")
+_FILE = re.compile(
+    r"^(?P<cluster>[a-z0-9][-a-z0-9.]*)-(?P<stamp>\d{8}T\d{6}Z)"
+    r"(?:-(?P<runid>[0-9a-f]{8}))?\.db$"
+)
 #: The upgrade executor writes these before it changes a control plane. They
 #: carry the cluster name from this version on; older files only carry the
 #: target version, and are still recognised because the directory belongs to
@@ -374,11 +377,22 @@ def validate_request(
     }
 
 
-def backup_filename(cluster_name: str, *, now: datetime | None = None) -> str:
-    """Return ``<cluster>-<UTC stamp>.db`` for one run."""
+def backup_filename(
+    cluster_name: str, *, now: datetime | None = None, run_id: str | None = None
+) -> str:
+    """Return ``<cluster>-<UTC stamp>.db`` for one run.
+
+    Two runs of the same cluster in the same second would otherwise collide on
+    the second-resolution stamp. A caller that needs a distinct name per run
+    passes an 8-hex ``run_id``; the suffixed name still parses back to the
+    cluster and stamp. Without ``run_id`` the legacy name is unchanged.
+    """
 
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
-    return f"{cluster_name}-{stamp}.db"
+    base = f"{cluster_name}-{stamp}"
+    if run_id:
+        return f"{base}-{run_id}.db"
+    return f"{base}.db"
 
 
 def partial_name(filename: str) -> str:
@@ -405,6 +419,7 @@ def parse_backup_name(name: str, *, cluster_name: str = "") -> dict[str, str] | 
         "name": name,
         "cluster": match.group("cluster"),
         "stamp": match.group("stamp"),
+        "run_id": match.group("runid"),
         "taken_at": taken_at.isoformat(),
     }
 

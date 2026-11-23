@@ -359,10 +359,17 @@ unchanged.
 The backup command forwards its command lease to the executor, which checks the
 lease before saving, before publishing, and before pruning. Once the lease is
 lost the run stops with `COMMAND_LEASE_LOST_DURING_EXECUTION`: it does not
-delete old snapshots and does not overwrite a final file. An interrupted
-verified snapshot keeps its staging file and a `pending_publish` sidecar for the
-next republish, and an already-published snapshot stays put with retention
-skipped.
+delete old snapshots and does not overwrite a final file. A verified snapshot
+whose publish was interrupted by the loss keeps its staging file and a
+`pending_publish` sidecar so the next run can republish it; a snapshot already
+published when the lease is lost stays put and retention is skipped.
+
+Two runs of the same cluster in the same second used to collide on the
+second-resolution stamp, and the publish rename could silently overwrite an
+existing final file. The staging path now carries a per-run id, and the final
+name keeps the legacy stamp name unless that final already exists, in which case
+a suffixed non-colliding name is chosen instead; an existing final is never
+overwritten. The suffixed name still parses back to its cluster and stamp.
 
 Retention is expressed in the request, not in a config file, so the scheduler is
 the single place that decides policy: `keep_count` (default 12, floor 2, ceiling

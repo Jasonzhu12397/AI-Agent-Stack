@@ -29,6 +29,14 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   its staging file and a `pending_publish` sidecar for the next republish, and an
   already-published snapshot stays put with retention skipped. The dispatch path
   forwards the event instead of dropping it.
+- Two backup runs of the same cluster in the same second collided on the
+  second-resolution stamp, and the publish rename could silently overwrite an
+  existing final snapshot. The staging path now carries a per-run id; the final
+  name keeps the legacy stamp name when it is free and otherwise takes a
+  suffixed, non-colliding name, so an existing final is never overwritten. The
+  suffixed name still parses back to its cluster and stamp, and republish of a
+  pending snapshot keeps the recorded final name, so retries do not accumulate
+  garbage.
 - The "who must be kept" protect set is now built in exactly one place:
   `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
   (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the

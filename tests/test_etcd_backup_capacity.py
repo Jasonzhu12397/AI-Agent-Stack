@@ -1,6 +1,6 @@
-"""Disk capacity accounting and cleanup failure reporting.
+"""Disk capacity accounting, cleanup failure reporting, and name uniqueness.
 
-Two root-cause gaps pinned here:
+Three root-cause gaps pinned here:
 
 * A2: the pre-write disk verdict ignored bytes already held by in-flight
   ``*.db.partial`` files, so a volume that fit the database alone could be
@@ -11,6 +11,11 @@ Two root-cause gaps pinned here:
   could not delete vanished from the report and was retried only by accident.
   Removal failures are now reported with path and error and left on disk for
   the next sweep.
+* D2: the final name carried a second-resolution UTC stamp only, so two runs
+  of the same cluster in the same second collided, and the publish rename
+  silently overwrote an existing final file. Staging paths carry a per-run id,
+  the publish side picks a non-colliding final name, and an existing final is
+  never overwritten.
 """
 
 from __future__ import annotations
@@ -28,7 +33,9 @@ from packages.agent_contracts.etcd_backup import (
     DEFAULT_DIRECTORY,
     backup_filename,
     disk_verdict,
+    parse_backup_name,
     partial_name,
+    staging_name_belongs,
     staging_occupancy,
     validate_request,
 )
@@ -265,3 +272,59 @@ def test_failed_cleanup_is_reported_and_left_for_the_next_sweep(tmp_path):
     assert len(failures) == 1
     assert failures[0]["path"].endswith(stale_name)
     assert "permission denied" in failures[0]["error"]
+
+
+# ------------------------------------------------------------------- D2
+
+
+def test_two_runs_same_second_get_distinct_names_and_staging_paths():
+    first = backup_filename("lab", now=NOW, run_id="aaaaaaaa")
+    second = backup_filename("lab", now=NOW, run_id="bbbbbbbb")
+    assert first != second
+    assert partial_name(first) != partial_name(second)
+    for name in (first, second):
+        parsed = parse_backup_name(name, cluster_name="lab")
+        assert parsed is not None
+        assert parsed["stamp"] == "20261122T030000Z"
+
+
+def test_legacy_filename_stays_parseable_without_a_run_id():
+    name = backup_filename("lab", now=NOW)
+    assert name == "lab-20261122T030000Z.db"
+    parsed = parse_backup_name(name, cluster_name="lab")
+    assert parsed is not None
+    assert parsed["run_id"] is None
+
+
+def test_publish_never_overwrites_an_existing_final(tmp_path):
+    staging_dir = _fs(tmp_path, DEFAULT_DIRECTORY)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    base = backup_filename("lab", now=NOW)
+    (staging_dir / base).write_bytes(b"already published")
+
+    runner = FsRunner(str(tmp_path))
+    result = EtcdBackupExecutor(runner).run(_execute_request(), now=NOW)
+
+    assert result["failure_code"] is None
+    assert (staging_dir / base).read_bytes() == b"already published"
+    final = staging_dir / result["backup"]["name"]
+    assert final.name != base
+    assert final.read_bytes() == b"snapshot"
+
+
+def test_two_executor_runs_same_second_keep_both_finals(tmp_path):
+    first_runner = FsRunner(str(tmp_path))
+    first = EtcdBackupExecutor(first_runner).run(_execute_request(), now=NOW)
+
+    second_runner = FsRunner(str(tmp_path))
+    second = EtcdBackupExecutor(second_runner).run(_execute_request(), now=NOW)
+
+    assert first["failure_code"] is None
+    assert second["failure_code"] is None
+    assert first["backup"]["name"] != second["backup"]["name"]
+    staging_dir = _fs(tmp_path, DEFAULT_DIRECTORY)
+    finals = [p.name for p in staging_dir.iterdir() if p.name.endswith(".db")]
+    assert sorted(finals) == sorted([first["backup"]["name"], second["backup"]["name"]])
+    assert staging_name_belongs(
+        partial_name(second["backup"]["name"]), cluster_name="lab"
+    )

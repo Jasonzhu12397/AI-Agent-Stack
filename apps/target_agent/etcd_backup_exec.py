@@ -13,6 +13,7 @@ go.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -52,6 +53,8 @@ ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
 #: Shared with the other mutating actions: a lease lost mid-run stops the
 #: command before it deletes or overwrites anything else.
 COMMAND_LEASE_LOST_DURING_EXECUTION = "COMMAND_LEASE_LOST_DURING_EXECUTION"
+#: Bounded retry when allocating a non-colliding suffixed final name.
+FINAL_NAME_ALLOC_ATTEMPTS = 8
 
 
 class EtcdBackupExecutionError(ValueError):
@@ -567,9 +570,17 @@ class EtcdBackupExecutor:
         # the post-run assessment read this same tuple, instead of each
         # parsing the request payload again and drifting apart.
         protect = tuple(request.get("protect") or ())
-        filename = backup_filename(request["cluster_name"], now=stamp_now)
-        staging = f"{directory}/{partial_name(filename)}"
-        final = f"{directory}/{filename}"
+
+        allocated = self._allocate_final_name(
+            directory, request["cluster_name"], stamp_now
+        )
+        if allocated is None:
+            return self._failed(
+                "ETCD_BACKUP_PUBLISH_NAME_CONFLICT", directory, request
+            )
+        final_name, staged_name = allocated
+        staging = f"{directory}/{partial_name(staged_name)}"
+        final = f"{directory}/{final_name}"
 
         prepare = self._step(
             1,
@@ -611,7 +622,7 @@ class EtcdBackupExecutor:
                 "--write-out=json",
                 f"kubectl -n kube-system exec <etcd-pod> -- df -PB1 {directory}",
             ],
-            detail="measure the live database and the free space before writing",
+            detail="measure the live database, staging occupancy and free space before writing",
         )
         verdict = self._disk_verdict(directory, request, directories)
         disk["detail"] = verdict["detail"]
@@ -705,18 +716,18 @@ class EtcdBackupExecutor:
             # the next run can republish it; nothing is deleted or overwritten.
             record = self._staging_record(
                 cluster_name=request["cluster_name"],
-                partial=partial_name(filename),
-                final_name=filename,
+                partial=partial_name(staged_name),
+                final_name=final_name,
                 directory=directory,
                 now=stamp_now,
                 state=STAGING_STATE_PENDING,
                 attempts=1,
                 last_failure="lease lost before publish",
             )
-            self._write_staging_state(directory, partial_name(filename), record)
+            self._write_staging_state(directory, partial_name(staged_name), record)
             staging_report.append(
                 {
-                    "name": partial_name(filename),
+                    "name": partial_name(staged_name),
                     "directory": directory,
                     "state": STAGING_STATE_PENDING,
                 }
@@ -748,18 +759,18 @@ class EtcdBackupExecutor:
             # the age sweep and lets the next run republish it.
             record = self._staging_record(
                 cluster_name=request["cluster_name"],
-                partial=partial_name(filename),
-                final_name=filename,
+                partial=partial_name(staged_name),
+                final_name=final_name,
                 directory=directory,
                 now=stamp_now,
                 state=STAGING_STATE_PENDING,
                 attempts=1,
                 last_failure=_output(result) or "publish rename failed",
             )
-            self._write_staging_state(directory, partial_name(filename), record)
+            self._write_staging_state(directory, partial_name(staged_name), record)
             staging_report.append(
                 {
-                    "name": partial_name(filename),
+                    "name": partial_name(staged_name),
                     "directory": directory,
                     "state": STAGING_STATE_PENDING,
                 }
@@ -782,7 +793,7 @@ class EtcdBackupExecutor:
                 directory,
                 request,
                 backup={
-                    "name": filename,
+                    "name": final_name,
                     "path": final,
                     "verified": True,
                     "taken_at": stamp_now.isoformat(),
@@ -849,7 +860,7 @@ class EtcdBackupExecutor:
             "cluster_name": request["cluster_name"],
             "execution_mode": "execute",
             "backup": {
-                "name": filename,
+                "name": final_name,
                 "path": final,
                 "verified": True,
                 "taken_at": stamp_now.isoformat(),
@@ -929,6 +940,33 @@ class EtcdBackupExecutor:
         error = _output(outcome) or "rm failed"
         self._cleanup_failures.append({"path": path, "error": error})
         return {"ok": False, "error": error}
+
+    def _allocate_final_name(
+        self, directory: str, cluster_name: str, now: datetime
+    ) -> tuple[str, str] | None:
+        """Pick a non-colliding final name and a distinct staging name.
+
+        The base name carries the second-resolution stamp. If a final file
+        with that name already exists, the run never overwrites it: a suffixed
+        name with a per-run id is used instead. The staging path always carries
+        the per-run id, so two runs in the same second never share a partial
+        path either.
+        """
+
+        base = backup_filename(cluster_name, now=now)
+        existing = {item["name"] for item in self._list_directory(directory)}
+        if base not in existing:
+            staged = backup_filename(
+                cluster_name, now=now, run_id=uuid.uuid4().hex[:8]
+            )
+            return base, staged
+        for _ in range(FINAL_NAME_ALLOC_ATTEMPTS):
+            suffixed = backup_filename(
+                cluster_name, now=now, run_id=uuid.uuid4().hex[:8]
+            )
+            if suffixed not in existing:
+                return suffixed, suffixed
+        return None
 
     def _staging_occupancy(self, directories: list[str], cluster_name: str) -> int:
         """Bytes held by this cluster's in-flight staging files across dirs."""
