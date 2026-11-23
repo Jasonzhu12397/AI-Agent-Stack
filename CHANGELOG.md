@@ -8,6 +8,14 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- Commands created through the node command endpoint no longer leave their
+  deployment link empty: the deployment the Target Agent serves is resolved at
+  creation and persisted on the command. Rollback snapshot protection, the
+  reported restore point and the post-change backup trigger all read that link,
+  so an open rollback actually holds the snapshot it named instead of relying
+  on an empty filter that could never match. A one-off migration backfills legacy
+  unattributed commands from the same node-to-deployment chain; read-time code
+  does not guess a deployment as a fallback.
 - The etcd backup scheduler heartbeat was recorded once per tenant, so one
   queued cluster lent its freshness to every other cluster in that tenant:
   agentless, policy-disabled and never-queued clusters looked evaluated, and the

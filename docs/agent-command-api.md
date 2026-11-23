@@ -393,6 +393,17 @@ of this cluster — a caller cannot point the pruning pass at a path, and cannot
 protect a file that does not belong here. The read-only view reports the same
 set, so "why was this file kept?" has an answer on the screen.
 
+Commands created through `POST /api/v1/agent-nodes/{node_id}/commands/` record
+the deployment their Target Agent serves at creation, resolved through the same
+project + cluster name + succeeded-status chain the snapshot directory lookup
+uses. Retention protection, the reported restore point and the post-change
+backup trigger all read that deployment link, so a rollback actually holds the
+snapshot it named. A node without a deployment (an EPH node, or one whose
+cluster was never installed) leaves the link empty, which is a legal state rather
+than a missing lookup. Commands created before this link was recorded are bound
+once by a data migration, resolved from the same chain; the lookup itself never
+guesses at read time.
+
 A backup that nobody checks is not a control. `python
 apps/platform-api/manage.py check_etcd_backups` walks every `succeeded` deployment,
 asks each one the same question the read-only view asks, writes an
