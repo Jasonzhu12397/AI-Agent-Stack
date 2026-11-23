@@ -200,6 +200,9 @@ class AlipayProvider(PaymentProvider):
     def refund(
         self, order, reason: str, amount_cents: int | None = None
     ) -> dict:
+        # Alipay refunds are settled synchronously: the refund result comes
+        # back in this response, so there is no async refund-notify channel
+        # to parse (the async notify covers payment trade status only).
         refund_cents = amount_cents if amount_cents is not None else order.amount_cents
         refund_amount = (
             Decimal(refund_cents) / Decimal(100)
