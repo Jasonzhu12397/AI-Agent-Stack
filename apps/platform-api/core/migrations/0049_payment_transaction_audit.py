@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ("core", "0046_token_usage_scope_ref"),
+        ("core", "0048_subscription_lifecycle"),
     ]
 
     operations = [

@@ -8,7 +8,7 @@ callback from a configured provider.
 
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -623,6 +623,9 @@ def _credit_entitlement(order: Order) -> EntitlementGrant:
     single order credits its quota exactly once.
     """
 
+    # Serialize re-entry on the order row: a replay and a concurrent credit
+    # path both take this lock, so only one grant row can ever be inserted.
+    order = Order.objects.select_for_update().get(pk=order.pk)
     existing = EntitlementGrant.objects.filter(order=order).first()
     if existing is not None:
         return existing
@@ -646,7 +649,12 @@ def _credit_entitlement(order: Order) -> EntitlementGrant:
         expires_at=timezone.now() + timedelta(days=30),
         reason=f"plan:{order.plan.code}",
     )
-    grant.save()
+    try:
+        with transaction.atomic():
+            grant.save()
+    except IntegrityError:
+        # Another writer won the race; its row is the authoritative grant.
+        return EntitlementGrant.objects.get(order=order)
 
     budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
         tenant=order.tenant
