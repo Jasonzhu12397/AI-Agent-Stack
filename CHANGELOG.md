@@ -20,6 +20,15 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   refused is recorded in `cleanup_failures` with path and error, left on disk for
   the next sweep to retry, while successful removals still report only through
   `swept_partials`.
+- The mutating backup command did not check its command lease while executing: a
+  lease lost mid-run could still publish a snapshot and then prune old ones. The
+  executor now receives the same `lease_lost_event` the other mutating actions
+  use, checks it before saving, before publishing, and before pruning, and stops
+  with `COMMAND_LEASE_LOST_DURING_EXECUTION` once it is lost. After the loss it
+  neither deletes nor overwrites anything: an interrupted verified snapshot keeps
+  its staging file and a `pending_publish` sidecar for the next republish, and an
+  already-published snapshot stays put with retention skipped. The dispatch path
+  forwards the event instead of dropping it.
 - The "who must be kept" protect set is now built in exactly one place:
   `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
   (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the

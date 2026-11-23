@@ -356,6 +356,14 @@ path and error, and the file stays on disk so the next sweep retries it. A
 successful removal still reports only in `swept_partials`, whose semantics are
 unchanged.
 
+The backup command forwards its command lease to the executor, which checks the
+lease before saving, before publishing, and before pruning. Once the lease is
+lost the run stops with `COMMAND_LEASE_LOST_DURING_EXECUTION`: it does not
+delete old snapshots and does not overwrite a final file. An interrupted
+verified snapshot keeps its staging file and a `pending_publish` sidecar for the
+next republish, and an already-published snapshot stays put with retention
+skipped.
+
 Retention is expressed in the request, not in a config file, so the scheduler is
 the single place that decides policy: `keep_count` (default 12, floor 2, ceiling
 168), `keep_max_age_hours` (default 8760, i.e. count-only unless a caller asks

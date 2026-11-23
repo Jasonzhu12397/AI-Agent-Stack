@@ -49,6 +49,9 @@ STEP_TIMEOUT_SECONDS = 900
 #: at it because it is not a snapshot.
 PARTIAL_STALE_MINUTES = 24 * 60
 ETCD_PKI_DIR = "/etc/kubernetes/pki/etcd"
+#: Shared with the other mutating actions: a lease lost mid-run stops the
+#: command before it deletes or overwrites anything else.
+COMMAND_LEASE_LOST_DURING_EXECUTION = "COMMAND_LEASE_LOST_DURING_EXECUTION"
 
 
 class EtcdBackupExecutionError(ValueError):
@@ -103,6 +106,7 @@ class EtcdBackupExecutor:
         self._runner = runner
         self._steps: list[dict[str, Any]] = []
         self._pod = ""
+        self._lease_lost_event: Any = None
         self._cleanup_failures: list[dict[str, str]] = []
 
     # ------------------------------------------------------------------ steps
@@ -546,9 +550,16 @@ class EtcdBackupExecutor:
                     )
 
     # ------------------------------------------------------------------ run
-    def run(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        request: dict[str, Any],
+        *,
+        now: datetime | None = None,
+        lease_lost_event: Any = None,
+    ) -> dict[str, Any]:
         """Take one snapshot, verify it, publish it, then prune old ones."""
 
+        self._lease_lost_event = lease_lost_event
         stamp_now = now or datetime.now(UTC)
         directory = request["directory"]
         directories = request.get("directories") or [directory]
@@ -610,6 +621,17 @@ class EtcdBackupExecutor:
             )
         disk["status"] = "succeeded"
         disk["exit_code"] = 0
+
+        if self._lease_lost():
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                verdict=verdict,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
 
         save = self._step(
             3,
@@ -678,6 +700,37 @@ class EtcdBackupExecutor:
                 staging=staging_report,
             )
 
+        if self._lease_lost():
+            # The verified staging file is kept with a pending-publish record so
+            # the next run can republish it; nothing is deleted or overwritten.
+            record = self._staging_record(
+                cluster_name=request["cluster_name"],
+                partial=partial_name(filename),
+                final_name=filename,
+                directory=directory,
+                now=stamp_now,
+                state=STAGING_STATE_PENDING,
+                attempts=1,
+                last_failure="lease lost before publish",
+            )
+            self._write_staging_state(directory, partial_name(filename), record)
+            staging_report.append(
+                {
+                    "name": partial_name(filename),
+                    "directory": directory,
+                    "state": STAGING_STATE_PENDING,
+                }
+            )
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                staging_kept=staging,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
+
         publish = self._step(
             5,
             "snapshot_publish",
@@ -716,6 +769,24 @@ class EtcdBackupExecutor:
                 directory,
                 request,
                 staging_kept=staging,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
+            )
+
+        if self._lease_lost():
+            # The snapshot is already published; retention must not run under
+            # a lost lease. The new final stays, nothing old is pruned.
+            return self._failed(
+                COMMAND_LEASE_LOST_DURING_EXECUTION,
+                directory,
+                request,
+                backup={
+                    "name": filename,
+                    "path": final,
+                    "verified": True,
+                    "taken_at": stamp_now.isoformat(),
+                },
                 swept_partials=swept,
                 republished=republished,
                 staging=staging_report,
@@ -835,6 +906,12 @@ class EtcdBackupExecutor:
         }
 
     # ------------------------------------------------------------------ helpers
+    def _lease_lost(self) -> bool:
+        return (
+            self._lease_lost_event is not None
+            and self._lease_lost_event.is_set()
+        )
+
     def _best_effort_remove(self, path: str) -> dict[str, Any]:
         """Remove a staging file or sidecar, reporting the outcome.
 
