@@ -26,6 +26,7 @@ from packages.agent_contracts.etcd_backup import (
     public_entries,
     select_prunable,
     snapshot_entries,
+    staging_name_belongs,
 )
 
 Runner = Callable[..., dict[str, Any]]
@@ -217,7 +218,7 @@ class EtcdBackupExecutor:
             )
         return entries
 
-    def _sweep_stale_partials(self, directory: str) -> list[str]:
+    def _sweep_stale_partials(self, directory: str, cluster_name: str) -> list[str]:
         """Remove staging files an earlier, killed run left behind.
 
         Only files that match the staging suffix and are older than
@@ -253,6 +254,10 @@ class EtcdBackupExecutor:
                 continue
             if path.rsplit("/", 1)[0] != directory.rstrip("/") or ".." in path:
                 continue
+            if not staging_name_belongs(
+                path.rsplit("/", 1)[-1], cluster_name=cluster_name
+            ):
+                continue
             outcome = self._runner(
                 self._pod_shell(["rm", "-f", path]),
                 timeout=STEP_TIMEOUT_SECONDS,
@@ -282,7 +287,7 @@ class EtcdBackupExecutor:
         )
         if not self._finish(prepare, result):
             return self._failed("ETCD_BACKUP_PREPARE_FAILED", directory, request)
-        swept = self._sweep_stale_partials(directory)
+        swept = self._sweep_stale_partials(directory, request["cluster_name"])
 
         disk = self._step(
             2,

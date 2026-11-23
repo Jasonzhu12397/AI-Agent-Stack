@@ -671,16 +671,28 @@ def test_a_failed_rename_keeps_the_verified_file_and_says_where_it_is():
 def test_a_sweep_removes_abandoned_staging_files_and_nothing_else():
     request = _execute_request()
     keep = _name(2)
-    stale = f"{DEFAULT_DIRECTORY}/{partial_name(_name(30, cluster='other'))}"
+    staging = partial_name(_name(30, cluster=request["cluster_name"]))
+    stale = f"{DEFAULT_DIRECTORY}/{staging}"
     shallow = f"{DEFAULT_DIRECTORY}/notes.db.partial"
     runner = FakeRunner(files=[keep, stale, shallow])
     runner.find_output = stale
     result = EtcdBackupExecutor(runner).run(request, now=NOW)
 
-    assert result["swept_partials"] == [partial_name(_name(30, cluster="other"))]
+    assert result["swept_partials"] == [staging]
     removed = [call[-1] for call in runner.calls if "rm" in call]
     assert removed == [stale]
     assert keep not in removed
+
+
+def test_a_sweep_leaves_another_clusters_staging_file_alone():
+    request = _execute_request()
+    staging = partial_name(_name(30, cluster="other"))
+    runner = FakeRunner(files=[])
+    runner.find_output = f"{DEFAULT_DIRECTORY}/{staging}"
+    result = EtcdBackupExecutor(runner).run(request, now=NOW)
+
+    assert result["swept_partials"] == []
+    assert not [call for call in runner.calls if "rm" in call]
 
 
 def test_a_sweep_never_deletes_a_path_outside_the_directory():
@@ -739,3 +751,21 @@ def test_a_pre_upgrade_snapshot_is_a_restore_point_before_the_first_backup():
         finding for finding in report["findings"] if finding["name"] == "backup.restore_point"
     )
     assert restore["ok"] is True
+
+
+def test_a_staging_name_is_attributed_to_the_cluster_that_wrote_it():
+    from packages.agent_contracts.etcd_backup import staging_name_belongs
+
+    assert staging_name_belongs("lab-20260102T000000Z.db.partial", cluster_name="lab")
+    assert staging_name_belongs(
+        "snapshot-pre-lab-v1.34.1-20260102T000000Z.db.partial", cluster_name="lab"
+    )
+    # Legacy upgrade snapshots name the version and not the cluster.
+    assert staging_name_belongs(
+        "snapshot-pre-v1.34.1-20260102T000000Z.db.partial", cluster_name="lab"
+    )
+    assert not staging_name_belongs("other-20260102T000000Z.db.partial", cluster_name="lab")
+    assert not staging_name_belongs(
+        "snapshot-pre-other-v1.34.1-20260102T000000Z.db.partial", cluster_name="lab"
+    )
+    assert not staging_name_belongs("notes.db.partial", cluster_name="lab")

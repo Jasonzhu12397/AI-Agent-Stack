@@ -334,6 +334,33 @@ def _as_time(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+_VERSION = re.compile(r"^v\d+(?:\.\d+)*$")
+
+
+def staging_name_belongs(name: str, *, cluster_name: str) -> bool:
+    """Whether a ``*.db.partial`` staging name is this cluster's in-flight file.
+
+    A sweep exists to remove what a killed run abandoned, not to interfere with
+    a run that is still writing. The directory can be shared by more than one
+    cluster on a lab Target node, so a staging file that cannot be attributed to
+    this cluster is left alone: deleting another cluster's staging file halfway
+    through its write would fail its snapshot instead of cleaning up after ours.
+    """
+
+    if not name.endswith(".db.partial"):
+        return False
+    stem = name[: -len(".partial")]
+    if parse_backup_name(stem, cluster_name=cluster_name):
+        return True
+    parsed = parse_pre_upgrade_name(stem, cluster_name=cluster_name)
+    if not parsed:
+        return False
+    if parsed["cluster"] == cluster_name:
+        return True
+    # Legacy names carry no cluster, only a target version: ``v1.34`` is ours.
+    return bool(_VERSION.fullmatch(str(parsed["version"])))
+
+
 def snapshot_entries(entries: Any, *, cluster_name: str = "") -> list[dict[str, Any]]:
     """Normalize a directory listing into ordered backup entries.
 

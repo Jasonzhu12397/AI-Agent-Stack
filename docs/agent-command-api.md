@@ -627,3 +627,9 @@ The insert runs in a savepoint: if the backup cannot be queued (a key
 collision, a database blip) the report of the change is still recorded, and the
 failure appears as a `cluster.etcd_backup.queue_failed` audit event rather than
 as a 5xx that leaves the agent retrying a result it cannot deliver.
+
+The sweep that clears abandoned staging files only touches names it can
+attribute to this cluster (a recurring name for this cluster, a pre-upgrade
+name naming it, or a legacy pre-upgrade name that carries a version). A shared
+backup directory can hold a run still writing under another cluster name, and
+deleting that file halfway would fail its snapshot.
