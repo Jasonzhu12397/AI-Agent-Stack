@@ -3,8 +3,9 @@
 import pytest
 from core.models import AuditEvent, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
-from packages.version import project_version
 from rest_framework.test import APIClient
+
+from packages.version import project_version
 
 
 @pytest.fixture

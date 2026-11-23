@@ -141,7 +141,9 @@ def test_settings_invalid_value_details(actor_factory):
 def test_settings_precedence_project_over_tenant(actor_factory):
     owner = actor_factory("precedence-owner")
     tenant = Tenant.objects.create(name="Precedence", slug="precedence")
-    project = Project.objects.create(tenant=tenant, name="Precedence project", slug="precedence-proj")
+    project = Project.objects.create(
+        tenant=tenant, name="Precedence project", slug="precedence-proj"
+    )
     TenantMembership.objects.create(tenant=tenant, user=owner, role="owner")
     ProjectMembership.objects.create(project=project, user=owner, role="admin")
     client = APIClient()

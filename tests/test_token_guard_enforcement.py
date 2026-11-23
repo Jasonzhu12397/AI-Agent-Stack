@@ -15,19 +15,15 @@ from core.models import (
     ModelConfig,
     ModelProvider,
     Project,
-    Task,
     Tenant,
     TenantMembership,
     TenantTokenBudget,
     TenantTokenUsage,
 )
-from core.token_budget import TenantTokenBudgetExceeded
 from core.token_guard import AdHocTokenGuard
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from rest_framework.test import APIClient
-from django.utils import timezone
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = [REPO_ROOT / "apps"]

@@ -1,7 +1,6 @@
 import pytest
 from core.models import (
     AgentDefinition,
-    AgentTeam,
     Project,
     ProjectMembership,
     Tenant,
@@ -57,8 +56,12 @@ def _archived_agent(workspace, project, slug, name):
 
 @pytest.mark.django_db
 def test_archive_list_scoped_to_project(archive_workspace):
-    agent_a1 = _archived_agent(archive_workspace, archive_workspace["project_a"], "agent-a1", "Alpha Agent")
-    agent_a2 = _archived_agent(archive_workspace, archive_workspace["project_a"], "agent-a2", "Beta Agent")
+    agent_a1 = _archived_agent(
+        archive_workspace, archive_workspace["project_a"], "agent-a1", "Alpha Agent"
+    )
+    agent_a2 = _archived_agent(
+        archive_workspace, archive_workspace["project_a"], "agent-a2", "Beta Agent"
+    )
     _archived_agent(archive_workspace, archive_workspace["project_b"], "agent-b1", "Gamma Agent")
 
     list_url = (
@@ -82,7 +85,9 @@ def test_archive_list_scoped_to_project(archive_workspace):
 
 @pytest.mark.django_db
 def test_archive_restore_idempotent(archive_workspace):
-    agent = _archived_agent(archive_workspace, archive_workspace["project_a"], "restore-me", "Restore Me")
+    agent = _archived_agent(
+        archive_workspace, archive_workspace["project_a"], "restore-me", "Restore Me"
+    )
     url = (
         f"/api/v1/tenants/{archive_workspace['tenant'].id}"
         f"/projects/{archive_workspace['project_a'].id}"
