@@ -136,17 +136,39 @@ def _parse_reference(reference: str):
     return parsed
 
 
-def _env_provider(reference: str) -> dict[str, str]:
-    parsed = urlsplit(reference)
-    variable = parsed.netloc or parsed.path.lstrip("/")
+def _default_env_prefixes() -> tuple[str, ...]:
     prefix = getattr(settings, "PLUGIN_CREDENTIAL_ENV_PREFIX", DEFAULT_ENV_PREFIX)
-    if not variable.startswith(prefix):
+    return (prefix,)
+
+
+def _env_variable(parsed) -> str:
+    return parsed.netloc or parsed.path.lstrip("/")
+
+
+def _allowlisted_env_value(variable: str, prefixes: tuple[str, ...]) -> str:
+    """Return the raw environment value of an allowlisted variable."""
+
+    if not any(variable.startswith(prefix) for prefix in prefixes):
         raise CredentialNotFoundError(
             "Credential variable is outside the configured provider allowlist."
         )
     if variable not in os.environ:
         raise CredentialNotFoundError("Credential variable is not available to the process.")
-    raw_value = os.environ[variable]
+    return os.environ[variable]
+
+
+def _contract_plaintext(contract: dict[str, str]) -> str:
+    """Flatten a credential contract to the single secret string it carries."""
+
+    if contract.get("type") == "bearer":
+        return str(contract.get("token") or "")
+    return str(contract.get("value") or "")
+
+
+def _env_provider(reference: str) -> dict[str, str]:
+    parsed = urlsplit(reference)
+    variable = _env_variable(parsed)
+    raw_value = _allowlisted_env_value(variable, _default_env_prefixes())
     if raw_value[:1] in {"{", "["}:
         try:
             decoded = json.loads(raw_value)
@@ -333,5 +355,45 @@ def resolve(credential_ref: str) -> dict[str, str]:
     return provider(credential_ref)
 
 
+def resolve_plaintext(
+    credential_ref: str, *, env_prefixes: tuple[str, ...] | None = None
+) -> str:
+    """Resolve a credential reference to the single secret string it carries.
+
+    Callers that need one secret (payment merchant keys, signing certificates)
+    use this instead of building their own environment lookup, so there is one
+    reference syntax and one allowlist decision per deployment. ``env_prefixes``
+    narrows the environment allowlist for that caller; registered schemes other
+    than ``env`` (``vault``) dispatch through the same provider registry.
+    """
+
+    parsed = _parse_reference(credential_ref)
+    if parsed.scheme == "env":
+        raw_value = _allowlisted_env_value(
+            _env_variable(parsed),
+            env_prefixes if env_prefixes is not None else _default_env_prefixes(),
+        )
+        if raw_value[:1] in {"{", "["}:
+            try:
+                decoded = json.loads(raw_value)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise CredentialInvalidShapeError(
+                    "Credential value is not a valid JSON credential object."
+                ) from exc
+            if not isinstance(decoded, dict) or not _valid_contract(decoded):
+                raise CredentialInvalidShapeError(
+                    "Credential JSON value does not match a supported credential contract."
+                )
+            return _contract_plaintext(decoded)
+        return raw_value
+    provider = _PROVIDERS.get(parsed.scheme)
+    if provider is None:
+        raise CredentialProviderUnsupportedError(
+            f"No credential provider is registered for scheme '{parsed.scheme}'."
+        )
+    return _contract_plaintext(provider(credential_ref))
+
+
 register_provider("env", _env_provider)
 register_provider("vault", _vault_provider)
+
