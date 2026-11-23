@@ -17,6 +17,21 @@ export type PaymentCapability = {
   available: boolean;
   channels: string[];
   reason_code: string | null;
+  /** Per-channel readiness: slot names only, never a credential reference. */
+  diagnostics?: PaymentChannelDiagnostic[];
+};
+
+export type PaymentChannelDiagnostic = {
+  channel: string;
+  configured: boolean;
+  missing: string[];
+  required?: string[];
+};
+
+export type ChannelReadiness = {
+  channel: string;
+  configured: boolean;
+  missing: string[];
 };
 
 export type SubscriptionRecord = {
@@ -54,6 +69,72 @@ export function paymentAvailability(capability?: PaymentCapability | null): {
   if (channels.length === 0) return { available: false, reasonCode: PAYMENT_UNAVAILABLE };
   return { available: true, reasonCode: "" };
 }
+
+/** Slot names are plain identifiers; anything else is reported as unspecified. */
+const SLOT_NAME = /^[a-z0-9_]+$/;
+export const UNSPECIFIED_SLOT = "unspecified";
+
+function slotName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  // Defense in depth: the API reports slot names only, but if a credential
+  // reference ever reaches the client it must not be rendered.
+  return SLOT_NAME.test(trimmed) ? trimmed : UNSPECIFIED_SLOT;
+}
+
+/**
+ * Readiness per supported channel, in product order.
+ *
+ * The server reports slot names only, so this view is safe to render: a channel
+ * with no diagnostic entry is reported as not configured rather than hidden,
+ * because the operator needs to see that WeChat Pay and Alipay are both missing
+ * instead of one silently absent row.
+ */
+export function channelReadiness(capability?: PaymentCapability | null): ChannelReadiness[] {
+  const reported = capability?.diagnostics ?? [];
+  return SUPPORTED_CHANNELS.map((channel) => {
+    const entry = reported.find((item) => item.channel === channel);
+    if (!entry) return { channel, configured: false, missing: [] };
+    const missing = sanitizeSlots(entry.missing);
+    return { channel, configured: entry.configured && missing.length === 0, missing };
+  });
+}
+
+function sanitizeSlots(values: unknown[] | undefined): string[] {
+  const slots: string[] = [];
+  for (const raw of values ?? []) {
+    const name = slotName(raw);
+    if (name === null || slots.includes(name)) continue;
+    slots.push(name);
+  }
+  return slots;
+}
+
+/** One line per channel gap: channel plus slot names, nothing else. */
+export function channelGapSummary(entry: ChannelReadiness): string {
+  const missing = sanitizeSlots(entry.missing);
+  if (entry.configured) return `${entry.channel}: configured`;
+  if (missing.length === 0) return `${entry.channel}: not configured`;
+  return `${entry.channel}: missing ${missing.join(", ")}`;
+}
+
+/**
+ * Slot names for a table cell, without the channel name repeated next to it.
+ * An empty slot list is reported as unspecified rather than blank, so a row is
+ * never silently ambiguous about why the channel is unavailable.
+ */
+export function missingSlotsText(entry: ChannelReadiness): string {
+  const missing = sanitizeSlots(entry.missing);
+  if (entry.configured) return "—";
+  if (missing.length === 0) return "not configured";
+  return missing.join(", ");
+}
+
+export const channelLabel: Record<string, string> = {
+  wechat: "WeChat Pay",
+  alipay: "Alipay",
+};
 
 /**
  * A plan is only purchasable when the server says so AND payment exists.
@@ -117,6 +198,12 @@ export const pageLabels = [
   "No plans are available",
   "Purchase",
   "Payment channels",
+  "Payment channel readiness",
+  "Configured",
+  "Missing credentials",
+  "not configured",
+  "WeChat Pay",
+  "Alipay",
   "Upgrade",
   "Plan management is not available in this deployment",
 ];

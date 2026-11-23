@@ -5,9 +5,12 @@ import {
   PAYMENT_UNAVAILABLE,
   REGION_UNSUPPORTED,
   canPurchase,
+  channelGapSummary,
+  channelReadiness,
   describeError,
   formatPrice,
   intervalLabel,
+  missingSlotsText,
   pageLabels,
   paymentAvailability,
   quotaSummary,
@@ -80,4 +83,61 @@ test("test_page_labels_have_chinese", () => {
   for (const label of pageLabels) {
     assert.ok(planMessages[label], `missing zh translation for "${label}"`);
   }
+});
+
+test("test_channel_readiness_lists_supported_channels_including_absent_ones", () => {
+  // The server may report only one channel; both must appear so an operator
+  // sees that the other is missing rather than absent from the table.
+  const oneChannel = {
+    available: true,
+    channels: ["wechat"],
+    reason_code: null,
+    diagnostics: [{ channel: "wechat", configured: true, missing: [], required: ["appid"] }],
+  };
+  assert.deepEqual(channelReadiness(oneChannel), [
+    { channel: "wechat", configured: true, missing: [] },
+    { channel: "alipay", configured: false, missing: [] },
+  ]);
+  assert.deepEqual(channelReadiness(undefined), [
+    { channel: "wechat", configured: false, missing: [] },
+    { channel: "alipay", configured: false, missing: [] },
+  ]);
+});
+
+test("test_channel_readiness_ignores_unreported_and_non_string_slots", () => {
+  const capability = {
+    available: false,
+    channels: [],
+    reason_code: PAYMENT_UNAVAILABLE,
+    diagnostics: [
+      { channel: "wechat", configured: false, missing: ["appid", "", null] },
+      { channel: "paypal", configured: true, missing: [] },
+    ],
+  };
+  const readiness = channelReadiness(capability);
+  assert.deepEqual(readiness[0], { channel: "wechat", configured: false, missing: ["appid"] });
+  // A channel the product does not support never becomes a row.
+  assert.equal(readiness.some((entry) => entry.channel === "paypal"), false);
+  assert.deepEqual(readiness[1], { channel: "alipay", configured: false, missing: [] });
+});
+
+test("test_missing_slots_text_names_slots_without_a_reference_uri", () => {
+  assert.equal(missingSlotsText({ channel: "wechat", configured: false, missing: ["appid", "mchid"] }), "appid, mchid");
+  assert.equal(missingSlotsText({ channel: "alipay", configured: false, missing: [] }), "not configured");
+  assert.equal(missingSlotsText({ channel: "wechat", configured: true, missing: [] }), "—");
+  const rendered = ["env://WECHATPAY_APPID", "vault://merchant/wechatpay"].map((bad) =>
+    missingSlotsText({ channel: "wechat", configured: false, missing: [bad] }),
+  );
+  for (const text of rendered) {
+    assert.equal(text.includes("://"), false);
+  }
+});
+
+test("test_channel_gap_summary_states_the_cause_per_channel", () => {
+  assert.equal(channelGapSummary({ channel: "wechat", configured: true, missing: [] }), "wechat: configured");
+  assert.equal(channelGapSummary({ channel: "alipay", configured: false, missing: [] }), "alipay: not configured");
+  assert.equal(
+    channelGapSummary({ channel: "alipay", configured: false, missing: ["app_id", "private_key"] }),
+    "alipay: missing app_id, private_key",
+  );
 });

@@ -8,13 +8,17 @@ import { activeTenantId, ensureTenantContext, tenantContextError } from "../shar
 import { createOrder, fetchBillingOverview } from "./api";
 import {
   canPurchase,
+  channelLabel,
+  channelReadiness,
   describeError,
   formatPrice,
   intervalLabel,
+  missingSlotsText,
   pageLabels,
   paymentAvailability,
   quotaSummary,
   type BillingPlan,
+  type ChannelReadiness,
 } from "./logic";
 
 const resource = useSettingsResource(async () => {
@@ -29,6 +33,15 @@ const orderError = ref("");
 const pendingPlan = ref("");
 const payment = computed(() => paymentAvailability(resource.data.value?.capabilities));
 const subscription = computed(() => resource.data.value?.subscription ?? null);
+const channels = computed(() => channelReadiness(resource.data.value?.capabilities));
+
+function gapSummary(entry: ChannelReadiness): string {
+  return missingSlotsText(entry);
+}
+
+function channelName(entry: ChannelReadiness): string {
+  return t(channelLabel[entry.channel] ?? entry.channel);
+}
 
 function purchaseState(plan: BillingPlan): { ok: boolean; reasonCode: string | null } {
   return canPurchase(plan, resource.data.value?.capabilities);
@@ -82,6 +95,27 @@ void pageLabels;
       :description="`${describeError(payment.reasonCode)} (${payment.reasonCode})`"
       data-payment-unavailable
     />
+
+    <el-card class="settings-card" shadow="never" data-payment-diagnostics>
+      <template #header>{{ t("Payment channel readiness") }}</template>
+      <el-table :data="channels" size="small" :border="false">
+        <el-table-column :label="t('Payment channels')" min-width="140">
+          <template #default="{ row }">{{ channelName(row) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('Configured')" width="140">
+          <template #default="{ row }">
+            <el-tag :type="row.configured ? 'success' : 'info'" effect="plain">
+              {{ row.configured ? t("Configured") : t("Missing credentials") }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('Missing credentials')" min-width="240">
+          <template #default="{ row }">
+            <span class="muted">{{ row.configured ? "—" : gapSummary(row) }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
 
     <el-card v-if="subscription" class="settings-card" shadow="never">
       <template #header>{{ t("Current plan") }}</template>
