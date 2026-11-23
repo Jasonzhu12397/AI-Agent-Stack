@@ -32,6 +32,7 @@ from core.payments.base import (
     CallbackResult,
     PaymentProvider,
     PaymentProviderError,
+    ProviderOrderState,
     resolve_credential_ref,
 )
 from core.payments.http import build_client, send_with_retry
@@ -190,7 +191,7 @@ class WechatPayV3Provider(PaymentProvider):
             "code_url": data.get("code_url", ""),
         }
 
-    def query_order(self, order) -> str:
+    def query_order(self, order) -> ProviderOrderState:
         out_trade_no = str(order.id)
         mchid = self._resolve("mchid") or ""
         data = self._signed_request(
@@ -199,15 +200,22 @@ class WechatPayV3Provider(PaymentProvider):
             f"mchid={mchid}",
             None,
         )
-        return _TRADE_STATE_MAP.get(data.get("trade_state", ""), "unknown")
+        amount = data.get("amount") or {}
+        return ProviderOrderState(
+            status=_TRADE_STATE_MAP.get(data.get("trade_state", ""), "unknown"),
+            amount_cents=amount.get("total"),
+        )
 
-    def refund(self, order, reason: str) -> dict:
+    def refund(
+        self, order, reason: str, amount_cents: int | None = None
+    ) -> dict:
+        refund_cents = amount_cents if amount_cents is not None else order.amount_cents
         payload = {
             "out_trade_no": str(order.id),
             "out_refund_no": f"refund-{order.id}",
             "reason": reason[:200],
             "amount": {
-                "refund": order.amount_cents,
+                "refund": refund_cents,
                 "total": order.amount_cents,
                 "currency": order.currency,
             },

@@ -27,6 +27,7 @@ from core.payments.base import (
     CallbackResult,
     PaymentProvider,
     PaymentProviderError,
+    ProviderOrderState,
     resolve_credential_ref,
 )
 from core.payments.http import build_client, send_with_retry
@@ -188,15 +189,24 @@ class AlipayProvider(PaymentProvider):
             "qr_code": node.get("qr_code", ""),
         }
 
-    def query_order(self, order) -> str:
+    def query_order(self, order) -> ProviderOrderState:
         biz_content = {"out_trade_no": str(order.id)}
         node = self._request("alipay.trade.query", biz_content)
-        return _TRADE_STATUS_MAP.get(node.get("trade_status", ""), "unknown")
+        return ProviderOrderState(
+            status=_TRADE_STATUS_MAP.get(node.get("trade_status", ""), "unknown"),
+            amount_cents=_yuan_to_cents(node.get("total_amount", "") or ""),
+        )
 
-    def refund(self, order, reason: str) -> dict:
+    def refund(
+        self, order, reason: str, amount_cents: int | None = None
+    ) -> dict:
+        refund_cents = amount_cents if amount_cents is not None else order.amount_cents
+        refund_amount = (
+            Decimal(refund_cents) / Decimal(100)
+        ).quantize(Decimal("0.01"))
         biz_content = {
             "out_trade_no": str(order.id),
-            "refund_amount": f"{order.amount_cents / 100:.2f}",
+            "refund_amount": f"{refund_amount:.2f}",
             "refund_reason": reason[:200],
         }
         node = self._request("alipay.trade.refund", biz_content)
