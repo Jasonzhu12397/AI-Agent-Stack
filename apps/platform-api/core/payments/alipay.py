@@ -28,7 +28,6 @@ from core.payments.base import (
     PaymentProvider,
     PaymentProviderError,
     ProviderOrderState,
-    resolve_credential_ref,
 )
 from core.payments.http import build_client, send_with_retry
 
@@ -61,6 +60,9 @@ def _yuan_to_cents(amount: str) -> int | None:
 class AlipayProvider(PaymentProvider):
     channel = "alipay"
 
+    SLOTS = ("app_id", "private_key", "public_key", "notify_url", "gateway")
+    REQUIRED_SLOTS = ("app_id", "private_key", "public_key")
+
     def __init__(
         self,
         app_id_ref: str = "env://ALIPAY_APP_ID",
@@ -81,11 +83,7 @@ class AlipayProvider(PaymentProvider):
         self._client: httpx.Client | None = None
 
     def _resolve(self, key: str) -> str | None:
-        return resolve_credential_ref(self._refs[key])
-
-    def is_configured(self) -> bool:
-        required = ("app_id", "private_key", "public_key")
-        return all(self._resolve(key) is not None for key in required)
+        return self.resolve_slot(key)
 
     # ------------------------------------------------------------- internals
 

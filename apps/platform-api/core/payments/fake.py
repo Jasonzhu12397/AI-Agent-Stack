@@ -17,8 +17,9 @@ FAKE_SIGNATURE_VALUE = "fake-ok"
 class FakeProvider(PaymentProvider):
     channel = "wechat"
 
-    def is_configured(self) -> bool:
-        return True
+    # No credential slots: readiness derives from an empty required set.
+    SLOTS = ()
+    REQUIRED_SLOTS = ()
 
     def create_payment(self, order) -> dict:
         trade_no = f"fake-{order.id}"

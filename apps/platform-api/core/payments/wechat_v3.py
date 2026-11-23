@@ -33,7 +33,6 @@ from core.payments.base import (
     PaymentProvider,
     PaymentProviderError,
     ProviderOrderState,
-    resolve_credential_ref,
 )
 from core.payments.http import build_client, send_with_retry
 
@@ -58,6 +57,25 @@ _DEFAULT_BASE_URL = "https://api.mch.weixin.qq.com"
 
 class WechatPayV3Provider(PaymentProvider):
     channel = "wechat"
+
+    SLOTS = (
+        "appid",
+        "mchid",
+        "api_v3_key",
+        "serial_no",
+        "private_key",
+        "platform_cert",
+        "notify_url",
+        "base_url",
+    )
+    REQUIRED_SLOTS = (
+        "appid",
+        "mchid",
+        "api_v3_key",
+        "serial_no",
+        "private_key",
+        "platform_cert",
+    )
 
     def __init__(
         self,
@@ -85,18 +103,7 @@ class WechatPayV3Provider(PaymentProvider):
         self._client: httpx.Client | None = None
 
     def _resolve(self, key: str) -> str | None:
-        return resolve_credential_ref(self._refs[key])
-
-    def is_configured(self) -> bool:
-        required = (
-            "appid",
-            "mchid",
-            "api_v3_key",
-            "serial_no",
-            "private_key",
-            "platform_cert",
-        )
-        return all(self._resolve(key) is not None for key in required)
+        return self.resolve_slot(key)
 
     # ------------------------------------------------------------- internals
 
