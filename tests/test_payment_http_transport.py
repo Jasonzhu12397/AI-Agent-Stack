@@ -28,7 +28,13 @@ from urllib.parse import parse_qsl, urlencode
 
 import httpx
 import pytest
-from core.billing_models import EntitlementGrant, Order, PaymentTransactionAudit, Plan
+from core.billing_models import (
+    EntitlementGrant,
+    EntitlementReclaim,
+    Order,
+    PaymentTransactionAudit,
+    Plan,
+)
 from core.models import AuditEvent, Tenant, TenantMembership, TenantTokenBudget
 from core.payments.alipay import AlipayProvider
 from core.payments.wechat_v3 import WechatPayV3Provider
@@ -106,6 +112,49 @@ def _wechat_notify(
     }
     resource = _encrypt_resource(plaintext, key_override or api_v3_key)
     envelope = {"id": "evt-1", "event_type": "TRANSACTION.SUCCESS", "resource": resource}
+    body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex
+    message = f"{timestamp}\n{nonce}\n".encode() + body + b"\n"
+    signature = base64.b64encode(
+        platform_private.sign(message, padding.PKCS1v15(), hashes.SHA256())
+    ).decode("utf-8")
+    if body_mutator is not None:
+        body = body_mutator(body)
+    serial = serial_override or format(cert.serial_number, "x")
+    headers = {
+        "Wechatpay-Timestamp": timestamp,
+        "Wechatpay-Nonce": nonce,
+        "Wechatpay-Serial": serial,
+        "Wechatpay-Signature": signature,
+    }
+    return headers, body
+
+
+def _wechat_refund_notify(
+    cert: x509.Certificate,
+    platform_private,
+    api_v3_key: str,
+    out_trade_no: str,
+    out_refund_no: str,
+    refund_cents: int,
+    total_cents: int,
+    refund_status: str = "SUCCESS",
+    *,
+    event_type: str = "REFUND.SUCCESS",
+    serial_override: str | None = None,
+    body_mutator=None,
+):
+    plaintext = {
+        "out_trade_no": out_trade_no,
+        "out_refund_no": out_refund_no,
+        "refund_id": f"refund-{out_refund_no}",
+        "refund_status": refund_status,
+        "amount": {"refund": refund_cents, "total": total_cents, "currency": "CNY"},
+    }
+    resource = _encrypt_resource(plaintext, api_v3_key, associated_data="refund")
+    envelope = {"id": "evt-refund-1", "event_type": event_type, "resource": resource}
     body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
 
     timestamp = str(int(time.time()))
@@ -542,6 +591,158 @@ def test_payment_records_never_leak_key_material(wechat_env, billing_setup):
     assert wechat_env["api_v3_key"] not in blob
     assert wechat_env["merchant_pem"] not in blob
     assert wechat_env["platform_cert_pem"] not in blob
+
+
+@pytest.mark.django_db
+def test_wechat_refund_notification_reclaims_once_on_replay(wechat_env, billing_setup):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    budget = TenantTokenBudget.objects.get_or_create(tenant=tenant)[0]
+    client = APIClient()
+
+    pay_headers, pay_body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+    )
+    paid = client.post(
+        _callback_url(tenant.id),
+        data=pay_body,
+        content_type="application/json",
+        **_header_kwargs(pay_headers),
+    )
+    assert paid.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.PAID
+    budget.refresh_from_db()
+    post_payment_limit = budget.monthly_limit
+
+    refund_headers, refund_body = _wechat_refund_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        "out-refund-once",
+        order.amount_cents,
+        order.amount_cents,
+    )
+    first = client.post(
+        _callback_url(tenant.id),
+        data=refund_body,
+        content_type="application/json",
+        **_header_kwargs(refund_headers),
+    )
+    second = client.post(
+        _callback_url(tenant.id),
+        data=refund_body,
+        content_type="application/json",
+        **_header_kwargs(refund_headers),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    order.refresh_from_db()
+    assert order.status == Order.Status.REFUNDED
+    assert EntitlementReclaim.objects.filter(order=order).count() == 1
+    budget.refresh_from_db()
+    assert budget.monthly_limit == post_payment_limit - plan.token_quota_monthly
+
+
+@pytest.mark.django_db
+def test_wechat_refund_notification_invalid_signature_is_fail_closed(
+    wechat_env, billing_setup
+):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    budget = TenantTokenBudget.objects.get_or_create(tenant=tenant)[0]
+    baseline = budget.monthly_limit
+
+    def _tamper(body: bytes) -> bytes:
+        envelope = json.loads(body)
+        envelope["resource"]["nonce"] = "0" * 24
+        return json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+    headers, body = _wechat_refund_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        "out-refund-bad-sig",
+        order.amount_cents,
+        order.amount_cents,
+        body_mutator=_tamper,
+    )
+    client = APIClient()
+    response = client.post(
+        _callback_url(tenant.id),
+        data=body,
+        content_type="application/json",
+        **_header_kwargs(headers),
+    )
+
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "PAYMENT_SIGNATURE_INVALID"
+    assert AuditEvent.objects.filter(
+        event_type="billing.callback.signature_invalid",
+        outcome=AuditEvent.Outcome.DENIED,
+    ).exists()
+    order.refresh_from_db()
+    assert order.status == Order.Status.PENDING
+    budget.refresh_from_db()
+    assert budget.monthly_limit == baseline
+    assert EntitlementReclaim.objects.filter(order=order).count() == 0
+
+
+@pytest.mark.django_db
+def test_wechat_refund_notification_does_not_reissue_entitlement(
+    wechat_env, billing_setup
+):
+    owner, tenant, plan = billing_setup
+    order = _pending_order(tenant, plan, owner)
+    budget = TenantTokenBudget.objects.get_or_create(tenant=tenant)[0]
+    client = APIClient()
+
+    pay_headers, pay_body = _wechat_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        order.amount_cents,
+    )
+    client.post(
+        _callback_url(tenant.id),
+        data=pay_body,
+        content_type="application/json",
+        **_header_kwargs(pay_headers),
+    )
+    order.refresh_from_db()
+    grant_count = EntitlementGrant.objects.filter(order=order).count()
+    budget.refresh_from_db()
+    limit_after_payment = budget.monthly_limit
+
+    refund_headers, refund_body = _wechat_refund_notify(
+        wechat_env["platform_cert"],
+        wechat_env["platform_private"],
+        wechat_env["api_v3_key"],
+        str(order.id),
+        "out-refund-no-regrant",
+        order.amount_cents,
+        order.amount_cents,
+    )
+    refund = client.post(
+        _callback_url(tenant.id),
+        data=refund_body,
+        content_type="application/json",
+        **_header_kwargs(refund_headers),
+    )
+
+    assert refund.status_code == 200
+    assert EntitlementGrant.objects.filter(order=order).count() == grant_count
+    budget.refresh_from_db()
+    assert budget.monthly_limit <= limit_after_payment
+    assert EntitlementReclaim.objects.filter(order=order).count() == 1
 
 
 # --------------------------------------------------------------------------- #
