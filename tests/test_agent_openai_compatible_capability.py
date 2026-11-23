@@ -14,9 +14,12 @@ from core.agent_capability_router import (
     invoke_capability,
 )
 from core.agent_openai_compatible_adapter import (
+    CAPABILITY_ARGUMENTS_OUT_OF_RANGE,
     CAPABILITY_UPSTREAM_CLIENT_ERROR,
     CAPABILITY_UPSTREAM_INVALID_RESPONSE,
     CAPABILITY_UPSTREAM_SERVER_ERROR,
+    _DEFAULT_MAX_TOKENS_LIMIT,
+    _validate_completion_options,
 )
 from core.models import (
     AgentCapabilityInvocation,
@@ -49,6 +52,8 @@ INPUT_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "max_tokens": {"type": "integer"},
+        "temperature": {"type": "number"},
     },
     "required": [],
     "additionalProperties": False,
@@ -61,14 +66,17 @@ OUTPUT_SCHEMA = {
 }
 
 
-def _manifest():
+def _manifest(*, max_tokens_limit=None):
+    block = {
+        "base_url": "https://oai.example.com",
+        "model": "example-model",
+        "path": "/v1/chat/completions",
+        "timeout_seconds": 10,
+    }
+    if max_tokens_limit is not None:
+        block["max_tokens_limit"] = max_tokens_limit
     return {
-        "openai_compatible": {
-            "base_url": "https://oai.example.com",
-            "model": "example-model",
-            "path": "/v1/chat/completions",
-            "timeout_seconds": 10,
-        },
+        "openai_compatible": block,
         "capabilities": [
             {
                 "name": "complete",
@@ -305,3 +313,208 @@ def test_openai_manifest_accepts_declared_source():
         )
         is None
     )
+
+
+@pytest.mark.django_db
+def test_openai_rejects_max_tokens_above_manifest_limit(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(
+        tenant, user, manifest=_manifest(max_tokens_limit=100), auth_required=False
+    )
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "max_tokens": 200},
+            )
+
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_rejects_max_tokens_above_default_limit(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "max_tokens": _DEFAULT_MAX_TOKENS_LIMIT + 1},
+            )
+
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_rejects_non_integer_max_tokens_locally(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "max_tokens": 512.5},
+            )
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_rejects_temperature_below_zero(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "temperature": -0.5},
+            )
+
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_rejects_temperature_above_two(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "temperature": 2.5},
+            )
+
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_rejects_non_number_temperature_locally(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "complete",
+                {"prompt": "Hi", "temperature": "0.7"},
+            )
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_openai_preserves_valid_completion_options(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_handler(calls, "replied"))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        result = invoke_capability(
+            str(tenant.id),
+            str(project.id),
+            "complete",
+            {"prompt": "Hi", "max_tokens": 512, "temperature": 0.7},
+        )
+
+    assert result == {"text": "replied"}
+    body = calls[0]["body"]
+    assert body["max_tokens"] == 512
+    assert body["temperature"] == 0.7
+
+
+def test_openai_options_helper_rejects_non_integer_and_non_number():
+    with pytest.raises(CapabilityResolutionError) as exc:
+        _validate_completion_options({"max_tokens": True}, {})
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        _validate_completion_options({"max_tokens": 4.2}, {})
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        _validate_completion_options({"max_tokens": -5}, {})
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        _validate_completion_options({"temperature": False}, {})
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+
+    with pytest.raises(CapabilityResolutionError) as exc:
+        _validate_completion_options({"temperature": "0.7"}, {})
+    assert exc.value.code == CAPABILITY_ARGUMENTS_OUT_OF_RANGE
+
+
+def test_openai_options_helper_omits_absent_options():
+    assert _validate_completion_options({"prompt": "Hi"}, {}) == {}
+    options = _validate_completion_options(
+        {"max_tokens": 64, "temperature": 0.2}, {}
+    )
+    assert options == {"max_tokens": 64, "temperature": 0.2}

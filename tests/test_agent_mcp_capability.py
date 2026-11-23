@@ -597,6 +597,130 @@ def test_endpoint_change_makes_discovery_record_stale(workspace, monkeypatch):
     assert "stale" in error
 
 
+ENUM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "units": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["city"],
+    "additionalProperties": False,
+}
+
+
+def _enum_manifest():
+    return {
+        "mcp": {"timeout_seconds": 10},
+        "capabilities": [
+            {
+                "name": "fetch_weather",
+                "description": "Fetch the current weather",
+                "input_schema": ENUM_SCHEMA,
+                "output_schema": OUTPUT_SCHEMA,
+                "risk_level": "low",
+                "timeout_seconds": 10,
+                "remote_name": "fetch-weather",
+            }
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_mcp_rejects_missing_required_argument_without_remote_call(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    monkeypatch.setenv("PLUGIN_SECRET_MCP_TOKEN", SECRET)
+    plugin = _make_plugin(tenant, user)
+    installation = _install(
+        tenant, project, plugin, user, credential_ref="env://PLUGIN_SECRET_MCP_TOKEN"
+    )
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _make_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(str(tenant.id), str(project.id), "fetch_weather", {})
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert SECRET not in str(exc.value)
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_mcp_rejects_unknown_property_without_remote_call(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _make_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "fetch_weather",
+                {"city": "Austin", "units": "metric"},
+            )
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_mcp_rejects_wrong_argument_type_without_remote_call(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _make_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id), str(project.id), "fetch_weather", {"city": 42}
+            )
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_mcp_rejects_enum_out_of_range_without_remote_call(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user, manifest=_enum_manifest(), auth_required=False)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _make_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "fetch_weather",
+                {"city": "Austin", "units": "kelvin"},
+            )
+
+    assert exc.value.code == CAPABILITY_INVOCATION_FAILED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
 @pytest.mark.django_db
 def test_repeat_discover_is_idempotent(workspace, monkeypatch):
     user, tenant, _, client = workspace

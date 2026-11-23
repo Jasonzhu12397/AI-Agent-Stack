@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 from core import agent_plugin_manifest
 from core.agent_a2a_adapter import (
     CAPABILITY_CONFIG_INVALID,
+    CAPABILITY_STREAMING_UNSUPPORTED,
     CAPABILITY_UPSTREAM_ERROR,
     discover_card,
 )
@@ -34,7 +35,11 @@ _REAL_CLIENT = httpx.Client
 
 INPUT_SCHEMA = {
     "type": "object",
-    "properties": {"prompt": {"type": "string"}},
+    "properties": {
+        "prompt": {"type": "string"},
+        "stream": {"type": "boolean"},
+        "streaming": {"type": "boolean"},
+    },
     "required": ["prompt"],
     "additionalProperties": False,
 }
@@ -103,11 +108,11 @@ def _install(tenant, project, plugin, user):
     )
 
 
-def _card():
+def _card(streaming=False):
     return {
         "name": "Travel Agent",
         "description": "A2A travel assistant",
-        "capabilities": {"streaming": False},
+        "capabilities": {"streaming": streaming},
         "skills": [
             {
                 "id": "greet",
@@ -362,3 +367,167 @@ def test_discover_card_writes_discovery_record_and_marks_skill(workspace, monkey
         agent_plugin_manifest.validate_manifest(plugin.manifest, "a2a", endpoint_url=ENDPOINT)
         is None
     )
+
+
+def _success_stream_handler(calls):
+    def handler(request):
+        calls.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "body": json.loads(request.content.decode("utf-8")),
+            }
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"artifacts": [{"text": "Hello, traveler!"}]},
+                }
+            ).encode("utf-8"),
+        )
+
+    return handler
+
+
+@pytest.mark.django_db
+def test_a2a_streaming_false_rejects_stream_request_without_remote_call(
+    workspace, monkeypatch
+):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user)
+    installation = _install(tenant, project, plugin, user)
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_stream_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "greet",
+                {"prompt": "Hi", "stream": True},
+            )
+
+    assert exc.value.code == CAPABILITY_STREAMING_UNSUPPORTED
+    assert calls == []
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.FAILED
+    assert record.error_code == CAPABILITY_INVOCATION_FAILED
+
+
+@pytest.mark.django_db
+def test_a2a_streaming_true_allows_message_send(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user)
+    installation = _install(tenant, project, plugin, user)
+
+    # Persist the discovered capability with the streaming flag enabled.
+    plugin.manifest["capabilities"][0]["streaming"] = True
+    plugin.save(update_fields=["manifest"])
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_stream_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        result = invoke_capability(
+            str(tenant.id),
+            str(project.id),
+            "greet",
+            {"prompt": "Hi", "stream": True},
+        )
+
+    assert result == {"text": "Hello, traveler!"}
+    assert len(calls) == 1
+    assert calls[0]["body"]["method"] == "message/send"
+    record = AgentCapabilityInvocation.objects.get(installation=installation)
+    assert record.status == AgentCapabilityInvocation.Status.SUCCESS
+
+
+@pytest.mark.django_db
+def test_a2a_missing_streaming_flag_defaults_to_non_streaming(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user)
+    _install(tenant, project, plugin, user)
+    plugin.manifest["capabilities"][0].pop("streaming", None)
+    plugin.save(update_fields=["manifest"])
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_stream_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "greet",
+                {"prompt": "Hi", "streaming": True},
+            )
+
+    assert exc.value.code == CAPABILITY_STREAMING_UNSUPPORTED
+    assert calls == []
+
+
+@pytest.mark.django_db
+def test_a2a_non_boolean_streaming_defaults_to_non_streaming(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user)
+    _install(tenant, project, plugin, user)
+    plugin.manifest["capabilities"][0]["streaming"] = "yes"
+    plugin.save(update_fields=["manifest"])
+
+    calls: list[dict] = []
+    _patch_transport(monkeypatch, _success_stream_handler(calls))
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        with pytest.raises(CapabilityResolutionError) as exc:
+            invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                "greet",
+                {"prompt": "Hi", "stream": True},
+            )
+
+    assert exc.value.code == CAPABILITY_STREAMING_UNSUPPORTED
+    assert calls == []
+
+
+@pytest.mark.django_db
+def test_a2a_discovery_records_streaming_flag(workspace, monkeypatch):
+    user, tenant, project, _ = workspace
+    plugin = _make_plugin(tenant, user)
+    installation = _install(tenant, project, plugin, user)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=json.dumps(_card(streaming=True)).encode("utf-8"),
+        )
+
+    _patch_transport(monkeypatch, handler)
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        capabilities = discover_card(installation)
+
+    assert capabilities[0]["streaming"] is True
+
+    def non_bool_handler(request):
+        card = _card()
+        card["capabilities"]["streaming"] = "yes"
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=json.dumps(card).encode("utf-8"),
+        )
+
+    _patch_transport(monkeypatch, non_bool_handler)
+
+    with override_settings(PLUGIN_HTTP_ALLOWED_HOSTS=[HOST]):
+        capabilities = discover_card(installation)
+
+    assert capabilities[0]["streaming"] is False
