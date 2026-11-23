@@ -6,6 +6,10 @@ import {
   visibleCapabilities,
   summarizeInvocation,
   statusTransition,
+  isCredentialReference,
+  credentialHint,
+  installPayload,
+  validateInstall,
 } from "../src/domain/agentMarketplace.ts";
 
 const makeDefinition = (overrides = {}) => ({
@@ -272,4 +276,63 @@ test("statusTransition rejects illegal lifecycle transitions", () => {
   assert.equal(statusTransition("uninstalled", "enable"), null);
   assert.equal(statusTransition("uninstalled", "disable"), null);
   assert.equal(statusTransition("uninstalled", "uninstall"), null);
+});
+
+test("isCredentialReference accepts URI references and rejects plaintext input", () => {
+  assert.equal(isCredentialReference("env://PLUGIN_SECRET_TOKEN"), true);
+  assert.equal(isCredentialReference("vault://team/agent/token"), true);
+  assert.equal(isCredentialReference("env://PLUGIN_SECRET_MARKET_AGENT_TOKEN"), true);
+  assert.equal(isCredentialReference("sk-abc123secret"), false);
+  assert.equal(isCredentialReference("Bearer abc123"), false);
+  assert.equal(isCredentialReference("env://has space"), false);
+  assert.equal(isCredentialReference("env://line\nbreak"), false);
+  assert.equal(isCredentialReference("plain-string"), false);
+  assert.equal(isCredentialReference(""), false);
+  assert.equal(isCredentialReference("ENV://UPPER_SCHEME"), false);
+  assert.equal(isCredentialReference("env://" + "a".repeat(201)), false);
+});
+
+test("credentialHint reports auth state without exposing the secret", () => {
+  const authDefinition = makeDefinition({ auth_required: true });
+  assert.equal(credentialHint(authDefinition, false), "Credential reference required");
+  assert.equal(
+    credentialHint(authDefinition, true),
+    "Credential configured (value is not stored by the platform)",
+  );
+  assert.equal(credentialHint(makeDefinition({ auth_required: false }), false), "");
+});
+
+test("installPayload carries credential_ref only for auth-required plugins", () => {
+  const authDefinition = makeDefinition({ id: "def-auth", auth_required: true });
+  assert.deepEqual(installPayload(authDefinition, "  env://PLUGIN_SECRET_TOKEN  "), {
+    plugin_id: "def-auth",
+    granted_capabilities: [],
+    credential_ref: "env://PLUGIN_SECRET_TOKEN",
+  });
+  const openDefinition = makeDefinition({ id: "def-open", auth_required: false });
+  assert.deepEqual(installPayload(openDefinition, "env://SHOULD_NOT_SEND"), {
+    plugin_id: "def-open",
+    granted_capabilities: [],
+  });
+});
+
+test("validateInstall blocks missing or plaintext credentials for auth-required plugins", () => {
+  const authDefinition = makeDefinition({ auth_required: true });
+  const missing = validateInstall(authDefinition, "");
+  assert.equal(missing.ok, false);
+  assert.match(missing.errors[0], /credential reference is required/i);
+  assert.equal(validateInstall(authDefinition, "sk-abc123").ok, false);
+  assert.equal(validateInstall(authDefinition, "Bearer token").ok, false);
+  assert.equal(validateInstall(authDefinition, "env://has space").ok, false);
+  assert.equal(validateInstall(authDefinition, "env://" + "a".repeat(201)).ok, false);
+  assert.equal(validateInstall(authDefinition, "not-a-uri").ok, false);
+  assert.equal(validateInstall(authDefinition, "env://PLUGIN_SECRET_TOKEN").ok, true);
+});
+
+test("validateInstall rejects references on plugins that do not accept credentials", () => {
+  const openDefinition = makeDefinition({ auth_required: false });
+  assert.equal(validateInstall(openDefinition, "").ok, true);
+  const rejected = validateInstall(openDefinition, "env://SHOULD_NOT_SEND");
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.errors[0], /does not accept a credential reference/i);
 });
