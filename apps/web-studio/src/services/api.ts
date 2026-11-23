@@ -1930,6 +1930,79 @@ export function installAgentPlugin(
   );
 }
 
+export type MarketplaceCatalogCapability = {
+  name: string;
+  description: string;
+  risk_level: string;
+};
+
+export type MarketplaceCatalogEntry = {
+  plugin_key: string;
+  name: string;
+  description: string;
+  version: string;
+  protocol: string;
+  enabled: boolean;
+  capabilities: MarketplaceCatalogCapability[];
+  installed: boolean;
+  installation_status: "installed" | "disabled" | "uninstalled" | "not_installed";
+  installation_id: string | null;
+  project_id: string | null;
+};
+
+export type MarketplaceCatalogResponse = {
+  count: number;
+  entries: MarketplaceCatalogEntry[];
+};
+
+export type MarketplaceCatalogParams = {
+  capability?: string;
+  protocol?: string;
+  installedOnly?: boolean;
+};
+
+export function fetchMarketplaceCatalog(
+  tenantId: string,
+  projectId: string,
+  params: MarketplaceCatalogParams = {},
+): Promise<MarketplaceCatalogResponse> {
+  const query = new URLSearchParams();
+  if (params.capability && params.capability.trim()) {
+    query.set("capability", params.capability.trim());
+  }
+  if (params.protocol && params.protocol.trim()) {
+    query.set("protocol", params.protocol.trim());
+  }
+  if (params.installedOnly !== undefined) {
+    query.set("installed", params.installedOnly ? "true" : "false");
+  }
+  if (projectId) query.set("project_id", projectId);
+  const suffix = query.toString() ? "?" + query.toString() : "";
+  return request(
+    "/api/v1/tenants/" + tenantId + "/marketplace/catalog/" + suffix,
+  );
+}
+
+export function installAgentPluginFromCatalog(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    plugin_key: string;
+    plugin_version: string;
+    granted_capabilities: string[];
+    credential_ref?: string;
+  },
+): Promise<AgentPluginInstallation> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-plugin-installations/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function setAgentPluginInstallationStatus(
   installationId: string,
   status: AgentPluginInstallationStatus,

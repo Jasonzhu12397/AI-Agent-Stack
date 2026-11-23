@@ -1,28 +1,37 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
+  catalogInstallPayload,
+  catalogStatusLabel,
   credentialHint,
   declaredCapabilities,
+  filterCatalog,
   installPayload,
   mergeMarketplace,
+  protocolLabel,
   statusTransition,
   summarizeInvocation,
   validateInstall,
   visibleCapabilities,
   type InstalledCapability,
   type LifecycleAction,
+  type MarketplaceCatalogEntry,
   type MarketplaceEntry,
 } from "../domain/agentMarketplace";
 import {
+  fetchMarketplaceCatalog,
   getAgentPluginDefinitions,
   getAgentPluginInstallations,
   getProjectAgentCapabilities,
   installAgentPlugin,
+  installAgentPluginFromCatalog,
   setAgentPluginInstallationStatus,
   type AgentCapabilityResponse,
   type AgentPluginDefinition,
   type AgentPluginInstallation,
 } from "../services/api";
+
+const PROTOCOL_OPTIONS = ["http_json", "mcp", "a2a", "openai_compatible"];
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 
@@ -36,6 +45,12 @@ const info = ref("");
 const expandedPlugins = ref<Set<string>>(new Set());
 const busyKey = ref("");
 const credentialRefs = ref<Record<string, string>>({});
+const catalogEntries = ref<MarketplaceCatalogEntry[]>([]);
+const catalogLoading = ref(false);
+const catalogQuery = ref("");
+const catalogProtocol = ref("");
+const catalogInstalledOnly = ref(false);
+const catalogBusyKey = ref("");
 
 const entries = computed<MarketplaceEntry[]>(() =>
   mergeMarketplace(definitions.value, installations.value),
@@ -43,6 +58,14 @@ const entries = computed<MarketplaceEntry[]>(() =>
 
 const visibleCapabilitiesList = computed<InstalledCapability[]>(() =>
   visibleCapabilities(capabilityResponse.value, installations.value),
+);
+
+const filteredCatalog = computed<MarketplaceCatalogEntry[]>(() =>
+  filterCatalog(catalogEntries.value, {
+    query: catalogQuery.value,
+    protocol: catalogProtocol.value,
+    installedOnly: catalogInstalledOnly.value,
+  }),
 );
 
 function statusBadge(status: string): {
@@ -109,12 +132,16 @@ function toggleExpanded(pluginKey: string): void {
 
 async function refresh(): Promise<void> {
   loading.value = true;
+  catalogLoading.value = true;
   error.value = "";
   try {
     if (props.tenantId) {
       definitions.value = await getAgentPluginDefinitions(props.tenantId);
+      const catalog = await fetchMarketplaceCatalog(props.tenantId, props.projectId, {});
+      catalogEntries.value = catalog.entries;
     } else {
       definitions.value = [];
+      catalogEntries.value = [];
     }
     if (props.tenantId && props.projectId) {
       installations.value = await getAgentPluginInstallations(props.tenantId, props.projectId);
@@ -130,6 +157,26 @@ async function refresh(): Promise<void> {
     error.value = cause instanceof Error ? cause.message : "Unable to load agent marketplace.";
   } finally {
     loading.value = false;
+    catalogLoading.value = false;
+  }
+}
+
+async function installFromCatalog(entry: MarketplaceCatalogEntry): Promise<void> {
+  if (!props.tenantId || !props.projectId) return;
+  submitting.value = true;
+  catalogBusyKey.value = entry.plugin_key;
+  error.value = "";
+  info.value = "";
+  try {
+    const payload = catalogInstallPayload(entry, "");
+    await installAgentPluginFromCatalog(props.tenantId, props.projectId, payload);
+    info.value = entry.name + " installed into the project.";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Agent plugin installation failed.";
+  } finally {
+    submitting.value = false;
+    catalogBusyKey.value = "";
   }
 }
 
@@ -211,6 +258,78 @@ onMounted(() => void refresh());
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
+
+    <section class="integration-panel marketplace-browse">
+      <div class="integration-panel-title">
+        <h3>Browse catalog</h3>
+        <span>{{ catalogEntries.length }} plugins</span>
+      </div>
+      <div class="marketplace-filters">
+        <el-input
+          v-model="catalogQuery"
+          placeholder="Search name, description or capability"
+          clearable
+          class="marketplace-filter-input"
+        />
+        <el-select
+          v-model="catalogProtocol"
+          placeholder="Protocol"
+          clearable
+          class="marketplace-filter-select"
+        >
+          <el-option
+            v-for="option in PROTOCOL_OPTIONS"
+            :key="option"
+            :label="protocolLabel(option)"
+            :value="option"
+          />
+        </el-select>
+        <el-checkbox v-model="catalogInstalledOnly">Installed only</el-checkbox>
+      </div>
+      <div class="marketplace-catalog-grid">
+        <div
+          v-for="entry in filteredCatalog"
+          :key="entry.plugin_key"
+          class="plugin-catalog-item marketplace-card"
+        >
+          <div class="plugin-catalog-top">
+            <strong>{{ entry.name }}</strong>
+            <el-tag :type="catalogStatusLabel(entry).type" size="small">
+              {{ catalogStatusLabel(entry).label }}
+            </el-tag>
+          </div>
+          <small>
+            {{ entry.plugin_key }} · v{{ entry.version }} · {{ protocolLabel(entry.protocol) }}
+          </small>
+          <p>{{ entry.description || "No description provided." }}</p>
+          <div class="plugin-tool-tags">
+            <el-tag size="small" effect="plain">
+              {{ entry.capabilities.length }} capabilities
+            </el-tag>
+            <el-tag size="small" effect="plain">{{ protocolLabel(entry.protocol) }}</el-tag>
+          </div>
+          <div class="installation-actions">
+            <el-button
+              v-if="!entry.installed"
+              type="primary"
+              plain
+              size="small"
+              :disabled="!projectId"
+              :loading="submitting && catalogBusyKey === entry.plugin_key"
+              @click="installFromCatalog(entry)"
+            >
+              Install
+            </el-button>
+            <el-tag v-else size="small" type="success">In project</el-tag>
+          </div>
+        </div>
+        <el-empty
+          v-if="!catalogLoading && filteredCatalog.length === 0"
+          description="No plugins match the current filters"
+          :image-size="60"
+        />
+      </div>
+    </section>
 
     <div class="integration-grid">
       <section

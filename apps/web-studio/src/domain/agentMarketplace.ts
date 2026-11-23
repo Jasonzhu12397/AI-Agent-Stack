@@ -346,3 +346,117 @@ export function validateInstall(
   }
   return { ok: errors.length === 0, errors };
 }
+
+// ---- Browse catalog (marketplace catalog endpoint) -------------------------
+
+export interface MarketplaceCatalogCapability {
+  name: string;
+  description: string;
+  risk_level: string;
+}
+
+export interface MarketplaceCatalogEntry {
+  plugin_key: string;
+  name: string;
+  description: string;
+  version: string;
+  protocol: string;
+  enabled: boolean;
+  capabilities: MarketplaceCatalogCapability[];
+  installed: boolean;
+  installation_status: InstallStatus;
+  installation_id: string | null;
+  project_id: string | null;
+}
+
+export interface CatalogFilter {
+  query?: string;
+  protocol?: string;
+  installedOnly?: boolean;
+}
+
+export interface CatalogInstallPayload {
+  plugin_key: string;
+  plugin_version: string;
+  granted_capabilities: string[];
+  credential_ref?: string;
+}
+
+// Human-readable protocol label. Unknown protocols are passed through verbatim.
+export function protocolLabel(protocol: string): string {
+  switch (protocol) {
+    case "http_json":
+      return "HTTP JSON";
+    case "mcp":
+      return "MCP";
+    case "a2a":
+      return "A2A";
+    case "openai_compatible":
+      return "OpenAI-compatible";
+    default:
+      return protocol;
+  }
+}
+
+// Badge label and Element Plus tag type for a catalog entry's installation state.
+export function catalogStatusLabel(
+  entry: MarketplaceCatalogEntry,
+): { label: string; type: "success" | "warning" | "danger" | "info" } {
+  switch (entry.installation_status) {
+    case "installed":
+      return { label: "Installed", type: "success" };
+    case "disabled":
+      return { label: "Disabled", type: "warning" };
+    case "uninstalled":
+      return { label: "Uninstalled", type: "info" };
+    case "not_installed":
+    default:
+      return { label: "Not installed", type: "info" };
+  }
+}
+
+// Client-side second-pass filtering over the catalog response. The backend
+// already filtered server-side; this keeps local search and UI toggles fast.
+// The original backend ordering is preserved.
+export function filterCatalog(
+  entries: MarketplaceCatalogEntry[],
+  filter: CatalogFilter = {},
+): MarketplaceCatalogEntry[] {
+  const query = (filter.query ?? "").trim().toLowerCase();
+  const protocol = (filter.protocol ?? "").trim();
+  return entries.filter((entry) => {
+    if (filter.installedOnly && !entry.installed) return false;
+    if (protocol && entry.protocol !== protocol) return false;
+    if (query) {
+      const haystack = [
+        entry.name,
+        entry.description,
+        ...entry.capabilities.map((capability) => capability.name),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+}
+
+// Build the install body for a catalog entry. Catalog entries carry no
+// plugin_id, so the plugin is identified by plugin_key plus pinned version.
+// A trimmed credential reference is attached only when provided; the
+// auth-required gating rules from the definition flow still apply server-side.
+export function catalogInstallPayload(
+  entry: MarketplaceCatalogEntry,
+  credentialRef: string,
+): CatalogInstallPayload {
+  const payload: CatalogInstallPayload = {
+    plugin_key: entry.plugin_key,
+    plugin_version: entry.version,
+    granted_capabilities: [],
+  };
+  const ref = (credentialRef ?? "").trim();
+  if (ref) {
+    payload.credential_ref = ref;
+  }
+  return payload;
+}
