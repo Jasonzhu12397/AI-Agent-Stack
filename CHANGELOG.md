@@ -8,6 +8,22 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- Snapshots left in a retired backup directory no longer leak or disappear
+  from the panel. Retention and the state view derive the candidate location
+  set from the cluster's own records (current spec directory, past backup/status
+  command directories, upgrade snapshot parent directories, and policy-update
+  audit events) instead of reading only the current spec single value. Each
+  entry is tagged with its own directory and pruned at its absolute path; the
+  report carries `pruned_entries` with name and directory, and an unconfirmed
+  restore point is marked as such.
+- Commands created through the node command endpoint no longer leave their
+  deployment link empty: the deployment the Target Agent serves is resolved at
+  creation and persisted on the command. Rollback snapshot protection, the
+  reported restore point and the post-change backup trigger all read that link,
+  so an open rollback actually holds the snapshot it named instead of relying
+  on an empty filter that could never match. A one-off migration backfills legacy
+  unattributed commands from the same node-to-deployment chain; read-time code
+  does not guess a deployment as a fallback.
 - The etcd backup scheduler heartbeat was recorded once per tenant, so one
   queued cluster lent its freshness to every other cluster in that tenant:
   agentless, policy-disabled and never-queued clusters looked evaluated, and the

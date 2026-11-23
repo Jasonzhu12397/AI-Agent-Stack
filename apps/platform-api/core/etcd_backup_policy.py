@@ -10,9 +10,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import AgentCommand, ClusterDeployment
-from packages.agent_contracts.etcd_backup import EtcdBackupError
+from core.models import AgentCommand, AuditEvent, ClusterDeployment
+from packages.agent_contracts.etcd_backup import (
+    ACTION,
+    STATUS_ACTION,
+    EtcdBackupError,
+    candidate_directories,
+)
 from packages.agent_contracts.kubernetes_rollback import ACTION as ROLLBACK_ACTION
+
+UPGRADE_ACTION = "cluster.kubernetes.version.upgrade"
+POLICY_AUDIT_EVENT = "cluster.etcd_backup.policy.updated"
 
 #: ``spec.kubernetes`` keys that carry retention policy, mapped to the request
 #: fields they become. Unknown keys are ignored; the contract refuses bad values.
@@ -83,6 +91,62 @@ def policy_directory(deployment: ClusterDeployment) -> str:
 
     directory = spec_policy((deployment.spec or {}).get("kubernetes")).get("directory")
     return str(directory or "").strip()
+
+
+def known_directories(deployment: ClusterDeployment) -> dict[str, Any]:
+    """Locations this cluster's snapshots may occupy, derived from its records.
+
+    After a policy directory rotation, snapshots left in the retired directory
+    are still this cluster's files. The candidate set therefore unions the
+    current spec directory, directories past backup/status commands reported,
+    the parent directory of an upgrade-reported snapshot, and directories the
+    policy audit event recorded. The contract validates and deduplicates them;
+    anything invalid comes back flagged instead of being dropped quietly.
+    """
+
+    sources: list[str] = []
+    declared = spec_policy((deployment.spec or {}).get("kubernetes")).get("directory")
+    if declared:
+        sources.append(str(declared))
+
+    history = AgentCommand.objects.filter(
+        deployment=deployment,
+        command_type__in=(ACTION, STATUS_ACTION),
+    ).only("payload")
+    for command in history:
+        payload = command.payload if isinstance(command.payload, dict) else {}
+        directory = payload.get("directory")
+        if isinstance(directory, str) and directory.strip():
+            sources.append(directory)
+
+    upgrades = AgentCommand.objects.filter(
+        deployment=deployment, command_type=UPGRADE_ACTION
+    ).only("result")
+    for command in upgrades:
+        result = command.result if isinstance(command.result, dict) else {}
+        snapshot = result.get("etcd_snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        path = str(snapshot.get("path") or "").strip()
+        if path:
+            sources.append(path.rsplit("/", 1)[0])
+
+    events = AuditEvent.objects.filter(
+        tenant=deployment.tenant,
+        event_type=POLICY_AUDIT_EVENT,
+        resource_type="cluster_deployment",
+        resource_id=str(deployment.id),
+    ).only("metadata")
+    for event in events:
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        policy = metadata.get("policy")
+        if not isinstance(policy, dict):
+            continue
+        directory = policy.get("etcd_backup_directory")
+        if isinstance(directory, str) and directory.strip():
+            sources.append(directory)
+
+    return candidate_directories(sources)
 
 
 def protected_names(deployment: ClusterDeployment) -> list[str]:

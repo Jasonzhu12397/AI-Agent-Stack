@@ -16,7 +16,12 @@ from typing import Any
 
 from django.db import transaction
 
-from core.etcd_backup_policy import enabled_switch, protected_names, spec_policy
+from core.etcd_backup_policy import (
+    enabled_switch,
+    known_directories,
+    protected_names,
+    spec_policy,
+)
 from core.models import AgentCommand, AgentNode, ClusterDeployment
 from packages.agent_contracts.etcd_backup import (
     ACTION,
@@ -94,6 +99,9 @@ def backup_payload(
         "confirm_cluster_name": deployment.cluster_name,
     }
     payload.update(spec_policy(kubernetes))
+    locations = known_directories(deployment)
+    if locations["directories"]:
+        payload["directories"] = locations["directories"]
     protect = protected_names(deployment)
     if protect:
         payload["protect"] = protect

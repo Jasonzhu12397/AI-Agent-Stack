@@ -393,6 +393,17 @@ of this cluster — a caller cannot point the pruning pass at a path, and cannot
 protect a file that does not belong here. The read-only view reports the same
 set, so "why was this file kept?" has an answer on the screen.
 
+Commands created through `POST /api/v1/agent-nodes/{node_id}/commands/` record
+the deployment their Target Agent serves at creation, resolved through the same
+project + cluster name + succeeded-status chain the snapshot directory lookup
+uses. Retention protection, the reported restore point and the post-change
+backup trigger all read that deployment link, so a rollback actually holds the
+snapshot it named. A node without a deployment (an EPH node, or one whose
+cluster was never installed) leaves the link empty, which is a legal state rather
+than a missing lookup. Commands created before this link was recorded are bound
+once by a data migration, resolved from the same chain; the lookup itself never
+guesses at read time.
+
 A backup that nobody checks is not a control. `python
 apps/platform-api/manage.py check_etcd_backups` walks every `succeeded` deployment,
 asks each one the same question the read-only view asks, writes an
@@ -474,6 +485,26 @@ find it. The upgrade request therefore accepts an optional
 The directory must be under `/var/lib/etcd`, the only host path the etcd pod
 mounts (`SNAPSHOT_DIRECTORY_INVALID` otherwise), because a snapshot the pod
 cannot read is not a backup.
+
+### Snapshots follow the cluster after a directory rotation
+
+The policy directory can be changed, but snapshots already written to the
+retired directory are still this cluster's files. Retention and the panel derive
+a candidate location set from the cluster's own records instead of trusting
+only the current spec directory: the current spec directory, directories past
+backup/status commands reported, the parent directory of an upgrade-reported
+snapshot, and directories recorded by `cluster.etcd_backup.policy.updated`
+audit events. The contract deduplicates and validates them; anything outside
+`/var/lib/etcd` or using path traversal comes back flagged in
+`invalid_directories` instead of being dropped quietly.
+
+A retention pass enumerates every candidate directory, tags each entry with
+the directory it was found in, and deletes by that entry's own absolute path.
+The run report keeps `pruned` as the pruned file names and adds
+`pruned_entries` (`name`, `directory`) so the panel can show where each removed
+file lived. The state view reports the union in `directories`; a restore point
+reported from a directory not confirmed by a recent listing carries
+`listed: false` and `unconfirmed: true`.
 
 Before writing it, the upgrade measures the live database
 (`etcdctl endpoint status`) against the free space of that volume (`df -PB1`).

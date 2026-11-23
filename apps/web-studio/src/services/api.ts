@@ -1076,6 +1076,7 @@ export type EtcdBackupCommandSummary = {
   finished_at: string | null;
   backup: { name?: string; path?: string; verified?: boolean; taken_at?: string } | null;
   pruned: string[];
+  pruned_entries?: Array<{ name: string; directory: string }>;
   count: number | null;
   failure_code: string | null;
   error: unknown;
@@ -1086,6 +1087,7 @@ export type EtcdRestorePoint = {
   kind: "periodic" | "pre_upgrade";
   path: string;
   listed: boolean;
+  unconfirmed?: boolean;
   taken_at: string;
   age_hours: number;
   size_bytes: number | null;
@@ -1111,6 +1113,8 @@ export type EtcdBackupState = {
   last_run: EtcdBackupCommandSummary | null;
   history: EtcdBackupCommandSummary[];
   restore_point: EtcdRestorePoint | null;
+  directories?: string[];
+  invalid_directories?: Array<{ directory: string; reason: string }>;
   reported_by?: string;
   reported_at?: string | null;
   enabled?: boolean;

@@ -11,7 +11,12 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from core.etcd_backup_policy import enabled_switch, protected_names, spec_policy
+from core.etcd_backup_policy import (
+    enabled_switch,
+    known_directories,
+    protected_names,
+    spec_policy,
+)
 from core.models import AgentCommand, AuditEvent, ClusterDeployment
 from packages.agent_contracts import etcd_backup as contract
 
@@ -176,7 +181,7 @@ def _reported_restore_point(
     point = contract.restore_point(entries, now=now)
     if not point:
         return None
-    return {**point, "path": path, "listed": False}
+    return {**point, "path": path, "listed": False, "unconfirmed": True}
 
 
 def _with_location(
@@ -195,7 +200,7 @@ def _with_location(
     path = str(point.get("path") or "").strip()
     if not path:
         path = f"{directory.rstrip('/')}/{point['name']}"
-    return {**point, "path": path, "listed": listed}
+    return {**point, "path": path, "listed": listed, "unconfirmed": not listed}
 
 
 def _listing_directory(command: AgentCommand, fallback: str) -> str:
@@ -269,6 +274,7 @@ def _command_summary(command: AgentCommand) -> dict[str, Any]:
         "finished_at": command.finished_at.isoformat() if command.finished_at else None,
         "backup": backup,
         "pruned": result.get("pruned") or [],
+        "pruned_entries": result.get("pruned_entries") or [],
         "count": result.get("count"),
         "failure_code": result.get("failure_code"),
         "error": command.error or None,
@@ -301,8 +307,11 @@ def etcd_backup_state(
     scheduler_age = (
         (now or datetime.datetime.now(datetime.UTC)) - scheduler_at
     ).total_seconds() / 3600.0 if scheduler_at else None
+    locations = known_directories(deployment)
     state: dict[str, Any] = {
         "policy": policy,
+        "directories": locations["directories"],
+        "invalid_directories": locations["invalid"],
         "restore_point": None,
         "scheduler_last_run": scheduler_at.isoformat() if scheduler_at else None,
         "scheduler_age_hours": (

@@ -117,10 +117,18 @@ MUTATING_COMMANDS = {
     # backups have to run without a person watching.
     "cluster.kubernetes.backup.run",
 }
-def _policy_snapshot_directory(node) -> str:
-    """The snapshot directory the deployment behind this node declares."""
+def _deployment_for_node(node) -> ClusterDeployment | None:
+    """The succeeded deployment this Target Agent node serves, if any.
 
-    deployment = (
+    This is the single authoritative node-to-deployment resolution chain:
+    project, cluster name and succeeded status, newest update first. Callers
+    that need the deployment (command attribution, snapshot directory lookup)
+    share it so the two cannot drift. A node without a deployment - an EPH
+    node, or one whose cluster was never installed - resolves to None, which is
+    a legal empty state rather than a lookup failure.
+    """
+
+    return (
         ClusterDeployment.objects.filter(
             project=node.project,
             cluster_name=node.cluster_name,
@@ -129,6 +137,12 @@ def _policy_snapshot_directory(node) -> str:
         .order_by("-updated_at")
         .first()
     )
+
+
+def _policy_snapshot_directory(node) -> str:
+    """The snapshot directory the deployment behind this node declares."""
+
+    deployment = _deployment_for_node(node)
     return policy_directory(deployment) if deployment is not None else ""
 
 
@@ -2582,6 +2596,7 @@ class AgentNodeCommandListCreateView(APIView):
             if command_type in APPROVAL_REQUIRED_COMMANDS
             else AgentCommand.Status.QUEUED
         )
+        deployment = _deployment_for_node(node)
         try:
             with transaction.atomic():
                 command, created = AgentCommand.objects.get_or_create(
@@ -2595,6 +2610,7 @@ class AgentNodeCommandListCreateView(APIView):
                         "payload": payload,
                         "status": initial_status,
                         "plan_hash": plan_hash,
+                        "deployment": deployment,
                     },
                 )
         except IntegrityError:
