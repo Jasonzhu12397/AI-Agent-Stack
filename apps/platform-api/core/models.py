@@ -926,6 +926,7 @@ class AgentPluginDefinition(models.Model):
     endpoint_url = models.URLField(max_length=500)
     auth_required = models.BooleanField(default=True)
     capabilities = models.JSONField(default=list)
+    manifest = models.JSONField(default=dict)
     input_schema = models.JSONField(default=dict)
     output_schema = models.JSONField(default=dict)
     timeout_seconds = models.PositiveSmallIntegerField(default=60)

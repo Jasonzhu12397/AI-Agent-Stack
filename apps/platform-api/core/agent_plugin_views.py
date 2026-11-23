@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core import agent_plugin_manifest
 from core.audit import record_audit_event
 from core.models import (
     AgentPluginDefinition,
@@ -162,6 +163,7 @@ def _definition_data(plugin):
         "endpoint_url": plugin.endpoint_url,
         "auth_required": plugin.auth_required,
         "capabilities": plugin.capabilities,
+        "manifest": plugin.manifest,
         "input_schema": plugin.input_schema,
         "output_schema": plugin.output_schema,
         "timeout_seconds": plugin.timeout_seconds,
@@ -238,10 +240,32 @@ class AgentPluginCatalogView(APIView):
         endpoint_error = _validate_endpoint_url(data["endpoint_url"])
         if endpoint_error:
             return Response({"detail": endpoint_error}, status=400)
-        capabilities = data.get("capabilities", [])
-        capability_error = _validate_capabilities(capabilities)
-        if capability_error:
-            return Response({"detail": capability_error}, status=400)
+        manifest = data.get("manifest", {})
+        if manifest is None:
+            manifest = {}
+        if not isinstance(manifest, dict) or len(str(manifest).encode("utf-8")) > (
+            agent_plugin_manifest.MAX_MANIFEST_BYTES
+        ):
+            return Response(
+                {"detail": "manifest must be a JSON object no larger than 32 KiB."},
+                status=400,
+            )
+        if _contains_sensitive_key(manifest):
+            return Response(
+                {"detail": "manifest must not contain credential-like field names."},
+                status=400,
+            )
+        manifest_error = agent_plugin_manifest.validate_manifest(manifest, data["protocol"])
+        if manifest_error:
+            return Response({"detail": manifest_error}, status=400)
+        manifest_names = agent_plugin_manifest.capability_names_from_manifest(manifest)
+        if manifest_names:
+            capabilities = manifest_names
+        else:
+            capabilities = data.get("capabilities", [])
+            capability_error = _validate_capabilities(capabilities)
+            if capability_error:
+                return Response({"detail": capability_error}, status=400)
         input_schema = data.get("input_schema", {})
         output_schema = data.get("output_schema", {})
         schemas = ((input_schema, "input_schema"), (output_schema, "output_schema"))
@@ -287,6 +311,7 @@ class AgentPluginCatalogView(APIView):
                     endpoint_url=data["endpoint_url"],
                     auth_required=auth_required,
                     capabilities=capabilities,
+                    manifest=manifest,
                     input_schema=input_schema,
                     output_schema=output_schema,
                     timeout_seconds=timeout_seconds,
