@@ -569,7 +569,8 @@ stop a retry: when the command for this bucket already ended `failed` or
 under `<key>:retry:<n>` instead of handing back the dead one, so an operator in
 the middle of an incident does not have to wait for the next hour. A live retry
 already covering the bucket is returned rather than duplicated, so double
-clicks stay idempotent.
+clicks stay idempotent. Read-only checks follow the same rule in their
+ten-minute bucket, so a failed probe can be repeated immediately.
 
 ### Overrides and their defaults
 

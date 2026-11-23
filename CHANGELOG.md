@@ -30,6 +30,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   a healthy fleet, dry runs or `--no-alert`), reports whether delivery worked
   without echoing the target, and compose runs it hourly as
   `etcd-backup-watchdog`.
+- The read-only check follows the same retry rule: a failed check no longer
+  answers "already queued" for its ten-minute bucket.
 - The watchdog entry also carries `enabled`, so a disabled cluster is visible in
   the dump without reading its state.
 - The verification matrix points at run 45088400861 (`9fff2092`, 1812 passed).

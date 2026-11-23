@@ -109,6 +109,37 @@ def backup_payload(
     return request
 
 
+def _queue_with_retry(
+    tenant: Any, key: str, defaults: dict[str, Any]
+) -> tuple[AgentCommand, bool]:
+    """Get or create this bucket's command, retrying when the bucket's is dead.
+
+    Both queues share the rule, because both have the same failure: a command
+    that ended failed or cancelled must not answer "already queued" to the
+    operator who is trying to fix exactly that.
+    """
+
+    with transaction.atomic():
+        command, created = AgentCommand.objects.get_or_create(
+            tenant=tenant, idempotency_key=key, defaults=defaults
+        )
+        if created or command.status not in DEAD_STATUSES:
+            return command, created
+        attempts = list(
+            AgentCommand.objects.filter(
+                tenant=tenant, idempotency_key__startswith=f"{key}:retry:"
+            ).order_by("idempotency_key")
+        )
+        if attempts and attempts[-1].status not in DEAD_STATUSES:
+            # A live retry already covers this bucket: return it, do not stack.
+            return attempts[-1], False
+        return AgentCommand.objects.get_or_create(
+            tenant=tenant,
+            idempotency_key=f"{key}:retry:{len(attempts) + 1}",
+            defaults=defaults,
+        )
+
+
 def queue_status(
     deployment: ClusterDeployment,
     *,
@@ -130,21 +161,20 @@ def queue_status(
     except EtcdBackupError as exc:
         return None, False, exc.code
     key = f"etcd-backup-status:{deployment.id}:{status_bucket(now)}"
-    with transaction.atomic():
-        command, created = AgentCommand.objects.get_or_create(
-            tenant=deployment.tenant,
-            idempotency_key=key,
-            defaults={
-                "project": deployment.project,
-                "node": deployment.target_node,
-                "requested_by": requested_by or deployment.requested_by,
-                "command_type": STATUS_ACTION,
-                "payload": payload,
-                "status": AgentCommand.Status.QUEUED,
-                "plan_hash": payload_hash(STATUS_ACTION, payload),
-                "deployment": deployment,
-            },
-        )
+    command, created = _queue_with_retry(
+        deployment.tenant,
+        key,
+        {
+            "project": deployment.project,
+            "node": deployment.target_node,
+            "requested_by": requested_by or deployment.requested_by,
+            "command_type": STATUS_ACTION,
+            "payload": payload,
+            "status": AgentCommand.Status.QUEUED,
+            "plan_hash": payload_hash(STATUS_ACTION, payload),
+            "deployment": deployment,
+        },
+    )
     return command, created, ""
 
 
@@ -171,39 +201,18 @@ def queue_backup(
     except EtcdBackupError as exc:
         return None, False, exc.code
     key = f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
-    defaults = {
-        "project": deployment.project,
-        "node": node,
-        "requested_by": requested_by or deployment.requested_by,
-        "command_type": ACTION,
-        "payload": payload,
-        "status": AgentCommand.Status.QUEUED,
-        "plan_hash": payload_hash(ACTION, payload),
-        "deployment": deployment,
-    }
-    with transaction.atomic():
-        command, created = AgentCommand.objects.get_or_create(
-            tenant=deployment.tenant,
-            idempotency_key=key,
-            defaults=defaults,
-        )
-        if not created and command.status in DEAD_STATUSES:
-            # The hour's command is dead: this call is a retry, not a duplicate
-            # click. The suffix keeps every attempt distinct and idempotent, so
-            # two operators pressing at once still produce one command.
-            attempts = list(
-                AgentCommand.objects.filter(
-                    tenant=deployment.tenant,
-                    idempotency_key__startswith=f"{key}:retry:",
-                ).order_by("idempotency_key")
-            )
-            if attempts and attempts[-1].status not in DEAD_STATUSES:
-                # A live retry already covers this hour: a second click returns
-                # it instead of stacking yet another command.
-                return attempts[-1], False, ""
-            command, created = AgentCommand.objects.get_or_create(
-                tenant=deployment.tenant,
-                idempotency_key=f"{key}:retry:{len(attempts) + 1}",
-                defaults=defaults,
-            )
+    command, created = _queue_with_retry(
+        deployment.tenant,
+        key,
+        {
+            "project": deployment.project,
+            "node": node,
+            "requested_by": requested_by or deployment.requested_by,
+            "command_type": ACTION,
+            "payload": payload,
+            "status": AgentCommand.Status.QUEUED,
+            "plan_hash": payload_hash(ACTION, payload),
+            "deployment": deployment,
+        },
+    )
     return command, created, ""

@@ -849,3 +849,30 @@ def test_a_restore_point_from_a_listing_uses_the_directory_that_was_listed():
 
     assert point["listed"] is True
     assert point["path"] == f"/var/lib/etcd/backups-old/{name}"
+
+
+@pytest.mark.django_db
+def test_a_failed_check_does_not_block_checking_again_in_the_same_bucket():
+    user, tenant, project, target, deployment, client = _workspace()
+    AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=target,
+        requested_by=user,
+        command_type=contract.STATUS_ACTION,
+        payload={"cluster_name": "lab"},
+        status=AgentCommand.Status.FAILED,
+        idempotency_key=f"etcd-backup-status:{deployment.id}:20261123T020",
+        plan_hash="9" * 64,
+        deployment=deployment,
+    )
+
+    url = f"/api/v1/cluster-deployments/{deployment.id}/etcd-backup/check/"
+    with patch("core.etcd_backup_queue.status_bucket", return_value="20261123T020"):
+        first = client.post(url)
+        second = client.post(url)
+
+    assert first.data["created"] is True
+    assert first.data["code"] == ""
+    assert second.data["created"] is False
+    assert second.data["command_id"] == first.data["command_id"]
