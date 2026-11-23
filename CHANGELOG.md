@@ -51,6 +51,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - A cluster whose only snapshots are pre-upgrade ones now reports the files its
   retention policy would delete, instead of reporting nothing to prune because
   no recurring backup exists yet.
+- The newest backup run is read from its own query, so a dozen "check now"
+  commands can no longer push a successful run out of the shared history
+  window and make the panel say the cluster was never backed up.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather

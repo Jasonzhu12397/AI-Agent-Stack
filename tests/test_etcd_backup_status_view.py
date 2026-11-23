@@ -940,3 +940,44 @@ def test_a_hand_edited_switch_is_reported_as_invalid_not_guessed():
     assert body["policy"]["valid"] is False
     assert body["policy"]["error"]["code"] == "ETCD_BACKUP_ENABLED_INVALID"
     assert body["findings"][0]["code"] == "ETCD_BACKUP_ENABLED_INVALID"
+
+
+@pytest.mark.django_db
+def test_a_dozen_read_only_checks_do_not_erase_the_backup_they_were_checking():
+    user, tenant, project, target, deployment, client = _workspace()
+    now = datetime.datetime.now(datetime.UTC)
+    name = contract.backup_filename("lab", now=now - datetime.timedelta(hours=2))
+    _command(
+        tenant,
+        project,
+        target,
+        user,
+        deployment,
+        names=[name],
+        when=now - datetime.timedelta(hours=2),
+    )
+    # An operator watching the panel presses "check now" until the read-only
+    # commands outnumber the history window. The backup run must not disappear
+    # out of it: the panel would say "never backed up" about a cluster that
+    # backed up two hours ago.
+    for index in range(contract.MIN_KEEP_COUNT + 11):
+        AgentCommand.objects.create(
+            tenant=tenant,
+            project=project,
+            node=target,
+            requested_by=user,
+            command_type=contract.STATUS_ACTION,
+            payload={"cluster_name": "lab"},
+            status=AgentCommand.Status.SUCCEEDED,
+            idempotency_key=f"status-{index}",
+            plan_hash="7" * 64,
+            deployment=deployment,
+            finished_at=now - datetime.timedelta(minutes=index),
+            result={"entries": [name]},
+        )
+
+    body = client.get(URL.format(deployment.id)).data
+
+    assert body.get("not_run_yet") is not True
+    assert body["last_run"]["backup"]["name"] == name
+    assert body["count"] == 1

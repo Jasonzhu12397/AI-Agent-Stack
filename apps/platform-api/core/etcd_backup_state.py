@@ -280,7 +280,16 @@ def etcd_backup_state(
             command_type__in=(contract.ACTION, contract.STATUS_ACTION),
         ).order_by("-created_at")[:HISTORY_LIMIT]
     )
-    runs = [command for command in commands if command.command_type == contract.ACTION]
+    # Read-only checks are cheap and an operator may press "check now" a dozen
+    # times in an hour. Asking the window above for the newest backup run would
+    # let those checks push the run out of it and turn "backed up an hour ago"
+    # into "never backed up", so the runs are asked for separately.
+    runs = list(
+        AgentCommand.objects.filter(
+            deployment=deployment,
+            command_type=contract.ACTION,
+        ).order_by("-created_at")[:HISTORY_LIMIT]
+    )
     scheduler_at = _scheduler_last_run(deployment)
     scheduler_age = (
         (now or datetime.datetime.now(datetime.UTC)) - scheduler_at
