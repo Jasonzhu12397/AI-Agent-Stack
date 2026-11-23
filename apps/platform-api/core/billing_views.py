@@ -26,6 +26,7 @@ from core.token_budget import (
     get_tenant_token_usage,
     get_tenant_usage_history,
     local_day_bounds,
+    local_month_bounds,
 )
 
 SUPPORTED_CHANNELS = ("wechat", "alipay")
@@ -179,6 +180,11 @@ class UsageView(TenantScopedView):
         budget, _ = TenantTokenBudget.objects.get_or_create(tenant=tenant)
         usage = get_tenant_token_usage(tenant.id)
         day_start, day_end = local_day_bounds()
+        _, month_end = local_month_bounds()
+        daily_used = int(usage["daily_used"])
+        monthly_used = int(usage["monthly_used"])
+        daily_limit = int(budget.daily_limit)
+        monthly_limit = int(budget.monthly_limit)
         grants = EntitlementGrant.objects.filter(tenant=tenant).order_by("-created_at")
         grant_history = [
             {
@@ -194,11 +200,16 @@ class UsageView(TenantScopedView):
         ]
         return Response(
             {
-                "daily_limit": budget.daily_limit,
-                "monthly_limit": budget.monthly_limit,
+                "daily_limit": daily_limit,
+                "monthly_limit": monthly_limit,
                 **usage,
+                "remaining_daily": max(0, daily_limit - daily_used),
+                "remaining_monthly": max(0, monthly_limit - monthly_used),
+                "reset_at": day_end.isoformat(),
+                "monthly_reset_at": month_end.isoformat(),
                 "period_start": day_start.isoformat(),
                 "period_end": day_end.isoformat(),
+                "limits_source": "tenant_budget",
                 "history": get_tenant_usage_history(tenant.id),
                 "grants": grant_history,
             }

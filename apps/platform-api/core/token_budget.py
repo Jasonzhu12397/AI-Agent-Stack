@@ -40,6 +40,25 @@ def local_day_bounds(now=None):
     return day_start, day_start + timedelta(days=1)
 
 
+def local_month_bounds(now=None):
+    """Return ``(month_start, month_end)`` on the local-time month boundary.
+
+    ``month_end`` is the first instant of the next local month; it is the
+    exact monthly reset timestamp exposed on the usage payload, so no second
+    month convention is introduced.
+    """
+    current_time = now or timezone.now()
+    local_now = timezone.localtime(current_time)
+    month_start = local_now.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+    return month_start, month_end
+
+
 def get_tenant_token_usage(tenant_id, now=None):
     current_time = now or timezone.now()
     day_start, _ = local_day_bounds(current_time)
