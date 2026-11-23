@@ -8,6 +8,10 @@ from core.billing_views import (
     OrderRefundView,
     PaymentCallbackView,
     PlansView,
+    SubscriptionCancelView,
+    SubscriptionRenewView,
+    SubscriptionSettleView,
+    SubscriptionTrialView,
     SubscriptionView,
     UsageView,
 )
@@ -27,6 +31,26 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/billing/subscription/",
         SubscriptionView.as_view(),
         name="billing-subscription",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/trial/",
+        SubscriptionTrialView.as_view(),
+        name="billing-subscription-trial",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/cancel/",
+        SubscriptionCancelView.as_view(),
+        name="billing-subscription-cancel",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/renew/",
+        SubscriptionRenewView.as_view(),
+        name="billing-subscription-renew",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/settle/",
+        SubscriptionSettleView.as_view(),
+        name="billing-subscription-settle",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/billing/usage/",
