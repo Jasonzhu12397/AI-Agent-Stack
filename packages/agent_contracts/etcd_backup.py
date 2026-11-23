@@ -17,6 +17,7 @@ Two rules keep the deletion side safe:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -69,6 +70,27 @@ MAX_PRE_UPGRADE_KEEP_MAX_AGE_HOURS = 8760
 DEFAULT_MIN_FREE_BYTES = 512 * 1024 * 1024
 MIN_FREE_BYTES_FLOOR = 0
 MAX_MIN_FREE_BYTES = 1024 * 1024 * 1024 * 1024
+
+#: A snapshot that verified but whose publish rename failed stays in staging
+#: until the next run republishes it. These two bounds decide when it stops
+#: trying: how long after verification it may still be republished, and how
+#: many publish attempts (the first one included) it may make before it is
+#: abandoned. They are policy defaults, not sweep-time guesses.
+DEFAULT_STAGING_REPUBLISH_WINDOW_HOURS = 24
+MIN_STAGING_REPUBLISH_WINDOW_HOURS = 1
+MAX_STAGING_REPUBLISH_WINDOW_HOURS = 720
+DEFAULT_STAGING_MAX_PUBLISH_ATTEMPTS = 3
+MIN_STAGING_MAX_PUBLISH_ATTEMPTS = 1
+MAX_STAGING_MAX_PUBLISH_ATTEMPTS = 24
+
+STAGING_STATE_PENDING = "pending_publish"
+STAGING_STATE_PUBLISHED = "published"
+STAGING_STATE_ABANDONED = "abandoned"
+STAGING_STATES = (
+    STAGING_STATE_PENDING,
+    STAGING_STATE_PUBLISHED,
+    STAGING_STATE_ABANDONED,
+)
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DIRECTORY = re.compile(r"^/var/lib/etcd[A-Za-z0-9._/-]*$")
@@ -418,6 +440,101 @@ def staging_name_belongs(name: str, *, cluster_name: str) -> bool:
         return True
     # Legacy names carry no cluster, only a target version: ``v1.34`` is ours.
     return bool(_VERSION.fullmatch(str(parsed["version"])))
+
+
+# ------------------------------------------------------------- staging state
+
+
+def staging_sidecar_name(partial: str) -> str:
+    """Name of the machine-readable state record next to a staging file.
+
+    The sidecar lives beside the ``*.db.partial`` file in the same backup
+    directory, so moving or removing the staging file never orphans its
+    record on a different volume.
+    """
+
+    return f"{partial}.state.json"
+
+
+def encode_staging_state(record: Mapping[str, Any]) -> str:
+    """Serialize a staging state record for its sidecar file."""
+
+    return json.dumps(dict(record), sort_keys=True, ensure_ascii=False)
+
+
+def decode_staging_state(text: Any, *, cluster_name: str) -> dict[str, Any] | None:
+    """Validate a sidecar record, or ``None`` when it cannot be trusted.
+
+    A record that is missing fields, names another cluster, carries an
+    unknown state, or cannot be read as JSON is treated as absent: the
+    legacy age sweep then decides what happens to the staging file.
+    """
+
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(record, Mapping):
+        return None
+    required = (
+        "cluster_name",
+        "final_name",
+        "directory",
+        "verified_at",
+        "state",
+        "attempts",
+        "last_failure",
+        "updated_at",
+    )
+    if any(key not in record for key in required):
+        return None
+    if str(record.get("cluster_name") or "") != cluster_name:
+        return None
+    if str(record.get("state") or "") not in STAGING_STATES:
+        return None
+    if _as_time(record.get("verified_at")) is None:
+        return None
+    attempts = record.get("attempts")
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+        return None
+    return {
+        "cluster_name": str(record["cluster_name"]),
+        "final_name": str(record["final_name"]),
+        "directory": str(record["directory"]),
+        "verified_at": _as_time(record["verified_at"]).isoformat(),
+        "state": str(record["state"]),
+        "attempts": attempts,
+        "last_failure": str(record.get("last_failure") or ""),
+        "updated_at": str(record.get("updated_at") or record["verified_at"]),
+    }
+
+
+def staging_state_decision(
+    record: Mapping[str, Any],
+    *,
+    now: datetime,
+    window_hours: int,
+    max_attempts: int,
+) -> dict[str, str]:
+    """Decide whether a pending staging record may still be republished.
+
+    A terminal record (``published`` / ``abandoned``) is left to the caller.
+    A pending record is kept while it sits inside the republish window and
+    has not used up its attempt budget; otherwise it is abandoned, with the
+    reason recorded so the report can say why the file went away.
+    """
+
+    if record.get("state") != STAGING_STATE_PENDING:
+        return {"action": "keep", "reason": "terminal_state"}
+    verified_at = _as_time(record.get("verified_at"))
+    attempts = int(record.get("attempts") or 1)
+    if verified_at is not None and now - verified_at > timedelta(hours=window_hours):
+        return {"action": "abandon", "reason": "window_expired"}
+    if attempts >= max_attempts:
+        return {"action": "abandon", "reason": "attempts_exhausted"}
+    return {"action": "keep", "reason": "within_window"}
 
 
 def snapshot_entries(entries: Any, *, cluster_name: str = "") -> list[dict[str, Any]]:

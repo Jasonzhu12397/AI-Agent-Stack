@@ -18,15 +18,26 @@ from datetime import UTC, datetime
 from typing import Any
 
 from packages.agent_contracts.etcd_backup import (
+    DEFAULT_STAGING_MAX_PUBLISH_ATTEMPTS,
+    DEFAULT_STAGING_REPUBLISH_WINDOW_HOURS,
+    STAGING_STATE_ABANDONED,
+    STAGING_STATE_PENDING,
+    STAGING_STATE_PUBLISHED,
     EtcdBackupError,
     assess,
     backup_filename,
+    decode_staging_state,
     disk_verdict,
+    encode_staging_state,
+    parse_backup_name,
+    parse_pre_upgrade_name,
     partial_name,
     public_entries,
     select_prunable,
     snapshot_entries,
     staging_name_belongs,
+    staging_sidecar_name,
+    staging_state_decision,
 )
 
 Runner = Callable[..., dict[str, Any]]
@@ -241,13 +252,113 @@ class EtcdBackupExecutor:
             entry["directory"] = listing_dir.get(entry["name"], directories[0])
         return entries
 
-    def _sweep_stale_partials(self, directory: str, cluster_name: str) -> list[str]:
+    # ------------------------------------------------------------------ staging state
+    def _read_text(self, path: str) -> str | None:
+        result = self._runner(
+            self._pod_shell(["cat", path]), timeout=STEP_TIMEOUT_SECONDS
+        )
+        if not _ok(result):
+            return None
+        body = str(result.get("stdout") or "").strip()
+        return body or None
+
+    def _write_text(self, path: str, body: str) -> bool:
+        outcome = self._runner(
+            self._pod_shell(
+                ["sh", "-c", 'printf "%s" "$1" > "$2"', "sh", body, path]
+            ),
+            timeout=STEP_TIMEOUT_SECONDS,
+        )
+        return _ok(outcome)
+
+    def _read_staging_state(
+        self, directory: str, partial: str, cluster_name: str
+    ) -> dict[str, Any] | None:
+        sidecar = f"{directory}/{staging_sidecar_name(partial)}"
+        body = self._read_text(sidecar)
+        if body is None:
+            return None
+        return decode_staging_state(body, cluster_name=cluster_name)
+
+    def _write_staging_state(
+        self, directory: str, partial: str, record: dict[str, Any]
+    ) -> None:
+        sidecar = f"{directory}/{staging_sidecar_name(partial)}"
+        self._write_text(sidecar, encode_staging_state(record))
+
+    def _remove_staging_state(self, directory: str, partial: str) -> None:
+        self._best_effort_remove(
+            f"{directory}/{staging_sidecar_name(partial)}"
+        )
+
+    def _staging_record(
+        self,
+        *,
+        cluster_name: str,
+        partial: str,
+        final_name: str,
+        directory: str,
+        now: datetime,
+        state: str,
+        attempts: int,
+        last_failure: str,
+    ) -> dict[str, Any]:
+        return {
+            "cluster_name": cluster_name,
+            "final_name": final_name,
+            "directory": directory,
+            "verified_at": now.isoformat(),
+            "state": state,
+            "attempts": attempts,
+            "last_failure": last_failure,
+            "updated_at": now.isoformat(),
+        }
+
+    @staticmethod
+    def _stamp(name: str) -> datetime | None:
+        parsed = parse_backup_name(name) or parse_pre_upgrade_name(name)
+        if not parsed:
+            return None
+        try:
+            return datetime.fromisoformat(parsed["taken_at"].replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _transition_abandoned(
+        self,
+        directory: str,
+        partial: str,
+        record: dict[str, Any],
+        now: datetime,
+        reason: str,
+    ) -> None:
+        record["state"] = STAGING_STATE_ABANDONED
+        record["updated_at"] = now.isoformat()
+        record["last_failure"] = f"{reason}: {record['last_failure']}".strip(": ")
+        self._write_staging_state(directory, partial, record)
+        self._best_effort_remove(f"{directory}/{partial}")
+        self._remove_staging_state(directory, partial)
+
+    # ------------------------------------------------------------------ sweep
+    def _sweep_stale_partials(
+        self,
+        directory: str,
+        cluster_name: str,
+        *,
+        now: datetime,
+        staging_report: list[dict[str, str]],
+    ) -> list[str]:
         """Remove staging files an earlier, killed run left behind.
 
-        Only files that match the staging suffix and are older than
-        ``PARTIAL_STALE_MINUTES`` are touched, and only paths that sit directly
-        in the backup directory: a sweep must never be able to delete anything
-        a backup would otherwise keep.
+        The age filter still lists only files older than
+        ``PARTIAL_STALE_MINUTES`` that sit directly in the backup directory.
+        What happens next depends on the sidecar state record, not the mtime:
+
+        * a ``pending_publish`` record inside its republish window is kept,
+          whatever its age;
+        * a record past the window, or over its attempt budget, is first
+          transitioned to ``abandoned`` and only then removed;
+        * a partial with no readable record follows the legacy age sweep.
         """
 
         listing = self._runner(
@@ -270,24 +381,170 @@ class EtcdBackupExecutor:
         )
         if not _ok(listing):
             return []
-        removed = []
+        removed: list[str] = []
         for line in str(listing.get("stdout") or "").splitlines():
             path = line.strip()
             if not path.endswith(".db.partial"):
                 continue
             if path.rsplit("/", 1)[0] != directory.rstrip("/") or ".." in path:
                 continue
-            if not staging_name_belongs(
-                path.rsplit("/", 1)[-1], cluster_name=cluster_name
-            ):
+            name = path.rsplit("/", 1)[-1]
+            if not staging_name_belongs(name, cluster_name=cluster_name):
+                continue
+            record = self._read_staging_state(directory, name, cluster_name)
+            if record is not None:
+                decision = staging_state_decision(
+                    record,
+                    now=now,
+                    window_hours=DEFAULT_STAGING_REPUBLISH_WINDOW_HOURS,
+                    max_attempts=DEFAULT_STAGING_MAX_PUBLISH_ATTEMPTS,
+                )
+                if decision["action"] == "keep":
+                    if record["state"] == STAGING_STATE_PENDING:
+                        staging_report.append(
+                            {"name": name, "directory": directory, "state": record["state"]}
+                        )
+                    continue
+                self._transition_abandoned(
+                    directory, name, record, now, reason=decision["reason"]
+                )
+                removed.append(name)
+                staging_report.append(
+                    {"name": name, "directory": directory, "state": STAGING_STATE_ABANDONED}
+                )
                 continue
             outcome = self._runner(
                 self._pod_shell(["rm", "-f", path]),
                 timeout=STEP_TIMEOUT_SECONDS,
             )
             if _ok(outcome):
-                removed.append(path.rsplit("/", 1)[-1])
+                removed.append(name)
         return removed
+
+    # ------------------------------------------------------------- republish
+    def _republish_pending(
+        self,
+        directories: list[str],
+        cluster_name: str,
+        *,
+        now: datetime,
+        republished: list[dict[str, str]],
+        staging_report: list[dict[str, str]],
+        swept: list[str],
+    ) -> None:
+        """Republish verified staging files the previous run could not rename.
+
+        Runs after the sweep, once per candidate directory. A pending record
+        is renamed to its final name when no newer final file already exists.
+        A successful republish clears the sidecar; a failed one bumps the
+        attempt budget and abandons the record when the budget or the window
+        runs out. Nothing here overwrites an existing final snapshot.
+        """
+
+        for directory in directories:
+            entries = self._list_directory(directory)
+            for entry in entries:
+                name = entry["name"]
+                if not name.endswith(".db.partial"):
+                    continue
+                if not staging_name_belongs(name, cluster_name=cluster_name):
+                    continue
+                record = self._read_staging_state(directory, name, cluster_name)
+                if record is None or record["state"] != STAGING_STATE_PENDING:
+                    continue
+                decision = staging_state_decision(
+                    record,
+                    now=now,
+                    window_hours=DEFAULT_STAGING_REPUBLISH_WINDOW_HOURS,
+                    max_attempts=DEFAULT_STAGING_MAX_PUBLISH_ATTEMPTS,
+                )
+                if decision["action"] == "abandon":
+                    self._transition_abandoned(
+                        directory, name, record, now, reason=decision["reason"]
+                    )
+                    swept.append(name)
+                    staging_report.append(
+                        {"name": name, "directory": directory, "state": STAGING_STATE_ABANDONED}
+                    )
+                    continue
+
+                final_name = record["final_name"]
+                final_path = f"{directory}/{final_name}"
+                record_stamp = self._stamp(record["final_name"])
+                existing_finals = [
+                    item["name"]
+                    for item in entries
+                    if not item["name"].endswith(".db.partial")
+                ]
+                newer_exists = False
+                for existing_name in existing_finals:
+                    existing_stamp = self._stamp(existing_name)
+                    if (
+                        existing_stamp is not None
+                        and record_stamp is not None
+                        and existing_stamp >= record_stamp
+                    ):
+                        newer_exists = True
+                        break
+                if newer_exists:
+                    self._transition_abandoned(
+                        directory,
+                        name,
+                        record,
+                        now,
+                        reason="final_exists_newer",
+                    )
+                    swept.append(name)
+                    staging_report.append(
+                        {
+                            "name": name,
+                            "directory": directory,
+                            "state": STAGING_STATE_ABANDONED,
+                        }
+                    )
+                    continue
+
+                outcome = self._runner(
+                    self._pod_shell(["mv", f"{directory}/{name}", final_path]),
+                    timeout=STEP_TIMEOUT_SECONDS,
+                )
+                if _ok(outcome):
+                    record["state"] = STAGING_STATE_PUBLISHED
+                    record["updated_at"] = now.isoformat()
+                    self._write_staging_state(directory, name, record)
+                    self._remove_staging_state(directory, name)
+                    republished.append({"name": final_name, "directory": directory})
+                    staging_report.append(
+                        {"name": name, "directory": directory, "state": STAGING_STATE_PUBLISHED}
+                    )
+                    continue
+
+                record["attempts"] += 1
+                record["last_failure"] = _output(outcome) or "publish rename failed"
+                record["updated_at"] = now.isoformat()
+                retry = staging_state_decision(
+                    record,
+                    now=now,
+                    window_hours=DEFAULT_STAGING_REPUBLISH_WINDOW_HOURS,
+                    max_attempts=DEFAULT_STAGING_MAX_PUBLISH_ATTEMPTS,
+                )
+                if retry["action"] == "abandon":
+                    self._transition_abandoned(
+                        directory, name, record, now, reason=retry["reason"]
+                    )
+                    swept.append(name)
+                    staging_report.append(
+                        {
+                            "name": name,
+                            "directory": directory,
+                            "state": STAGING_STATE_ABANDONED,
+                        }
+                    )
+                else:
+                    self._write_staging_state(directory, name, record)
+                    staging_report.append(
+                        {"name": name, "directory": directory, "state": STAGING_STATE_PENDING}
+                    )
 
     # ------------------------------------------------------------------ run
     def run(self, request: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
@@ -312,10 +569,25 @@ class EtcdBackupExecutor:
         if not self._finish(prepare, result):
             return self._failed("ETCD_BACKUP_PREPARE_FAILED", directory, request)
         swept: list[str] = []
+        republished: list[dict[str, str]] = []
+        staging_report: list[dict[str, str]] = []
         for entry_directory in directories:
             swept.extend(
-                self._sweep_stale_partials(entry_directory, request["cluster_name"])
+                self._sweep_stale_partials(
+                    entry_directory,
+                    request["cluster_name"],
+                    now=stamp_now,
+                    staging_report=staging_report,
+                )
             )
+        self._republish_pending(
+            directories,
+            request["cluster_name"],
+            now=stamp_now,
+            republished=republished,
+            staging_report=staging_report,
+            swept=swept,
+        )
 
         disk = self._step(
             2,
@@ -382,12 +654,34 @@ class EtcdBackupExecutor:
         if not self._finish(publish, result):
             # A rename that failed leaves the verified file under its staging
             # name; it is still a usable snapshot, so it is kept rather than
-            # deleted, and the next run's sweep reports it as an orphan.
+            # deleted. The verify-time state record is what protects it from
+            # the age sweep and lets the next run republish it.
+            record = self._staging_record(
+                cluster_name=request["cluster_name"],
+                partial=partial_name(filename),
+                final_name=filename,
+                directory=directory,
+                now=stamp_now,
+                state=STAGING_STATE_PENDING,
+                attempts=1,
+                last_failure=_output(result) or "publish rename failed",
+            )
+            self._write_staging_state(directory, partial_name(filename), record)
+            staging_report.append(
+                {
+                    "name": partial_name(filename),
+                    "directory": directory,
+                    "state": STAGING_STATE_PENDING,
+                }
+            )
             return self._failed(
                 "ETCD_BACKUP_PUBLISH_FAILED",
                 directory,
                 request,
                 staging_kept=staging,
+                swept_partials=swept,
+                republished=republished,
+                staging=staging_report,
             )
 
         entries = self._union_entries(directories, request["cluster_name"])
@@ -467,6 +761,8 @@ class EtcdBackupExecutor:
             "failure_code": None,
             "performed_steps": [step["name"] for step in self._steps],
             "swept_partials": swept,
+            "republished": republished,
+            "staging": staging_report,
         }
         return result
 
@@ -570,6 +866,9 @@ class EtcdBackupExecutor:
             "steps": self._steps,
             "failure_code": code,
             "performed_steps": [step["name"] for step in self._steps],
+            "swept_partials": [],
+            "republished": [],
+            "staging": [],
         }
         # Callers pass what they measured so a failed report still explains
         # itself; before this, the extras were accepted and silently dropped.

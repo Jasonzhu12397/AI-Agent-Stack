@@ -8,6 +8,18 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- An approved rollback whose Target Agent went offline before ever claiming the
+  lease no longer protects its snapshot indefinitely. Protection is now a
+  bounded lease: an approved, unclaimed rollback past the deployment's
+  protection horizon (default 24 hours, overridable through
+  `spec.kubernetes.etcd_backup_rollback_protection_minutes`) is swept once into
+  the terminal `expired` state, writes one
+  `cluster.kubernetes.rollback.protection.released` audit event, and releases
+  the snapshot; running or claimed rollbacks keep protecting. The sweep is
+  idempotent (`select_for_update`, status re-check under lock, one audit event
+  per transition), and a backup command's `protect` set is recomputed fresh
+  when the agent claims it, so a rollback created after the backup was enqueued
+  is still covered instead of relying on the frozen enqueue-time copy.
 - Snapshots left in a retired backup directory no longer leak or disappear
   from the panel. Retention and the state view derive the candidate location
   set from the cluster's own records (current spec directory, past backup/status
@@ -46,6 +58,17 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   name as `protect` so the retention pass can never delete it, and the read-only
   view shows the protected set. A rollback that failed or was cancelled stops
   protecting its file.
+- A verified etcd snapshot whose publish rename failed used to be kept under
+  its `.partial` name with no state record, so the 24h mtime sweep eventually
+  deleted it and no run ever republished it. It now carries a sidecar state
+  record written at verify time (`pending_publish` / `published` / `abandoned`,
+  with cluster, final name, directory, verify time, attempt count and last
+  failure); the sweep and the republish pass read that state instead of the
+  mtime. Pending snapshots inside the republish window (default 24h, up to 3
+  publish attempts) are kept and republished by the next run, idempotently and
+  without overwriting a newer final file; past the window or after the attempt
+  limit the record turns `abandoned` and only then the file is removed, listed
+  in the report. Partials without a readable record still follow the age sweep.
 
 ### Added
 

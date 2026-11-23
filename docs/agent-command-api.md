@@ -387,11 +387,38 @@ alone reports `ETCD_BACKUP_MISSING`, not a fresh backup set.
 
 Retention is safe by construction only if it knows what is being held. The
 scheduler reads the snapshot a rollback of this cluster still refers to (any
-rollback command that did not fail or get cancelled), passes its bare file name
-as `protect`, and the contract refuses anything that is not a bare snapshot name
-of this cluster — a caller cannot point the pruning pass at a path, and cannot
-protect a file that does not belong here. The read-only view reports the same
-set, so "why was this file kept?" has an answer on the screen.
+rollback command that did not end in `succeeded`, `failed`, `cancelled`, or
+`expired`), passes its bare file name as `protect`, and the contract refuses
+anything that is not a bare snapshot name of this cluster — a caller cannot point
+the pruning pass at a path, and cannot protect a file that does not belong here.
+The read-only view reports the same set, so "why was this file kept?" has an
+answer on the screen.
+
+### Rollback protection is a bounded lease
+
+Protection follows a command's live state under a TTL lease, not the mere fact
+that a command row exists. A rollback that is `running`, or about to run, keeps
+its snapshot protected. An approved rollback that no agent ever claimed the
+lease for — the Target Agent is permanently offline, so the command can never
+execute — is released after the deployment's protection horizon. The horizon
+defaults to 24 hours and can be overridden per deployment through
+`spec.kubernetes.etcd_backup_rollback_protection_minutes`; the sweep and the
+lease deadline read the same policy source.
+
+The `expire_rollback_protection` management command runs the horizon sweep.
+Each approved, unclaimed rollback past its horizon transitions once to the
+terminal `expired` status, clears its lease fields, and writes one
+`cluster.kubernetes.rollback.protection.released` audit event naming the
+deployment, the snapshot path, the approval time and the horizon used. The pass
+is idempotent: rows are locked with `select_for_update`, the status is
+re-checked under the lock, and only an actual transition writes an audit event,
+so repeated runs neither migrate a command twice nor duplicate the event.
+Running or claimed rollbacks are never touched by the sweep.
+
+The backup command's `protect` set is resolved fresh when the agent claims it on
+the poll path, not only from the copy frozen at enqueue: a rollback created
+after the backup was queued is therefore still protected, while the candidate
+`directories` set and every other payload key are preserved untouched.
 
 Commands created through `POST /api/v1/agent-nodes/{node_id}/commands/` record
 the deployment their Target Agent serves at creation, resolved through the same
@@ -596,12 +623,34 @@ window is left alone.
 A save that dies mid-write, or a run whose process is killed outright, leaves a
 `*.db.partial` behind. Retention only ever looks at naming-valid snapshots, so
 nothing would delete it and it can be as large as the whole database. The
-executor therefore removes the staging file on a failed save or failed verify,
-keeps a verified file that failed only to be renamed (`staging_kept` names it),
-and, as part of `prepare`, sweeps staging files older than
-`PARTIAL_STALE_MINUTES` (24h) that sit directly in the backup directory —
-nothing outside it and nothing that is not a staging file is ever touched. The
-run reports what it swept in `swept_partials`.
+executor therefore removes the staging file on a failed save or failed verify.
+
+A file that passed `snapshot status` but whose publish rename failed is still a
+usable snapshot, so it is kept rather than deleted. At verify time it writes a
+machine-readable sidecar record next to the file (`<partial>.state.json`)
+recording the owning cluster, final name, directory, verify time, state
+(`pending_publish`, `published`, `abandoned`), attempt count and last failure.
+The sweep and the republish pass read that state record, never the mtime alone:
+
+* a `pending_publish` snapshot inside its republish window (default 24h, up to
+  3 publish attempts) is kept even when it is older than the 24h stale
+  threshold;
+* the next run, after its own sweep, republishes each pending record to its
+  final name. The republish is idempotent: it never overwrites a final file
+  that is already newer or equally old, and a successful republish clears the
+  sidecar;
+* past the window, after the attempt limit, or when a newer final file already
+  exists, the record transitions to `abandoned` and only then the staging file
+  and sidecar are removed. The report lists what was abandoned instead of
+  dropping it silently;
+* a partial with no readable record (or a record that cannot be validated)
+  keeps the legacy age sweep: files older than `PARTIAL_STALE_MINUTES` (24h)
+  that sit directly in the backup directory are removed, and nothing outside
+  it and nothing that is not a staging file is ever touched.
+
+The run reports swept partials in `swept_partials`, republished snapshots as
+`republished` (`{name, directory}`), and the per-file staging state in
+`staging` (`{name, directory, state}`).
 
 The pre-upgrade snapshot follows the same discipline: it is saved as
 `snapshot-pre-<cluster>-<target>-<stamp>.db.partial`, read back with
